@@ -1,10 +1,14 @@
 # SharpDeps — .NET Dependency Map
 
-[![CI](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml/badge.svg)](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/Htkym/sharpdeps/ci.yml?branch=main&label=CI)](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml)
+[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/htkym.sharpdeps?label=Marketplace)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/htkym.sharpdeps?label=Installs)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
 
 SharpDeps visualizes the dependencies in a .NET solution as an interactive graph, at both **project** and **namespace** granularity, and flags **circular dependencies**.
 
 The graph opens as a normal editor tab (a webview). Mermaid is bundled into the extension, so rendering works offline with no CDN access.
+
+![SharpDeps showing the project-level dependency graph for a .NET solution](images/overview.png)
 
 ## Features
 
@@ -16,6 +20,13 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
   - namespace cycles anchor to a representative source file for each namespace.
 - Export the current graph: **copy Mermaid source**, **save as SVG**, **save as PNG**.
 - Run from the Explorer context menu on a `.sln` file, or from the Command Palette.
+
+## Install
+
+- **From the Marketplace:** open the Extensions view in VS Code, search for **SharpDeps**, and install — or visit the [Marketplace page](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps).
+- **From a VSIX:** download the latest `.vsix` from the [Releases](https://github.com/Htkym/sharpdeps/releases) page, then run **Extensions: Install from VSIX…** from the Command Palette.
+
+The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) is installed automatically as a dependency. See [Requirements](#requirements) for how the `dotnet` runtime is resolved.
 
 ## Requirements
 
