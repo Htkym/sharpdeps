@@ -40,6 +40,11 @@ type Elements = {
   exportPngButton: HTMLButtonElement;
   status: HTMLElement;
   viewport: HTMLElement;
+  scroll: HTMLElement;
+  zoomInButton: HTMLButtonElement;
+  zoomOutButton: HTMLButtonElement;
+  zoomFitButton: HTMLButtonElement;
+  zoomLevel: HTMLElement;
   source: HTMLElement;
   cycleList: HTMLElement;
   cycleEmpty: HTMLElement;
@@ -71,6 +76,23 @@ let currentGraph: GraphView | null = null;
 let currentBinding: Binding | null = null;
 let mermaidInitialized = false;
 
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 1.2;
+const ZOOM_WHEEL_SENSITIVITY = 0.0015;
+const FIT_PADDING = 16;
+const PAN_THRESHOLD = 4;
+
+const zoomState: {
+  svg: SVGSVGElement | null;
+  intrinsicWidth: number;
+  intrinsicHeight: number;
+  zoom: number;
+  fitZoom: number;
+} = { svg: null, intrinsicWidth: 0, intrinsicHeight: 0, zoom: 1, fitZoom: 1 };
+
+let suppressNextClick = false;
+
 function postMessage(message: WebviewToHostMessage): void {
   vscode.postMessage(message);
 }
@@ -78,6 +100,7 @@ function postMessage(message: WebviewToHostMessage): void {
 function main(): void {
   elements = buildShell();
   wireUiEvents();
+  wireZoomEvents();
   window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) => {
     void handleHostMessage(event.data);
   });
@@ -159,7 +182,24 @@ function buildShell(): Elements {
   viewport.id = 'viewer-graph';
   stage.append(viewport);
   scroll.append(stage);
-  graphPanel.append(status, legend, scroll);
+
+  const zoomControls = createElement('div', 'zoom-controls');
+  zoomControls.setAttribute('role', 'group');
+  zoomControls.setAttribute('aria-label', 'Zoom controls');
+  const zoomOutButton = createIconButton('viewer-zoom-out', 'Zoom out', ICONS.zoomOut);
+  const zoomLevel = createElement('span', 'zoom-level', '—');
+  zoomLevel.id = 'viewer-zoom-level';
+  zoomLevel.setAttribute('aria-live', 'polite');
+  const zoomInButton = createIconButton('viewer-zoom-in', 'Zoom in', ICONS.zoomIn);
+  const zoomDivider = createElement('span', 'zoom-divider');
+  zoomDivider.setAttribute('aria-hidden', 'true');
+  const zoomFitButton = createIconButton('viewer-zoom-fit', 'Fit to view', ICONS.fit);
+  zoomOutButton.disabled = true;
+  zoomInButton.disabled = true;
+  zoomFitButton.disabled = true;
+  zoomControls.append(zoomOutButton, zoomLevel, zoomInButton, zoomDivider, zoomFitButton);
+
+  graphPanel.append(status, legend, scroll, zoomControls);
 
   const sidebar = createElement('aside', 'cycle-sidebar panel');
   sidebar.setAttribute('aria-label', 'Graph details');
@@ -211,6 +251,11 @@ function buildShell(): Elements {
     exportPngButton,
     status,
     viewport,
+    scroll,
+    zoomInButton,
+    zoomOutButton,
+    zoomFitButton,
+    zoomLevel,
     source,
     cycleList,
     cycleEmpty,
@@ -252,7 +297,7 @@ type IconShape = { tag: string; attrs: Record<string, string> };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-const ICONS: Record<'refresh' | 'copy' | 'download', IconShape[]> = {
+const ICONS: Record<'refresh' | 'copy' | 'download' | 'zoomIn' | 'zoomOut' | 'fit', IconShape[]> = {
   refresh: [
     { tag: 'polyline', attrs: { points: '23 4 23 10 17 10' } },
     { tag: 'polyline', attrs: { points: '1 20 1 14 7 14' } },
@@ -269,6 +314,23 @@ const ICONS: Record<'refresh' | 'copy' | 'download', IconShape[]> = {
     { tag: 'path', attrs: { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' } },
     { tag: 'polyline', attrs: { points: '7 10 12 15 17 10' } },
     { tag: 'line', attrs: { x1: '12', y1: '15', x2: '12', y2: '3' } }
+  ],
+  zoomIn: [
+    { tag: 'circle', attrs: { cx: '11', cy: '11', r: '8' } },
+    { tag: 'line', attrs: { x1: '21', y1: '21', x2: '16.65', y2: '16.65' } },
+    { tag: 'line', attrs: { x1: '11', y1: '8', x2: '11', y2: '14' } },
+    { tag: 'line', attrs: { x1: '8', y1: '11', x2: '14', y2: '11' } }
+  ],
+  zoomOut: [
+    { tag: 'circle', attrs: { cx: '11', cy: '11', r: '8' } },
+    { tag: 'line', attrs: { x1: '21', y1: '21', x2: '16.65', y2: '16.65' } },
+    { tag: 'line', attrs: { x1: '8', y1: '11', x2: '14', y2: '11' } }
+  ],
+  fit: [
+    { tag: 'path', attrs: { d: 'M8 3H5a2 2 0 0 0-2 2v3' } },
+    { tag: 'path', attrs: { d: 'M21 8V5a2 2 0 0 0-2-2h-3' } },
+    { tag: 'path', attrs: { d: 'M3 16v3a2 2 0 0 0 2 2h3' } },
+    { tag: 'path', attrs: { d: 'M16 21h3a2 2 0 0 0 2-2v-3' } }
   ]
 };
 
@@ -457,6 +519,9 @@ async function renderGraph(granularity: Granularity): Promise<void> {
       svg.removeAttribute('height');
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', `${graphLabel(graph)} dependency graph`);
+      setupZoom(svg);
+    } else {
+      disableZoom();
     }
 
     if (typeof rendered.bindFunctions === 'function') {
@@ -507,9 +572,242 @@ function renderFailure(error: unknown, mermaidSource: string): void {
   elements.viewport.append(
     createElement('pre', 'render-fallback', mermaidSource || 'Mermaid source is unavailable.')
   );
+  disableZoom();
   const message = getMessage(error, 'Graph rendering failed. Showing Mermaid source.');
   setStatus(message, 'warning');
   postMessage({ type: 'log', level: 'error', message });
+}
+
+function setupZoom(svg: SVGSVGElement): void {
+  const viewBox = svg.viewBox.baseVal;
+  let intrinsicWidth = viewBox && viewBox.width > 0 ? viewBox.width : 0;
+  let intrinsicHeight = viewBox && viewBox.height > 0 ? viewBox.height : 0;
+  if (!intrinsicWidth || !intrinsicHeight) {
+    try {
+      const box = svg.getBBox();
+      intrinsicWidth = intrinsicWidth || box.width;
+      intrinsicHeight = intrinsicHeight || box.height;
+    } catch {
+      // getBBox can throw when the element is not yet rendered; fall back below.
+    }
+  }
+  zoomState.svg = svg;
+  zoomState.intrinsicWidth = intrinsicWidth || 1200;
+  zoomState.intrinsicHeight = intrinsicHeight || 800;
+  setZoomControlsEnabled(true);
+  zoomState.fitZoom = computeFitZoom();
+  zoomState.zoom = zoomState.fitZoom;
+  applyZoom();
+  centerScroll();
+}
+
+function disableZoom(): void {
+  zoomState.svg = null;
+  setZoomControlsEnabled(false);
+}
+
+function clampZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) {
+    return MIN_ZOOM;
+  }
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+}
+
+function computeFitZoom(): number {
+  const { intrinsicWidth, intrinsicHeight } = zoomState;
+  const availableWidth = elements.scroll.clientWidth - FIT_PADDING * 2;
+  const availableHeight = elements.scroll.clientHeight - FIT_PADDING * 2;
+  if (intrinsicWidth <= 0 || intrinsicHeight <= 0 || availableWidth <= 0 || availableHeight <= 0) {
+    return 1;
+  }
+  const fit = Math.min(availableWidth / intrinsicWidth, availableHeight / intrinsicHeight);
+  return clampZoom(Math.min(fit, 1));
+}
+
+function applyZoom(): void {
+  const svg = zoomState.svg;
+  if (!svg) {
+    return;
+  }
+  const zoom = clampZoom(zoomState.zoom);
+  zoomState.zoom = zoom;
+  svg.style.width = `${zoomState.intrinsicWidth * zoom}px`;
+  svg.style.height = `${zoomState.intrinsicHeight * zoom}px`;
+  elements.zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+  elements.zoomOutButton.disabled = zoom <= MIN_ZOOM + 1e-4;
+  elements.zoomInButton.disabled = zoom >= MAX_ZOOM - 1e-4;
+}
+
+function zoomToPoint(targetZoom: number, clientX: number, clientY: number): void {
+  if (!zoomState.svg) {
+    return;
+  }
+  const previousZoom = zoomState.zoom;
+  const nextZoom = clampZoom(targetZoom);
+  if (Math.abs(nextZoom - previousZoom) < 1e-4) {
+    return;
+  }
+  const scroll = elements.scroll;
+  const rect = scroll.getBoundingClientRect();
+  const offsetX = clientX - rect.left;
+  const offsetY = clientY - rect.top;
+  const contentX = scroll.scrollLeft + offsetX;
+  const contentY = scroll.scrollTop + offsetY;
+  const ratio = nextZoom / previousZoom;
+  zoomState.zoom = nextZoom;
+  applyZoom();
+  scroll.scrollLeft = contentX * ratio - offsetX;
+  scroll.scrollTop = contentY * ratio - offsetY;
+}
+
+function zoomByStep(factor: number): void {
+  const rect = elements.scroll.getBoundingClientRect();
+  zoomToPoint(zoomState.zoom * factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+}
+
+function fitToViewport(): void {
+  if (!zoomState.svg) {
+    return;
+  }
+  zoomState.fitZoom = computeFitZoom();
+  zoomState.zoom = zoomState.fitZoom;
+  applyZoom();
+  centerScroll();
+}
+
+function centerScroll(): void {
+  const scroll = elements.scroll;
+  scroll.scrollLeft = Math.max(0, (scroll.scrollWidth - scroll.clientWidth) / 2);
+  scroll.scrollTop = 0;
+}
+
+function setZoomControlsEnabled(enabled: boolean): void {
+  elements.zoomInButton.disabled = !enabled;
+  elements.zoomOutButton.disabled = !enabled;
+  elements.zoomFitButton.disabled = !enabled;
+  if (!enabled) {
+    elements.zoomLevel.textContent = '—';
+  }
+}
+
+function wheelZoomFactor(event: WheelEvent): number {
+  let delta = event.deltaY;
+  if (event.deltaMode === 1) {
+    delta *= 16;
+  } else if (event.deltaMode === 2) {
+    delta *= 100;
+  }
+  const factor = Math.exp(-delta * ZOOM_WHEEL_SENSITIVITY);
+  return Math.min(5, Math.max(0.2, factor));
+}
+
+function wireZoomEvents(): void {
+  const scroll = elements.scroll;
+  elements.zoomInButton.addEventListener('click', () => zoomByStep(ZOOM_STEP));
+  elements.zoomOutButton.addEventListener('click', () => zoomByStep(1 / ZOOM_STEP));
+  elements.zoomFitButton.addEventListener('click', () => fitToViewport());
+
+  scroll.addEventListener(
+    'wheel',
+    (event: WheelEvent) => {
+      if (!zoomState.svg) {
+        return;
+      }
+      // Trackpad pinch gestures are delivered as wheel events with ctrlKey set,
+      // so this single handler covers Ctrl/Cmd + wheel and two-finger pinch zoom.
+      // Plain wheel / two-finger swipe keeps the native scroll behaviour for panning.
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+      event.preventDefault();
+      zoomToPoint(zoomState.zoom * wheelZoomFactor(event), event.clientX, event.clientY);
+    },
+    { passive: false }
+  );
+
+  let panning = false;
+  let panMoved = false;
+  let panPointerId = -1;
+  let startClientX = 0;
+  let startClientY = 0;
+  let startScrollLeft = 0;
+  let startScrollTop = 0;
+
+  scroll.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0 || !zoomState.svg) {
+      return;
+    }
+    panning = true;
+    panMoved = false;
+    suppressNextClick = false;
+    panPointerId = event.pointerId;
+    startClientX = event.clientX;
+    startClientY = event.clientY;
+    startScrollLeft = scroll.scrollLeft;
+    startScrollTop = scroll.scrollTop;
+  });
+
+  scroll.addEventListener('pointermove', (event: PointerEvent) => {
+    if (!panning) {
+      return;
+    }
+    const dx = event.clientX - startClientX;
+    const dy = event.clientY - startClientY;
+    if (!panMoved) {
+      if (Math.abs(dx) + Math.abs(dy) < PAN_THRESHOLD) {
+        return;
+      }
+      panMoved = true;
+      suppressNextClick = true;
+      scroll.classList.add('is-panning');
+      try {
+        scroll.setPointerCapture(panPointerId);
+      } catch {
+        // Pointer capture is best-effort; dragging still works without it.
+      }
+    }
+    scroll.scrollLeft = startScrollLeft - dx;
+    scroll.scrollTop = startScrollTop - dy;
+  });
+
+  const endPan = (): void => {
+    if (!panning) {
+      return;
+    }
+    panning = false;
+    if (panMoved) {
+      scroll.classList.remove('is-panning');
+      try {
+        scroll.releasePointerCapture(panPointerId);
+      } catch {
+        // Capture may already be released; ignore.
+      }
+    }
+  };
+  scroll.addEventListener('pointerup', endPan);
+  scroll.addEventListener('pointercancel', endPan);
+
+  // Suppress the click that follows a drag so panning never toggles node selection.
+  scroll.addEventListener(
+    'click',
+    (event: MouseEvent) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        event.stopPropagation();
+        event.preventDefault();
+      }
+    },
+    true
+  );
+
+  window.addEventListener('resize', () => {
+    if (!zoomState.svg) {
+      return;
+    }
+    if (Math.abs(zoomState.zoom - zoomState.fitZoom) < 1e-3) {
+      fitToViewport();
+    }
+  });
 }
 
 function bindCodeMapInteractivity(svg: SVGSVGElement, graph: GraphView): boolean {
@@ -802,14 +1100,21 @@ async function exportCurrentGraph(format: ExportFormat): Promise<void> {
       throw new Error('No rendered SVG is available to export.');
     }
 
-    const serialized = serializeSvg(svg);
+    const exportSvg = svg.cloneNode(true) as SVGSVGElement;
+    const { width, height } = getSvgPixelSize(svg);
+    exportSvg.style.removeProperty('width');
+    exportSvg.style.removeProperty('height');
+    exportSvg.setAttribute('width', String(width));
+    exportSvg.setAttribute('height', String(height));
+
+    const serialized = serializeSvg(exportSvg);
     if (format === 'svg') {
       postMessage({ type: 'export', format, data: serialized, granularity: state.granularity });
       setStatus('SVG export sent to VS Code.', 'ready');
       return;
     }
 
-    const png = await svgToPng(serialized, svg);
+    const png = await svgToPng(serialized, exportSvg);
     postMessage({ type: 'export', format, data: png, granularity: state.granularity });
     setStatus('PNG export sent to VS Code.', 'ready');
   } catch (error) {
