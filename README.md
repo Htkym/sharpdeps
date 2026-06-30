@@ -14,12 +14,23 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
 
 - Interactive Mermaid dependency graph for a `.sln`, shown in an editor tab.
 - Toggle between **project-level** and **namespace-level** views instantly.
+- Zoom and pan the graph: on-screen controls, Ctrl/⌘ + wheel, trackpad pinch, and drag to pan.
 - Circular dependencies are highlighted in red on the graph.
 - Cycles are also reported in the **Problems** panel:
   - project cycles anchor to the participating `.csproj` files,
   - namespace cycles anchor to a representative source file for each namespace.
 - Export the current graph: **copy Mermaid source**, **save as SVG**, **save as PNG**.
 - Run from the Explorer context menu on a `.sln` file, or from the Command Palette.
+
+## Screenshots
+
+Namespace-level view — switch granularity with the **Projects / Namespaces** toggle to group dependencies by namespace:
+
+![Namespace-level dependency graph grouped into namespace clusters](images/namespace-graph.png)
+
+Circular dependencies are highlighted in red on the graph and listed in the sidebar; selecting one focuses the participating nodes:
+
+![A circular dependency highlighted in red between two namespaces](images/cycles.png)
 
 ## Install
 
