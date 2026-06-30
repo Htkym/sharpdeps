@@ -1,0 +1,10 @@
+out
+media/viewer.js
+media/viewer.js.map
+analyzer/bin
+analyzer/obj
+analyzer/.build
+node_modules
+*.vsix
+package-lock.json
+*.md

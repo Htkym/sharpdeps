@@ -1,0 +1,8 @@
+node_modules/
+out/
+media/viewer.js
+media/viewer.js.map
+*.vsix
+analyzer/bin/
+analyzer/obj/
+coverage/

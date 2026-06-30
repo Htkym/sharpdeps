@@ -1,0 +1,144 @@
+{
+  "name": "sharpdeps",
+  "displayName": "SharpDeps — .NET Dependency Map",
+  "description": "Visualize .NET solution dependencies at project and namespace granularity, with circular-dependency detection.",
+  "version": "0.0.1",
+  "publisher": "htkym",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Htkym/sharpdeps.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Htkym/sharpdeps/issues"
+  },
+  "homepage": "https://github.com/Htkym/sharpdeps#readme",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "dotnet",
+    "csharp",
+    "dependency",
+    "graph",
+    "mermaid",
+    "architecture",
+    "namespace",
+    "circular dependency"
+  ],
+  "icon": "resources/icon.png",
+  "extensionDependencies": [
+    "ms-dotnettools.vscode-dotnet-runtime"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sharpdeps.showDependencyMap",
+        "title": "Show Dependency Map",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.refresh",
+        "title": "Refresh Dependency Map",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.copyMermaid",
+        "title": "Copy Mermaid Source",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.exportSvg",
+        "title": "Export Graph as SVG",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.exportPng",
+        "title": "Export Graph as PNG",
+        "category": "SharpDeps"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "sharpdeps.showDependencyMap",
+          "when": "resourceExtname == .sln",
+          "group": "navigation@9"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sharpdeps.refresh",
+          "when": "sharpdeps.panelActive"
+        },
+        {
+          "command": "sharpdeps.copyMermaid",
+          "when": "sharpdeps.panelActive"
+        },
+        {
+          "command": "sharpdeps.exportSvg",
+          "when": "sharpdeps.panelActive"
+        },
+        {
+          "command": "sharpdeps.exportPng",
+          "when": "sharpdeps.panelActive"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SharpDeps",
+      "properties": {
+        "sharpdeps.maxProjects": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "Maximum number of projects to include in the project-level graph. Passed to the analyzer as `--max-projects`."
+        },
+        "sharpdeps.maxEdges": {
+          "type": "number",
+          "default": 200,
+          "minimum": 1,
+          "markdownDescription": "Maximum number of dependency edges to include in the graph. Passed to the analyzer as `--max-edges`."
+        },
+        "sharpdeps.dotnetPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to a `dotnet` executable to use. When empty, SharpDeps resolves one via the .NET Install Tool (`dotnet.findPath`), then `PATH`, then acquires a private .NET runtime on demand."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build:analyzer && npm run build -- --production",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "build:analyzer": "node scripts/build-analyzer.js",
+    "compile": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.26.0",
+    "esbuild": "^0.21.5",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "mermaid": "^11.4.0",
+    "prettier": "^3.9.4",
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^8.62.1",
+    "vitest": "^4.1.9"
+  }
+}

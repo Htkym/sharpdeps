@@ -1,0 +1,343 @@
+:root {
+  --cycle: #e5484d;
+  --accent: var(--vscode-focusBorder, #3b82f6);
+  --bg: var(--vscode-editor-background);
+  --text: var(--vscode-editor-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --panel: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --panel-strong: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+  --border: var(--vscode-panel-border);
+  --hover: var(--vscode-list-hoverBackground);
+  --warning: var(--vscode-editorWarning-foreground, #d97706);
+  font-family: var(--vscode-font-family, 'Segoe UI', system-ui, sans-serif);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, var(--hover));
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sharpdeps-app {
+  height: 100vh;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.viewer-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.title-block {
+  min-width: 0;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  line-height: 1.25;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.toolbar-actions > button {
+  background: var(--vscode-button-secondaryBackground, var(--panel-strong));
+  color: var(--vscode-button-secondaryForeground, var(--text));
+  border-color: var(--border);
+}
+
+.toolbar-actions > button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--hover));
+  border-color: var(--accent);
+}
+
+.granularity-toggle {
+  display: inline-flex;
+  gap: 0;
+  padding: 3px;
+  margin-right: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-strong);
+}
+
+.granularity-toggle .toggle {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.granularity-toggle .toggle:hover:not(:disabled):not(.active) {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--text);
+}
+
+.granularity-toggle .toggle.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.granularity-toggle .toggle:disabled {
+  color: var(--muted);
+}
+
+.namespace-note {
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.viewer-main {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+  gap: 12px;
+}
+
+.panel {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.graph-panel {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  overflow: hidden;
+}
+
+.status {
+  padding: 12px 14px 0;
+  color: var(--muted);
+}
+
+.status[data-state='warning'] {
+  color: var(--warning);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 14px 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+}
+
+.cycle-swatch {
+  background: var(--cycle);
+}
+
+.selected-swatch {
+  background: var(--accent);
+}
+
+.diagram-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.diagram-stage {
+  min-width: max-content;
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+}
+
+.diagram-viewport {
+  min-width: max-content;
+}
+
+.diagram-viewport svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  background: transparent;
+}
+
+.diagram-viewport .interactive-node:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.diagram-viewport .is-dimmed {
+  opacity: 0.45;
+}
+
+.diagram-viewport path.is-dimmed,
+.diagram-viewport .edgePath.is-dimmed {
+  opacity: 0.2;
+}
+
+.diagram-viewport .is-selected,
+.diagram-viewport .is-highlighted,
+.diagram-viewport .is-related,
+.diagram-viewport .is-cycle-highlighted {
+  opacity: 1;
+}
+
+.cycle-sidebar {
+  overflow: auto;
+  padding: 14px;
+}
+
+.cycle-sidebar h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.graph-summary {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.cycle-list,
+.detail-panel ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.cycle-list li,
+.detail-panel li {
+  overflow-wrap: anywhere;
+}
+
+.cycle-button {
+  width: 100%;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--text));
+  text-align: left;
+}
+
+.cycle-button.active {
+  border-color: var(--cycle);
+  box-shadow: inset 3px 0 0 var(--cycle);
+}
+
+.empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.detail-panel,
+.source-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.detail-panel summary,
+.source-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+pre {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.9rem/1.45 var(--vscode-editor-font-family, Consolas, 'Cascadia Code', monospace);
+}
+
+.render-fallback {
+  max-width: 80vw;
+}
+
+@media (max-width: 900px) {
+  .viewer-toolbar {
+    flex-direction: column;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .viewer-main {
+    grid-template-columns: 1fr;
+  }
+
+  .cycle-sidebar {
+    max-height: 35vh;
+  }
+}
