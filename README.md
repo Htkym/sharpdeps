@@ -1,8 +1,7 @@
 # SharpDeps — .NET Dependency Map
 
 [![CI](https://img.shields.io/github/actions/workflow/status/Htkym/sharpdeps/ci.yml?branch=main&label=CI)](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml)
-[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/htkym.sharpdeps?label=Marketplace)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/htkym.sharpdeps?label=Installs)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
+[![VS Marketplace](https://badgen.net/vs-marketplace/v/htkym.sharpdeps)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
 
 SharpDeps visualizes the dependencies in a .NET solution as an interactive graph, at both **project** and **namespace** granularity, and flags **circular dependencies**.
 
