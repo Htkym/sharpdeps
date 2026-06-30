@@ -108,6 +108,34 @@ h1 {
   border-color: var(--accent);
 }
 
+.toolbar-actions > button.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.toolbar-actions > button.icon-button.has-label {
+  padding: 0.4rem 0.7rem;
+}
+
+.icon-button svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.icon-button-text {
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.03em;
+}
+
 .granularity-toggle {
   display: inline-flex;
   gap: 0;
@@ -134,9 +162,9 @@ h1 {
 }
 
 .granularity-toggle .toggle.active {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-  border-color: transparent;
+  background: var(--accent);
+  color: var(--vscode-button-foreground, #ffffff);
+  border-color: var(--accent);
   font-weight: 600;
 }
 

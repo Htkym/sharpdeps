@@ -97,6 +97,9 @@ export class CodeMapPanel {
           this.post({ type: 'render', model: this.model, theme: currentTheme() });
         }
         break;
+      case 'refresh':
+        void vscode.commands.executeCommand('sharpdeps.refresh');
+        break;
       case 'copyMermaid':
         void vscode.env.clipboard
           .writeText(message.text)

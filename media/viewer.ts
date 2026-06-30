@@ -34,6 +34,7 @@ type Elements = {
   projectsButton: HTMLButtonElement;
   namespacesButton: HTMLButtonElement;
   namespaceNote: HTMLElement;
+  refreshButton: HTMLButtonElement;
   copyButton: HTMLButtonElement;
   exportSvgButton: HTMLButtonElement;
   exportPngButton: HTMLButtonElement;
@@ -112,10 +113,21 @@ function buildShell(): Elements {
   namespacesButton.setAttribute('aria-pressed', 'false');
   granularity.append(projectsButton, namespacesButton);
 
-  const copyButton = createButton('viewer-copy-mermaid', undefined, 'Copy Mermaid');
-  const exportSvgButton = createButton('viewer-export-svg', undefined, 'Export SVG');
-  const exportPngButton = createButton('viewer-export-png', undefined, 'Export PNG');
-  actions.append(granularity, copyButton, exportSvgButton, exportPngButton);
+  const refreshButton = createIconButton('viewer-refresh', 'Refresh dependency map', ICONS.refresh);
+  const copyButton = createIconButton('viewer-copy-mermaid', 'Copy Mermaid source', ICONS.copy);
+  const exportSvgButton = createIconButton(
+    'viewer-export-svg',
+    'Export as SVG',
+    ICONS.download,
+    'SVG'
+  );
+  const exportPngButton = createIconButton(
+    'viewer-export-png',
+    'Export as PNG',
+    ICONS.download,
+    'PNG'
+  );
+  actions.append(granularity, refreshButton, copyButton, exportSvgButton, exportPngButton);
   header.append(titleBlock, actions);
 
   const namespaceNote = createElement(
@@ -193,6 +205,7 @@ function buildShell(): Elements {
     projectsButton,
     namespacesButton,
     namespaceNote,
+    refreshButton,
     copyButton,
     exportSvgButton,
     exportPngButton,
@@ -235,6 +248,70 @@ function createButton(id: string, className: string | undefined, text: string): 
   return button;
 }
 
+type IconShape = { tag: string; attrs: Record<string, string> };
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const ICONS: Record<'refresh' | 'copy' | 'download', IconShape[]> = {
+  refresh: [
+    { tag: 'polyline', attrs: { points: '23 4 23 10 17 10' } },
+    { tag: 'polyline', attrs: { points: '1 20 1 14 7 14' } },
+    {
+      tag: 'path',
+      attrs: { d: 'M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15' }
+    }
+  ],
+  copy: [
+    { tag: 'rect', attrs: { x: '9', y: '9', width: '13', height: '13', rx: '2', ry: '2' } },
+    { tag: 'path', attrs: { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' } }
+  ],
+  download: [
+    { tag: 'path', attrs: { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' } },
+    { tag: 'polyline', attrs: { points: '7 10 12 15 17 10' } },
+    { tag: 'line', attrs: { x1: '12', y1: '15', x2: '12', y2: '3' } }
+  ]
+};
+
+function createIcon(shapes: IconShape[]): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  for (const shape of shapes) {
+    const element = document.createElementNS(SVG_NS, shape.tag);
+    for (const [name, value] of Object.entries(shape.attrs)) {
+      element.setAttribute(name, value);
+    }
+    svg.append(element);
+  }
+  return svg;
+}
+
+function createIconButton(
+  id: string,
+  label: string,
+  shapes: IconShape[],
+  textLabel?: string
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.id = id;
+  button.type = 'button';
+  button.className = textLabel ? 'icon-button has-label' : 'icon-button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.append(createIcon(shapes));
+  if (textLabel) {
+    button.append(createElement('span', 'icon-button-text', textLabel));
+  }
+  return button;
+}
+
 function legendItem(swatchClass: string, label: string): HTMLElement {
   const item = createElement('span', 'legend-item');
   const swatch = createElement('span', `swatch ${swatchClass}`);
@@ -271,6 +348,10 @@ function wireUiEvents(): void {
   });
   elements.namespacesButton.addEventListener('click', () => {
     void selectGraph('namespaces');
+  });
+  elements.refreshButton.addEventListener('click', () => {
+    postMessage({ type: 'refresh' });
+    setStatus('Refreshing dependency map…', 'ready');
   });
   elements.copyButton.addEventListener('click', copyCurrentMermaid);
   elements.exportSvgButton.addEventListener('click', () => {

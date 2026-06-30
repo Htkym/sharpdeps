@@ -45,6 +45,7 @@ export type HostToWebviewMessage =
 // Webview -> extension host
 export type WebviewToHostMessage =
   | { type: 'ready' }
+  | { type: 'refresh' }
   | { type: 'copyMermaid'; text: string }
   | { type: 'export'; format: ExportFormat; data: string; granularity: Granularity }
   | { type: 'exportError'; message: string }
