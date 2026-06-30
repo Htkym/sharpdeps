@@ -1,5 +1,7 @@
 # SharpDeps — .NET Dependency Map
 
+[![CI](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml/badge.svg)](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml)
+
 SharpDeps visualizes the dependencies in a .NET solution as an interactive graph, at both **project** and **namespace** granularity, and flags **circular dependencies**.
 
 The graph opens as a normal editor tab (a webview). Mermaid is bundled into the extension, so rendering works offline with no CDN access.
