@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const report = await runAnalyzer({
             dotnetPath: dotnet.dotnetPath,
             analyzer,
-            solutionPath: target.fsPath,
+            analysisTargetPath: target.fsPath,
             maxProjects: config.get<number>('maxProjects', 60),
             maxEdges: config.get<number>('maxEdges', 200),
             token

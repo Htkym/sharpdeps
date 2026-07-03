@@ -66,16 +66,16 @@ sealed class CodeMapAnalyzer
         var isSlnxFile = string.Equals(resolvedExtension, ".slnx", StringComparison.OrdinalIgnoreCase);
         var isProjectFile = SupportedProjectExtensions.Contains(resolvedExtension);
 
-        if (!File.Exists(resolvedSolutionPath))
-        {
-            var missingKind = isProjectFile ? "Project file" : "Solution file";
-            throw new FileNotFoundException($"{missingKind} was not found: {resolvedSolutionPath}", resolvedSolutionPath);
-        }
-
         if (!isSolutionFile && !isSlnxFile && !isProjectFile)
         {
             throw new InvalidOperationException(
                 $"Only .sln, .slnx, .csproj, .fsproj, .vbproj, and .vcxproj are supported. Received: {resolvedSolutionPath}");
+        }
+
+        if (!File.Exists(resolvedSolutionPath))
+        {
+            var missingKind = isProjectFile ? "Project file" : "Solution file";
+            throw new FileNotFoundException($"{missingKind} was not found: {resolvedSolutionPath}", resolvedSolutionPath);
         }
 
         var notes = new List<string>();
@@ -93,7 +93,7 @@ sealed class CodeMapAnalyzer
         }
         else
         {
-            parsedSolution = await ParseProjectClosureAsync(resolvedSolutionPath, warnings);
+            parsedSolution = await ParseProjectClosureAsync(resolvedSolutionPath, maxProjects, warnings);
             notes.Add("The selected project file was parsed by following ProjectReference edges without a .sln or .slnx file.");
         }
 
@@ -444,16 +444,18 @@ sealed class CodeMapAnalyzer
             projects);
     }
 
-    private static async Task<ParsedSolution> ParseProjectClosureAsync(string projectPath, List<string> warnings)
+    private static async Task<ParsedSolution> ParseProjectClosureAsync(string projectPath, int maxProjects, List<string> warnings)
     {
         var resolvedProjectPath = Path.GetFullPath(projectPath);
         var rootDirectoryPath = Path.GetDirectoryName(resolvedProjectPath)
             ?? throw new InvalidOperationException($"Could not determine the project directory for {resolvedProjectPath}");
         var rootProjectName = Path.GetFileNameWithoutExtension(resolvedProjectPath);
+        var traversalLimit = Math.Max(1, maxProjects);
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var queued = new HashSet<string>(StringComparer.Ordinal);
         var pending = new Queue<string>();
         var projectEntries = new Dictionary<string, SolutionProjectEntry>(StringComparer.Ordinal);
+        var traversalCapped = false;
 
         var rootLookupKey = NormalizePathKey(resolvedProjectPath);
         pending.Enqueue(resolvedProjectPath);
@@ -504,11 +506,27 @@ sealed class CodeMapAnalyzer
                     continue;
                 }
 
+                if (queued.Contains(projectReference.LookupKey))
+                {
+                    continue;
+                }
+
+                if (queued.Count >= traversalLimit)
+                {
+                    traversalCapped = true;
+                    continue;
+                }
+
                 if (queued.Add(projectReference.LookupKey))
                 {
                     pending.Enqueue(projectReference.FullPath);
                 }
             }
+        }
+
+        if (traversalCapped)
+        {
+            warnings.Add($"Project-scoped traversal was limited to the first {traversalLimit} project(s). Increase --max-projects to include more.");
         }
 
         return new ParsedSolution(

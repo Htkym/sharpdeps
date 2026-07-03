@@ -39,20 +39,20 @@ export function locateAnalyzer(context: vscode.ExtensionContext): AnalyzerLocati
 export interface RunAnalyzerOptions {
   dotnetPath: string;
   analyzer: AnalyzerLocation;
-  solutionPath: string;
+  analysisTargetPath: string;
   maxProjects: number;
   maxEdges: number;
   token?: vscode.CancellationToken;
 }
 
-/** Run the analyzer against a solution and return the parsed report. */
+/** Run the analyzer against a solution/project target and return the parsed report. */
 export async function runAnalyzer(options: RunAnalyzerOptions): Promise<CodeMapReport> {
   const workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sharpdeps-'));
   const outputPath = path.join(workDir, 'report.json');
 
   const flags = [
     '--solution',
-    options.solutionPath,
+    options.analysisTargetPath,
     '--output',
     outputPath,
     '--max-projects',
