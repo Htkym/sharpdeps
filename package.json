@@ -68,7 +68,7 @@
       "explorer/context": [
         {
           "command": "sharpdeps.showDependencyMap",
-          "when": "resourceExtname == .sln",
+          "when": "resourceExtname == .sln || resourceExtname == .slnx || resourceExtname == .csproj || resourceExtname == .fsproj || resourceExtname == .vbproj || resourceExtname == .vcxproj",
           "group": "navigation@9"
         }
       ],

@@ -61,29 +61,40 @@ sealed class CodeMapAnalyzer
             ? throw new InvalidOperationException("A solution path is required.")
             : solutionPath);
 
+        var resolvedExtension = Path.GetExtension(resolvedSolutionPath);
+        var isSolutionFile = string.Equals(resolvedExtension, ".sln", StringComparison.OrdinalIgnoreCase);
+        var isSlnxFile = string.Equals(resolvedExtension, ".slnx", StringComparison.OrdinalIgnoreCase);
+        var isProjectFile = SupportedProjectExtensions.Contains(resolvedExtension);
+
         if (!File.Exists(resolvedSolutionPath))
         {
-            throw new FileNotFoundException($"Solution file was not found: {resolvedSolutionPath}", resolvedSolutionPath);
+            var missingKind = isProjectFile ? "Project file" : "Solution file";
+            throw new FileNotFoundException($"{missingKind} was not found: {resolvedSolutionPath}", resolvedSolutionPath);
         }
 
-        if (!resolvedSolutionPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
-            && !resolvedSolutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+        if (!isSolutionFile && !isSlnxFile && !isProjectFile)
         {
-            throw new InvalidOperationException($"Only .sln and .slnx are supported. Received: {resolvedSolutionPath}");
+            throw new InvalidOperationException(
+                $"Only .sln, .slnx, .csproj, .fsproj, .vbproj, and .vcxproj are supported. Received: {resolvedSolutionPath}");
         }
 
         var notes = new List<string>();
         var warnings = new List<string>();
 
         ParsedSolution parsedSolution;
-        if (resolvedSolutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+        if (isSlnxFile)
         {
             parsedSolution = await ParseSlnxAsync(resolvedSolutionPath);
             notes.Add("The selected .slnx file was parsed through XML project discovery.");
         }
-        else
+        else if (isSolutionFile)
         {
             parsedSolution = await ParseSlnAsync(resolvedSolutionPath);
+        }
+        else
+        {
+            parsedSolution = await ParseProjectClosureAsync(resolvedSolutionPath, warnings);
+            notes.Add("The selected project file was parsed by following ProjectReference edges without a .sln or .slnx file.");
         }
 
         if (parsedSolution.Projects.Count == 0)
@@ -433,6 +444,82 @@ sealed class CodeMapAnalyzer
             projects);
     }
 
+    private static async Task<ParsedSolution> ParseProjectClosureAsync(string projectPath, List<string> warnings)
+    {
+        var resolvedProjectPath = Path.GetFullPath(projectPath);
+        var rootDirectoryPath = Path.GetDirectoryName(resolvedProjectPath)
+            ?? throw new InvalidOperationException($"Could not determine the project directory for {resolvedProjectPath}");
+        var rootProjectName = Path.GetFileNameWithoutExtension(resolvedProjectPath);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var queued = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>();
+        var projectEntries = new Dictionary<string, SolutionProjectEntry>(StringComparer.Ordinal);
+
+        var rootLookupKey = NormalizePathKey(resolvedProjectPath);
+        pending.Enqueue(resolvedProjectPath);
+        queued.Add(rootLookupKey);
+
+        while (pending.Count > 0)
+        {
+            var currentProjectPath = pending.Dequeue();
+            var currentLookupKey = NormalizePathKey(currentProjectPath);
+            if (!visited.Add(currentLookupKey))
+            {
+                continue;
+            }
+
+            var projectDirectoryPath = Path.GetDirectoryName(currentProjectPath)
+                ?? throw new InvalidOperationException($"Could not determine the project directory for {currentProjectPath}");
+
+            XElement root;
+            try
+            {
+                var projectText = await File.ReadAllTextAsync(currentProjectPath);
+                var document = XDocument.Parse(projectText, LoadOptions.PreserveWhitespace);
+                root = document.Root ?? throw new InvalidOperationException("Project XML is empty.");
+            }
+            catch (Exception error)
+            {
+                warnings.Add($"Failed to parse project '{Path.GetFileNameWithoutExtension(currentProjectPath)}': {error.Message}");
+                continue;
+            }
+
+            projectEntries[currentLookupKey] = new SolutionProjectEntry(
+                currentProjectPath,
+                Path.GetFileNameWithoutExtension(currentProjectPath),
+                currentProjectPath,
+                Path.GetRelativePath(rootDirectoryPath, currentProjectPath),
+                string.Empty);
+
+            foreach (var projectReference in ReadProjectReferences(root, projectDirectoryPath))
+            {
+                if (!LooksLikeProjectPath(projectReference.FullPath))
+                {
+                    continue;
+                }
+
+                if (!File.Exists(projectReference.FullPath))
+                {
+                    warnings.Add($"Referenced project was not found and was skipped: {projectReference.FullPath}");
+                    continue;
+                }
+
+                if (queued.Add(projectReference.LookupKey))
+                {
+                    pending.Enqueue(projectReference.FullPath);
+                }
+            }
+        }
+
+        return new ParsedSolution(
+            resolvedProjectPath,
+            $"{rootProjectName} (project scope)",
+            rootDirectoryPath,
+            projectEntries.Values
+                .OrderBy(entry => entry.Name, StringComparer.Ordinal)
+                .ToArray());
+    }
+
     private static async Task<LoadedProject> LoadProjectAsync(SolutionProjectEntry project, string solutionDirectoryPath)
     {
         var projectText = await File.ReadAllTextAsync(project.FullPath);
@@ -452,28 +539,7 @@ sealed class CodeMapAnalyzer
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var projectReferences = root
-            .Descendants()
-            .Where(element => string.Equals(element.Name.LocalName, "ProjectReference", StringComparison.OrdinalIgnoreCase))
-            .Select(element =>
-            {
-                var includePath = GetAttributeOrChildValue(element, "Include");
-                if (string.IsNullOrWhiteSpace(includePath))
-                {
-                    return null;
-                }
-
-                var fullReferencePath = Path.GetFullPath(Path.Combine(projectDirectoryPath, includePath));
-                var isConditional = HasCondition(element);
-                return new ProjectReferenceInfo(
-                    includePath,
-                    fullReferencePath,
-                    NormalizePathKey(fullReferencePath),
-                    isConditional);
-            })
-            .Where(reference => reference is not null)
-            .Cast<ProjectReferenceInfo>()
-            .ToArray();
+        var projectReferences = ReadProjectReferences(root, projectDirectoryPath);
 
         var kind = DetermineProjectKind(
             project.Name,
@@ -497,6 +563,29 @@ sealed class CodeMapAnalyzer
             projectReferences,
             packageReferences);
     }
+
+    private static ProjectReferenceInfo[] ReadProjectReferences(XElement root, string projectDirectoryPath)
+        => root
+            .Descendants()
+            .Where(element => string.Equals(element.Name.LocalName, "ProjectReference", StringComparison.OrdinalIgnoreCase))
+            .Select(element =>
+            {
+                var includePath = GetAttributeOrChildValue(element, "Include");
+                if (string.IsNullOrWhiteSpace(includePath))
+                {
+                    return null;
+                }
+
+                var fullReferencePath = Path.GetFullPath(Path.Combine(projectDirectoryPath, includePath));
+                return new ProjectReferenceInfo(
+                    includePath,
+                    fullReferencePath,
+                    NormalizePathKey(fullReferencePath),
+                    HasCondition(element));
+            })
+            .Where(reference => reference is not null)
+            .Cast<ProjectReferenceInfo>()
+            .ToArray();
 
     private static string BuildGroupPath(
         RawSolutionEntry entry,

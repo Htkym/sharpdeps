@@ -4,6 +4,13 @@ All notable changes to the SharpDeps extension are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Explorer context-menu and command support for `.slnx` solution files, in addition to `.sln`.
+- Explorer context-menu and command support for right-clicking a project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`) to generate a project-scoped dependency graph for that project and everything it transitively references via `ProjectReference`, without requiring a `.sln`/`.slnx`.
+
 ## [0.0.1] - 2026-06-30
 
 ### Added
