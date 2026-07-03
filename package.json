@@ -2,7 +2,7 @@
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
   "description": "Visualize .NET solution dependencies at project and namespace granularity, with circular-dependency detection.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
