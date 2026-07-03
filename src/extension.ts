@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { resolveSolution } from './solution/resolveTarget';
+import { resolveAnalysisTarget } from './solution/resolveTarget';
 import { ensureDotnet, DotnetNotAvailableError } from './runtime/ensureDotnet';
 import { AnalyzerError, locateAnalyzer, runAnalyzer } from './analyzer/runAnalyzer';
 import { buildViewModel } from './view/viewModel';
@@ -11,19 +11,19 @@ export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = new CycleDiagnostics(output);
   context.subscriptions.push(output, diagnostics);
 
-  let lastSolution: vscode.Uri | undefined;
+  let lastTarget: vscode.Uri | undefined;
 
-  async function runAndShow(target?: vscode.Uri): Promise<void> {
-    const solution = await resolveSolution(target);
-    if (!solution) {
+  async function runAndShow(requestedTarget?: vscode.Uri): Promise<void> {
+    const target = await resolveAnalysisTarget(requestedTarget);
+    if (!target) {
       return;
     }
-    lastSolution = solution;
+    lastTarget = target;
 
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: 'SharpDeps: Analyzing solution…',
+        title: 'SharpDeps: Analyzing dependencies…',
         cancellable: true
       },
       async (progress, token) => {
@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const report = await runAnalyzer({
             dotnetPath: dotnet.dotnetPath,
             analyzer,
-            solutionPath: solution.fsPath,
+            analysisTargetPath: target.fsPath,
             maxProjects: config.get<number>('maxProjects', 60),
             maxEdges: config.get<number>('maxEdges', 200),
             token
@@ -56,7 +56,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('sharpdeps.showDependencyMap', (uri?: vscode.Uri) =>
       runAndShow(uri)
     ),
-    vscode.commands.registerCommand('sharpdeps.refresh', () => runAndShow(lastSolution)),
+    vscode.commands.registerCommand('sharpdeps.refresh', () => runAndShow(lastTarget)),
     vscode.commands.registerCommand('sharpdeps.copyMermaid', () =>
       CodeMapPanel.currentPanel?.copyMermaid()
     ),

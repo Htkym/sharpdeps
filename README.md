@@ -11,7 +11,7 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
 
 ## Features
 
-- Interactive Mermaid dependency graph for a `.sln`, shown in an editor tab.
+- Interactive Mermaid dependency graph for a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`), shown in an editor tab.
 - Toggle between **project-level** and **namespace-level** views instantly.
 - Zoom and pan the graph: on-screen controls, Ctrl/⌘ + wheel, trackpad pinch, and drag to pan.
 - Circular dependencies are highlighted in red on the graph.
@@ -19,7 +19,7 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
   - project cycles anchor to the participating `.csproj` files,
   - namespace cycles anchor to a representative source file for each namespace.
 - Export the current graph: **copy Mermaid source**, **save as SVG**, **save as PNG**.
-- Run from the Explorer context menu on a `.sln` file, or from the Command Palette.
+- Run from the Explorer context menu on a `.sln`, `.slnx`, or supported project file, or from the Command Palette. Right-clicking a project file generates a project-scoped graph for that project and everything it transitively references via `ProjectReference`, with no `.sln`/`.slnx` required.
 
 ## Screenshots
 
@@ -53,8 +53,8 @@ If none of these succeed, SharpDeps shows a notification with a **Download .NET*
 
 ## Usage
 
-- Right-click a `.sln` file in the Explorer and choose **SharpDeps: Show Dependency Map**, or
-- Run **SharpDeps: Show Dependency Map** from the Command Palette.
+- Right-click a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`) in the Explorer and choose **SharpDeps: Show Dependency Map**. Right-clicking a project file generates a project-scoped graph for that project and everything it transitively references via `ProjectReference`, with no `.sln`/`.slnx` required.
+- Run **SharpDeps: Show Dependency Map** from the Command Palette. If the active editor is a `.sln`, `.slnx`, or supported project file, SharpDeps uses that; otherwise it falls back to discovering `.sln`/`.slnx` files in the workspace.
 
 While the map is open, these palette commands are available:
 
@@ -75,7 +75,7 @@ While the map is open, these palette commands are available:
 
 ```mermaid
 flowchart LR
-  cmd["Command / right-click"] --> resolve["Resolve target .sln"]
+  cmd["Command / right-click"] --> resolve["Resolve target (.sln/.slnx/project)"]
   resolve --> rt["Resolve dotnet (findPath / acquire)"]
   rt --> run["Run analyzer DLL via dotnet"]
   run --> json["Parse JSON report"]
@@ -84,7 +84,7 @@ flowchart LR
   view -->|copy / export| ext["Extension host (clipboard / save)"]
 ```
 
-The analyzer parses the solution and projects with Roslyn (no MSBuild/SDK dependency) and emits a JSON report. The extension renders it in the webview and publishes any cycles to the Problems panel.
+The analyzer parses the selected solution or project scope with Roslyn (no MSBuild/SDK dependency) and emits a JSON report. The extension renders it in the webview and publishes any cycles to the Problems panel.
 
 ## Building from source
 

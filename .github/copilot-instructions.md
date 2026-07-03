@@ -5,9 +5,10 @@ interactive Mermaid graph (project- and namespace-level) and flags circular depe
 It spans two languages that are built and shipped together:
 
 - **TypeScript** — the extension host (`src/`) and the webview client (`media/viewer.ts`).
-- **C#** — a standalone Roslyn analyzer (`analyzer/code-map.cs`) that parses the solution and
-  emits a JSON report. It does **not** use MSBuild; it reads `.sln`/`.csproj` with
-  `Microsoft.CodeAnalysis.CSharp` only, so it runs on a .NET runtime without the SDK.
+- **C#** — a standalone Roslyn analyzer (`analyzer/code-map.cs`) that parses a solution or
+  project-scoped dependency graph and emits a JSON report. It does **not** use MSBuild; it reads
+  `.sln`/`.slnx` and project files directly with `Microsoft.CodeAnalysis.CSharp`, so it runs on a
+  .NET runtime without the SDK.
 
 ## Build and validate
 
@@ -39,8 +40,8 @@ npm run package          # VSIX via vsce (vscode:prepublish reruns build:analyze
 The flow lives in `src/extension.ts` and chains single-purpose modules:
 
 ```
-command / .sln right-click
-  -> solution/resolveTarget.ts   pick the .sln (arg, active editor, workspace, QuickPick)
+command / target right-click / palette
+  -> solution/resolveTarget.ts   resolveAnalysisTarget: resolve a `.sln`/`.slnx`/project target (arg, active editor, workspace `.sln`/`.slnx` fallback, QuickPick)
   -> runtime/ensureDotnet.ts     resolve a dotnet executable
   -> analyzer/runAnalyzer.ts     run the analyzer, parse report.json into CodeMapReport
   -> view/viewModel.ts           CodeMapReport -> CodeMapViewModel
@@ -70,8 +71,8 @@ command / .sln right-click
   `dotnet run` when the DLL is absent (the pre-build dev path).
 - **`representativeFile` is set only on namespace diagram nodes; it is null for project nodes.**
   Cycle diagnostics anchor accordingly: project cycles to the `.csproj` (relative path joined to
-  the solution dir), namespace cycles to `representativeFile`; unanchored namespace cycles go to the
-  SharpDeps output channel.
+  the selected solution/project directory), namespace cycles to `representativeFile`; unanchored
+  namespace cycles go to the SharpDeps output channel.
 - **Webview security:** `view/html.ts` emits a strict nonce-based CSP with **no `unsafe-eval`**, and
   `localResourceRoots` is limited to `media/`. Keep Mermaid working under this CSP — do not introduce
   `eval`/`new Function` paths.
