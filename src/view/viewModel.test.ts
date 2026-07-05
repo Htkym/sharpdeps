@@ -187,6 +187,53 @@ describe('buildViewModel', () => {
     expect(report.diagramProjects[0].representativeFile).toBeUndefined();
   });
 
+  it('preserves project node identity when no enrichment is possible', () => {
+    const solutionDir = path.resolve('repo');
+    const existingFile = path.join(solutionDir, 'src', 'A', 'A.csproj');
+    const report = makeReport({
+      solutionPath: path.join(solutionDir, 'App.sln'),
+      projects: [
+        {
+          name: 'A',
+          relativePath: path.join('src', 'A', 'A.csproj'),
+          groupPath: '',
+          kind: 'lib',
+          targetFramework: 'net10.0',
+          outgoingDependencies: 0,
+          incomingDependencies: 0,
+          packageReferences: 0
+        },
+        {
+          name: 'Missing',
+          relativePath: path.join('src', 'Missing', 'Missing.csproj'),
+          groupPath: '',
+          kind: 'lib',
+          targetFramework: 'net10.0',
+          outgoingDependencies: 0,
+          incomingDependencies: 0,
+          packageReferences: 0
+        }
+      ],
+      diagramProjects: [
+        {
+          nodeId: 'n0',
+          lookupKey: 'A',
+          name: 'A',
+          kind: 'lib',
+          inCycle: false,
+          representativeFile: existingFile
+        },
+        { nodeId: 'n1', lookupKey: 'B', name: 'B', kind: 'lib', inCycle: false }
+      ]
+    });
+
+    const vm = buildViewModel(report);
+
+    expect(vm.projectGraph.nodes).toBe(report.diagramProjects);
+    expect(vm.projectGraph.nodes[0].representativeFile).toBe(existingFile);
+    expect(vm.projectGraph.nodes[1].representativeFile).toBeUndefined();
+  });
+
   it('falls back to safe defaults when optional fields are missing', () => {
     const sparse = {
       solutionPath: '/repo/Sparse.sln'

@@ -69,8 +69,8 @@ command / target right-click / palette
 - **Analyzer resolution / dev fallback:** `locateAnalyzer` prefers the shipped
   `analyzer/bin/code-map.dll` and falls back to running `analyzer/code-map.cs` source via
   `dotnet run` when the DLL is absent (the pre-build dev path).
-- **`representativeFile` is always set on namespace diagram nodes, and `view/viewModel.ts` also
-  resolves it for project-level nodes.** Cycle diagnostics still anchor project cycles to the
+- **`representativeFile` is set on namespace diagram nodes when a file can be resolved (and may be
+  `null` otherwise), and `view/viewModel.ts` also resolves it for project-level nodes.** Cycle diagnostics still anchor project cycles to the
   `.csproj` (relative path joined to the selected solution/project directory), while the webview's
   copy-for-agent summary can surface the resolved `.csproj` path from project nodes; namespace
   cycles anchor to `representativeFile`; unanchored namespace cycles go to the SharpDeps output

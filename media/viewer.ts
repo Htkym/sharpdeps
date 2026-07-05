@@ -1294,7 +1294,11 @@ function formatCyclesWithFiles(
 function toDisplayPath(file: string, solutionPath: string): string {
   const normalizedFile = file.replace(/\\/g, '/');
   const solutionDir = solutionPath.replace(/[\\/][^\\/]*$/, '').replace(/\\/g, '/');
-  if (solutionDir && normalizedFile.startsWith(solutionDir)) {
+  const solutionDirPrefix = solutionDir.endsWith('/') ? solutionDir : `${solutionDir}/`;
+  if (
+    solutionDir &&
+    (normalizedFile === solutionDir || normalizedFile.startsWith(solutionDirPrefix))
+  ) {
     return normalizedFile.slice(solutionDir.length).replace(/^\/+/, '');
   }
   return normalizedFile;

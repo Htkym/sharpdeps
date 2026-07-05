@@ -47,8 +47,8 @@ export function buildViewModel(report: CodeMapReport): CodeMapViewModel {
  * Populates `representativeFile` on project-level nodes (it is only set by the
  * analyzer for namespace nodes). Mirrors the path resolution in
  * `diagnostics/cycleAnchoring.ts` so a project node's file always points at its
- * `.csproj`, letting the clipboard "copy for Copilot" payload reference exact
- * files without requiring the receiving agent to search the workspace.
+ * `.csproj`, letting the copy-for-agent payload reference exact files without
+ * requiring the receiving Coding Agent to search the workspace.
  * Returns the original array unchanged (same reference) when there is nothing
  * to enrich, so callers relying on referential identity are unaffected.
  */
@@ -65,7 +65,8 @@ function withProjectFilePaths(
     projects.map((project) => [project.name, project.relativePath])
   );
   const solutionDir = path.dirname(solutionPath);
-  return nodes.map((node) => {
+  let changed = false;
+  const enrichedNodes = nodes.map((node) => {
     if (node.representativeFile) {
       return node;
     }
@@ -76,6 +77,8 @@ function withProjectFilePaths(
     const file = path.isAbsolute(relativePath)
       ? relativePath
       : path.join(solutionDir, relativePath);
+    changed = true;
     return { ...node, representativeFile: file };
   });
+  return changed ? enrichedNodes : nodes;
 }
