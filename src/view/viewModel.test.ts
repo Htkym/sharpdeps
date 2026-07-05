@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { CodeMapReport } from '../analyzer/types';
 import { buildViewModel } from './viewModel';
@@ -112,6 +113,80 @@ describe('buildViewModel', () => {
     expect(vm.meta.notes).toEqual(['n1', 'n2']);
   });
 
+  it('passes through project kind breakdown and dependency hubs for the overview', () => {
+    const report = makeReport({
+      projectKinds: [
+        { name: 'lib', count: 3 },
+        { name: 'test', count: 1 }
+      ],
+      dependencyHubs: [
+        {
+          name: 'Core',
+          kind: 'lib',
+          outgoingDependencies: 1,
+          incomingDependencies: 4,
+          packageReferences: 2
+        }
+      ]
+    });
+
+    const vm = buildViewModel(report);
+
+    expect(vm.meta.projectKinds).toEqual([
+      { name: 'lib', count: 3 },
+      { name: 'test', count: 1 }
+    ]);
+    expect(vm.meta.dependencyHubs).toEqual([
+      {
+        name: 'Core',
+        kind: 'lib',
+        outgoingDependencies: 1,
+        incomingDependencies: 4,
+        packageReferences: 2
+      }
+    ]);
+  });
+
+  it('enriches project nodes with a representativeFile derived from relativePath', () => {
+    const solutionDir = path.resolve('repo');
+    const report = makeReport({
+      solutionPath: path.join(solutionDir, 'App.sln'),
+      projects: [
+        {
+          name: 'A',
+          relativePath: path.join('src', 'A', 'A.csproj'),
+          groupPath: '',
+          kind: 'lib',
+          targetFramework: 'net10.0',
+          outgoingDependencies: 0,
+          incomingDependencies: 0,
+          packageReferences: 0
+        },
+        {
+          name: 'B',
+          relativePath: path.join('src', 'B', 'B.csproj'),
+          groupPath: '',
+          kind: 'lib',
+          targetFramework: 'net10.0',
+          outgoingDependencies: 0,
+          incomingDependencies: 0,
+          packageReferences: 0
+        }
+      ]
+    });
+
+    const vm = buildViewModel(report);
+
+    expect(vm.projectGraph.nodes[0].representativeFile).toBe(
+      path.join(solutionDir, 'src', 'A', 'A.csproj')
+    );
+    expect(vm.projectGraph.nodes[1].representativeFile).toBe(
+      path.join(solutionDir, 'src', 'B', 'B.csproj')
+    );
+    // Enrichment must not mutate the original report data.
+    expect(report.diagramProjects[0].representativeFile).toBeUndefined();
+  });
+
   it('falls back to safe defaults when optional fields are missing', () => {
     const sparse = {
       solutionPath: '/repo/Sparse.sln'
@@ -130,5 +205,7 @@ describe('buildViewModel', () => {
     expect(vm.meta.namespaceCycleCount).toBe(0);
     expect(vm.meta.warnings).toEqual([]);
     expect(vm.meta.notes).toEqual([]);
+    expect(vm.meta.projectKinds).toEqual([]);
+    expect(vm.meta.dependencyHubs).toEqual([]);
   });
 });

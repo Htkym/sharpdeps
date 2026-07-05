@@ -1,5 +1,11 @@
 // Message protocol and view-model shared between the extension host and the webview client.
-import type { CodeMapDiagramEdge, CodeMapDiagramProject, DependencyCycle } from '../analyzer/types';
+import type {
+  CodeMapDiagramEdge,
+  CodeMapDiagramProject,
+  DependencyCycle,
+  DependencyHubSummary,
+  ProjectKindSummary
+} from '../analyzer/types';
 
 export type Granularity = 'projects' | 'namespaces';
 
@@ -21,6 +27,10 @@ export interface ViewModelMeta {
   namespaceCount: number;
   projectCycleCount: number;
   namespaceCycleCount: number;
+  /** Project kind breakdown (e.g. lib/test/web), used for the architecture overview. */
+  projectKinds: ProjectKindSummary[];
+  /** The most-connected projects (analyzer caps this list), used to highlight core modules. */
+  dependencyHubs: DependencyHubSummary[];
   warnings: string[];
   notes: string[];
 }
@@ -47,6 +57,7 @@ export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'refresh' }
   | { type: 'copyMermaid'; text: string }
+  | { type: 'copyForAgent'; text: string }
   | { type: 'export'; format: ExportFormat; data: string; granularity: Granularity }
   | { type: 'exportError'; message: string }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string };
