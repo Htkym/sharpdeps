@@ -19,6 +19,7 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
   - project cycles anchor to the participating `.csproj` files,
   - namespace cycles anchor to a representative source file for each namespace.
 - Export the current graph: **copy Mermaid source**, **save as SVG**, **save as PNG**.
+- Copy a compact analysis summary and handoff instructions for an AI coding agent from the toolbar.
 - Run from the Explorer context menu on a `.sln`, `.slnx`, or supported project file, or from the Command Palette. Right-clicking a project file generates a project-scoped graph for that project and everything it transitively references via `ProjectReference`, with no `.sln`/`.slnx` required.
 
 ## Screenshots
