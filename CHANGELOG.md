@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Viewer toolbar action to copy a compact analysis summary and AI coding-agent handoff prompt, including project overview, cycle file paths, and warning/note excerpts.
+
 ## [0.0.2] - 2026-07-03
 
 ### Added

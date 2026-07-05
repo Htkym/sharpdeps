@@ -36,6 +36,7 @@ type Elements = {
   namespaceNote: HTMLElement;
   refreshButton: HTMLButtonElement;
   copyButton: HTMLButtonElement;
+  copyForAgentButton: HTMLButtonElement;
   exportSvgButton: HTMLButtonElement;
   exportPngButton: HTMLButtonElement;
   status: HTMLElement;
@@ -138,6 +139,11 @@ function buildShell(): Elements {
 
   const refreshButton = createIconButton('viewer-refresh', 'Refresh dependency map', ICONS.refresh);
   const copyButton = createIconButton('viewer-copy-mermaid', 'Copy Mermaid source', ICONS.copy);
+  const copyForAgentButton = createIconButton(
+    'viewer-copy-agent',
+    'Copy analysis and Coding Agent prompt',
+    ICONS.copyForAgent
+  );
   const exportSvgButton = createIconButton(
     'viewer-export-svg',
     'Export as SVG',
@@ -150,7 +156,14 @@ function buildShell(): Elements {
     ICONS.download,
     'PNG'
   );
-  actions.append(granularity, refreshButton, copyButton, exportSvgButton, exportPngButton);
+  actions.append(
+    granularity,
+    refreshButton,
+    copyButton,
+    copyForAgentButton,
+    exportSvgButton,
+    exportPngButton
+  );
   header.append(titleBlock, actions);
 
   const namespaceNote = createElement(
@@ -247,6 +260,7 @@ function buildShell(): Elements {
     namespaceNote,
     refreshButton,
     copyButton,
+    copyForAgentButton,
     exportSvgButton,
     exportPngButton,
     status,
@@ -293,11 +307,14 @@ function createButton(id: string, className: string | undefined, text: string): 
   return button;
 }
 
-type IconShape = { tag: string; attrs: Record<string, string> };
+type IconShape = { tag: string; attrs: Record<string, string>; text?: string };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-const ICONS: Record<'refresh' | 'copy' | 'download' | 'zoomIn' | 'zoomOut' | 'fit', IconShape[]> = {
+const ICONS: Record<
+  'refresh' | 'copy' | 'copyForAgent' | 'download' | 'zoomIn' | 'zoomOut' | 'fit',
+  IconShape[]
+> = {
   refresh: [
     { tag: 'polyline', attrs: { points: '23 4 23 10 17 10' } },
     { tag: 'polyline', attrs: { points: '1 20 1 14 7 14' } },
@@ -309,6 +326,35 @@ const ICONS: Record<'refresh' | 'copy' | 'download' | 'zoomIn' | 'zoomOut' | 'fi
   copy: [
     { tag: 'rect', attrs: { x: '9', y: '9', width: '13', height: '13', rx: '2', ry: '2' } },
     { tag: 'path', attrs: { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' } }
+  ],
+  // Original flat icon: a chat bubble containing "AI" plus a sparkle badge,
+  // used for "copy analysis + agent prompt". Not derived from any
+  // third-party artwork/logo (e.g. not the Copilot mark or any stock icon).
+  copyForAgent: [
+    { tag: 'rect', attrs: { x: '3', y: '4', width: '15', height: '11', rx: '2', ry: '2' } },
+    { tag: 'path', attrs: { d: 'M7 15v4l5-4' } },
+    {
+      tag: 'text',
+      attrs: {
+        x: '10.5',
+        y: '11.4',
+        'font-size': '6.5',
+        'font-weight': '700',
+        'font-family': 'sans-serif',
+        'text-anchor': 'middle',
+        fill: 'currentColor',
+        stroke: 'none'
+      },
+      text: 'AI'
+    },
+    {
+      tag: 'path',
+      attrs: {
+        d: 'M19.5 1 20.4 3.1 22.5 4 20.4 4.9 19.5 7 18.6 4.9 16.5 4 18.6 3.1Z',
+        fill: 'currentColor',
+        stroke: 'none'
+      }
+    }
   ],
   download: [
     { tag: 'path', attrs: { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' } },
@@ -349,6 +395,9 @@ function createIcon(shapes: IconShape[]): SVGSVGElement {
     const element = document.createElementNS(SVG_NS, shape.tag);
     for (const [name, value] of Object.entries(shape.attrs)) {
       element.setAttribute(name, value);
+    }
+    if (shape.text) {
+      element.textContent = shape.text;
     }
     svg.append(element);
   }
@@ -416,6 +465,7 @@ function wireUiEvents(): void {
     setStatus('Refreshing dependency map…', 'ready');
   });
   elements.copyButton.addEventListener('click', copyCurrentMermaid);
+  elements.copyForAgentButton.addEventListener('click', copyForAgent);
   elements.exportSvgButton.addEventListener('click', () => {
     void exportCurrentGraph('svg');
   });
@@ -1091,6 +1141,167 @@ function bindTextList(
 function copyCurrentMermaid(): void {
   postMessage({ type: 'copyMermaid', text: currentGraph?.mermaid ?? '' });
   setStatus('Mermaid source sent to VS Code for copying.', 'ready');
+}
+
+function copyForAgent(): void {
+  postMessage({ type: 'copyForAgent', text: buildAgentClipboardText() });
+  setStatus('Analysis summary and Coding Agent prompt sent to VS Code for copying.', 'ready');
+}
+
+const MAX_LISTED_CYCLES = 15;
+const MAX_LISTED_PROJECTS = 60;
+const MAX_LISTED_MESSAGES = 3;
+
+/**
+ * Builds a compact, no-mermaid clipboard payload for handoff to a coding
+ * agent (e.g. GitHub Copilot, or any other AI coding assistant).
+ *
+ * This is meant to work for two use cases: reviewing a circular-dependency
+ * finding, and getting a first bird's-eye view of an unfamiliar codebase.
+ * Total-token economy is the goal, not just clipboard-payload size: a
+ * moderately larger but self-contained snapshot (project map, dependency
+ * hubs, cycle chains with exact files) lets the agent skip the many
+ * grep/glob/view round-trips it would otherwise need to reconstruct the same
+ * picture, which costs far more tokens overall. Raw Mermaid source and the
+ * full edge list are still omitted since they add bulk without adding
+ * anything grep couldn't already tell the agent.
+ */
+function buildAgentClipboardText(): string {
+  const model = state.model;
+  const graph = currentGraph;
+  if (!model || !graph) {
+    return [
+      'SharpDeps analysis data is not ready yet.',
+      '',
+      'Instruction: Analysis data is unavailable. Please re-run the analysis, then review the dependencies.'
+    ].join('\n');
+  }
+
+  const granularityLabel = graph.granularity === 'namespaces' ? 'namespace' : 'project';
+  const fileByName = new Map(graph.nodes.map((node) => [node.name, node.representativeFile]));
+  const cycleLines = formatCyclesWithFiles(graph.cycles, fileByName, model.solutionPath);
+  const overviewLines = formatProjectOverview(model);
+  const messageLines = formatMessages(model.meta.warnings, model.meta.notes);
+
+  return [
+    '# SharpDeps report (pre-analyzed architecture snapshot; no re-exploration needed)',
+    `solution=${model.solutionPath || model.solutionName || 'Dependency Map'}`,
+    `viewing=${granularityLabel} nodes=${formatNumber(graph.nodes.length)} edges=${formatNumber(graph.edges.length)} cycles=${formatNumber(graph.cycles.length)}`,
+    `totals: projects=${formatNumber(model.meta.projectCount)} namespaces=${formatNumber(model.meta.namespaceCount)}`,
+    '',
+    ...overviewLines,
+    '',
+    ...cycleLines,
+    ...(messageLines.length ? ['', ...messageLines] : []),
+    '',
+    'Instruction: The above is a pre-analyzed snapshot (project map, key dependencies, cycles). No further file exploration is needed; reference the listed files/modules directly. Summarize, in short priority-ordered points: (1) architecture overview, (2) how to resolve any cycles, (3) improvement suggestions.'
+  ].join('\n');
+}
+
+/** Solution-wide project map: kind breakdown, top dependency hubs, then every project with its file. */
+function formatProjectOverview(model: CodeMapViewModel): string[] {
+  const nodes = model.projectGraph.nodes;
+  if (!nodes.length) {
+    return ['projects: (none)'];
+  }
+
+  const kindsLine = model.meta.projectKinds.length
+    ? [
+        `kinds: ${model.meta.projectKinds.map((kind) => `${kind.name}=${formatNumber(kind.count)}`).join(', ')}`
+      ]
+    : [];
+
+  const hubLines = model.meta.dependencyHubs.length
+    ? [
+        'hubs (most connected, review these first):',
+        ...model.meta.dependencyHubs.map(
+          (hub) =>
+            `- ${hub.name}(${hub.kind}) out=${formatNumber(hub.outgoingDependencies)} in=${formatNumber(hub.incomingDependencies)} pkg=${formatNumber(hub.packageReferences)}`
+        )
+      ]
+    : [];
+
+  const listedNodes = nodes.slice(0, MAX_LISTED_PROJECTS);
+  const projectLines = listedNodes.map((node) => {
+    const file = node.representativeFile
+      ? toDisplayPath(node.representativeFile, model.solutionPath)
+      : '';
+    const cycleMark = node.inCycle ? ' [cycle]' : '';
+    return `- ${node.name}(${node.kind})${cycleMark}${file ? ` ${file}` : ''}`;
+  });
+  const restCount = nodes.length - listedNodes.length;
+  if (restCount > 0) {
+    projectLines.push(`(+${formatNumber(restCount)} more projects omitted)`);
+  }
+
+  return ['projects (solution map):', ...kindsLine, ...hubLines, ...projectLines];
+}
+
+/** Surfaces a few raw warning/note messages verbatim (e.g. "diagram truncated to top N") as caveats. */
+function formatMessages(warnings: readonly string[], notes: readonly string[]): string[] {
+  const lines: string[] = [];
+  if (warnings.length) {
+    lines.push(
+      'warnings:',
+      ...warnings.slice(0, MAX_LISTED_MESSAGES).map((warning) => `- ${warning}`)
+    );
+    if (warnings.length > MAX_LISTED_MESSAGES) {
+      lines.push(`(+${formatNumber(warnings.length - MAX_LISTED_MESSAGES)} more warnings omitted)`);
+    }
+  }
+  if (notes.length) {
+    lines.push('notes:', ...notes.slice(0, MAX_LISTED_MESSAGES).map((note) => `- ${note}`));
+    if (notes.length > MAX_LISTED_MESSAGES) {
+      lines.push(`(+${formatNumber(notes.length - MAX_LISTED_MESSAGES)} more notes omitted)`);
+    }
+  }
+  return lines;
+}
+
+function formatCyclesWithFiles(
+  cycles: readonly DependencyCycle[],
+  fileByName: ReadonlyMap<string, string | null | undefined>,
+  solutionPath: string
+): string[] {
+  if (!cycles.length) {
+    return ['cycles: none'];
+  }
+
+  const lines = cycles.slice(0, MAX_LISTED_CYCLES).map((cycle, index) => {
+    const nodes = Array.isArray(cycle.nodes) ? cycle.nodes : [];
+    const chain = nodes
+      .map((name) => {
+        const file = fileByName.get(name);
+        return file ? `${name}(${toDisplayPath(file, solutionPath)})` : name;
+      })
+      .join(' -> ');
+    const closing = nodes.length ? ` -> ${nodes[0]}` : '';
+    return `${index + 1}) ${chain}${closing}`;
+  });
+
+  const restCount = cycles.length - lines.length;
+  if (restCount > 0) {
+    lines.push(`(+${formatNumber(restCount)} more cycles omitted)`);
+  }
+  return ['cycles:', ...lines];
+}
+
+/**
+ * Converts an absolute representativeFile path to a short path relative to
+ * the solution directory. The webview sandbox has no Node 'path' module, so
+ * this does plain string/prefix stripping instead.
+ */
+function toDisplayPath(file: string, solutionPath: string): string {
+  const normalizedFile = file.replace(/\\/g, '/');
+  const solutionDir = solutionPath.replace(/[\\/][^\\/]*$/, '').replace(/\\/g, '/');
+  const solutionDirPrefix = solutionDir.endsWith('/') ? solutionDir : `${solutionDir}/`;
+  if (
+    solutionDir &&
+    (normalizedFile === solutionDir || normalizedFile.startsWith(solutionDirPrefix))
+  ) {
+    return normalizedFile.slice(solutionDir.length).replace(/^\/+/, '');
+  }
+  return normalizedFile;
 }
 
 async function exportCurrentGraph(format: ExportFormat): Promise<void> {

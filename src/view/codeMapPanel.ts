@@ -107,6 +107,15 @@ export class CodeMapPanel {
             vscode.window.showInformationMessage('SharpDeps: Mermaid source copied to clipboard.')
           );
         break;
+      case 'copyForAgent':
+        void vscode.env.clipboard
+          .writeText(message.text)
+          .then(() =>
+            vscode.window.showInformationMessage(
+              'SharpDeps: Analysis summary and Coding Agent prompt copied to clipboard.'
+            )
+          );
+        break;
       case 'export':
         void saveExport(
           message.format,
