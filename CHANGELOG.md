@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Node colors by project kind (web, library, test, desktop, app) with a legend that lists the kinds present in the current graph.
+- Zoom slider in the on-screen controls to set an arbitrary zoom level, alongside the existing zoom buttons, wheel, and pinch.
+- Node-spacing and rank-spacing sliders (in the bottom-right controls panel) to adjust the graph layout density live.
+- Show/hide test projects toggle in the controls panel: hiding re-lays out the graph without the test projects so the remaining graph is more compact.
+- Draggable splitter between the graph and the circular-dependency sidebar to resize the two panes.
+
+### Changed
+
+- Thicker dependency edges and arrowheads for better readability.
+- The graph now fits the available window when it opens and re-fits on window resize, instead of opening at a fixed small zoom.
+
 ## [0.0.3] - 2026-07-05
 
 ### Added
