@@ -717,6 +717,11 @@ async function renderGraph(granularity: Granularity): Promise<void> {
 
   const renderId = nextRenderId();
   const sequence = ++state.renderSequence;
+  // Capture and clear the "preserve zoom" request synchronously, bound to this
+  // render, so it can never leak into a later render if this one is superseded
+  // (renderSequence guard below) or throws before setupZoom runs.
+  const preserveZoom = keepZoomOnNextRender;
+  keepZoomOnNextRender = false;
   try {
     const rendered = await mermaid.render(renderId, mermaidSource);
     if (sequence !== state.renderSequence) {
@@ -731,7 +736,7 @@ async function renderGraph(granularity: Granularity): Promise<void> {
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', `${graphLabel(graph)} dependency graph`);
       scaleArrowMarkers(svg);
-      setupZoom(svg);
+      setupZoom(svg, preserveZoom);
       updateTestToggleButton();
     } else {
       disableZoom();
@@ -808,7 +813,7 @@ function renderFailure(error: unknown, mermaidSource: string): void {
   postMessage({ type: 'log', level: 'error', message });
 }
 
-function setupZoom(svg: SVGSVGElement): void {
+function setupZoom(svg: SVGSVGElement, preserveZoom: boolean): void {
   const viewBox = svg.viewBox.baseVal;
   let intrinsicWidth = viewBox && viewBox.width > 0 ? viewBox.width : 0;
   let intrinsicHeight = viewBox && viewBox.height > 0 ? viewBox.height : 0;
@@ -825,11 +830,7 @@ function setupZoom(svg: SVGSVGElement): void {
   zoomState.intrinsicWidth = intrinsicWidth || 1200;
   zoomState.intrinsicHeight = intrinsicHeight || 800;
   setZoomControlsEnabled(true);
-  // Capture and consume the "preserve zoom" request synchronously so a later,
-  // unrelated render doesn't accidentally inherit it.
-  const preserveZoom = keepZoomOnNextRender;
   const previousZoom = zoomState.zoom;
-  keepZoomOnNextRender = false;
   // When preserving zoom (e.g. spacing/test re-renders), size the freshly
   // inserted SVG synchronously in the same frame as the swap. Deferring this
   // to requestAnimationFrame lets the SVG paint once at its unscaled default
