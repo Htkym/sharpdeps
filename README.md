@@ -13,7 +13,10 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
 
 - Interactive Mermaid dependency graph for a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`), shown in an editor tab.
 - Toggle between **project-level** and **namespace-level** views instantly.
-- Zoom and pan the graph: on-screen controls, Ctrl/⌘ + wheel, trackpad pinch, and drag to pan.
+- Nodes are **color-coded by project kind** (web, library, test, desktop, app), with a legend that lists the kinds present in the current graph.
+- Zoom and pan the graph: on-screen controls (including a **zoom slider**), Ctrl/⌘ + wheel, trackpad pinch, and drag to pan. The graph fits the available window when it opens and re-fits on resize.
+- Tune the layout with **node-spacing** and **rank-spacing** sliders, and resize the graph and cycle panes with a draggable splitter.
+- **Hide test projects** with a single toggle: the graph re-lays out without them so the remaining dependencies are easier to read.
 - Circular dependencies are highlighted in red on the graph.
 - Cycles are also reported in the **Problems** panel:
   - project cycles anchor to the participating `.csproj` files,

@@ -46,18 +46,38 @@ type Elements = {
   zoomOutButton: HTMLButtonElement;
   zoomFitButton: HTMLButtonElement;
   zoomLevel: HTMLElement;
+  zoomSlider: HTMLInputElement;
+  nodeSpacingSlider: HTMLInputElement;
+  rankSpacingSlider: HTMLInputElement;
+  testToggleButton: HTMLButtonElement;
   source: HTMLElement;
   cycleList: HTMLElement;
   cycleEmpty: HTMLElement;
   graphSummary: HTMLElement;
+  legend: HTMLElement;
   warningsList: HTMLElement;
   warningsEmpty: HTMLElement;
   notesList: HTMLElement;
   notesEmpty: HTMLElement;
+  mainArea: HTMLElement;
+  panelSplitter: HTMLElement;
 };
 
 const CYCLE_COLOR = '#e5484d';
 const SELECTION_COLOR = '#3b82f6';
+const KIND_COLORS: Record<string, string> = {
+  web: '#f59e0b',
+  library: '#10b981',
+  test: '#a855f7',
+  desktop: '#06b6d4',
+  app: '#eab308'
+};
+const DEFAULT_KIND_COLOR = '#8b8f98';
+
+function getKindColor(kind: string): string {
+  return KIND_COLORS[kind.toLowerCase()] ?? DEFAULT_KIND_COLOR;
+}
+
 const vscode = acquireVsCodeApi();
 
 const state: {
@@ -76,6 +96,7 @@ let elements: Elements;
 let currentGraph: GraphView | null = null;
 let currentBinding: Binding | null = null;
 let mermaidInitialized = false;
+let hideTestProjects = false;
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 4;
@@ -83,6 +104,10 @@ const ZOOM_STEP = 1.2;
 const ZOOM_WHEEL_SENSITIVITY = 0.0015;
 const FIT_PADDING = 16;
 const PAN_THRESHOLD = 4;
+// The zoom slider uses a logarithmic scale so that dragging feels equally
+// precise across the whole 10%-400% range (a linear scale made small drags
+// change the zoom level far too much, especially in the common 20%-100% band).
+const ZOOM_SLIDER_RESOLUTION = 1000;
 
 const zoomState: {
   svg: SVGSVGElement | null;
@@ -91,6 +116,15 @@ const zoomState: {
   zoom: number;
   fitZoom: number;
 } = { svg: null, intrinsicWidth: 0, intrinsicHeight: 0, zoom: 1, fitZoom: 1 };
+
+const layoutSpacing = { nodeSpacing: 50, rankSpacing: 50 };
+let spacingRenderTimer: ReturnType<typeof setTimeout> | undefined;
+
+// When set, the next setupZoom() call keeps the current zoom level instead of
+// re-fitting the diagram to the viewport. Used for re-renders that are not a
+// user-initiated navigation (spacing changes, test-project visibility toggle)
+// so the zoom level the user chose is not silently reset.
+let keepZoomOnNextRender = false;
 
 let suppressNextClick = false;
 
@@ -102,6 +136,8 @@ function main(): void {
   elements = buildShell();
   wireUiEvents();
   wireZoomEvents();
+  wireSpacingEvents();
+  wirePanelSplitter();
   window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) => {
     void handleHostMessage(event.data);
   });
@@ -196,10 +232,45 @@ function buildShell(): Elements {
   stage.append(viewport);
   scroll.append(stage);
 
+  const spacingControls = createElement('div', 'spacing-controls');
+  spacingControls.setAttribute('role', 'group');
+  spacingControls.setAttribute('aria-label', 'Diagram spacing controls');
+  const nodeSpacingLabel = createElement('label', 'spacing-label', 'Node spacing');
+  nodeSpacingLabel.htmlFor = 'viewer-node-spacing';
+  const nodeSpacingSlider = document.createElement('input');
+  nodeSpacingSlider.type = 'range';
+  nodeSpacingSlider.id = 'viewer-node-spacing';
+  nodeSpacingSlider.className = 'spacing-slider';
+  nodeSpacingSlider.min = '10';
+  nodeSpacingSlider.max = '300';
+  nodeSpacingSlider.step = '10';
+  nodeSpacingSlider.value = String(layoutSpacing.nodeSpacing);
+  nodeSpacingSlider.setAttribute('aria-label', 'Node spacing');
+  const rankSpacingLabel = createElement('label', 'spacing-label', 'Rank spacing');
+  rankSpacingLabel.htmlFor = 'viewer-rank-spacing';
+  const rankSpacingSlider = document.createElement('input');
+  rankSpacingSlider.type = 'range';
+  rankSpacingSlider.id = 'viewer-rank-spacing';
+  rankSpacingSlider.className = 'spacing-slider';
+  rankSpacingSlider.min = '10';
+  rankSpacingSlider.max = '300';
+  rankSpacingSlider.step = '10';
+  rankSpacingSlider.value = String(layoutSpacing.rankSpacing);
+  rankSpacingSlider.setAttribute('aria-label', 'Rank spacing');
+  spacingControls.append(nodeSpacingLabel, nodeSpacingSlider, rankSpacingLabel, rankSpacingSlider);
+
   const zoomControls = createElement('div', 'zoom-controls');
   zoomControls.setAttribute('role', 'group');
   zoomControls.setAttribute('aria-label', 'Zoom controls');
   const zoomOutButton = createIconButton('viewer-zoom-out', 'Zoom out', ICONS.zoomOut);
+  const zoomSlider = document.createElement('input');
+  zoomSlider.type = 'range';
+  zoomSlider.id = 'viewer-zoom-slider';
+  zoomSlider.className = 'zoom-slider';
+  zoomSlider.min = '0';
+  zoomSlider.max = String(ZOOM_SLIDER_RESOLUTION);
+  zoomSlider.step = '1';
+  zoomSlider.setAttribute('aria-label', 'Zoom level');
   const zoomLevel = createElement('span', 'zoom-level', '—');
   zoomLevel.id = 'viewer-zoom-level';
   zoomLevel.setAttribute('aria-live', 'polite');
@@ -207,12 +278,33 @@ function buildShell(): Elements {
   const zoomDivider = createElement('span', 'zoom-divider');
   zoomDivider.setAttribute('aria-hidden', 'true');
   const zoomFitButton = createIconButton('viewer-zoom-fit', 'Fit to view', ICONS.fit);
+  const testDivider = createElement('span', 'zoom-divider');
+  testDivider.setAttribute('aria-hidden', 'true');
+  const testToggleButton = createIconButton(
+    'viewer-toggle-test',
+    'Hide test projects',
+    ICONS.flask
+  );
+  testToggleButton.setAttribute('aria-pressed', 'false');
   zoomOutButton.disabled = true;
   zoomInButton.disabled = true;
   zoomFitButton.disabled = true;
-  zoomControls.append(zoomOutButton, zoomLevel, zoomInButton, zoomDivider, zoomFitButton);
+  zoomSlider.disabled = true;
+  zoomControls.append(
+    zoomOutButton,
+    zoomSlider,
+    zoomLevel,
+    zoomInButton,
+    zoomDivider,
+    zoomFitButton,
+    testDivider,
+    testToggleButton
+  );
 
-  graphPanel.append(status, legend, scroll, zoomControls);
+  const controlsPanel = createElement('div', 'controls-panel');
+  controlsPanel.append(spacingControls, zoomControls);
+
+  graphPanel.append(status, legend, scroll, controlsPanel);
 
   const sidebar = createElement('aside', 'cycle-sidebar panel');
   sidebar.setAttribute('aria-label', 'Graph details');
@@ -249,7 +341,14 @@ function buildShell(): Elements {
     notes.container,
     sourceDetails
   );
-  mainArea.append(graphPanel, sidebar);
+
+  const panelSplitter = createElement('div', 'panel-splitter');
+  panelSplitter.setAttribute('role', 'separator');
+  panelSplitter.setAttribute('aria-orientation', 'vertical');
+  panelSplitter.setAttribute('aria-label', 'Resize graph panel');
+  panelSplitter.tabIndex = 0;
+
+  mainArea.append(graphPanel, panelSplitter, sidebar);
   app.append(header, namespaceNote, mainArea);
 
   return {
@@ -270,14 +369,21 @@ function buildShell(): Elements {
     zoomOutButton,
     zoomFitButton,
     zoomLevel,
+    zoomSlider,
+    nodeSpacingSlider,
+    rankSpacingSlider,
+    testToggleButton,
     source,
     cycleList,
     cycleEmpty,
     graphSummary,
+    legend,
     warningsList: warnings.list,
     warningsEmpty: warnings.empty,
     notesList: notes.list,
-    notesEmpty: notes.empty
+    notesEmpty: notes.empty,
+    mainArea,
+    panelSplitter
   };
 }
 
@@ -312,7 +418,15 @@ type IconShape = { tag: string; attrs: Record<string, string>; text?: string };
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const ICONS: Record<
-  'refresh' | 'copy' | 'copyForAgent' | 'download' | 'zoomIn' | 'zoomOut' | 'fit',
+  | 'refresh'
+  | 'copy'
+  | 'copyForAgent'
+  | 'download'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'fit'
+  | 'flask'
+  | 'flaskOff',
   IconShape[]
 > = {
   refresh: [
@@ -377,6 +491,30 @@ const ICONS: Record<
     { tag: 'path', attrs: { d: 'M21 8V5a2 2 0 0 0-2-2h-3' } },
     { tag: 'path', attrs: { d: 'M3 16v3a2 2 0 0 0 2 2h3' } },
     { tag: 'path', attrs: { d: 'M16 21h3a2 2 0 0 0 2-2v-3' } }
+  ],
+  // Conical lab flask — the universal "test" symbol, used for the
+  // show/hide test-projects toggle.
+  flask: [
+    {
+      tag: 'path',
+      attrs: {
+        d: 'M10 2v8.5a2.5 2.5 0 0 1-.34 1.26L4.5 21a1 1 0 0 0 .87 1.5h13.26a1 1 0 0 0 .87-1.5l-5.16-9.24a2.5 2.5 0 0 1-.34-1.26V2'
+      }
+    },
+    { tag: 'path', attrs: { d: 'M8.5 2h7' } },
+    { tag: 'path', attrs: { d: 'M7 16h10' } }
+  ],
+  // The same flask crossed out with a slash — shown while test projects are hidden.
+  flaskOff: [
+    {
+      tag: 'path',
+      attrs: {
+        d: 'M10 2v8.5a2.5 2.5 0 0 1-.34 1.26L4.5 21a1 1 0 0 0 .87 1.5h13.26a1 1 0 0 0 .87-1.5l-5.16-9.24a2.5 2.5 0 0 1-.34-1.26V2'
+      }
+    },
+    { tag: 'path', attrs: { d: 'M8.5 2h7' } },
+    { tag: 'path', attrs: { d: 'M7 16h10' } },
+    { tag: 'line', attrs: { x1: '3', y1: '3', x2: '21', y2: '21' } }
   ]
 };
 
@@ -474,6 +612,23 @@ function wireUiEvents(): void {
   });
 }
 
+function wireSpacingEvents(): void {
+  const handleSpacingChange = (): void => {
+    layoutSpacing.nodeSpacing = Number(elements.nodeSpacingSlider.value);
+    layoutSpacing.rankSpacing = Number(elements.rankSpacingSlider.value);
+    if (spacingRenderTimer !== undefined) {
+      clearTimeout(spacingRenderTimer);
+    }
+    spacingRenderTimer = setTimeout(() => {
+      initializeMermaid(state.theme);
+      keepZoomOnNextRender = true;
+      void renderGraph(state.granularity);
+    }, 120);
+  };
+  elements.nodeSpacingSlider.addEventListener('input', handleSpacingChange);
+  elements.rankSpacingSlider.addEventListener('input', handleSpacingChange);
+}
+
 async function handleHostMessage(message: HostToWebviewMessage): Promise<void> {
   switch (message.type) {
     case 'render':
@@ -510,7 +665,9 @@ function initializeMermaid(theme: ThemeKind): void {
     securityLevel: 'loose',
     flowchart: {
       useMaxWidth: false,
-      htmlLabels: false
+      htmlLabels: false,
+      nodeSpacing: layoutSpacing.nodeSpacing,
+      rankSpacing: layoutSpacing.rankSpacing
     }
   });
   mermaidInitialized = true;
@@ -545,10 +702,14 @@ async function renderGraph(granularity: Granularity): Promise<void> {
   const graph = getGraphData(granularity);
   currentGraph = graph;
   currentBinding = null;
-  const mermaidSource = graph.mermaid || `flowchart LR\n  Empty["No ${graphLabel(graph)} data"]`;
+  const baseMermaidSource =
+    graph.mermaid || `flowchart LR\n  Empty["No ${graphLabel(graph)} data"]`;
+  const hiddenNodeIds = getHiddenTestNodeIds(graph);
+  const mermaidSource = filterHiddenNodesFromMermaid(baseMermaidSource, hiddenNodeIds);
   elements.source.textContent = mermaidSource;
   bindCycleList(graph.cycles);
   setGraphSummary(graph);
+  updateLegend(graph);
 
   if (!mermaidInitialized) {
     initializeMermaid(state.theme);
@@ -569,7 +730,9 @@ async function renderGraph(granularity: Granularity): Promise<void> {
       svg.removeAttribute('height');
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', `${graphLabel(graph)} dependency graph`);
+      scaleArrowMarkers(svg);
       setupZoom(svg);
+      updateTestToggleButton();
     } else {
       disableZoom();
     }
@@ -617,6 +780,23 @@ function setGraphSummary(graph: GraphView): void {
   elements.graphSummary.textContent = `${formatNumber(graph.nodes.length)} node(s), ${formatNumber(graph.edges.length)} edge(s), ${formatNumber(graph.cycles.length)} cycle(s).`;
 }
 
+function updateLegend(graph: GraphView): void {
+  const kinds = Array.from(new Set(graph.nodes.map((node) => node.kind))).sort();
+  const kindItems = kinds.map((kind) => {
+    const item = legendItem('', capitalize(kind));
+    const swatch = item.querySelector<HTMLElement>('.swatch');
+    if (swatch) {
+      swatch.style.background = getKindColor(kind);
+    }
+    return item;
+  });
+  elements.legend.replaceChildren(
+    legendItem('cycle-swatch', 'Circular dependency'),
+    legendItem('selected-swatch', 'Selected / connected'),
+    ...kindItems
+  );
+}
+
 function renderFailure(error: unknown, mermaidSource: string): void {
   elements.viewport.replaceChildren();
   elements.viewport.append(
@@ -645,10 +825,36 @@ function setupZoom(svg: SVGSVGElement): void {
   zoomState.intrinsicWidth = intrinsicWidth || 1200;
   zoomState.intrinsicHeight = intrinsicHeight || 800;
   setZoomControlsEnabled(true);
-  zoomState.fitZoom = computeFitZoom();
-  zoomState.zoom = zoomState.fitZoom;
-  applyZoom();
-  centerScroll();
+  // Capture and consume the "preserve zoom" request synchronously so a later,
+  // unrelated render doesn't accidentally inherit it.
+  const preserveZoom = keepZoomOnNextRender;
+  const previousZoom = zoomState.zoom;
+  keepZoomOnNextRender = false;
+  // When preserving zoom (e.g. spacing/test re-renders), size the freshly
+  // inserted SVG synchronously in the same frame as the swap. Deferring this
+  // to requestAnimationFrame lets the SVG paint once at its unscaled default
+  // size and then jump to the target zoom, which reads as a flicker.
+  if (preserveZoom) {
+    zoomState.zoom = clampZoom(previousZoom);
+    applyZoom();
+  }
+  // Defer the initial fit measurement until layout has settled — measuring
+  // immediately after the SVG is inserted can read a stale/transient container
+  // size (e.g. right after a VS Code webview panel becomes visible), producing
+  // an incorrectly small fit percentage.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (zoomState.svg !== svg) {
+        return;
+      }
+      zoomState.fitZoom = computeFitZoom();
+      if (!preserveZoom) {
+        zoomState.zoom = zoomState.fitZoom;
+        applyZoom();
+        centerScroll();
+      }
+    });
+  });
 }
 
 function disableZoom(): void {
@@ -661,6 +867,19 @@ function clampZoom(zoom: number): number {
     return MIN_ZOOM;
   }
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+}
+
+// Maps a zoom factor to a position on the (linear) slider track using a
+// logarithmic scale, and back. This keeps the perceived drag sensitivity
+// consistent across the whole MIN_ZOOM..MAX_ZOOM range.
+function zoomToSliderValue(zoom: number): number {
+  const ratio = Math.log(clampZoom(zoom) / MIN_ZOOM) / Math.log(MAX_ZOOM / MIN_ZOOM);
+  return Math.round(ratio * ZOOM_SLIDER_RESOLUTION);
+}
+
+function sliderValueToZoom(value: number): number {
+  const ratio = Math.min(1, Math.max(0, value / ZOOM_SLIDER_RESOLUTION));
+  return clampZoom(MIN_ZOOM * Math.pow(MAX_ZOOM / MIN_ZOOM, ratio));
 }
 
 function computeFitZoom(): number {
@@ -684,6 +903,7 @@ function applyZoom(): void {
   svg.style.width = `${zoomState.intrinsicWidth * zoom}px`;
   svg.style.height = `${zoomState.intrinsicHeight * zoom}px`;
   elements.zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+  elements.zoomSlider.value = String(zoomToSliderValue(zoom));
   elements.zoomOutButton.disabled = zoom <= MIN_ZOOM + 1e-4;
   elements.zoomInButton.disabled = zoom >= MAX_ZOOM - 1e-4;
 }
@@ -735,6 +955,7 @@ function setZoomControlsEnabled(enabled: boolean): void {
   elements.zoomInButton.disabled = !enabled;
   elements.zoomOutButton.disabled = !enabled;
   elements.zoomFitButton.disabled = !enabled;
+  elements.zoomSlider.disabled = !enabled;
   if (!enabled) {
     elements.zoomLevel.textContent = '—';
   }
@@ -756,6 +977,17 @@ function wireZoomEvents(): void {
   elements.zoomInButton.addEventListener('click', () => zoomByStep(ZOOM_STEP));
   elements.zoomOutButton.addEventListener('click', () => zoomByStep(1 / ZOOM_STEP));
   elements.zoomFitButton.addEventListener('click', () => fitToViewport());
+  elements.testToggleButton.addEventListener('click', () => {
+    hideTestProjects = !hideTestProjects;
+    updateTestToggleButton();
+    keepZoomOnNextRender = true;
+    void renderGraph(state.granularity);
+  });
+  elements.zoomSlider.addEventListener('input', () => {
+    const rect = elements.scroll.getBoundingClientRect();
+    const targetZoom = sliderValueToZoom(Number(elements.zoomSlider.value));
+    zoomToPoint(targetZoom, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
 
   scroll.addEventListener(
     'wheel',
@@ -856,6 +1088,88 @@ function wireZoomEvents(): void {
     }
     if (Math.abs(zoomState.zoom - zoomState.fitZoom) < 1e-3) {
       fitToViewport();
+    }
+  });
+
+  const scrollResizeObserver = new ResizeObserver(() => {
+    if (!zoomState.svg) {
+      return;
+    }
+    if (Math.abs(zoomState.zoom - zoomState.fitZoom) < 1e-3) {
+      fitToViewport();
+    }
+  });
+  scrollResizeObserver.observe(elements.scroll);
+}
+
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 480;
+
+function wirePanelSplitter(): void {
+  const splitter = elements.panelSplitter;
+  const mainArea = elements.mainArea;
+  let dragging = false;
+  let dragPointerId = -1;
+
+  function currentSidebarWidth(): number {
+    const sidebarColumn = mainArea.style.gridTemplateColumns;
+    const match = /\s(\d+(?:\.\d+)?)px$/.exec(sidebarColumn);
+    if (match) {
+      return Number(match[1]);
+    }
+    return elements.scroll.getBoundingClientRect() ? 320 : 320;
+  }
+
+  function applySidebarWidth(width: number): void {
+    const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+    mainArea.style.gridTemplateColumns = `minmax(0, 1fr) 6px ${clamped}px`;
+  }
+
+  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0) {
+      return;
+    }
+    dragging = true;
+    dragPointerId = event.pointerId;
+    try {
+      splitter.setPointerCapture(dragPointerId);
+    } catch {
+      // Pointer capture is best-effort.
+    }
+    event.preventDefault();
+  });
+
+  splitter.addEventListener('pointermove', (event: PointerEvent) => {
+    if (!dragging) {
+      return;
+    }
+    const rect = mainArea.getBoundingClientRect();
+    const newSidebarWidth = rect.right - event.clientX;
+    applySidebarWidth(newSidebarWidth);
+  });
+
+  const endDrag = (): void => {
+    if (!dragging) {
+      return;
+    }
+    dragging = false;
+    try {
+      splitter.releasePointerCapture(dragPointerId);
+    } catch {
+      // Capture may already be released.
+    }
+  };
+  splitter.addEventListener('pointerup', endDrag);
+  splitter.addEventListener('pointercancel', endDrag);
+
+  splitter.addEventListener('keydown', (event: KeyboardEvent) => {
+    const step = 16;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      applySidebarWidth(currentSidebarWidth() + step);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      applySidebarWidth(currentSidebarWidth() - step);
     }
   });
 }
@@ -983,10 +1297,10 @@ function bindCodeMapInteractivity(svg: SVGSVGElement, graph: GraphView): boolean
           ? CYCLE_COLOR
           : '';
       edge.element.style.strokeWidth = isHighlighted
-        ? '4px'
+        ? '4.5px'
         : edge.inCycle || isCycleHighlighted
-          ? '2.5px'
-          : '';
+          ? '3px'
+          : '2px';
 
       if (isHighlighted) {
         connectedNodeIds.add(edge.sourceNodeId);
@@ -1009,8 +1323,8 @@ function bindCodeMapInteractivity(svg: SVGSVGElement, graph: GraphView): boolean
       node.element.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
       node.element.style.opacity = isDimmed ? '0.45' : '1';
 
-      const baseStroke = node.inCycle || isCycleHighlighted ? CYCLE_COLOR : '';
-      const baseWidth = node.inCycle || isCycleHighlighted ? '2px' : '';
+      const baseStroke = node.inCycle || isCycleHighlighted ? CYCLE_COLOR : getKindColor(node.kind);
+      const baseWidth = node.inCycle || isCycleHighlighted ? '2px' : '1.5px';
       const shapes = node.element.querySelectorAll<SVGElement>(
         'rect, circle, ellipse, polygon, path'
       );
@@ -1051,29 +1365,30 @@ function applyCycleBaseStyles(
   edges: readonly CodeMapDiagramEdge[]
 ): void {
   for (const node of nodes) {
-    if (!node.inCycle) {
-      continue;
-    }
     const shapes =
       findCodeMapNodeElement(svg, node.nodeId)?.querySelectorAll<SVGElement>(
         'rect, circle, ellipse, polygon, path'
       ) ?? [];
+    const stroke = node.inCycle ? CYCLE_COLOR : getKindColor(node.kind);
+    const strokeWidth = node.inCycle ? '2px' : '1.5px';
     for (const shape of shapes) {
-      shape.style.stroke = CYCLE_COLOR;
-      shape.style.strokeWidth = '2px';
+      shape.style.stroke = stroke;
+      shape.style.strokeWidth = strokeWidth;
     }
   }
 
   for (const edge of edges) {
-    if (!edge.inCycle) {
-      continue;
-    }
     const element = svg.querySelector<SVGElement>(
       `[data-edge="true"][data-id="${cssEscape(edge.edgeId)}"]`
     );
-    if (element) {
+    if (!element) {
+      continue;
+    }
+    if (edge.inCycle) {
       element.style.stroke = CYCLE_COLOR;
-      element.style.strokeWidth = '2.5px';
+      element.style.strokeWidth = '3px';
+    } else {
+      element.style.strokeWidth = '2px';
     }
   }
 }
@@ -1426,6 +1741,99 @@ function nextRenderId(): string {
     return `sharpdeps-${crypto.randomUUID()}`;
   }
   return `sharpdeps-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function scaleArrowMarkers(svg: SVGSVGElement): void {
+  const MARKER_SCALE = 1.3;
+  const markers = svg.querySelectorAll<SVGMarkerElement>('marker');
+  for (const marker of markers) {
+    scaleMarkerAttribute(marker, 'markerWidth', MARKER_SCALE);
+    scaleMarkerAttribute(marker, 'markerHeight', MARKER_SCALE);
+    scaleMarkerAttribute(marker, 'refX', MARKER_SCALE);
+    scaleMarkerAttribute(marker, 'refY', MARKER_SCALE);
+  }
+}
+
+function scaleMarkerAttribute(marker: SVGMarkerElement, attribute: string, factor: number): void {
+  const raw = marker.getAttribute(attribute);
+  if (raw === null) {
+    return;
+  }
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) {
+    return;
+  }
+  marker.setAttribute(attribute, String(value * factor));
+}
+
+function getHiddenTestNodeIds(graph: GraphView): Set<string> {
+  if (!hideTestProjects) {
+    return new Set();
+  }
+  return new Set(
+    graph.nodes.filter((node) => node.kind.toLowerCase() === 'test').map((node) => node.nodeId)
+  );
+}
+
+// Removes the Mermaid statements that declare hidden (test-kind) nodes and
+// any edges touching them, so the layout engine lays out the remaining nodes
+// compactly instead of just hiding elements after rendering (which would
+// leave their reserved layout space empty).
+function filterHiddenNodesFromMermaid(source: string, hiddenNodeIds: ReadonlySet<string>): string {
+  if (hiddenNodeIds.size === 0) {
+    return source;
+  }
+  const nodeDeclPattern = /^\s*([A-Za-z0-9_]+)\[/;
+  const edgePattern = /^\s*(\S+)\s+\S+@-->\s*(\S+)\s*$/;
+  const stylePattern = /^\s*style\s+(\S+)\s+/;
+  const linkStylePattern = /^\s*linkStyle\s+/;
+
+  const withoutHiddenStatements = source.split('\n').filter((line) => {
+    // linkStyle references edges by their positional index in the diagram, which
+    // shifts once edges are removed above; drop it rather than risk pointing at
+    // the wrong edge. Cycle/selection coloring is reapplied by JS after render
+    // (see applyCycleBaseStyles), so this Mermaid-native styling is redundant.
+    if (linkStylePattern.test(line)) {
+      return false;
+    }
+    const edgeMatch = line.match(edgePattern);
+    if (edgeMatch) {
+      const [, sourceId, targetId] = edgeMatch;
+      return !hiddenNodeIds.has(sourceId) && !hiddenNodeIds.has(targetId);
+    }
+    const styleMatch = line.match(stylePattern);
+    if (styleMatch) {
+      return !hiddenNodeIds.has(styleMatch[1]);
+    }
+    const nodeMatch = line.match(nodeDeclPattern);
+    if (nodeMatch) {
+      return !hiddenNodeIds.has(nodeMatch[1]);
+    }
+    return true;
+  });
+
+  // Drop subgraph groups that ended up with no nodes left inside them.
+  const result: string[] = [];
+  for (let i = 0; i < withoutHiddenStatements.length; i++) {
+    const line = withoutHiddenStatements[i];
+    const next = withoutHiddenStatements[i + 1];
+    if (/^\s*subgraph\s/.test(line) && next !== undefined && /^\s*end\s*$/.test(next)) {
+      i++;
+      continue;
+    }
+    result.push(line);
+  }
+  return result.join('\n');
+}
+
+function updateTestToggleButton(): void {
+  const button = elements.testToggleButton;
+  const label = hideTestProjects ? 'Show test projects' : 'Hide test projects';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', hideTestProjects ? 'true' : 'false');
+  button.classList.toggle('is-active', hideTestProjects);
+  button.replaceChildren(createIcon(hideTestProjects ? ICONS.flaskOff : ICONS.flask));
 }
 
 function cssEscape(value: string): string {
