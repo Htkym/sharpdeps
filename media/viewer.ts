@@ -786,7 +786,9 @@ function setGraphSummary(graph: GraphView): void {
 }
 
 function updateLegend(graph: GraphView): void {
-  const kinds = Array.from(new Set(graph.nodes.map((node) => node.kind))).sort();
+  const hiddenNodeIds = getHiddenTestNodeIds(graph);
+  const visibleNodes = graph.nodes.filter((node) => !hiddenNodeIds.has(node.nodeId));
+  const kinds = Array.from(new Set(visibleNodes.map((node) => node.kind))).sort();
   const kindItems = kinds.map((kind) => {
     const item = legendItem('', capitalize(kind));
     const swatch = item.querySelector<HTMLElement>('.swatch');
@@ -1118,7 +1120,12 @@ function wirePanelSplitter(): void {
     if (match) {
       return Number(match[1]);
     }
-    return elements.scroll.getBoundingClientRect() ? 320 : 320;
+    // Before the first resize the width comes from the CSS default
+    // (minmax(18rem, 24rem)); read the resolved track width so keyboard
+    // resizing starts from the actual on-screen size rather than a magic number.
+    const tracks = getComputedStyle(mainArea).gridTemplateColumns.split(/\s+/);
+    const resolved = Number.parseFloat(tracks[tracks.length - 1]);
+    return Number.isFinite(resolved) ? resolved : SIDEBAR_MIN_WIDTH;
   }
 
   function applySidebarWidth(width: number): void {
