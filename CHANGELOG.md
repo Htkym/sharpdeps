@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-07-06
+
 ### Added
 
 - Node colors by project kind (web, library, test, desktop, app) with a legend that lists the kinds present in the current graph.
@@ -45,6 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Explorer context-menu entry on `.sln` files and a "SharpDeps: Show Dependency Map" command.
 - Automatic .NET runtime resolution via the .NET Install Tool, with a configurable `sharpdeps.dotnetPath` fallback.
 
+[0.0.4]: https://github.com/Htkym/sharpdeps/releases/tag/v0.0.4
 [0.0.3]: https://github.com/Htkym/sharpdeps/releases/tag/v0.0.3
 [0.0.2]: https://github.com/Htkym/sharpdeps/releases/tag/v0.0.2
 [0.0.1]: https://github.com/Htkym/sharpdeps/releases/tag/v0.0.1
