@@ -95,13 +95,22 @@ public static class SymbolIndexBuilder
         SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
             SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
 
+    /// <summary>
+    /// Builds the index. The document registry is shared with the evidence collectors
+    /// so a file has exactly one document id per analysis.
+    /// </summary>
     public static SymbolIndex Build(
         string rootId,
         string rootDirectory,
         IReadOnlyList<SymbolIndexInput> inputs,
         CancellationToken cancellationToken = default)
+        => Build(new SourceDocumentRegistry(rootId, rootDirectory), inputs, cancellationToken);
+
+    public static SymbolIndex Build(
+        SourceDocumentRegistry documents,
+        IReadOnlyList<SymbolIndexInput> inputs,
+        CancellationToken cancellationToken = default)
     {
-        var documents = new SourceDocumentRegistry(rootId, rootDirectory);
         var namespaces = new List<IndexedNamespace>();
         var types = new List<IndexedType>();
         var members = new List<IndexedMember>();

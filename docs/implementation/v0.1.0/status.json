@@ -357,12 +357,28 @@
       "id": "SD-009",
       "title": "宣言・公開面の依存抽出",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/CollectedEvidence.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/DeclarationDependencyCollector.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Symbols/SymbolIndex.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/DeclarationDependencyCollectorTests.cs",
+        "docs/analysis-semantics.md",
+        "docs/implementation/v0.1.0/tasks/SD-009.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 80テスト成功",
+        "継承・実装・暗黙object除外",
+        "シグネチャの正規化（型引数・配列要素・tuple要素がそれぞれ別根拠）",
+        "ジェネリック制約・属性",
+        "公開面（包含型を含む実効アクセシビリティ）",
+        "親の同一性・自己参照の分類",
+        "golden fixture（OrderStoreのimplements根拠の位置とkind）"
+      ],
+      "evidence": ["docs/analysis-semantics.md", "docs/implementation/v0.1.0/tasks/SD-009.md"],
+      "blockers": [],
+      "notes": "関係の集計と件数はSD-012、Operation由来の種別はSD-010。"
     },
     {
       "id": "SD-010",
