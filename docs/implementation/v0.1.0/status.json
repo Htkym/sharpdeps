@@ -9,7 +9,8 @@
       "id": "M0",
       "name": "基準と技術成立性",
       "tasks": ["SD-001", "SD-002", "SD-003", "SD-004", "SD-005"],
-      "status": "in_progress"
+      "status": "in_progress",
+      "notes": "SD-001〜SD-005は完了（基準固定、report v2契約、Semanticロード試作、SVG/ELK/Worker試作、解析器分割）。M0の残条件であるSD-023の起動/CSP境界は、Worker用CSP（worker-src blob: / connect-src）まで実装済みで、Trust guardは未着手。"
     },
     {
       "id": "M1",
