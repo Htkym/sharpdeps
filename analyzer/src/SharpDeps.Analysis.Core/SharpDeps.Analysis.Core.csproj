@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SharpDeps.Analysis.Core</RootNamespace>
+    <AssemblyName>SharpDeps.Analysis.Core</AssemblyName>
+    <Description>Graph, identity, and path utilities shared by the SharpDeps analyzers.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SharpDeps.Analysis.Contracts</RootNamespace>
+    <AssemblyName>SharpDeps.Analysis.Contracts</AssemblyName>
+    <Description>Report and solution contracts shared by the SharpDeps analyzers.</Description>
+  </PropertyGroup>
+
+</Project>

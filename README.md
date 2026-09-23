@@ -96,9 +96,16 @@ Prerequisites: Node.js, and the .NET SDK (only to precompile the analyzer).
 
 ```bash
 npm install
-npm run build:analyzer   # publishes analyzer/code-map.cs -> analyzer/bin/code-map.dll
+npm run build:analyzer   # publishes the analyzer solution -> analyzer/bin/quick, analyzer/bin/semantic
 npm run build            # bundles the extension host and the webview client
 npm run compile          # type-check (tsc --noEmit)
+```
+
+The analyzers build from `analyzer/SharpDeps.Analyzer.slnx`:
+
+```bash
+dotnet build analyzer/SharpDeps.Analyzer.slnx -c Release
+dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release
 ```
 
 Run the extension:

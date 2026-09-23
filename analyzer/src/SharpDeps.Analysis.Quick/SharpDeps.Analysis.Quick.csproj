@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SharpDeps.Analysis.Quick</RootNamespace>
+    <AssemblyName>SharpDeps.Analysis.Quick</AssemblyName>
+    <Description>SDK-free Quick analysis: declared project references and C# syntax.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
+    <ProjectReference Include="..\SharpDeps.Analysis.Core\SharpDeps.Analysis.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Syntax-only Roslyn. This project must never reference MSBuild or the Roslyn
+      workspace packages: Quick has to run without an SDK installed.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+</Project>

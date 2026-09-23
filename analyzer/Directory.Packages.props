@@ -9,6 +9,12 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />
     <!--
+      Quick uses syntax-only Roslyn and stays on the v0.0.4 parser version so its
+      output is unchanged by the SD-005 split. Semantic uses the 5.9.0 series with
+      MSBuild 18; the two run in separate processes.
+    -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <!--
       Microsoft.Build.Framework must be referenced with ExcludeAssets="runtime"
       (MSBL001) so MSBuild assemblies are loaded from the located SDK instance.
       The version must match the transitive reference of Workspaces.MSBuild.

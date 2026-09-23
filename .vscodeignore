@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
 .local/**
+.playwright-mcp/**
 docs/**
 tests/**
 schemas/**
@@ -12,7 +13,6 @@ tsconfig.json
 **/*.ts
 **/*.map
 analyzer/obj/**
-analyzer/.build/**
 analyzer/src/**
 analyzer/tests/**
 analyzer/Directory.Build.props

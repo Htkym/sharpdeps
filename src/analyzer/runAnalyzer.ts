@@ -16,24 +16,28 @@ export class AnalyzerError extends Error {
 }
 
 export interface AnalyzerLocation {
-  /** 'dll' runs a precompiled DLL with any runtime; 'source' runs the .cs via the SDK (dev fallback). */
-  mode: 'dll' | 'source';
   path: string;
 }
 
 /**
- * Locate the analyzer. Prefer the precompiled DLL (analyzer/bin/code-map.dll, shipped in the VSIX);
- * fall back to the .cs source for development before `npm run build:analyzer` has been run.
+ * Locate the published Quick analyzer. The VSIX ships
+ * `analyzer/bin/quick/code-map.dll`; `analyzer/bin/code-map.dll` is accepted so a
+ * v0.0.4-era layout keeps working. There is no source fallback: the file-based
+ * analyzer was replaced by the QuickHost project in SD-005.
  */
 export function locateAnalyzer(context: vscode.ExtensionContext): AnalyzerLocation {
-  const dll = path.join(context.extensionUri.fsPath, 'analyzer', 'bin', 'code-map.dll');
-  if (fs.existsSync(dll)) {
-    return { mode: 'dll', path: dll };
+  const candidates = [
+    path.join(context.extensionUri.fsPath, 'analyzer', 'bin', 'quick', 'code-map.dll'),
+    path.join(context.extensionUri.fsPath, 'analyzer', 'bin', 'code-map.dll')
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!found) {
+    throw new AnalyzerError(
+      'The Quick analyzer was not found in this installation (analyzer/bin/quick/code-map.dll).',
+      'Reinstall SharpDeps. When running from source, execute `npm run build:analyzer` first.'
+    );
   }
-  return {
-    mode: 'source',
-    path: path.join(context.extensionUri.fsPath, 'analyzer', 'code-map.cs')
-  };
+  return { path: found };
 }
 
 export interface RunAnalyzerOptions {
@@ -61,13 +65,8 @@ export async function runAnalyzer(options: RunAnalyzerOptions): Promise<CodeMapR
     String(options.maxEdges)
   ];
 
-  const args =
-    options.analyzer.mode === 'dll'
-      ? [options.analyzer.path, ...flags]
-      : ['run', options.analyzer.path, '--', ...flags];
-
   try {
-    await runProcess(options.dotnetPath, args, path.dirname(options.analyzer.path), options.token);
+    await runProcess(options.dotnetPath, [options.analyzer.path, ...flags], options.token);
     const json = await fs.promises.readFile(outputPath, 'utf8');
     return JSON.parse(json) as CodeMapReport;
   } finally {
@@ -78,11 +77,10 @@ export async function runAnalyzer(options: RunAnalyzerOptions): Promise<CodeMapR
 function runProcess(
   command: string,
   args: string[],
-  cwd: string,
   token?: vscode.CancellationToken
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd });
+    const child = spawn(command, args, { cwd: path.dirname(args[0] ?? '.') });
     let stdout = '';
     let stderr = '';
 

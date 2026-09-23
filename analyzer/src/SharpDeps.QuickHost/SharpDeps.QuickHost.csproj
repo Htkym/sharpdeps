@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SharpDeps.QuickHost</RootNamespace>
+    <!-- The published assembly keeps the historical name so the extension and its
+         snapshot test find analyzer/bin/quick/code-map.dll. -->
+    <AssemblyName>code-map</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Description>SDK-free Quick analysis host for SharpDeps.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
+    <ProjectReference Include="..\SharpDeps.Analysis.Core\SharpDeps.Analysis.Core.csproj" />
+    <ProjectReference Include="..\SharpDeps.Analysis.Quick\SharpDeps.Analysis.Quick.csproj" />
+  </ItemGroup>
+
+</Project>

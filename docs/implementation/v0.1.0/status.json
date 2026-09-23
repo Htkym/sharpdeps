@@ -210,12 +210,37 @@
       "id": "SD-005",
       "title": "C#解析器のプロジェクト分割",
       "milestone": "M0",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/code-map.cs (deleted)",
+        "analyzer/src/SharpDeps.Analysis.Contracts/**",
+        "analyzer/src/SharpDeps.Analysis.Core/**",
+        "analyzer/src/SharpDeps.Analysis.Quick/**",
+        "analyzer/src/SharpDeps.QuickHost/**",
+        "analyzer/Directory.Packages.props",
+        "analyzer/SharpDeps.Analyzer.slnx",
+        "analyzer/tests/SharpDeps.Analysis.Tests/**",
+        "scripts/build-analyzer.js",
+        "src/analyzer/runAnalyzer.ts",
+        "README.md",
+        ".vscodeignore",
+        "docs/implementation/v0.1.0/tasks/SD-005.md"
+      ],
+      "tests": [
+        "dotnet build analyzer/SharpDeps.Analyzer.slnx -c Release — 成功（警告0）",
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 47テスト成功",
+        "Quick基準fixture回帰（tests/analyzer/quickBaseline.test.ts） — 分割後も一致",
+        "npm run build:analyzer / compile / lint / build / package — 成功",
+        "npm test — 87テスト成功",
+        "code-map.deps.json にMSBuild参照0件、runtimeconfigはランタイムのみ"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-005.md",
+        "tests/fixtures/quick-baseline/expected/quick-report.json"
+      ],
+      "blockers": [],
+      "notes": "SDKなし環境での実機確認はSD-029。.slnxのgroupPath正規化はSD-006。"
     },
     {
       "id": "SD-006",
