@@ -312,7 +312,12 @@
         "distinctSourceDocumentCount": { "type": "integer", "minimum": 1 },
         "generatedEvidenceCount": { "type": "integer", "minimum": 0 },
         "publicSurfaceEvidenceCount": { "type": "integer", "minimum": 0 },
-        "confidence": { "enum": ["resolved", "inferred"] }
+        "confidence": { "enum": ["resolved", "inferred"] },
+        "ambiguousCandidates": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Number of target candidates that share the same name. Set when a declared reference (for example a using directive) cannot be bound to one project variant, so the relation is one candidate among several instead of a unique determination. Null means the target was unique."
+        }
       }
     },
     "cycleGroup": {

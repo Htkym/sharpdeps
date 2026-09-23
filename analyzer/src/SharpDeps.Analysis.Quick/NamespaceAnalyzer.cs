@@ -3,6 +3,7 @@ namespace SharpDeps.Analysis.Quick;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Text;
 using SharpDeps.Analysis.Contracts;
 using SharpDeps.Analysis.Core.Graph;
 
@@ -24,7 +25,8 @@ public static class NamespaceAnalyzer
     public static async Task<NamespaceGraph> AnalyzeAsync(
         IReadOnlyList<LoadedProject> projects,
         int maxNodes,
-        int maxEdges)
+        int maxEdges,
+        QuickSourceIndexCollector? collector = null)
     {
         var csharpProjects = projects
             .Where(project => project.FullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
@@ -51,6 +53,7 @@ public static class NamespaceAnalyzer
             var projectDirectory = Path.GetDirectoryName(project.FullPath);
             if (string.IsNullOrEmpty(projectDirectory) || !Directory.Exists(projectDirectory))
             {
+                collector?.AddSkip(project.FullPath, "projectDirectoryMissing");
                 continue;
             }
 
@@ -59,21 +62,26 @@ public static class NamespaceAnalyzer
                 if (parsedFiles >= MaxSourceFiles)
                 {
                     truncatedFiles = true;
+                    collector?.AddSkip(file, "sourceFileCapReached");
                     break;
                 }
 
+                byte[] bytes;
                 string text;
                 try
                 {
                     if (new FileInfo(file).Length > MaxSourceFileBytes)
                     {
+                        collector?.AddSkip(file, "sourceFileTooLarge");
                         continue;
                     }
 
-                    text = await File.ReadAllTextAsync(file);
+                    bytes = await File.ReadAllBytesAsync(file);
+                    text = DecodeSource(bytes);
                 }
                 catch
                 {
+                    collector?.AddSkip(file, "sourceFileUnreadable");
                     continue;
                 }
 
@@ -84,6 +92,7 @@ public static class NamespaceAnalyzer
                 }
                 catch
                 {
+                    collector?.AddSkip(file, "sourceFileUnparsable");
                     continue;
                 }
 
@@ -143,6 +152,11 @@ public static class NamespaceAnalyzer
                 if (fileNamespaces.Length > 0)
                 {
                     fileRecords.Add(new FileNamespaceInfo(project.Name, fileNamespaces, usings));
+                }
+
+                if (collector is not null)
+                {
+                    CollectIndexData(collector, project.Name, file, bytes, root, fileNamespaces);
                 }
             }
         }
@@ -275,6 +289,83 @@ public static class NamespaceAnalyzer
 
         names.Reverse();
         return string.Join('.', names.Where(name => name.Length > 0));
+    }
+
+    /// <summary>Decodes source bytes, honouring a byte order mark.</summary>
+    private static string DecodeSource(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// Records the document, its namespace declarations, and its using directives
+    /// (with positions) for the v2 model. Runs only when a collector is attached, so
+    /// the v1 path is untouched.
+    /// </summary>
+    private static void CollectIndexData(
+        QuickSourceIndexCollector collector,
+        string projectName,
+        string fullPath,
+        byte[] bytes,
+        SyntaxNode root,
+        IReadOnlyList<string> fileNamespaces)
+    {
+        var document = collector.AddDocument(
+            fullPath,
+            bytes,
+            QuickSourceIndexCollector.ComputeContentHash(bytes));
+
+        foreach (var declaration in root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
+        {
+            var name = FullNamespaceName(declaration);
+            if (name.Length == 0)
+            {
+                continue;
+            }
+
+            collector.AddDeclaration(
+                new QuickNamespaceDeclaration(projectName, document.Id, name, ToQuickSpan(declaration.GetLocation())));
+        }
+
+        var usings = new List<QuickUsing>();
+        foreach (var directive in root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+        {
+            if (directive.Alias is not null)
+            {
+                continue;
+            }
+
+            var target = ResolveUsingNamespace(directive);
+            if (target is null)
+            {
+                continue;
+            }
+
+            var span = ToQuickSpan(directive.GetLocation());
+            if (directive.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
+            {
+                collector.AddGlobalUsing(new QuickGlobalUsing(projectName, target, document.Id, span));
+                continue;
+            }
+
+            usings.Add(new QuickUsing(target, span));
+        }
+
+        collector.AddFileUsage(new QuickFileUsage(projectName, document.Id, fileNamespaces, usings));
+    }
+
+    private static QuickSpan ToQuickSpan(Location location)
+    {
+        var span = location.GetLineSpan();
+        return new QuickSpan(
+            location.SourceSpan.Start,
+            location.SourceSpan.Length,
+            span.StartLinePosition.Line,
+            span.StartLinePosition.Character,
+            span.EndLinePosition.Line,
+            span.EndLinePosition.Character);
     }
 
     private static string? ResolveUsingNamespace(UsingDirectiveSyntax directive)

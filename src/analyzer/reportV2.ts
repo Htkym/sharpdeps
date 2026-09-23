@@ -136,6 +136,12 @@ export interface AnalysisRelation {
   generatedEvidenceCount: number;
   publicSurfaceEvidenceCount: number;
   confidence?: Confidence;
+  /**
+   * Set when the target name matches several candidate entities (Quick cannot bind
+   * a using directive to one project variant). The relation is then one candidate
+   * among several, never a unique determination.
+   */
+  ambiguousCandidates?: number | null;
 }
 
 export interface CycleWitness {

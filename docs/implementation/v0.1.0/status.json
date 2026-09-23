@@ -125,7 +125,7 @@
         "schemas/report-v2.schema.json"
       ],
       "blockers": [],
-      "notes": "契約テストのC#実出力への差し替えはSD-006/SD-007。Webviewのv2切り替えはSD-013/SD-015。"
+      "notes": "契約テストのC#実出力への差し替えはSD-006で完了（tests/analyzer/quickV2.test.ts が実出力を検証）。Webviewのv2切り替えはSD-013/SD-015。"
     },
     {
       "id": "SD-003",
@@ -247,12 +247,44 @@
       "id": "SD-006",
       "title": "Quickのモデル正規化と不完全性表示",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Contracts/AnalysisSnapshot.cs",
+        "analyzer/src/SharpDeps.Analysis.Core/Identity/Identity.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/QuickSourceIndex.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/QuickV2Mapper.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/NamespaceAnalyzer.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/ProjectLoader.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/QuickAnalyzer.cs",
+        "analyzer/src/SharpDeps.QuickHost/Program.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/IdentityTests.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/QuickV2MapperTests.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/TestPaths.cs",
+        "schemas/report-v2.schema.json",
+        "src/analyzer/reportV2.ts",
+        "src/analyzer/reportV2Validation.ts",
+        "tests/analyzer/quickV2.test.ts",
+        "tests/helpers/quickV2Snapshot.ts",
+        "tests/contract/identityAgreement.test.ts",
+        "tests/fixtures/quick-baseline/expected/quick-v2-structure.json",
+        ".prettierignore",
+        "docs/implementation/v0.1.0/tasks/SD-006.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 57テスト成功",
+        "v1回帰（quickBaseline.test.ts） — 索引追加後も不変",
+        "quickV2.test.ts — 実出力の契約検証・構造スナップショット・ID形状・決定性",
+        "identityAgreement.test.ts — C#とTSのID一致",
+        "npm test — 11ファイル / 93テスト成功",
+        "npm run package — 成功（47ファイル / 6.72MB）"
+      ],
+      "evidence": [
+        "tests/fixtures/quick-baseline/expected/quick-v2-structure.json",
+        "docs/implementation/v0.1.0/tasks/SD-006.md"
+      ],
+      "blockers": [],
+      "notes": "v2はUI未接続（SD-013/SD-015）。v1出力は移行期間のため併存。"
     },
     {
       "id": "SD-007",

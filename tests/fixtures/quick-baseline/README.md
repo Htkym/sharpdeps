@@ -41,8 +41,14 @@ cycle; the fixture is only meant to be parsed.
 replaced with `<FIXTURE_ROOT>` and separators are normalized to `/` by
 `tests/helpers/quickReportNormalizer.ts`.
 
-The snapshot is compared by `tests/analyzer/quickBaseline.test.ts`, which runs the
-published DLL and therefore skips when `analyzer/bin/**/code-map.dll` is absent.
+`expected/quick-v2-structure.json` is the report v2 structure (entity labels
+instead of ids, so it is machine independent) produced by
+`tests/helpers/quickV2Snapshot.ts`. Both files are generated artifacts and are
+excluded from Prettier.
+
+The snapshots are compared by `tests/analyzer/quickBaseline.test.ts` (v1) and
+`tests/analyzer/quickV2.test.ts` (v2), which run the published DLL and therefore
+skip when `analyzer/bin/**/code-map.dll` is absent.
 
 Refresh it only for an intentional analyzer change:
 

@@ -12,6 +12,8 @@ analyzer/**/obj
 analyzer/**/bin
 tests/fixtures/**/obj
 tests/fixtures/**/bin
+# Regression snapshots are generated artifacts; they are compared by value.
+tests/fixtures/**/expected
 node_modules
 *.vsix
 package-lock.json

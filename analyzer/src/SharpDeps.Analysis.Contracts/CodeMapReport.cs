@@ -90,7 +90,3 @@ public sealed record NamespaceGraph(
         [],
         string.IsNullOrWhiteSpace(note) ? [] : [note]);
 }
-
-[JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
-[JsonSerializable(typeof(CodeMapReport))]
-public partial class CodeMapJsonContext : JsonSerializerContext;

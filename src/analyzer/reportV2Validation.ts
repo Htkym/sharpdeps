@@ -521,6 +521,16 @@ function validateRelations(
         'inferred'
       ] as const);
     }
+    if (relation.ambiguousCandidates !== undefined && relation.ambiguousCandidates !== null) {
+      const candidates = requireCount(
+        relation.ambiguousCandidates,
+        `${path}.ambiguousCandidates`,
+        errors
+      );
+      if (candidates !== undefined && candidates < 1) {
+        errors.add(`${path}.ambiguousCandidates`, 'expected at least 1');
+      }
+    }
   });
   return ids;
 }

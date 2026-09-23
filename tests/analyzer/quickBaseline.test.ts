@@ -66,9 +66,8 @@ describe.skipIf(!analyzerDll)('Quick analyzer baseline fixture', () => {
       const normalized = normalizeQuickReport(actual, fixtureRoot);
 
       if (updateBaseline) {
-        const json = `${JSON.stringify(normalized, null, 2)}\n`;
         fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
-        fs.writeFileSync(expectedPath, await formatJson(json), 'utf8');
+        fs.writeFileSync(expectedPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
         expect(fs.existsSync(expectedPath)).toBe(true);
         return;
       }
@@ -87,10 +86,4 @@ if (!analyzerDll) {
     'Quick analyzer baseline fixture skipped: analyzer/bin/quick/code-map.dll and ' +
       'analyzer/bin/code-map.dll were not found. Run `npm run build:analyzer` first.'
   );
-}
-
-/** Keep the refreshed snapshot formatted like the rest of the repository. */
-async function formatJson(json: string): Promise<string> {
-  const prettier = await import('prettier');
-  return prettier.format(json, { filepath: expectedPath });
 }

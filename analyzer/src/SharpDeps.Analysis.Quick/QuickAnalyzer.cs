@@ -11,7 +11,11 @@ using SharpDeps.Analysis.Core.Paths;
 /// </summary>
 public static class QuickAnalyzer
 {
-        public static async Task<CodeMapReport> AnalyzeAsync(string solutionPath, int maxProjects, int maxEdges)
+        public static async Task<CodeMapReport> AnalyzeAsync(
+        string solutionPath,
+        int maxProjects,
+        int maxEdges,
+        QuickSourceIndexCollector? collector = null)
         {
             var resolvedSolutionPath = Path.GetFullPath(string.IsNullOrWhiteSpace(solutionPath)
                 ? throw new InvalidOperationException("A solution path is required.")
@@ -79,7 +83,7 @@ public static class QuickAnalyzer
             {
                 try
                 {
-                    loadedProjects.Add(await ProjectLoader.LoadProjectAsync(project, parsedSolution.SolutionDirectoryPath));
+                    loadedProjects.Add(await ProjectLoader.LoadProjectAsync(project, parsedSolution.SolutionDirectoryPath, collector));
                 }
                 catch (Exception error)
                 {
@@ -255,7 +259,7 @@ public static class QuickAnalyzer
                 projectCycleResult.CycleNodeKeys,
                 projectCycleResult.CycleEdgeKeys);
 
-            var namespaceGraph = await NamespaceAnalyzer.AnalyzeAsync(loadedProjects, maxProjects, maxEdges);
+            var namespaceGraph = await NamespaceAnalyzer.AnalyzeAsync(loadedProjects, maxProjects, maxEdges, collector);
             if (namespaceGraph.Cycles.Count > 0)
             {
                 warnings.Add(

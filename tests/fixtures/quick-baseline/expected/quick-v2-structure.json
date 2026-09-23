@@ -1,0 +1,668 @@
+{
+  "target": {
+    "kind": "solution",
+    "relativePath": "Baseline.sln"
+  },
+  "mode": "quick",
+  "completeness": "partial",
+  "capabilities": {
+    "typeGraph": false,
+    "evidence": true,
+    "generatedDocuments": false,
+    "cycleWitness": false,
+    "search": true
+  },
+  "coverage": {
+    "discovered": 6,
+    "loaded": 6,
+    "analyzed": 6,
+    "failed": 0,
+    "skipped": 0,
+    "unresolved": 0
+  },
+  "profile": {
+    "configuration": "Debug",
+    "variants": [
+      {
+        "project": "App",
+        "targetFramework": "net10.0",
+        "targetFrameworkSource": "targetFramework"
+      },
+      {
+        "project": "Core.Tests",
+        "targetFramework": "net10.0",
+        "targetFrameworkSource": "targetFramework"
+      },
+      {
+        "project": "Core",
+        "targetFramework": "net10.0",
+        "targetFrameworkSource": "targetFramework"
+      },
+      {
+        "project": "Extras",
+        "targetFramework": "net10.0",
+        "targetFrameworkSource": "targetFramework"
+      },
+      {
+        "project": "Native",
+        "targetFramework": "(not specified)",
+        "targetFrameworkSource": "notSpecified"
+      },
+      {
+        "project": "Util",
+        "targetFramework": "net10.0",
+        "targetFrameworkSource": "targetFramework"
+      }
+    ]
+  },
+  "projects": [
+    {
+      "name": "App",
+      "relativePath": "src/App/App.csproj",
+      "groupPath": "src",
+      "kind": "app",
+      "targetFramework": "net10.0",
+      "loadState": "loaded"
+    },
+    {
+      "name": "Core.Tests",
+      "relativePath": "tests/Core.Tests/Core.Tests.csproj",
+      "groupPath": "tests",
+      "kind": "test",
+      "targetFramework": "net10.0",
+      "loadState": "loaded"
+    },
+    {
+      "name": "Core",
+      "relativePath": "src/Core/Core.csproj",
+      "groupPath": "src",
+      "kind": "library",
+      "targetFramework": "net10.0",
+      "loadState": "loaded"
+    },
+    {
+      "name": "Extras",
+      "relativePath": "src/Extras/Extras.csproj",
+      "groupPath": "src",
+      "kind": "library",
+      "targetFramework": "net10.0",
+      "loadState": "loaded"
+    },
+    {
+      "name": "Native",
+      "relativePath": "native/Native.vcxproj",
+      "groupPath": "native",
+      "kind": "library",
+      "targetFramework": "(not specified)",
+      "loadState": "loaded"
+    },
+    {
+      "name": "Util",
+      "relativePath": "src/Util/Util.csproj",
+      "groupPath": "src",
+      "kind": "library",
+      "targetFramework": "net10.0",
+      "loadState": "loaded"
+    }
+  ],
+  "namespaces": [
+    {
+      "name": "App.Services",
+      "project": "App",
+      "typeCount": 0
+    },
+    {
+      "name": "App",
+      "project": "App",
+      "typeCount": 0
+    },
+    {
+      "name": "Core.Legacy",
+      "project": "Core",
+      "typeCount": 0
+    },
+    {
+      "name": "Core.Tests",
+      "project": "Core.Tests",
+      "typeCount": 0
+    },
+    {
+      "name": "Core",
+      "project": "Core",
+      "typeCount": 0
+    },
+    {
+      "name": "Extras",
+      "project": "Extras",
+      "typeCount": 0
+    },
+    {
+      "name": "Util",
+      "project": "Util",
+      "typeCount": 0
+    }
+  ],
+  "types": [],
+  "relations": [
+    {
+      "source": "namespace:App.Services@App",
+      "target": "namespace:Core@Core",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:App.Services@App",
+      "target": "namespace:Util@Util",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:App@App",
+      "target": "namespace:App.Services@App",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:App@App",
+      "target": "namespace:Core@Core",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:Core.Legacy@Core",
+      "target": "namespace:Util@Util",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 2,
+      "distinctSourceDocumentCount": 2,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:Core.Tests@Core.Tests",
+      "target": "namespace:App.Services@App",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:Core.Tests@Core.Tests",
+      "target": "namespace:Core.Legacy@Core",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:Core@Core",
+      "target": "namespace:Util@Util",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 2,
+      "distinctSourceDocumentCount": 2,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "namespace:Util@Util",
+      "target": "namespace:Core@Core",
+      "basis": "usingInferred",
+      "kinds": ["usingInferred"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "project:App",
+      "target": "project:Core",
+      "basis": "projectDeclared",
+      "kinds": ["projectDeclared"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "project:App",
+      "target": "project:Extras",
+      "basis": "projectDeclared",
+      "kinds": ["projectDeclared"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "project:App",
+      "target": "project:Util",
+      "basis": "projectDeclared",
+      "kinds": ["projectDeclared"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "project:Core.Tests",
+      "target": "project:Core",
+      "basis": "projectDeclared",
+      "kinds": ["projectDeclared"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "project:Core",
+      "target": "project:Util",
+      "basis": "projectDeclared",
+      "kinds": ["projectDeclared"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    },
+    {
+      "source": "project:Util",
+      "target": "project:Core",
+      "basis": "projectDeclared",
+      "kinds": ["projectDeclared"],
+      "evidenceCount": 1,
+      "distinctSourceDocumentCount": 1,
+      "confidence": "inferred",
+      "ambiguousCandidates": null
+    }
+  ],
+  "cycleGroups": [
+    {
+      "scope": "namespace",
+      "basis": "usingInferred",
+      "witness": null,
+      "members": ["namespace:Core@Core", "namespace:Util@Util"],
+      "internalRelations": [
+        "namespace:Core@Core -> namespace:Util@Util",
+        "namespace:Util@Util -> namespace:Core@Core"
+      ]
+    },
+    {
+      "scope": "project",
+      "basis": "projectDeclared",
+      "witness": null,
+      "members": ["project:Core", "project:Util"],
+      "internalRelations": [
+        "project:Core -> project:Util",
+        "project:Util -> project:Core"
+      ]
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "quick.warning",
+      "message": "1 circular namespace-dependency group(s) detected across 7 namespace(s)."
+    },
+    {
+      "severity": "warning",
+      "code": "quick.warning",
+      "message": "1 circular project-dependency group(s) detected involving 2 project(s)."
+    },
+    {
+      "severity": "warning",
+      "code": "quick.warning",
+      "message": "1 conditional ProjectReference item(s) were detected and may vary by configuration."
+    }
+  ],
+  "evidenceIndex": [
+    {
+      "relation": "namespace:App.Services@App -> namespace:Core@Core",
+      "count": 1
+    },
+    {
+      "relation": "namespace:App.Services@App -> namespace:Util@Util",
+      "count": 1
+    },
+    {
+      "relation": "namespace:App@App -> namespace:App.Services@App",
+      "count": 1
+    },
+    {
+      "relation": "namespace:App@App -> namespace:Core@Core",
+      "count": 1
+    },
+    {
+      "relation": "namespace:Core.Legacy@Core -> namespace:Util@Util",
+      "count": 2
+    },
+    {
+      "relation": "namespace:Core.Tests@Core.Tests -> namespace:App.Services@App",
+      "count": 1
+    },
+    {
+      "relation": "namespace:Core.Tests@Core.Tests -> namespace:Core.Legacy@Core",
+      "count": 1
+    },
+    {
+      "relation": "namespace:Core@Core -> namespace:Util@Util",
+      "count": 2
+    },
+    {
+      "relation": "namespace:Util@Util -> namespace:Core@Core",
+      "count": 1
+    },
+    {
+      "relation": "project:App -> project:Core",
+      "count": 1
+    },
+    {
+      "relation": "project:App -> project:Extras",
+      "count": 1
+    },
+    {
+      "relation": "project:App -> project:Util",
+      "count": 1
+    },
+    {
+      "relation": "project:Core -> project:Util",
+      "count": 1
+    },
+    {
+      "relation": "project:Core.Tests -> project:Core",
+      "count": 1
+    },
+    {
+      "relation": "project:Util -> project:Core",
+      "count": 1
+    }
+  ],
+  "documents": [
+    {
+      "relativePath": "native/Native.vcxproj",
+      "origin": "userSource",
+      "contentHash": "4531fba0f73f14ed48ceb7daa3dbb635542334a11271250b410704be4f2d426b"
+    },
+    {
+      "relativePath": "src/App/App.csproj",
+      "origin": "userSource",
+      "contentHash": "406e353fd70ec9eb74eed92fabb7decb022447aab39a3eecbc675e49bb92f3da"
+    },
+    {
+      "relativePath": "src/App/Program.cs",
+      "origin": "userSource",
+      "contentHash": "19aa090bc70206658d3d8da4adbcb56244589311de371edae2bf6ddc0981945b"
+    },
+    {
+      "relativePath": "src/App/Services/OrderService.cs",
+      "origin": "userSource",
+      "contentHash": "cf96c428837165e67fb6bd8939cb3488aac354b9432fc7d3d10813e0fa362d61"
+    },
+    {
+      "relativePath": "src/Core/Core.csproj",
+      "origin": "userSource",
+      "contentHash": "81a7f16e363b2bf349dd6a89759d8f041a677922704797e656fad6e164508391"
+    },
+    {
+      "relativePath": "src/Core/GlobalUsings.cs",
+      "origin": "userSource",
+      "contentHash": "ab65525604a289b0177bed2e212a6e60dda1d45d31e4f43d9d2e90e4f1d34aba"
+    },
+    {
+      "relativePath": "src/Core/Legacy/LegacyStore.cs",
+      "origin": "userSource",
+      "contentHash": "e7d2d9c4209dad8253a97c97da5fda4d74763a90f6a88abbb00fc13fddc0ce0c"
+    },
+    {
+      "relativePath": "src/Core/Order.cs",
+      "origin": "userSource",
+      "contentHash": "147100bade434e88901dd60b5c68c06441e61dfbcb5531fb48ca98a6a957aa12"
+    },
+    {
+      "relativePath": "src/Core/UtilBridge.cs",
+      "origin": "userSource",
+      "contentHash": "e908fc046224b18d5e700771f702a1d566f8817ad7490a1e7b7b3fe04853add8"
+    },
+    {
+      "relativePath": "src/Extras/Extra.cs",
+      "origin": "userSource",
+      "contentHash": "7675abac5589053d1fec2976ad4a8a39da7f052f19aa3cdf914f1c874b51a697"
+    },
+    {
+      "relativePath": "src/Extras/Extras.csproj",
+      "origin": "userSource",
+      "contentHash": "2c82dae7a6492e5dc0d99b6b5a5d1c89a4702b892f71757981e46302949d6115"
+    },
+    {
+      "relativePath": "src/Util/Helpers.cs",
+      "origin": "userSource",
+      "contentHash": "da62e87a630e123068f0d206503ec500531341869a1a27e002b9793c8815cdef"
+    },
+    {
+      "relativePath": "src/Util/Names.cs",
+      "origin": "userSource",
+      "contentHash": "305c1c8764e11c49ec18d71c2a544ee02ed9496f50e36cb7c1270782036f166b"
+    },
+    {
+      "relativePath": "src/Util/Util.csproj",
+      "origin": "userSource",
+      "contentHash": "f58098e0b887b88bd46d2a42176711ba09deccc49d144e3fa804967509d7baaa"
+    },
+    {
+      "relativePath": "tests/Core.Tests/Core.Tests.csproj",
+      "origin": "userSource",
+      "contentHash": "198ad495079dc18bd18bfc71b9133e1194f2920d36ddbec0afe2de02dfa573cc"
+    },
+    {
+      "relativePath": "tests/Core.Tests/OrderTests.cs",
+      "origin": "userSource",
+      "contentHash": "0fb8e10424f89de33541f55b4ac50d4a8624c68734339a4691b5cc5a3945d16e"
+    }
+  ],
+  "evidence": [
+    {
+      "relation": "namespace:App.Services@App -> namespace:Core@Core",
+      "kind": "usingInferred",
+      "document": "src/App/Services/OrderService.cs",
+      "span": [0, 0, 11],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:App.Services@App -> namespace:Util@Util",
+      "kind": "usingInferred",
+      "document": "src/App/Services/OrderService.cs",
+      "span": [1, 0, 11],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:App@App -> namespace:App.Services@App",
+      "kind": "usingInferred",
+      "document": "src/App/Program.cs",
+      "span": [0, 0, 19],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:App@App -> namespace:Core@Core",
+      "kind": "usingInferred",
+      "document": "src/App/Program.cs",
+      "span": [1, 0, 11],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Core.Legacy@Core -> namespace:Util@Util",
+      "kind": "usingInferred",
+      "document": "src/Core/GlobalUsings.cs",
+      "span": [0, 0, 18],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Core.Legacy@Core -> namespace:Util@Util",
+      "kind": "usingInferred",
+      "document": "src/Core/Legacy/LegacyStore.cs",
+      "span": [0, 0, 11],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Core.Tests@Core.Tests -> namespace:App.Services@App",
+      "kind": "usingInferred",
+      "document": "tests/Core.Tests/OrderTests.cs",
+      "span": [0, 0, 19],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Core.Tests@Core.Tests -> namespace:Core.Legacy@Core",
+      "kind": "usingInferred",
+      "document": "tests/Core.Tests/OrderTests.cs",
+      "span": [1, 0, 18],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Core@Core -> namespace:Util@Util",
+      "kind": "usingInferred",
+      "document": "src/Core/GlobalUsings.cs",
+      "span": [0, 0, 18],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Core@Core -> namespace:Util@Util",
+      "kind": "usingInferred",
+      "document": "src/Core/UtilBridge.cs",
+      "span": [0, 0, 11],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "namespace:Util@Util -> namespace:Core@Core",
+      "kind": "usingInferred",
+      "document": "src/Util/Helpers.cs",
+      "span": [0, 0, 18],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "project:App -> project:Core",
+      "kind": "projectDeclared",
+      "document": "src/App/App.csproj",
+      "span": [10, 5, 49],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "project:App -> project:Extras",
+      "kind": "projectDeclared",
+      "document": "src/App/App.csproj",
+      "span": [12, 5, 97],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "project:App -> project:Util",
+      "kind": "projectDeclared",
+      "document": "src/App/App.csproj",
+      "span": [11, 5, 49],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "project:Core -> project:Util",
+      "kind": "projectDeclared",
+      "document": "src/Core/Core.csproj",
+      "span": [9, 5, 49],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "project:Core.Tests -> project:Core",
+      "kind": "projectDeclared",
+      "document": "tests/Core.Tests/Core.Tests.csproj",
+      "span": [10, 5, 56],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    },
+    {
+      "relation": "project:Util -> project:Core",
+      "kind": "projectDeclared",
+      "document": "src/Util/Util.csproj",
+      "span": [9, 5, 49],
+      "confidence": "inferred",
+      "publicSurface": false,
+      "origin": "userSource"
+    }
+  ],
+  "limitations": [
+    {
+      "code": "quick.conditionNotEvaluated",
+      "count": 1,
+      "message": "Conditional ProjectReference items were not evaluated against a configuration; edges may not exist in the selected build."
+    },
+    {
+      "code": "quick.evidenceIsDeclarationOnly",
+      "count": null,
+      "message": "Evidence positions point at the declaration site (using directive or ProjectReference item), not at code that uses the dependency."
+    },
+    {
+      "code": "quick.typeGraphUnavailable",
+      "count": null,
+      "message": "Quick analysis reads project files and C# syntax only; it cannot resolve symbol usage, so the model has no types and no type-level relations."
+    },
+    {
+      "code": "quick.usingInferred",
+      "count": null,
+      "message": "Namespace relations come from using directives. They are inferred dependencies and are not usage counts."
+    },
+    {
+      "code": "quick.witnessUnavailable",
+      "count": null,
+      "message": "Cycle groups come from strongly connected components of inferred relations; no verified cycle path is available."
+    },
+    {
+      "code": "quick.xmlSpanIsDeclarationLine",
+      "count": null,
+      "message": "ProjectReference spans cover the declaration line in the project file; the exact attribute range is not recorded."
+    }
+  ]
+}
