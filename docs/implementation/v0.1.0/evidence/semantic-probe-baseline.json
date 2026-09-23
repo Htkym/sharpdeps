@@ -1,6 +1,6 @@
 {
   "schemaVersion": "semantic-probe-1",
-  "createdAt": "2026-09-23T15:15:07.8185923+00:00",
+  "createdAt": "2026-09-23T23:50:23.5941062+00:00",
   "environment": {
     "dotnetPath": null,
     "sdkVersion": "10.0.300",
@@ -55,8 +55,9 @@
       "configuration": "Debug",
       "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Application/Application.csproj|net8.0|debug|",
       "loadState": "loaded",
-      "documentCount": 4,
+      "documentCount": 5,
       "documents": [
+        "Info.cs",
         "OrderService.cs",
         "obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs",
         "obj/Debug/net8.0/Application.AssemblyInfo.cs",
@@ -78,9 +79,14 @@
       "configuration": "Debug",
       "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|net10.0|debug|",
       "loadState": "loaded",
-      "documentCount": 4,
+      "documentCount": 9,
       "documents": [
+        "Info.cs",
+        "IsExternalInit.cs",
         "Order.cs",
+        "PartialThing.Second.cs",
+        "PartialThing.cs",
+        "Shapes.cs",
         "obj/Debug/net10.0/.NETCoreApp,Version=v10.0.AssemblyAttributes.cs",
         "obj/Debug/net10.0/Domain.AssemblyInfo.cs",
         "obj/Debug/net10.0/Domain.GlobalUsings.g.cs"
@@ -101,9 +107,14 @@
       "configuration": "Debug",
       "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|netstandard2.0|debug|",
       "loadState": "loaded",
-      "documentCount": 4,
+      "documentCount": 9,
       "documents": [
+        "Info.cs",
+        "IsExternalInit.cs",
         "Order.cs",
+        "PartialThing.Second.cs",
+        "PartialThing.cs",
+        "Shapes.cs",
         "obj/Debug/netstandard2.0/.NETStandard,Version=v2.0.AssemblyAttributes.cs",
         "obj/Debug/netstandard2.0/Domain.AssemblyInfo.cs",
         "obj/Debug/netstandard2.0/Domain.GlobalUsings.g.cs"

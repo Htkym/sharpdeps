@@ -13,12 +13,14 @@ public sealed record SemanticLoadOptions(
     int TimeoutSeconds = 180);
 
 /// <summary>
-/// Result of a semantic load: the probe report plus the per-variant compilations the
-/// collectors (SD-008/SD-010) analyze. Compilations are keyed by variant key.
+/// Result of a semantic load: the probe report, the per-variant compilations the
+/// collectors (SD-008/SD-010) analyze, and the "assembly name → defining variant"
+/// map the symbol resolver needs. Compilations are keyed by variant key.
 /// </summary>
 public sealed record SemanticLoadResult(
     SemanticProbeReport Report,
-    IReadOnlyDictionary<string, Compilation> Compilations);
+    IReadOnlyDictionary<string, Compilation> Compilations,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> DefiningVariantByAssembly);
 
 /// <summary>
 /// Loads a solution or project with MSBuildWorkspace and reports what was actually
@@ -108,7 +110,8 @@ public static class SemanticLoader
                     Diagnostics: diagnostics,
                     Limitations: limitations,
                     Coverage: new ProbeCoverage(0, 0, 0, 0, 0, 0)),
-                new Dictionary<string, Compilation>());
+                new Dictionary<string, Compilation>(),
+                new Dictionary<string, IReadOnlyDictionary<string, string>>());
         }
 
         var addedReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -130,11 +133,7 @@ public static class SemanticLoader
             cancellationToken.ThrowIfCancellationRequested();
 
             var targetFramework = TryGetTargetFramework(project);
-            var variantKey = ProjectVariantResolver.VariantKey(
-                project.FilePath ?? project.Name,
-                targetFramework,
-                options.Configuration,
-                options.Platform);
+            var variantKey = VariantKeyFor(project, options);
 
             if (project.FilePath is not null)
             {
@@ -375,7 +374,11 @@ public static class SemanticLoader
                 Skipped: 0,
                 Unresolved: unresolvedReferences));
 
-        return new SemanticLoadResult(report, compilations);
+        var referenceMap = Symbols.SemanticReferenceMap.Build(
+            solution,
+            project => VariantKeyFor(project, options));
+
+        return new SemanticLoadResult(report, compilations, referenceMap);
     }
 
     /// <summary>
@@ -459,11 +462,7 @@ public static class SemanticLoader
                 if (additions.Count > 0)
                 {
                     compilation = compilation.AddReferences(additions);
-                    var variantKey = ProjectVariantResolver.VariantKey(
-                        project.FilePath ?? project.Name,
-                        TryGetTargetFramework(project),
-                        options.Configuration,
-                        options.Platform);
+                    var variantKey = VariantKeyFor(project, options);
                     addedReferences[variantKey] = additions.Count;
                 }
 
@@ -486,11 +485,7 @@ public static class SemanticLoader
                 continue;
             }
 
-            result[ProjectVariantResolver.VariantKey(
-                project.FilePath ?? project.Name,
-                TryGetTargetFramework(project),
-                options.Configuration,
-                options.Platform)] = compilation;
+            result[VariantKeyFor(project, options)] = compilation;
         }
 
         return result;
@@ -611,6 +606,14 @@ public static class SemanticLoader
 
         return new SemanticProfileInfo(options.Configuration, options.Platform, profileHash, variants);
     }
+
+    /// <summary>Variant key of a loaded project: path + TFM + configuration + platform.</summary>
+    private static string VariantKeyFor(Project project, SemanticLoadOptions options)
+        => ProjectVariantResolver.VariantKey(
+            project.FilePath ?? project.Name,
+            TryGetTargetFramework(project),
+            options.Configuration,
+            options.Platform);
 
     private static string ToProjectRelativePath(Project project, string? documentPath)
     {

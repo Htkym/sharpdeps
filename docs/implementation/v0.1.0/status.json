@@ -323,12 +323,35 @@
       "id": "SD-008",
       "title": "シンボルの索引・安定ID・所有関係",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Symbols/SymbolIndex.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Symbols/SymbolSupport.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Symbols/SymbolResolver.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticLoader.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticProbeReport.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/SymbolIndexTests.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/SymbolIndexIntegrationTests.cs",
+        "tests/fixtures/semantic-baseline/src/Domain/**",
+        "tests/fixtures/semantic-baseline/src/Application/Info.cs",
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
+        "docs/implementation/v0.1.0/tasks/SD-008.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 72テスト成功",
+        "partial統合・フラグ識別（nested/generic/file-local/enum/delegate/record）",
+        "同名型の分離（Domain.Info / Application.Info）、マルチTFM分離（Domain.Order）",
+        "Compilation横断解決（推移参照越しに定義変種のIDへ）、外部型のAssemblyIdentity区別",
+        "位置索引（最も内側の型・変種ごとの候補）、ID安定性（2回解析で一致）",
+        "npm test — 93テスト成功（TS回帰なし）"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-008.md",
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json"
+      ],
+      "blockers": [],
+      "notes": "v2のtypes[]への出力はSD-012/013。publicSurface判定はSD-009、位置索引の変種選択はSD-019。"
     },
     {
       "id": "SD-009",
