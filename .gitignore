@@ -6,3 +6,4 @@ media/viewer.js.map
 analyzer/bin/
 analyzer/obj/
 coverage/
+.local/
