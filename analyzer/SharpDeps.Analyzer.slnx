@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SharpDeps.Analysis.Roslyn/SharpDeps.Analysis.Roslyn.csproj" />
+    <Project Path="src/SharpDeps.SemanticHost/SharpDeps.SemanticHost.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />
+  </Folder>
+</Solution>

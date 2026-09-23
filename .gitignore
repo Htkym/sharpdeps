@@ -5,5 +5,9 @@ media/viewer.js.map
 *.vsix
 analyzer/bin/
 analyzer/obj/
+analyzer/**/bin/
+analyzer/**/obj/
+tests/fixtures/**/bin/
+tests/fixtures/**/obj/
 coverage/
 .local/

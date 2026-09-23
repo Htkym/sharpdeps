@@ -130,12 +130,39 @@
       "id": "SD-003",
       "title": "SDK/MSBuild/Roslynの実行互換性試作",
       "milestone": "M0",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/Directory.Build.props",
+        "analyzer/Directory.Packages.props",
+        "analyzer/SharpDeps.Analyzer.slnx",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/**",
+        "analyzer/src/SharpDeps.SemanticHost/**",
+        "analyzer/tests/SharpDeps.Analysis.Tests/**",
+        "tests/fixtures/semantic-baseline/**",
+        "tests/fixtures/semantic-unrestored/**",
+        "scripts/build-analyzer.js",
+        ".gitignore",
+        "docs/compatibility.md",
+        "docs/adr/0001-semantic-loading.md",
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
+        "docs/implementation/v0.1.0/tasks/SD-003.md"
+      ],
+      "tests": [
+        "dotnet restore analyzer/SharpDeps.Analyzer.slnx — 成功",
+        "dotnet build analyzer/SharpDeps.Analyzer.slnx -c Release — 成功（警告0）",
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 25テスト成功",
+        "SemanticHost実行（semantic-baseline） — 変種5・参照4・未解決0・約3.5秒",
+        "npm run build:analyzer — 成功",
+        "npm test — 87テスト成功（TS回帰なし）"
+      ],
+      "evidence": [
+        "docs/compatibility.md",
+        "docs/adr/0001-semantic-loading.md",
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json"
+      ],
+      "blockers": [],
+      "notes": "SDKなし環境での初期化失敗経路は未検証（対応表に明記）。推移的ProjectReferenceの扱いはSD-007で決定。"
     },
     {
       "id": "SD-004",

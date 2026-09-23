@@ -4,6 +4,10 @@ media/viewer.js.map
 analyzer/bin
 analyzer/obj
 analyzer/.build
+analyzer/**/obj
+analyzer/**/bin
+tests/fixtures/**/obj
+tests/fixtures/**/bin
 node_modules
 *.vsix
 package-lock.json

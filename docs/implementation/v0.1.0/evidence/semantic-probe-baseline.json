@@ -1,0 +1,187 @@
+{
+  "schemaVersion": "semantic-probe-1",
+  "createdAt": "2026-09-23T13:35:21.7026783+00:00",
+  "environment": {
+    "dotnetPath": null,
+    "sdkVersion": "10.0.300",
+    "msBuildVersion": "18.6.3+caa81fa4971f74880cdab61990cb1b11420939ec",
+    "msBuildPath": "<DOTNET_ROOT>/sdk/10.0.300",
+    "globalJsonPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/global.json",
+    "globalJsonSdkVersion": "10.0.300",
+    "roslynVersion": "5.9.0.0",
+    "msBuildLocatorVersion": "1.0.0.0",
+    "hostRuntimeVersion": ".NET 10.0.8",
+    "notes": ["global.json requests SDK 10.0.300; the registered SDK is 10.0.300."]
+  },
+  "targetPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/SemanticBaseline.sln",
+  "configuration": "Debug",
+  "variants": [
+    {
+      "projectName": "Application",
+      "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Application/Application.csproj",
+      "targetFramework": "net8.0",
+      "configuration": "Debug",
+      "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Application/Application.csproj|net8.0|debug|",
+      "loadState": "loaded",
+      "documentCount": 4,
+      "documents": [
+        "OrderService.cs",
+        "obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs",
+        "obj/Debug/net8.0/Application.AssemblyInfo.cs",
+        "obj/Debug/net8.0/Application.GlobalUsings.g.cs"
+      ],
+      "documentsTruncated": false,
+      "generatedDocumentCount": 0,
+      "generatedDocumentError": null,
+      "metadataReferenceCount": 163,
+      "compilationObtained": true,
+      "errorDiagnosticCount": 0,
+      "failureReason": null
+    },
+    {
+      "projectName": "Domain(net10.0)",
+      "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+      "targetFramework": "net10.0",
+      "configuration": "Debug",
+      "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|net10.0|debug|",
+      "loadState": "loaded",
+      "documentCount": 4,
+      "documents": [
+        "Order.cs",
+        "obj/Debug/net10.0/.NETCoreApp,Version=v10.0.AssemblyAttributes.cs",
+        "obj/Debug/net10.0/Domain.AssemblyInfo.cs",
+        "obj/Debug/net10.0/Domain.GlobalUsings.g.cs"
+      ],
+      "documentsTruncated": false,
+      "generatedDocumentCount": 0,
+      "generatedDocumentError": null,
+      "metadataReferenceCount": 167,
+      "compilationObtained": true,
+      "errorDiagnosticCount": 0,
+      "failureReason": null
+    },
+    {
+      "projectName": "Domain(netstandard2.0)",
+      "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+      "targetFramework": "netstandard2.0",
+      "configuration": "Debug",
+      "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|netstandard2.0|debug|",
+      "loadState": "loaded",
+      "documentCount": 4,
+      "documents": [
+        "Order.cs",
+        "obj/Debug/netstandard2.0/.NETStandard,Version=v2.0.AssemblyAttributes.cs",
+        "obj/Debug/netstandard2.0/Domain.AssemblyInfo.cs",
+        "obj/Debug/netstandard2.0/Domain.GlobalUsings.g.cs"
+      ],
+      "documentsTruncated": false,
+      "generatedDocumentCount": 0,
+      "generatedDocumentError": null,
+      "metadataReferenceCount": 113,
+      "compilationObtained": true,
+      "errorDiagnosticCount": 0,
+      "failureReason": null
+    },
+    {
+      "projectName": "Infrastructure",
+      "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Infrastructure/Infrastructure.csproj",
+      "targetFramework": "net10.0",
+      "configuration": "Debug",
+      "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Infrastructure/Infrastructure.csproj|net10.0|debug|",
+      "loadState": "loaded",
+      "documentCount": 5,
+      "documents": [
+        "../../shared/Shared.cs",
+        "OrderStore.cs",
+        "obj/Debug/net10.0/.NETCoreApp,Version=v10.0.AssemblyAttributes.cs",
+        "obj/Debug/net10.0/Infrastructure.AssemblyInfo.cs",
+        "obj/Debug/net10.0/Infrastructure.GlobalUsings.g.cs"
+      ],
+      "documentsTruncated": false,
+      "generatedDocumentCount": 0,
+      "generatedDocumentError": null,
+      "metadataReferenceCount": 167,
+      "compilationObtained": true,
+      "errorDiagnosticCount": 0,
+      "failureReason": null
+    },
+    {
+      "projectName": "Infrastructure.Tests",
+      "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj",
+      "targetFramework": "net10.0",
+      "configuration": "Debug",
+      "variantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj|net10.0|debug|",
+      "loadState": "loaded",
+      "documentCount": 4,
+      "documents": [
+        "OrderStoreTests.cs",
+        "obj/Debug/net10.0/.NETCoreApp,Version=v10.0.AssemblyAttributes.cs",
+        "obj/Debug/net10.0/Infrastructure.Tests.AssemblyInfo.cs",
+        "obj/Debug/net10.0/Infrastructure.Tests.GlobalUsings.g.cs"
+      ],
+      "documentsTruncated": false,
+      "generatedDocumentCount": 0,
+      "generatedDocumentError": null,
+      "metadataReferenceCount": 167,
+      "compilationObtained": true,
+      "errorDiagnosticCount": 0,
+      "failureReason": null
+    }
+  ],
+  "references": [
+    {
+      "sourceVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Application/Application.csproj|net8.0|debug|",
+      "sourceProjectName": "Application",
+      "sourceTargetFramework": "net8.0",
+      "targetProjectName": "Domain(netstandard2.0)",
+      "targetProjectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+      "targetVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|netstandard2.0|debug|",
+      "targetTargetFramework": "netstandard2.0",
+      "resolution": "compatible",
+      "note": null
+    },
+    {
+      "sourceVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Infrastructure/Infrastructure.csproj|net10.0|debug|",
+      "sourceProjectName": "Infrastructure",
+      "sourceTargetFramework": "net10.0",
+      "targetProjectName": "Domain(net10.0)",
+      "targetProjectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+      "targetVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|net10.0|debug|",
+      "targetTargetFramework": "net10.0",
+      "resolution": "exact",
+      "note": null
+    },
+    {
+      "sourceVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj|net10.0|debug|",
+      "sourceProjectName": "Infrastructure.Tests",
+      "sourceTargetFramework": "net10.0",
+      "targetProjectName": "Infrastructure",
+      "targetProjectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Infrastructure/Infrastructure.csproj",
+      "targetVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Infrastructure/Infrastructure.csproj|net10.0|debug|",
+      "targetTargetFramework": "net10.0",
+      "resolution": "exact",
+      "note": null
+    },
+    {
+      "sourceVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj|net10.0|debug|",
+      "sourceProjectName": "Infrastructure.Tests",
+      "sourceTargetFramework": "net10.0",
+      "targetProjectName": "Domain(net10.0)",
+      "targetProjectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+      "targetVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|net10.0|debug|",
+      "targetTargetFramework": "net10.0",
+      "resolution": "exact",
+      "note": null
+    }
+  ],
+  "diagnostics": [],
+  "limitations": [],
+  "coverage": {
+    "discovered": 5,
+    "loaded": 5,
+    "analyzed": 5,
+    "failed": 0,
+    "skipped": 0,
+    "unresolved": 0
+  }
+}

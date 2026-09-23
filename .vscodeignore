@@ -13,7 +13,13 @@ tsconfig.json
 **/*.map
 analyzer/obj/**
 analyzer/.build/**
+analyzer/src/**
+analyzer/tests/**
+analyzer/Directory.Build.props
+analyzer/Directory.Packages.props
+analyzer/*.slnx
 analyzer/bin/**/*.pdb
+analyzer/bin/semantic/**
 .gitignore
 .eslintrc*
 eslint.config.mjs

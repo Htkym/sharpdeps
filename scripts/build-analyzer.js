@@ -6,6 +6,10 @@
 //   2. If that does not yield analyzer/bin/code-map.dll, fall back to generating a
 //      temporary .csproj wrapper that mirrors the file's #:package / #:property directives
 //      and publish that instead.
+//
+// Both publishes pass -p:ImportDirectoryBuildProps=false: analyzer/Directory.Build.props
+// and analyzer/Directory.Packages.props configure the SemanticHost solution and must not
+// apply to this file-based app (it declares its own packages via #:package).
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -15,6 +19,7 @@ const analyzerDir = path.join(__dirname, '..', 'analyzer');
 const sourceFile = path.join(analyzerDir, 'code-map.cs');
 const outDir = path.join(analyzerDir, 'bin');
 const dllPath = path.join(outDir, 'code-map.dll');
+const isolatedFromSolutionProps = '-p:ImportDirectoryBuildProps=false';
 
 function run(command, args, cwd) {
   console.log(`> ${command} ${args.join(' ')}`);
@@ -54,6 +59,7 @@ function publishFileBased() {
       '-o',
       outDir,
       '-p:PublishAot=false',
+      isolatedFromSolutionProps,
       '--self-contained',
       'false'
     ],
@@ -97,7 +103,11 @@ ${packageRefs}
   const csprojPath = path.join(wrapperDir, 'code-map.csproj');
   fs.writeFileSync(csprojPath, csproj, 'utf8');
 
-  const ok = run('dotnet', ['publish', csprojPath, '-c', 'Release', '-o', outDir], wrapperDir);
+  const ok = run(
+    'dotnet',
+    ['publish', csprojPath, '-c', 'Release', '-o', outDir, isolatedFromSolutionProps],
+    wrapperDir
+  );
   fs.rmSync(wrapperDir, { recursive: true, force: true });
   return ok;
 }

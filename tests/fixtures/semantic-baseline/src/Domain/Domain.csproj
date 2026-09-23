@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Multi-TFM: the loader must report both variants, never one merged TFM. -->
+    <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+
+</Project>
