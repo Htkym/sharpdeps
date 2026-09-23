@@ -168,12 +168,43 @@
       "id": "SD-004",
       "title": "SVG＋ELK＋Worker＋出力の試作",
       "milestone": "M0",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "media/graph/**",
+        "media/workers/**",
+        "media/styles/graph.css",
+        "esbuild.js",
+        "src/view/html.ts",
+        "scripts/serve-webview.mjs",
+        "tests/webview/fixtures/graph-prototype.html",
+        "package.json",
+        "package-lock.json",
+        ".gitignore",
+        ".prettierignore",
+        "docs/adr/0003-graph-renderer.md",
+        "docs/implementation/v0.1.0/evidence/sd004-graph.svg",
+        "docs/implementation/v0.1.0/evidence/sd004-graph.png",
+        "docs/implementation/v0.1.0/evidence/sd004-graph-fit.png",
+        "docs/implementation/v0.1.0/evidence/sd004-graph-cycle.png",
+        "docs/implementation/v0.1.0/tasks/SD-004.md"
+      ],
+      "tests": [
+        "npm run compile / lint / format:check — 成功",
+        "npm test — 87テスト成功",
+        "npm run build — 成功（worker 2.7MB / prototype 37KB）",
+        "Playwright実機: 50ノード/54辺描画・辺選択・キーボード選択・双方向辺・循環表示 — 成功",
+        "Playwright実機: SVG出力（script/イベント属性/外部リンクなし）・PNG出力（PNG署名を確認） — 成功",
+        "Playwright実機: 選択で再レイアウトしないこと（レイアウト回数1のまま） — 確認"
+      ],
+      "evidence": [
+        "docs/adr/0003-graph-renderer.md",
+        "docs/implementation/v0.1.0/evidence/sd004-graph.svg",
+        "docs/implementation/v0.1.0/evidence/sd004-graph.png",
+        "docs/implementation/v0.1.0/evidence/sd004-graph-fit.png"
+      ],
+      "blockers": [],
+      "notes": "VS Code Webview内での確認はSD-017/SD-027。バッジと長いラベルの重なりは既知の見た目上の課題。"
     },
     {
       "id": "SD-005",

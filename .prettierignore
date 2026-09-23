@@ -1,6 +1,10 @@
 out
 media/viewer.js
 media/viewer.js.map
+media/graph/prototype.js
+media/graph/prototype.js.map
+media/workers/elkLayout.worker.js
+media/workers/elkLayout.worker.js.map
 analyzer/bin
 analyzer/obj
 analyzer/.build
@@ -12,3 +16,5 @@ node_modules
 *.vsix
 package-lock.json
 *.md
+.local
+.playwright-mcp

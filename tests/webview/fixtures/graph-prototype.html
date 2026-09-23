@@ -1,0 +1,34 @@
+<!doctype html>
+<!--
+  SD-004 verification page.
+
+  Reproduces the webview constraints that matter for the graph prototype: a strict
+  Content Security Policy with a nonce for the script, `worker-src blob:` for the
+  layout worker, and local resources only. Serve the repository root over HTTP
+  (see scripts/serve-webview.mjs) and open:
+
+    http://127.0.0.1:4173/tests/webview/fixtures/graph-prototype.html
+
+  The page is inert on its own: it renders a fixture and exposes
+  window.sharpdepsPrototype for assertions and exports.
+-->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'nonce-prototype-nonce'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src blob:; connect-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="../../../media/styles/graph.css" rel="stylesheet" />
+    <title>SharpDeps graph prototype (SD-004)</title>
+  </head>
+  <body>
+    <div
+      id="app"
+      class="graph-host"
+      data-worker-uri="../../../media/workers/elkLayout.worker.js"
+    ></div>
+    <script nonce="prototype-nonce" src="../../../media/graph/prototype.js"></script>
+  </body>
+</html>
