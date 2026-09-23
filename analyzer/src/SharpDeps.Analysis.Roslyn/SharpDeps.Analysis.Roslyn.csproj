@@ -7,6 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
+    <ProjectReference Include="..\SharpDeps.Analysis.Core\SharpDeps.Analysis.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" />

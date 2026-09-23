@@ -290,12 +290,34 @@
       "id": "SD-007",
       "title": "Semanticの対象ロードとprofile選択",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticLoader.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticProbeReport.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SharpDeps.Analysis.Roslyn.csproj",
+        "analyzer/src/SharpDeps.SemanticHost/Program.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/SemanticLoaderIntegrationTests.cs",
+        "tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj",
+        "docs/adr/0001-semantic-loading.md",
+        "docs/compatibility.md",
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
+        "docs/implementation/v0.1.0/tasks/SD-007.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 60テスト成功",
+        "AddsTheTransitiveReferencesTheCompilerWouldSee — 推移参照1件・コンパイルエラー0",
+        "DoesNotModifyTheAnalyzedSources — 解析前後でソースハッシュ一致",
+        "ReportsTheProfileItActuallyUsed — Debug/ReleaseでprofileHashが異なる",
+        "SemanticHost実行 — 変種5・参照3・Compilation 5・約3.5秒"
+      ],
+      "evidence": [
+        "docs/adr/0001-semantic-loading.md",
+        "docs/compatibility.md",
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json"
+      ],
+      "blockers": [],
+      "notes": "必要になった理由：MSBuildWorkspaceは推移参照を公開せず、TryApplyChangesはプロジェクトファイルを書き換えた。Semanticのv2出力はSD-008以降。"
     },
     {
       "id": "SD-008",

@@ -5,10 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Deliberately no direct reference to Domain: this project sees Domain only
+         through Infrastructure. The semantic loader must add the transitive
+         compilation reference the compiler would see (SD-007) without touching this
+         file. -->
     <ProjectReference Include="..\..\src\Infrastructure\Infrastructure.csproj" />
-    <!-- Transitive ProjectReferences are not materialized by MSBuildWorkspace, so the
-         test project declares the reference it compiles against. -->
-    <ProjectReference Include="..\..\src\Domain\Domain.csproj" />
   </ItemGroup>
 
 </Project>

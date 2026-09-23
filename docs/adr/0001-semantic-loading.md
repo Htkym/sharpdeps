@@ -57,8 +57,33 @@ Roslyn 5.9.0の `Project` にTFMプロパティは無い。MSBuildが渡すデ�
 | QuickもSemanticと同じcsproj構成に統一する | Quickの「SDK不要」要件を満たせない（SDK/MSBuildの初期化が必要になる） |
 | 自動でNuGet restoreまで行う | 利用者コードの評価・ネットワーク・実行を伴う。Trustと明示操作が必要（SD-023/SD-007） |
 | TFMをプロジェクト名の `(net10.0)` から取る | 表示名であって評価結果ではない。名前変更や他ツールの出力で壊れる |
-| 推移的なProjectReferenceを名前で辿る | 実測でワークスペースに現れないことを確認済み。辿る場合は評価済み参照を使う（SD-007） |
+| 推移的なProjectReferenceをプロジェクト名で辿る | 名前の一致は根拠にならない。評価済みのProjectIdで辿る |
+| `MSBuildWorkspace.TryApplyChanges` で推移参照を追加する | **実測でプロジェクトファイルが書き換わった**（SD-007）。ユーザーソースを変更するため採用しない |
 | Roslyn 4.14.0（Quickと同一系列）を採用 | MSBuild 18系との組み合わせが未検証。SDK 10.0.300の実測では5.9.0が動作した |
+
+## 推移参照の扱い（SD-007で確定）
+
+MSBuildWorkspaceが公開する `ProjectReferences` は**直接参照のみ**で、実際のビルドで
+コンパイラーが見る推移参照は含まれない（実測：`Infrastructure.Tests → Infrastructure → Domain`
+で `Domain` が見えず `CS0246`）。
+
+対応：`SemanticLoader` が参照の推移閉包を計算し、**メモリ上のCompilationにだけ**
+`Compilation.AddReferences(targetCompilation.ToMetadataReference())` で追加する。
+
+- プロジェクトファイルもワークスペースも変更しない（`TryApplyChanges` は使わない）。
+- 追加は変種単位で、同じTFMのProjectインスタンスを辿るため、TFMの混在は起きない。
+- 追加件数は `ProjectVariantInfo.AddedTransitiveReferences` と制約
+  `semantic.transitiveReferencesAdded` に記録する。
+- 参照の循環を検出した場合は `semantic.projectReferenceCycle` として記録し、
+  循環する参照は追加しない（無限再帰を避ける）。
+- 対象ソース（`.cs`/`.csproj`/`.sln`/`.slnx`/props/global.json）を変更しないことを
+  統合テスト `DoesNotModifyTheAnalyzedSources` で固定した。
+
+## プロファイル
+
+`--configuration`（既定 `Debug`）と `--platform` を解析プロファイルとし、
+実際に使った値・プロジェクトごとのTFM・`profileHash` を結果へ含める。
+`profileHash` が変われば別の解析として扱う（同じ結果を再利用しない）。
 
 ## 帰結
 
@@ -70,7 +95,7 @@ Roslyn 5.9.0の `Project` にTFMプロパティは無い。MSBuildが渡すデ�
 - SDKが無い環境での失敗経路は未検証（`docs/compatibility.md` の未確認項目）。
 - ロードはMSBuildのdesign-time buildを通じてプロジェクトの `obj/` へファイルを書き出す
   （実測：未restoreのプロジェクトでも `obj/Debug/net10.0/*.AssemblyInfo.cs` が生成される）。
-  ユーザーソースは変更しないが、読み取り専用の操作ではない。Trust確認とキャンセル時の
-  一時領域管理（SD-014）で扱う。
+  対象ソース（`.cs`・プロジェクトファイル等）は変更しないことをテストで固定しているが、
+  読み取り専用の操作ではない。Trust確認とキャンセル時の一時領域管理（SD-014）で扱う。
 - `analyzer/Directory.Build.props` はSemanticHost側にのみ適用する。file-based appは
   `-p:ImportDirectoryBuildProps=false` で分離し、SD-005でQuickHostへ移すまで現状を維持する。

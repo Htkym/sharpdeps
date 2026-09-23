@@ -48,10 +48,10 @@ Progress("discover", new { target = targetPath, configuration, platform });
 
 try
 {
-    var report = await SemanticLoader.LoadAsync(
+    var load = await SemanticLoader.LoadAsync(
         new SemanticLoadOptions(targetPath, configuration, platform, timeoutSeconds),
         cancellation.Token);
-
+    var report = load.Report;
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
     await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, json), CancellationToken.None);
 
@@ -63,6 +63,7 @@ try
             references = report.References.Count,
             unresolved = report.Coverage.Unresolved,
             diagnostics = report.Diagnostics.Count,
+            compilations = load.Compilations.Count,
             elapsedMs = stopwatch.ElapsedMilliseconds
         });
 

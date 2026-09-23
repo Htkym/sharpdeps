@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
+using SharpDeps.Analysis.Core.Identity;
 
 namespace SharpDeps.Analysis.Roslyn;
 
@@ -11,21 +13,49 @@ public sealed record SemanticLoadOptions(
     int TimeoutSeconds = 180);
 
 /// <summary>
+/// Result of a semantic load: the probe report plus the per-variant compilations the
+/// collectors (SD-008/SD-010) analyze. Compilations are keyed by variant key.
+/// </summary>
+public sealed record SemanticLoadResult(
+    SemanticProbeReport Report,
+    IReadOnlyDictionary<string, Compilation> Compilations);
+
+/// <summary>
 /// Loads a solution or project with MSBuildWorkspace and reports what was actually
-/// read: per-variant TFM, documents, generated documents, and how each
-/// ProjectReference resolved to a target variant.
+/// read: per-variant TFM, documents, generated documents, compilation state, and how
+/// each ProjectReference resolved to a target variant.
 /// </summary>
 /// <remarks>
-/// Requires <see cref="SemanticEnvironment.TryRegister"/> to have succeeded
-/// first. Loading evaluates MSBuild project files and may run build logic, so the
-/// caller is responsible for the workspace-trust decision.
+/// Requires <see cref="SemanticEnvironment.TryRegister"/> to have succeeded first.
+/// Loading evaluates MSBuild project files and runs design-time builds, so it writes
+/// to the projects' obj directories and may run build logic; the caller is
+/// responsible for the workspace-trust decision.
+///
+/// The load never writes to project files: transitive project references are added to
+/// the in-memory compilations only. (MSBuildWorkspace.TryApplyChanges persists project
+/// changes to disk, so it is not used.)
 /// </remarks>
 public static class SemanticLoader
 {
     /// <summary>Document paths are evidence, but a report must stay small.</summary>
     private const int MaxDocumentPaths = 100;
 
-    public static async Task<SemanticProbeReport> LoadAsync(
+    /// <summary>
+    /// Compiler errors the user can act on. Restore and language-version problems are
+    /// turned into named limitations instead of a bare error count.
+    /// </summary>
+    private static readonly Dictionary<string, string> ErrorHints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["CS0246"] = "resolve",
+        ["CS0234"] = "resolve",
+        ["CS1069"] = "resolve",
+        ["CS1705"] = "resolve",
+        ["CS8630"] = "language",
+        ["CS8400"] = "language",
+        ["CS9058"] = "language"
+    };
+
+    public static async Task<SemanticLoadResult> LoadAsync(
         SemanticLoadOptions options,
         CancellationToken cancellationToken = default)
     {
@@ -57,7 +87,6 @@ public static class SemanticLoader
         workspace.RegisterWorkspaceFailedHandler(args =>
             diagnostics.Add(new ProbeDiagnostic(args.Diagnostic.Kind.ToString(), args.Diagnostic.Message)));
 
-        var stopwatch = Stopwatch.StartNew();
         Solution solution;
         try
         {
@@ -66,29 +95,52 @@ public static class SemanticLoader
         catch (Exception error) when (error is not OperationCanceledException)
         {
             limitations.Add(new ProbeLimitation("semantic.loadFailed", error.Message, null));
-            return new SemanticProbeReport(
-                SchemaVersion: "semantic-probe-1",
-                CreatedAt: DateTimeOffset.UtcNow.ToString("O"),
-                Environment: SemanticEnvironment.Describe(Path.GetDirectoryName(targetPath) ?? targetPath),
-                TargetPath: targetPath,
-                Configuration: options.Configuration,
-                Variants: [],
-                References: [],
-                Diagnostics: diagnostics,
-                Limitations: limitations,
-                Coverage: new ProbeCoverage(0, 0, 0, 0, 0, 0));
+            return new SemanticLoadResult(
+                new SemanticProbeReport(
+                    SchemaVersion: "semantic-probe-1",
+                    CreatedAt: DateTimeOffset.UtcNow.ToString("O"),
+                    Environment: SemanticEnvironment.Describe(Path.GetDirectoryName(targetPath) ?? targetPath),
+                    TargetPath: targetPath,
+                    Configuration: options.Configuration,
+                    Profile: new SemanticProfileInfo(options.Configuration, options.Platform, string.Empty, []),
+                    Variants: [],
+                    References: [],
+                    Diagnostics: diagnostics,
+                    Limitations: limitations,
+                    Coverage: new ProbeCoverage(0, 0, 0, 0, 0, 0)),
+                new Dictionary<string, Compilation>());
         }
+
+        var addedReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var compilations = await BuildCompilationsAsync(
+            solution,
+            options,
+            addedReferences,
+            limitations,
+            cancellationToken);
 
         var variants = new List<ProjectVariantInfo>();
         var references = new List<ReferenceEdgeInfo>();
         var unresolvedReferences = 0;
-        var generatedFailures = 0;
+        var errorHints = new List<(string Project, string Hint, string Id, string Message)>();
+        var loadedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var project in solution.Projects.OrderBy(entry => entry.Name, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var targetFramework = TryGetTargetFramework(project);
+            var variantKey = ProjectVariantResolver.VariantKey(
+                project.FilePath ?? project.Name,
+                targetFramework,
+                options.Configuration,
+                options.Platform);
+
+            if (project.FilePath is not null)
+            {
+                loadedPaths.Add(Path.GetFullPath(project.FilePath));
+            }
+
             if (targetFramework is not null
                 && TryReadNameSuffix(project.Name, out var nameTargetFramework)
                 && !string.Equals(nameTargetFramework, targetFramework, StringComparison.OrdinalIgnoreCase))
@@ -100,11 +152,6 @@ public static class SemanticLoader
                         + $"but the evaluated symbols say {targetFramework}. The variant is reported as unresolved data.",
                         1));
             }
-            var variantKey = ProjectVariantResolver.VariantKey(
-                project.FilePath ?? project.Name,
-                targetFramework,
-                options.Configuration,
-                options.Platform);
 
             var generatedCount = 0;
             string? generatedError = null;
@@ -116,7 +163,6 @@ public static class SemanticLoader
             catch (Exception error) when (error is not OperationCanceledException)
             {
                 generatedError = error.Message;
-                generatedFailures++;
                 limitations.Add(
                     new ProbeLimitation(
                         "semantic.generatedDocumentsUnavailable",
@@ -135,37 +181,29 @@ public static class SemanticLoader
                 documentPaths.Add(ToProjectRelativePath(project, document.FilePath));
             }
 
-            var compilationObtained = false;
+            var compilationObtained = compilations.TryGetValue(variantKey, out var compilation);
             var errorDiagnostics = 0;
             var sampleErrors = new List<string>();
-            try
+            if (compilation is not null)
             {
-                var compilation = await project.GetCompilationAsync(cancellationToken);
-                if (compilation is not null)
+                foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken))
                 {
-                    compilationObtained = true;
-                    foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken))
+                    if (diagnostic.Severity != DiagnosticSeverity.Error)
                     {
-                        if (diagnostic.Severity != DiagnosticSeverity.Error)
-                        {
-                            continue;
-                        }
+                        continue;
+                    }
 
-                        errorDiagnostics++;
-                        if (sampleErrors.Count < 3)
-                        {
-                            sampleErrors.Add(diagnostic.Id + ": " + diagnostic.GetMessage());
-                        }
+                    errorDiagnostics++;
+                    if (sampleErrors.Count < 3)
+                    {
+                        sampleErrors.Add(diagnostic.Id + ": " + diagnostic.GetMessage());
+                    }
+
+                    if (ErrorHints.TryGetValue(diagnostic.Id, out var hint))
+                    {
+                        errorHints.Add((project.Name, hint, diagnostic.Id, diagnostic.GetMessage()));
                     }
                 }
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                limitations.Add(
-                    new ProbeLimitation(
-                        "semantic.compilationUnavailable",
-                        $"Compilation could not be produced for '{project.Name}': {error.Message}",
-                        1));
             }
 
             if (errorDiagnostics > 0)
@@ -192,6 +230,7 @@ public static class SemanticLoader
                     GeneratedDocumentCount: generatedCount,
                     GeneratedDocumentError: generatedError,
                     MetadataReferenceCount: project.MetadataReferences.Count,
+                    AddedTransitiveReferences: addedReferences.GetValueOrDefault(variantKey),
                     CompilationObtained: compilationObtained,
                     ErrorDiagnosticCount: errorDiagnostics,
                     FailureReason: null));
@@ -245,6 +284,51 @@ public static class SemanticLoader
             }
         }
 
+        // Transitive references live only in the compilations: report them as edges so
+        // the model can distinguish them from declared ProjectReference items.
+        foreach (var (variantKey, count) in addedReferences)
+        {
+            if (count > 0)
+            {
+                limitations.Add(new ProbeLimitation(
+                    "semantic.transitiveReferencesAdded",
+                    "MSBuildWorkspace exposes direct ProjectReferences only; the transitively referenced projects the "
+                    + "compiler would see were added to the in-memory compilations (project files are not modified).",
+                    count));
+            }
+        }
+
+        // Projects the workspace could not load at all are reported as failed instead of
+        // silently disappearing from the model.
+        foreach (var (path, message) in CollectFailedProjects(diagnostics))
+        {
+            if (loadedPaths.Contains(path))
+            {
+                continue;
+            }
+
+            variants.Add(
+                new ProjectVariantInfo(
+                    ProjectName: Path.GetFileNameWithoutExtension(path),
+                    ProjectPath: path,
+                    TargetFramework: null,
+                    Configuration: options.Configuration,
+                    VariantKey: ProjectVariantResolver.VariantKey(path, null, options.Configuration, options.Platform),
+                    LoadState: "failed",
+                    DocumentCount: 0,
+                    Documents: [],
+                    DocumentsTruncated: false,
+                    GeneratedDocumentCount: 0,
+                    GeneratedDocumentError: null,
+                    MetadataReferenceCount: 0,
+                    AddedTransitiveReferences: 0,
+                    CompilationObtained: false,
+                    ErrorDiagnosticCount: 0,
+                    FailureReason: message));
+        }
+
+        AddActionableDiagnostics(errorHints, limitations);
+
         if (solution.Projects.Any(project => project.Language != LanguageNames.CSharp))
         {
             var otherLanguages = solution.Projects
@@ -270,25 +354,377 @@ public static class SemanticLoader
         }
 
         var loaded = variants.Count(variant => variant.LoadState == "loaded");
-        var analyzed = loaded;
+        var failed = variants.Count(variant => variant.LoadState == "failed");
 
-        return new SemanticProbeReport(
+        var report = new SemanticProbeReport(
             SchemaVersion: "semantic-probe-1",
             CreatedAt: DateTimeOffset.UtcNow.ToString("O"),
             Environment: SemanticEnvironment.Describe(Path.GetDirectoryName(targetPath) ?? targetPath),
             TargetPath: targetPath,
             Configuration: options.Configuration,
+            Profile: BuildProfile(solution, options),
             Variants: variants,
             References: references,
             Diagnostics: diagnostics,
             Limitations: limitations,
             Coverage: new ProbeCoverage(
-                Discovered: variants.Count,
+                Discovered: loaded + failed,
                 Loaded: loaded,
-                Analyzed: analyzed,
-                Failed: variants.Count - loaded,
+                Analyzed: loaded,
+                Failed: failed,
                 Skipped: 0,
                 Unresolved: unresolvedReferences));
+
+        return new SemanticLoadResult(report, compilations);
+    }
+
+    /// <summary>
+    /// Builds one compilation per project variant, adding the transitively referenced
+    /// projects as compilation references. Nothing is written to the project files:
+    /// the additions are in-memory only.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<string, Compilation>> BuildCompilationsAsync(
+        Solution solution,
+        SemanticLoadOptions options,
+        Dictionary<string, int> addedReferences,
+        List<ProbeLimitation> limitations,
+        CancellationToken cancellationToken)
+    {
+        var cache = new Dictionary<ProjectId, Compilation>();
+        var visiting = new HashSet<ProjectId>();
+        var reportedCycles = new HashSet<string>(StringComparer.Ordinal);
+        var directReferenceIds = solution.Projects.ToDictionary(
+            project => project.Id,
+            project => project.ProjectReferences.Select(reference => reference.ProjectId).ToHashSet());
+
+        async Task<Compilation?> BuildAsync(ProjectId projectId)
+        {
+            if (cache.TryGetValue(projectId, out var cached))
+            {
+                return cached;
+            }
+
+            var project = solution.GetProject(projectId);
+            if (project is null || project.Language != LanguageNames.CSharp)
+            {
+                return null;
+            }
+
+            if (!visiting.Add(projectId))
+            {
+                return null;
+            }
+
+            try
+            {
+                var compilation = await project.GetCompilationAsync(cancellationToken);
+                if (compilation is null)
+                {
+                    return null;
+                }
+
+                var direct = directReferenceIds.GetValueOrDefault(projectId, []);
+                var additions = new List<MetadataReference>();
+                foreach (var targetId in TransitiveClosure(solution, direct))
+                {
+                    if (direct.Contains(targetId))
+                    {
+                        continue;
+                    }
+
+                    if (visiting.Contains(targetId))
+                    {
+                        var key = $"{project.Name}->{solution.GetProject(targetId)?.Name}";
+                        if (reportedCycles.Add(key))
+                        {
+                            limitations.Add(new ProbeLimitation(
+                                "semantic.projectReferenceCycle",
+                                $"A project reference cycle involving {project.Name} was detected while resolving transitive "
+                                + "references; the cyclic reference is not added to the compilation.",
+                                1));
+                        }
+
+                        continue;
+                    }
+
+                    var targetCompilation = await BuildAsync(targetId);
+                    if (targetCompilation is null)
+                    {
+                        continue;
+                    }
+
+                    additions.Add(targetCompilation.ToMetadataReference());
+                }
+
+                if (additions.Count > 0)
+                {
+                    compilation = compilation.AddReferences(additions);
+                    var variantKey = ProjectVariantResolver.VariantKey(
+                        project.FilePath ?? project.Name,
+                        TryGetTargetFramework(project),
+                        options.Configuration,
+                        options.Platform);
+                    addedReferences[variantKey] = additions.Count;
+                }
+
+                cache[projectId] = compilation;
+                return compilation;
+            }
+            finally
+            {
+                visiting.Remove(projectId);
+            }
+        }
+
+        var result = new Dictionary<string, Compilation>(StringComparer.OrdinalIgnoreCase);
+        foreach (var project in solution.Projects.Where(entry => entry.Language == LanguageNames.CSharp))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var compilation = await BuildAsync(project.Id);
+            if (compilation is null)
+            {
+                continue;
+            }
+
+            result[ProjectVariantResolver.VariantKey(
+                project.FilePath ?? project.Name,
+                TryGetTargetFramework(project),
+                options.Configuration,
+                options.Platform)] = compilation;
+        }
+
+        return result;
+    }
+
+    /// <summary>Breadth-first closure of the referenced projects, excluding the roots.</summary>
+    private static IEnumerable<ProjectId> TransitiveClosure(Solution solution, IReadOnlySet<ProjectId> roots)
+    {
+        var queue = new Queue<ProjectId>(roots);
+        var seen = new HashSet<ProjectId>(roots);
+        while (queue.Count > 0)
+        {
+            var current = solution.GetProject(queue.Dequeue());
+            if (current is null)
+            {
+                continue;
+            }
+
+            foreach (var reference in current.ProjectReferences)
+            {
+                if (!seen.Add(reference.ProjectId))
+                {
+                    continue;
+                }
+
+                queue.Enqueue(reference.ProjectId);
+                yield return reference.ProjectId;
+            }
+        }
+    }
+
+    /// <summary>Maps diagnostic messages back to the project files they mention.</summary>
+    private static IReadOnlyList<(string Path, string Message)> CollectFailedProjects(
+        IReadOnlyList<ProbeDiagnostic> diagnostics)
+    {
+        var failures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var pattern = new Regex(
+            "[A-Za-z]:\\\\[^\"']+?\\.(?:csproj|vbproj|fsproj|vcxproj)",
+            RegexOptions.CultureInvariant);
+
+        foreach (var diagnostic in diagnostics)
+        {
+            foreach (Match match in pattern.Matches(diagnostic.Message))
+            {
+                if (!failures.ContainsKey(match.Value))
+                {
+                    failures[match.Value] = diagnostic.Message;
+                }
+            }
+        }
+
+        return failures
+            .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(entry => (entry.Key, entry.Value))
+            .ToArray();
+    }
+
+    /// <summary>Turns raw compiler errors into named, actionable limitations.</summary>
+    private static void AddActionableDiagnostics(
+        IReadOnlyList<(string Project, string Hint, string Id, string Message)> hints,
+        List<ProbeLimitation> limitations)
+    {
+        foreach (var group in hints.GroupBy(hint => hint.Hint, StringComparer.Ordinal))
+        {
+            var projects = group
+                .Select(entry => entry.Project)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            var ids = group
+                .Select(entry => entry.Id)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+            var sample = group.First().Message;
+
+            var (code, message) = group.Key switch
+            {
+                "resolve" => (
+                    "semantic.referencesUnresolved",
+                    $"Referenced packages or projects could not be resolved ({string.Join(", ", ids)}) for "
+                    + $"{string.Join(", ", projects)}. Run `dotnet restore` for the target and analyze again; "
+                    + "SharpDeps never restores automatically. Example: " + sample),
+                "language" => (
+                    "semantic.languageVersionUnsupported",
+                    $"The projects use a C# feature the loaded compiler options reject ({string.Join(", ", ids)}) for "
+                    + $"{string.Join(", ", projects)}. Check LangVersion and the SDK used for the analysis. Example: " + sample),
+                _ => ("semantic.compilationHint", "Compilation diagnostics require attention. Example: " + sample)
+            };
+
+            limitations.Add(new ProbeLimitation(code, message, group.Count()));
+        }
+    }
+
+    private static SemanticProfileInfo BuildProfile(Solution solution, SemanticLoadOptions options)
+    {
+        var variants = solution.Projects
+            .Where(project => project.Language == LanguageNames.CSharp)
+            .OrderBy(project => project.Name, StringComparer.Ordinal)
+            .Select(project => new SemanticVariantInfo(
+                project.Name,
+                project.FilePath ?? string.Empty,
+                TryGetTargetFramework(project)))
+            .ToArray();
+
+        // The hash covers the inputs that change the analysis: configuration, platform,
+        // and the per-project TFM selection.
+        var profileHash = Identity.ProfileHash(
+            options.Configuration,
+            options.Platform,
+            variants.Select(variant => (
+                ProjectLogicalId: ProjectVariantResolver.VariantKey(
+                    variant.ProjectPath,
+                    variant.TargetFramework,
+                    options.Configuration,
+                    options.Platform),
+                TargetFramework: variant.TargetFramework ?? string.Empty)));
+
+        return new SemanticProfileInfo(options.Configuration, options.Platform, profileHash, variants);
+    }
+
+    private static string ToProjectRelativePath(Project project, string? documentPath)
+    {
+        if (string.IsNullOrEmpty(documentPath))
+        {
+            return string.Empty;
+        }
+
+        var projectDirectory = Path.GetDirectoryName(project.FilePath ?? string.Empty);
+        if (string.IsNullOrEmpty(projectDirectory))
+        {
+            return documentPath;
+        }
+
+        var relative = Path.GetRelativePath(projectDirectory, documentPath);
+        return relative.Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Roslyn does not expose the evaluated TFM on Project. Derive it from data
+    /// MSBuild gave Roslyn: the TFM-specific preprocessor symbols first, then the
+    /// output path segment. Return null when neither is available so the caller
+    /// records an unresolved reference instead of guessing.
+    /// </summary>
+    private static string? TryGetTargetFramework(Project project)
+    {
+        var symbols = (project.ParseOptions as Microsoft.CodeAnalysis.CSharp.CSharpParseOptions)
+            ?.PreprocessorSymbolNames;
+        if (symbols is not null)
+        {
+            foreach (var symbol in symbols.OrderBy(value => value, StringComparer.Ordinal))
+            {
+                var fromSymbol = TargetFrameworkFromSymbol(symbol);
+                if (fromSymbol is not null)
+                {
+                    return fromSymbol;
+                }
+            }
+        }
+
+        return TargetFrameworkFromPath(project.OutputFilePath);
+    }
+
+    private static string? TargetFrameworkFromSymbol(string symbol)
+    {
+        var match = Regex.Match(
+            symbol,
+            "^NET(?<major>\\d+)_(?<minor>\\d+)$",
+            RegexOptions.CultureInvariant);
+        if (match.Success)
+        {
+            return $"net{match.Groups["major"].Value}.{match.Groups["minor"].Value}";
+        }
+
+        var standard = Regex.Match(
+            symbol,
+            "^NETSTANDARD(?<major>\\d+)_(?<minor>\\d+)$",
+            RegexOptions.CultureInvariant);
+        if (standard.Success)
+        {
+            return $"netstandard{standard.Groups["major"].Value}.{standard.Groups["minor"].Value}";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// MSBuildWorkspace disambiguates multi-targeted projects by appending the TFM
+    /// to the project name ("Domain(net10.0)"). It is only used as a cross-check
+    /// against the evaluated symbols, never as the primary source.
+    /// </summary>
+    private static bool TryReadNameSuffix(string projectName, out string targetFramework)
+    {
+        targetFramework = string.Empty;
+        var open = projectName.LastIndexOf('(');
+        if (open < 0 || !projectName.EndsWith(')'))
+        {
+            return false;
+        }
+
+        var value = projectName[(open + 1)..^1];
+        if (!Regex.IsMatch(
+                value,
+                "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)$",
+                RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        targetFramework = value;
+        return true;
+    }
+
+    private static string? TargetFrameworkFromPath(string? outputFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(outputFilePath))
+        {
+            return null;
+        }
+
+        var segments = outputFilePath.Replace('\\', '/').Split('/');
+        for (var index = segments.Length - 1; index >= 0; index--)
+        {
+            var segment = segments[index];
+            if (Regex.IsMatch(
+                    segment,
+                    "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)$",
+                    RegexOptions.CultureInvariant))
+            {
+                return segment;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -318,118 +754,5 @@ public static class SemanticLoader
     {
         var project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken);
         return project.Solution;
-    }
-
-    private static string ToProjectRelativePath(Project project, string? documentPath)
-    {
-        if (string.IsNullOrEmpty(documentPath))
-        {
-            return string.Empty;
-        }
-
-        var projectDirectory = Path.GetDirectoryName(project.FilePath ?? string.Empty);
-        if (string.IsNullOrEmpty(projectDirectory))
-        {
-            return documentPath;
-        }
-
-        var relative = Path.GetRelativePath(projectDirectory, documentPath);
-        return relative.Replace('\\', '/');
-    }
-
-    private static string? TryGetTargetFramework(Project project)
-    {
-        // Roslyn does not expose the evaluated TFM on Project. Derive it from data
-        // MSBuild gave Roslyn: the TFM-specific preprocessor symbols first, then the
-        // output path segment. Return null when neither is available so the caller
-        // records an unresolved reference instead of guessing.
-        var symbols = (project.ParseOptions as Microsoft.CodeAnalysis.CSharp.CSharpParseOptions)
-            ?.PreprocessorSymbolNames;
-        if (symbols is not null)
-        {
-            foreach (var symbol in symbols.OrderBy(value => value, StringComparer.Ordinal))
-            {
-                var fromSymbol = TargetFrameworkFromSymbol(symbol);
-                if (fromSymbol is not null)
-                {
-                    return fromSymbol;
-                }
-            }
-        }
-
-        return TargetFrameworkFromPath(project.OutputFilePath);
-    }
-
-    private static string? TargetFrameworkFromSymbol(string symbol)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(
-            symbol,
-            "^NET(?<major>\\d+)_(?<minor>\\d+)$",
-            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        if (match.Success)
-        {
-            return $"net{match.Groups["major"].Value}.{match.Groups["minor"].Value}";
-        }
-
-        var standard = System.Text.RegularExpressions.Regex.Match(
-            symbol,
-            "^NETSTANDARD(?<major>\\d+)_(?<minor>\\d+)$",
-            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        if (standard.Success)
-        {
-            return $"netstandard{standard.Groups["major"].Value}.{standard.Groups["minor"].Value}";
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// MSBuildWorkspace disambiguates multi-targeted projects by appending the TFM
-    /// to the project name ("Domain(net10.0)"). It is only used as a cross-check
-    /// against the evaluated symbols, never as the primary source.
-    /// </summary>
-    private static bool TryReadNameSuffix(string projectName, out string targetFramework)
-    {
-        targetFramework = string.Empty;
-        var open = projectName.LastIndexOf('(');
-        if (open < 0 || !projectName.EndsWith(')'))
-        {
-            return false;
-        }
-
-        var value = projectName[(open + 1)..^1];
-        if (!System.Text.RegularExpressions.Regex.IsMatch(
-                value,
-                "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)$",
-                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
-        {
-            return false;
-        }
-
-        targetFramework = value;
-        return true;
-    }
-
-    private static string? TargetFrameworkFromPath(string? outputFilePath)
-    {
-        if (string.IsNullOrWhiteSpace(outputFilePath))
-        {
-            return null;
-        }
-
-        var segments = outputFilePath.Replace('\\', '/').Split('/');
-        for (var index = segments.Length - 1; index >= 0; index--)
-        {
-            var segment = segments[index];
-            if (System.Text.RegularExpressions.Regex.IsMatch(
-                    segment,
-                    "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)$",
-                    System.Text.RegularExpressions.RegexOptions.CultureInvariant))
-            {
-                return segment;
-            }
-        }
-
-        return null;
     }
 }

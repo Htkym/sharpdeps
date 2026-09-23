@@ -1,6 +1,6 @@
 {
   "schemaVersion": "semantic-probe-1",
-  "createdAt": "2026-09-23T13:35:21.7026783+00:00",
+  "createdAt": "2026-09-23T15:15:07.8185923+00:00",
   "environment": {
     "dotnetPath": null,
     "sdkVersion": "10.0.300",
@@ -15,6 +15,38 @@
   },
   "targetPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/SemanticBaseline.sln",
   "configuration": "Debug",
+  "profile": {
+    "configuration": "Debug",
+    "platform": null,
+    "profileHash": "ccb3362dbda60ea8",
+    "variants": [
+      {
+        "projectName": "Application",
+        "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Application/Application.csproj",
+        "targetFramework": "net8.0"
+      },
+      {
+        "projectName": "Domain(net10.0)",
+        "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+        "targetFramework": "net10.0"
+      },
+      {
+        "projectName": "Domain(netstandard2.0)",
+        "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+        "targetFramework": "netstandard2.0"
+      },
+      {
+        "projectName": "Infrastructure",
+        "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Infrastructure/Infrastructure.csproj",
+        "targetFramework": "net10.0"
+      },
+      {
+        "projectName": "Infrastructure.Tests",
+        "projectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj",
+        "targetFramework": "net10.0"
+      }
+    ]
+  },
   "variants": [
     {
       "projectName": "Application",
@@ -34,6 +66,7 @@
       "generatedDocumentCount": 0,
       "generatedDocumentError": null,
       "metadataReferenceCount": 163,
+      "addedTransitiveReferences": 0,
       "compilationObtained": true,
       "errorDiagnosticCount": 0,
       "failureReason": null
@@ -56,6 +89,7 @@
       "generatedDocumentCount": 0,
       "generatedDocumentError": null,
       "metadataReferenceCount": 167,
+      "addedTransitiveReferences": 0,
       "compilationObtained": true,
       "errorDiagnosticCount": 0,
       "failureReason": null
@@ -78,6 +112,7 @@
       "generatedDocumentCount": 0,
       "generatedDocumentError": null,
       "metadataReferenceCount": 113,
+      "addedTransitiveReferences": 0,
       "compilationObtained": true,
       "errorDiagnosticCount": 0,
       "failureReason": null
@@ -101,6 +136,7 @@
       "generatedDocumentCount": 0,
       "generatedDocumentError": null,
       "metadataReferenceCount": 167,
+      "addedTransitiveReferences": 0,
       "compilationObtained": true,
       "errorDiagnosticCount": 0,
       "failureReason": null
@@ -123,6 +159,7 @@
       "generatedDocumentCount": 0,
       "generatedDocumentError": null,
       "metadataReferenceCount": 167,
+      "addedTransitiveReferences": 1,
       "compilationObtained": true,
       "errorDiagnosticCount": 0,
       "failureReason": null
@@ -161,21 +198,16 @@
       "targetTargetFramework": "net10.0",
       "resolution": "exact",
       "note": null
-    },
-    {
-      "sourceVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/tests/Infrastructure.Tests/Infrastructure.Tests.csproj|net10.0|debug|",
-      "sourceProjectName": "Infrastructure.Tests",
-      "sourceTargetFramework": "net10.0",
-      "targetProjectName": "Domain(net10.0)",
-      "targetProjectPath": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
-      "targetVariantKey": "<FIXTURE_ROOT>/tests/fixtures/semantic-baseline/src/Domain/Domain.csproj|net10.0|debug|",
-      "targetTargetFramework": "net10.0",
-      "resolution": "exact",
-      "note": null
     }
   ],
   "diagnostics": [],
-  "limitations": [],
+  "limitations": [
+    {
+      "code": "semantic.transitiveReferencesAdded",
+      "message": "MSBuildWorkspace exposes direct ProjectReferences only; the transitively referenced projects the compiler would see were added to the in-memory compilations (project files are not modified).",
+      "count": 1
+    }
+  ],
   "coverage": {
     "discovered": 5,
     "loaded": 5,

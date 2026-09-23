@@ -120,7 +120,9 @@ public sealed class SemanticLoaderIntegrationTests
     {
         var slnx = await LoadAsync("semantic-baseline/SemanticBaseline.slnx");
         Assert.Equal(5, slnx.Variants.Count);
-        Assert.Equal(4, slnx.References.Count);
+        // Direct ProjectReference items only: Application -> Domain,
+        // Infrastructure -> Domain, Infrastructure.Tests -> Infrastructure.
+        Assert.Equal(3, slnx.References.Count);
         Assert.Equal(0, slnx.Coverage.Unresolved);
 
         var singleProject = await LoadAsync("semantic-baseline/src/Infrastructure/Infrastructure.csproj");
@@ -138,8 +140,75 @@ public sealed class SemanticLoaderIntegrationTests
 
         Assert.All(report.Variants, variant => Assert.Equal(0, variant.ErrorDiagnosticCount));
         Assert.Empty(report.Diagnostics);
-        Assert.Empty(report.Limitations);
         Assert.Equal(0, report.Coverage.Unresolved);
+
+        // The transitive-reference note is informational: it describes an adjustment
+        // the loader made, not a failure of the target.
+        Assert.All(
+            report.Limitations,
+            limitation => Assert.Equal("semantic.transitiveReferencesAdded", limitation.Code));
+    }
+
+    [Fact]
+    public async Task AddsTheTransitiveReferencesTheCompilerWouldSee()
+    {
+        var report = await LoadAsync("semantic-baseline/SemanticBaseline.sln");
+
+        var testProject = report.Variants.Single(variant => variant.ProjectName == "Infrastructure.Tests");
+        Assert.True(
+            testProject.AddedTransitiveReferences >= 1,
+            "The test project only references Infrastructure, so Domain has to be added transitively.");
+        Assert.Equal(0, testProject.ErrorDiagnosticCount);
+        Assert.Contains(
+            report.Limitations,
+            limitation => limitation.Code == "semantic.transitiveReferencesAdded");
+    }
+
+    [Fact]
+    public async Task DoesNotModifyTheAnalyzedSources()
+    {
+        var fixtureRoot = Path.Combine(TestPaths.RepositoryRoot, "tests", "fixtures", "semantic-baseline");
+        var before = SnapshotSourceFiles(fixtureRoot);
+
+        await LoadAsync("semantic-baseline/SemanticBaseline.sln");
+
+        var after = SnapshotSourceFiles(fixtureRoot);
+        Assert.Equal(before, after);
+    }
+
+    private static Dictionary<string, string> SnapshotSourceFiles(string root)
+        => Directory
+            .EnumerateFiles(root, "*.*", SearchOption.AllDirectories)
+            .Where(file => file.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".props", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .ToDictionary(
+                file => Path.GetRelativePath(root, file),
+                file => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(file))),
+                StringComparer.OrdinalIgnoreCase);
+
+    [Fact]
+    public async Task ReportsTheProfileItActuallyUsed()
+    {
+        var debug = await LoadAsync("semantic-baseline/SemanticBaseline.sln", configuration: "Debug");
+        var release = await LoadAsync("semantic-baseline/SemanticBaseline.sln", configuration: "Release");
+
+        Assert.Equal("Debug", debug.Profile.Configuration);
+        Assert.Null(debug.Profile.Platform);
+        Assert.Matches("^[0-9a-f]{16}$", debug.Profile.ProfileHash);
+        Assert.NotEqual(debug.Profile.ProfileHash, release.Profile.ProfileHash);
+
+        var domainVariants = debug.Profile.Variants
+            .Where(variant => variant.ProjectName.StartsWith("Domain", StringComparison.Ordinal))
+            .Select(variant => variant.TargetFramework)
+            .OrderBy(framework => framework, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(new[] { "net10.0", "netstandard2.0" }, domainVariants);
     }
 
     [Fact]
@@ -168,11 +237,12 @@ public sealed class SemanticLoaderIntegrationTests
             () => SemanticLoader.LoadAsync(new SemanticLoadOptions("does-not-exist.sln")));
     }
 
-    private static Task<SemanticProbeReport> LoadAsync(string relativeTarget, string configuration = "Debug")
+    private static async Task<SemanticProbeReport> LoadAsync(string relativeTarget, string configuration = "Debug")
     {
         var target = Path.Combine(RepositoryRoot, "tests", "fixtures", relativeTarget.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(target), $"Fixture not found: {target}");
-        return SemanticLoader.LoadAsync(new SemanticLoadOptions(target, configuration));
+        var load = await SemanticLoader.LoadAsync(new SemanticLoadOptions(target, configuration));
+        return load.Report;
     }
 
     private static string FindRepositoryRoot()

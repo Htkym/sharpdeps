@@ -11,11 +11,27 @@ public sealed record SemanticProbeReport(
     SemanticEnvironmentInfo Environment,
     string TargetPath,
     string Configuration,
+    SemanticProfileInfo Profile,
     IReadOnlyList<ProjectVariantInfo> Variants,
     IReadOnlyList<ReferenceEdgeInfo> References,
     IReadOnlyList<ProbeDiagnostic> Diagnostics,
     IReadOnlyList<ProbeLimitation> Limitations,
     ProbeCoverage Coverage);
+
+/// <summary>
+/// The analysis profile the loader actually used. Changing any input produces a new
+/// analysis, so the profile is reported alongside the result (never assumed).
+/// </summary>
+public sealed record SemanticProfileInfo(
+    string Configuration,
+    string? Platform,
+    string ProfileHash,
+    IReadOnlyList<SemanticVariantInfo> Variants);
+
+public sealed record SemanticVariantInfo(
+    string ProjectName,
+    string ProjectPath,
+    string? TargetFramework);
 
 public sealed record ProjectVariantInfo(
     string ProjectName,
@@ -30,6 +46,7 @@ public sealed record ProjectVariantInfo(
     int GeneratedDocumentCount,
     string? GeneratedDocumentError,
     int MetadataReferenceCount,
+    int AddedTransitiveReferences,
     bool CompilationObtained,
     int ErrorDiagnosticCount,
     string? FailureReason);

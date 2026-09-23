@@ -47,6 +47,10 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
 | `Directory.Build.props` の `DefineConstants` | ロードしたプロジェクトのシンボルに反映 | 同上（`SEMANTIC_BASELINE`） |
 | `global.json` | 検出し、要求SDKと登録SDKを記録 | 統合テスト `RecordsTheEnvironmentThatWasUsed` |
 | 未restoreのプロジェクト | 例外にせず、コンパイルエラー件数と `semantic.compilationErrors` で報告 | 統合テスト `ReportsAnUnrestoredProjectWithoutThrowing` |
+| 未restoreの利用者向け診断 | `semantic.referencesUnresolved`（`dotnet restore` を案内。自動restoreはしない） | 統合テスト |
+| 推移的な `ProjectReference` | メモリ上のCompilationへ追加し、件数を記録。プロジェクトファイルは変更しない | 統合テスト `AddsTheTransitiveReferencesTheCompilerWouldSee` / `DoesNotModifyTheAnalyzedSources` |
+| 解析プロファイル | `Configuration`/`Platform`/`profileHash`/プロジェクト別TFMを結果へ含める | 統合テスト `ReportsTheProfileItActuallyUsed` |
+| 言語版の非対応 | `semantic.languageVersionUnsupported`（CS8630/CS8400/CS9058 を検出時） | 実装（fixtureでは未再現） |
 | 非C#プロジェクト | ロード対象外として件数と理由を記録（`semantic.nonCSharpProjects`） | 実装（fixtureでは未使用のため未検証） |
 | 配布物にMSBuild本体を含めない | publish出力に `Microsoft.Build*.dll` が無い（28ファイル / 16.4 MB） | `analyzer/bin/semantic` の実測 |
 | MSBuild未登録でのロード | `InvalidOperationException` で拒否 | 実装 |
@@ -72,8 +76,9 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
    名前だけで結合しない。
 2. **推移的な `ProjectReference` はワークスペースに現れない。** `Infrastructure.Tests → Infrastructure → Domain`
    の構成で、`Infrastructure.Tests` の `ProjectReferences` に `Domain` は含まれない
-   （実測。コンパイルも `CS0246` になる）。SD-007では推移参照を自前で解決するか、
-   評価済み参照アセンブリを使う必要がある。fixtureでは明示参照を追加して基準を保った。
+   （実測。追加前はコンパイルも `CS0246` になる）。SD-007では**メモリ上のCompilationへ
+   推移閉包を追加**して解消し、プロジェクトファイルは変更しない。
+   追加件数は結果と制約に記録する。
 3. **`Microsoft.Build.Framework` を参照しないとビルドが失敗する。** MSBuildLocator 1.11.2 の
    `MSBL001` が `ExcludeAssets="runtime"` + `PrivateAssets="all"` を要求する。
 4. **多TFMプロジェクトの名前は `Domain(net10.0)` になる。** 変種の識別には使えるが、
@@ -82,3 +87,7 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
    `obj/<Config>/<TFM>/` に `AssemblyInfo.cs` などを生成する（`project.assets.json` は作られないため
    未restoreのまま）。ユーザーソースは変更しないが、`obj/` は変更されうる。読み取り専用を前提に
    しない。解析前のTrust確認と、`obj/` を無視するGit設定が前提になる。
+6. **`MSBuildWorkspace.TryApplyChanges` はプロジェクトファイルを書き換える。** 推移参照の追加を
+   このAPIで行うと `.csproj` が実際に変更される（実測：`<ProjectReference>` と `<Name>` メタデータが
+   追記された）。SD-007では使わず、Compilationへの参照追加だけで完結させ、統合テスト
+   `DoesNotModifyTheAnalyzedSources` で固定している。
