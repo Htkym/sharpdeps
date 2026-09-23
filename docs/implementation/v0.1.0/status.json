@@ -91,12 +91,40 @@
       "id": "SD-002",
       "title": "report v2・ID・プロトコルの仕様固定",
       "milestone": "M0",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "schemas/report-v2.schema.json",
+        "schemas/evidence-v2.schema.json",
+        "schemas/protocol-v2.schema.json",
+        "schemas/view-state-v1.schema.json",
+        "src/analyzer/reportV2.ts",
+        "src/analyzer/identity.ts",
+        "src/analyzer/reportV2Validation.ts",
+        "src/analyzer/legacyAdapter.ts",
+        "src/view/protocolV2.ts",
+        "tests/contract/reportV2Contract.test.ts",
+        "tests/helpers/reportV2Fixtures.ts",
+        "package.json",
+        "package-lock.json",
+        "docs/adr/0002-report-v2-contract.md",
+        "docs/analysis-semantics.md",
+        "docs/implementation/v0.1.0/tasks/SD-002.md"
+      ],
+      "tests": [
+        "npm run compile — 成功",
+        "npm run lint — 成功",
+        "npm run format:check — 成功",
+        "npm test — 9ファイル / 87テスト 成功",
+        "tests/contract/reportV2Contract.test.ts — ajvとruntime validatorの一致を確認"
+      ],
+      "evidence": [
+        "docs/adr/0002-report-v2-contract.md",
+        "docs/analysis-semantics.md",
+        "schemas/report-v2.schema.json"
+      ],
+      "blockers": [],
+      "notes": "契約テストのC#実出力への差し替えはSD-006/SD-007。Webviewのv2切り替えはSD-013/SD-015。"
     },
     {
       "id": "SD-003",

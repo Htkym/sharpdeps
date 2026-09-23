@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharpdeps.dev/schemas/evidence-v2.schema.json",
+  "title": "SharpDeps Evidence record (v2)",
+  "description": "One line of the evidence NDJSON file referenced by AnalysisSnapshot.evidenceIndex. Records are ordered by relationId and never split across lines. Positions are 0-based UTF-16; the UI converts line numbers to 1-based for display only.",
+  "type": "object",
+  "required": [
+    "id",
+    "relationId",
+    "sourceEntityId",
+    "targetEntityId",
+    "kind",
+    "origin",
+    "documentId",
+    "sourceContentHash",
+    "confidence",
+    "publicSurface"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^ev_[0-9a-f]{16}$" },
+    "relationId": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+    "sourceEntityId": { "type": "string", "pattern": "^(prj|var|ns|ty|mb)_[0-9a-f]{16}$" },
+    "targetEntityId": { "type": "string", "pattern": "^(prj|var|ns|ty|mb)_[0-9a-f]{16}$" },
+    "sourceTypeId": {
+      "oneOf": [{ "type": "string", "pattern": "^ty_[0-9a-f]{16}$" }, { "type": "null" }]
+    },
+    "sourceMemberId": {
+      "oneOf": [{ "type": "string", "pattern": "^mb_[0-9a-f]{16}$" }, { "type": "null" }]
+    },
+    "targetTypeId": {
+      "oneOf": [{ "type": "string", "pattern": "^ty_[0-9a-f]{16}$" }, { "type": "null" }]
+    },
+    "targetMemberId": {
+      "oneOf": [{ "type": "string", "pattern": "^mb_[0-9a-f]{16}$" }, { "type": "null" }]
+    },
+    "kind": {
+      "enum": [
+        "inherits",
+        "implements",
+        "signature",
+        "constraint",
+        "constructs",
+        "calls",
+        "memberAccess",
+        "attribute",
+        "typeUse",
+        "compileTimeName",
+        "projectDeclared",
+        "projectEvaluated",
+        "usingInferred"
+      ]
+    },
+    "origin": { "enum": ["userSource", "generatedSource"] },
+    "documentId": { "type": "string", "pattern": "^doc_[0-9a-f]{16}$" },
+    "physicalSpan": {
+      "oneOf": [
+        { "$ref": "#/$defs/span" },
+        {
+          "type": "null",
+          "description": "Null when only a document-level location is known (for example an MSBuild-evaluated reference)."
+        }
+      ]
+    },
+    "mappedLocation": {
+      "oneOf": [
+        { "$ref": "#/$defs/mappedLocation" },
+        {
+          "type": "null",
+          "description": "#line-mapped location. Never used as a substitute for physicalSpan."
+        }
+      ]
+    },
+    "sourceContentHash": { "type": "string", "minLength": 1 },
+    "confidence": { "enum": ["resolved", "inferred"] },
+    "publicSurface": {
+      "type": "boolean",
+      "description": "Effective accessibility including containing types."
+    },
+    "snippet": {
+      "type": ["string", "null"],
+      "description": "Optional short code excerpt. Hosts must not send whole files to the webview."
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "required": ["start", "length", "startLine", "startCharacter", "endLine", "endCharacter"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 0 },
+        "startLine": { "type": "integer", "minimum": 0 },
+        "startCharacter": { "type": "integer", "minimum": 0 },
+        "endLine": { "type": "integer", "minimum": 0 },
+        "endCharacter": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "mappedLocation": {
+      "type": "object",
+      "required": ["relativePath", "line", "character"],
+      "properties": {
+        "relativePath": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 0 },
+        "character": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

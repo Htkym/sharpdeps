@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharpdeps.dev/schemas/view-state-v1.schema.json",
+  "title": "SharpDeps webview state (v1)",
+  "description": "Small UI state persisted with getState/setState and the host workspaceState. It never contains analysis results, source text, or absolute paths. Unknown or older versions are discarded and replaced with safe defaults. Restoring state must not start an analysis.",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": { "const": 1 },
+    "targetId": {
+      "type": ["string", "null"],
+      "description": "Opaque id of the analysis target (workspace root + relative path)."
+    },
+    "mode": { "enum": ["quick", "semantic"] },
+    "profile": {
+      "type": ["object", "null"],
+      "properties": {
+        "configuration": { "type": "string" },
+        "platform": { "type": ["string", "null"] }
+      }
+    },
+    "scope": {
+      "type": ["object", "null"],
+      "properties": {
+        "kind": { "type": "string" },
+        "id": { "type": ["string", "null"] },
+        "depth": { "type": ["integer", "null"], "minimum": 1, "maximum": 3 }
+      }
+    },
+    "granularity": { "enum": ["project", "namespace", "type"] },
+    "viewKind": { "enum": ["graph", "table"] },
+    "search": { "type": "string" },
+    "filters": {
+      "type": ["object", "null"],
+      "properties": {
+        "kinds": { "type": "array", "items": { "type": "string" } },
+        "projectKinds": { "type": "array", "items": { "type": "string" } },
+        "relationKinds": { "type": "array", "items": { "type": "string" } },
+        "basis": { "type": "array", "items": { "type": "string" } },
+        "includeGenerated": { "type": "boolean" },
+        "includeExternal": { "type": "boolean" },
+        "includeTests": { "type": "boolean" }
+      }
+    },
+    "selection": {
+      "type": ["object", "null"],
+      "properties": {
+        "entityId": { "type": ["string", "null"] },
+        "relationId": { "type": ["string", "null"] }
+      }
+    },
+    "camera": {
+      "type": ["object", "null"],
+      "properties": {
+        "zoom": { "type": "number", "minimum": 0.05, "maximum": 20 },
+        "scrollLeft": { "type": "number", "minimum": 0 },
+        "scrollTop": { "type": "number", "minimum": 0 }
+      }
+    },
+    "paneWidths": {
+      "type": ["object", "null"],
+      "properties": {
+        "navigation": { "type": "number", "minimum": 0 },
+        "inspector": { "type": "number", "minimum": 0 }
+      }
+    },
+    "history": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["scope"],
+        "properties": {
+          "scope": { "type": "object" },
+          "granularity": { "enum": ["project", "namespace", "type"] },
+          "selectionId": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

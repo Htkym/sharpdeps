@@ -1,0 +1,419 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharpdeps.dev/schemas/protocol-v2.schema.json",
+  "title": "SharpDeps webview protocol (v2)",
+  "description": "Messages between the extension host and the webview. Every message has a `type`. Unknown types are rejected by the receiver; unknown extra properties are ignored for forward compatibility. `protocolVersion` is negotiated once in `ready`/`capabilities`; the host refuses requests before a successful negotiation or with a mismatched version. `analysisId` is echoed on every analysis-scoped message so late responses for a superseded analysis are discarded. The webview never supplies file paths or byte offsets: it passes opaque ids and cursors only.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "protocolVersion"],
+      "properties": {
+        "type": { "const": "ready" },
+        "protocolVersion": { "const": 2 },
+        "webviewVersion": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "mode"],
+      "properties": {
+        "type": { "const": "analyze" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "mode": { "enum": ["quick", "semantic"] },
+        "targetId": { "type": ["string", "null"] },
+        "profile": { "$ref": "#/$defs/profileRequest" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId"],
+      "properties": {
+        "type": { "const": "cancelAnalysis" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "scope", "granularity"],
+      "properties": {
+        "type": { "const": "getProjection" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "granularity": { "$ref": "#/$defs/granularity" },
+        "filters": { "$ref": "#/$defs/filters" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "query"],
+      "properties": {
+        "type": { "const": "searchEntities" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "query": { "type": "string" },
+        "granularity": { "$ref": "#/$defs/granularity" },
+        "filters": { "$ref": "#/$defs/filters" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "cursor": { "$ref": "#/$defs/cursor" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "entityId"],
+      "properties": {
+        "type": { "const": "getEntityDetails" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "entityId": { "$ref": "#/$defs/entityId" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "relationId"],
+      "properties": {
+        "type": { "const": "getEvidencePage" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "relationId": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "cursor": { "$ref": "#/$defs/cursor" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "cycleGroupId"],
+      "properties": {
+        "type": { "const": "getCycleWitness" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "cycleGroupId": { "type": "string", "pattern": "^cyc_[0-9a-f]{16}$" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "evidenceId"],
+      "properties": {
+        "type": { "const": "openEvidence" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "evidenceId": { "type": "string", "pattern": "^ev_[0-9a-f]{16}$" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "entityId"],
+      "properties": {
+        "type": { "const": "openDeclaration" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "declarationIndex": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "scope"],
+      "properties": {
+        "type": { "const": "copyContext" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "includeSnippets": { "type": "boolean" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "format", "scope"],
+      "properties": {
+        "type": { "const": "export" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "format": { "enum": ["mermaid", "svg", "png", "json"] },
+        "scope": { "$ref": "#/$defs/scope" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "viewState"],
+      "properties": {
+        "type": { "const": "persistViewState" },
+        "viewState": { "type": "object" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "protocolVersion", "capabilities"],
+      "properties": {
+        "type": { "const": "capabilities" },
+        "protocolVersion": { "const": 2 },
+        "capabilities": { "$ref": "#/$defs/capabilities" },
+        "analysisId": { "oneOf": [{ "$ref": "#/$defs/analysisId" }, { "type": "null" }] }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "analysisId", "stage"],
+      "properties": {
+        "type": { "const": "analysisProgress" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "stage": { "enum": ["discover", "load", "compile", "extract", "aggregate", "write"] },
+        "discovered": { "type": "integer", "minimum": 0 },
+        "loaded": { "type": "integer", "minimum": 0 },
+        "analyzed": { "type": "integer", "minimum": 0 },
+        "elapsedMs": { "type": "integer", "minimum": 0 },
+        "message": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "analysisId", "completeness", "coverage"],
+      "properties": {
+        "type": { "const": "analysisComplete" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "completeness": { "enum": ["completeWithinScope", "partial", "failed"] },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "mode": { "enum": ["quick", "semantic"] },
+        "profile": { "$ref": "#/$defs/profileSummary" },
+        "limitations": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "analysisId", "message"],
+      "properties": {
+        "type": { "const": "analysisFailed" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "message": { "type": "string" },
+        "detail": { "type": "string" },
+        "cancelled": { "type": "boolean" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "projection"],
+      "properties": {
+        "type": { "const": "projection" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "projection": { "$ref": "#/$defs/projection" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "total", "items"],
+      "properties": {
+        "type": { "const": "searchResults" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "total": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/entitySummary" } },
+        "nextCursor": { "oneOf": [{ "$ref": "#/$defs/cursor" }, { "type": "null" }] }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "entity"],
+      "properties": {
+        "type": { "const": "details" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "entity": { "type": "object" },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/entitySummary" } },
+        "dependents": { "type": "array", "items": { "$ref": "#/$defs/entitySummary" } }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "relationId", "total", "items"],
+      "properties": {
+        "type": { "const": "evidencePage" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "relationId": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+        "total": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array", "items": { "type": "object" } },
+        "nextCursor": { "oneOf": [{ "$ref": "#/$defs/cursor" }, { "type": "null" }] }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "cycleGroupId", "witness"],
+      "properties": {
+        "type": { "const": "cycleWitness" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "cycleGroupId": { "type": "string", "pattern": "^cyc_[0-9a-f]{16}$" },
+        "witness": { "type": ["object", "null"] }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "analysisId", "reason"],
+      "properties": {
+        "type": { "const": "stale" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "reason": { "enum": ["unsavedChange", "savedChange", "profileChange", "unknown"] },
+        "relativePaths": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "code", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "requestId": { "type": ["string", "null"] },
+        "analysisId": { "oneOf": [{ "$ref": "#/$defs/analysisId" }, { "type": "null" }] }
+      }
+    }
+  ],
+  "$defs": {
+    "requestId": { "type": "string", "pattern": "^req_[0-9a-f]{16}$" },
+    "analysisId": { "type": "string", "pattern": "^an_[0-9a-f]{16}$" },
+    "cursor": { "type": "string", "pattern": "^cur_[0-9a-f]{16}$" },
+    "entityId": { "type": "string", "pattern": "^(prj|var|ns|ty|mb)_[0-9a-f]{16}$" },
+    "granularity": { "enum": ["project", "namespace", "type"] },
+    "scope": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["root", "project", "namespace", "type", "dependencies", "dependents", "cycle"]
+        },
+        "id": { "type": ["string", "null"] },
+        "depth": { "type": ["integer", "null"], "minimum": 1, "maximum": 3 }
+      }
+    },
+    "filters": {
+      "type": "object",
+      "description": "Filters within one category are OR-ed; filters across categories are AND-ed.",
+      "properties": {
+        "kinds": { "type": "array", "items": { "type": "string" } },
+        "projectKinds": { "type": "array", "items": { "type": "string" } },
+        "relationKinds": { "type": "array", "items": { "type": "string" } },
+        "basis": { "type": "array", "items": { "type": "string" } },
+        "includeGenerated": { "type": "boolean" },
+        "includeExternal": { "type": "boolean" },
+        "includeTests": { "type": "boolean" }
+      }
+    },
+    "profileRequest": {
+      "type": "object",
+      "properties": {
+        "configuration": { "type": "string" },
+        "platform": { "type": ["string", "null"] },
+        "projectVariants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["projectLogicalId", "targetFramework"],
+            "properties": {
+              "projectLogicalId": { "type": "string", "pattern": "^prj_[0-9a-f]{16}$" },
+              "targetFramework": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "profileSummary": {
+      "type": "object",
+      "properties": {
+        "configuration": { "type": "string" },
+        "profileHash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "projectVariants": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["discovered", "loaded", "analyzed", "failed", "skipped", "unresolved"],
+      "properties": {
+        "discovered": { "type": "integer", "minimum": 0 },
+        "loaded": { "type": "integer", "minimum": 0 },
+        "analyzed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "unresolved": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["typeGraph", "evidence", "generatedDocuments", "cycleWitness", "search"],
+      "properties": {
+        "typeGraph": { "type": "boolean" },
+        "evidence": { "type": "boolean" },
+        "generatedDocuments": { "type": "boolean" },
+        "cycleWitness": { "type": "boolean" },
+        "search": { "type": "boolean" }
+      }
+    },
+    "entitySummary": {
+      "type": "object",
+      "required": ["id", "name", "granularity"],
+      "properties": {
+        "id": { "$ref": "#/$defs/entityId" },
+        "name": { "type": "string" },
+        "granularity": { "$ref": "#/$defs/granularity" },
+        "kind": { "type": "string" },
+        "projectName": { "type": "string" },
+        "inCycle": { "type": "boolean" },
+        "isExternal": { "type": "boolean" },
+        "isGenerated": { "type": "boolean" }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "description": "Display projection derived from the snapshot. Never the full analysis: analysis budgets and display budgets are independent, and totals are always reported.",
+      "required": [
+        "scope",
+        "granularity",
+        "nodes",
+        "edges",
+        "totalNodeCount",
+        "totalEdgeCount",
+        "truncated"
+      ],
+      "properties": {
+        "scope": { "$ref": "#/$defs/scope" },
+        "granularity": { "$ref": "#/$defs/granularity" },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/entitySummary" } },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "sourceId",
+              "targetId",
+              "basis",
+              "kinds",
+              "evidenceCount",
+              "inCycle"
+            ],
+            "properties": {
+              "id": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+              "sourceId": { "$ref": "#/$defs/entityId" },
+              "targetId": { "$ref": "#/$defs/entityId" },
+              "basis": { "type": "string" },
+              "kinds": { "type": "array", "items": { "type": "string" } },
+              "evidenceCount": { "type": "integer", "minimum": 1 },
+              "inCycle": { "type": "boolean" },
+              "generatedEvidenceCount": { "type": "integer", "minimum": 0 },
+              "publicSurfaceEvidenceCount": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "totalNodeCount": { "type": "integer", "minimum": 0 },
+        "totalEdgeCount": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "includedOutOfFilterIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/entityId" },
+          "description": "Members temporarily added for cycle inspection; the UI must offer a way back to the previous filter state."
+        }
+      }
+    }
+  }
+}
