@@ -1,0 +1,410 @@
+{
+  "planVersion": "0.1.0",
+  "baselineCommit": "22a2d751ff54c6db26f3032c287e22ef4d9a446d",
+  "branch": "feature/v0.1.0",
+  "updatedAt": "2026-09-23",
+  "statusValues": ["not_started", "in_progress", "blocked", "done"],
+  "milestones": [
+    {
+      "id": "M0",
+      "name": "基準と技術成立性",
+      "tasks": ["SD-001", "SD-002", "SD-003", "SD-004", "SD-005"],
+      "status": "in_progress"
+    },
+    {
+      "id": "M1",
+      "name": "一つの依存を最後まで辿る",
+      "tasks": [
+        "SD-006",
+        "SD-007",
+        "SD-008",
+        "SD-009",
+        "SD-010",
+        "SD-013",
+        "SD-014",
+        "SD-015",
+        "SD-016",
+        "SD-017",
+        "SD-018"
+      ],
+      "status": "not_started"
+    },
+    {
+      "id": "M2",
+      "name": "解析・探索の必須機能を揃える",
+      "tasks": ["SD-011", "SD-012", "SD-019", "SD-020", "SD-021", "SD-022"],
+      "status": "not_started"
+    },
+    {
+      "id": "M3",
+      "name": "安全性・使用性・規模",
+      "tasks": ["SD-023", "SD-024", "SD-025", "SD-026", "SD-027", "SD-028"],
+      "status": "not_started"
+    },
+    {
+      "id": "M4",
+      "name": "リリース候補",
+      "tasks": ["SD-029", "SD-030"],
+      "status": "not_started"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "SD-001",
+      "title": "基準状態・回帰項目の固定",
+      "milestone": "M0",
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        ".gitignore",
+        ".vscodeignore",
+        "eslint.config.mjs",
+        "tsconfig.json",
+        "vitest.config.ts",
+        "tests/helpers/quickReportNormalizer.ts",
+        "tests/helpers/quickReportNormalizer.test.ts",
+        "tests/analyzer/quickBaseline.test.ts",
+        "tests/fixtures/quick-baseline/**",
+        "docs/implementation/v0.1.0/baseline.md",
+        "docs/implementation/v0.1.0/existing-features.md",
+        "docs/implementation/v0.1.0/status.json",
+        "docs/implementation/v0.1.0/tasks/SD-001.md"
+      ],
+      "tests": [
+        "npm run compile — 成功",
+        "npm run lint — 成功",
+        "npm run format:check — 成功",
+        "npm test — 4ファイル / 19テスト 成功（既存15 + 追加4）",
+        "tests/analyzer/quickBaseline.test.ts — 現行アナライザーDLLでスナップショット一致",
+        "npm run build:analyzer / build / package — 成功",
+        "npx vsce ls — 41ファイル、.local/** の混入なし"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/baseline.md",
+        "docs/implementation/v0.1.0/existing-features.md",
+        "tests/fixtures/quick-baseline/expected/quick-report.json"
+      ],
+      "blockers": [],
+      "notes": "実機UIチェックリストは作成済み・未実施（SD-027で実施）。"
+    },
+    {
+      "id": "SD-002",
+      "title": "report v2・ID・プロトコルの仕様固定",
+      "milestone": "M0",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-003",
+      "title": "SDK/MSBuild/Roslynの実行互換性試作",
+      "milestone": "M0",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-004",
+      "title": "SVG＋ELK＋Worker＋出力の試作",
+      "milestone": "M0",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-005",
+      "title": "C#解析器のプロジェクト分割",
+      "milestone": "M0",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-006",
+      "title": "Quickのモデル正規化と不完全性表示",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-007",
+      "title": "Semanticの対象ロードとprofile選択",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-008",
+      "title": "シンボルの索引・安定ID・所有関係",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-009",
+      "title": "宣言・公開面の依存抽出",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-010",
+      "title": "Operationによる実使用依存抽出",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-011",
+      "title": "生成コード・証拠位置の保持",
+      "milestone": "M2",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-012",
+      "title": "集計・局所探索・閉路抽出",
+      "milestone": "M2",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-013",
+      "title": "結果ストア・ページング・bridge",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-014",
+      "title": "解析実行の進捗・キャンセル・世代管理",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-015",
+      "title": "Shell・UI state・レスポンシブ骨格",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-016",
+      "title": "ツリー・全体検索・Table view",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-017",
+      "title": "本番SVGグラフ・選択・camera",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-018",
+      "title": "Inspectorと根拠一覧",
+      "milestone": "M1",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-019",
+      "title": "エディターからの型探索とコード移動",
+      "milestone": "M2",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-020",
+      "title": "循環の調査と被依存候補ビュー",
+      "milestone": "M2",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-021",
+      "title": "古い結果の検知と画面状態の復元",
+      "milestone": "M2",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-022",
+      "title": "エクスポートと根拠付きAI引継ぎ",
+      "milestone": "M2",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-023",
+      "title": "Trust・CSP・境界検証の横断実装",
+      "milestone": "M3",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-024",
+      "title": "キーボード・テーマ・狭幅の完成",
+      "milestone": "M3",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-025",
+      "title": "C#解析精度・統合回帰テスト",
+      "milestone": "M3",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-026",
+      "title": "TS・契約・ライフサイクルの自動テスト",
+      "milestone": "M3",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-027",
+      "title": "Webview・Extension実機E2E",
+      "milestone": "M3",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-028",
+      "title": "性能・大規模データ・後始末の検証",
+      "milestone": "M3",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-029",
+      "title": "ビルド・VSIX・ドキュメント整備",
+      "milestone": "M4",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "SD-030",
+      "title": "リリース候補の最終判定",
+      "milestone": "M4",
+      "status": "not_started",
+      "owner": null,
+      "changedFiles": [],
+      "tests": [],
+      "evidence": [],
+      "blockers": []
+    }
+  ]
+}

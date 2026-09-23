@@ -1,0 +1,435 @@
+{
+  "solutionPath": "<FIXTURE_ROOT>/Baseline.sln",
+  "solutionName": "Baseline",
+  "projectCount": 6,
+  "totalDependencies": 6,
+  "totalPackageReferences": 0,
+  "testProjectCount": 1,
+  "projectKinds": [
+    {
+      "name": "library",
+      "count": 4
+    },
+    {
+      "name": "app",
+      "count": 1
+    },
+    {
+      "name": "test",
+      "count": 1
+    }
+  ],
+  "dependencyHubs": [
+    {
+      "name": "Core",
+      "kind": "library",
+      "outgoingDependencies": 1,
+      "incomingDependencies": 3,
+      "packageReferences": 0
+    },
+    {
+      "name": "App",
+      "kind": "app",
+      "outgoingDependencies": 3,
+      "incomingDependencies": 0,
+      "packageReferences": 0
+    },
+    {
+      "name": "Util",
+      "kind": "library",
+      "outgoingDependencies": 1,
+      "incomingDependencies": 2,
+      "packageReferences": 0
+    },
+    {
+      "name": "Core.Tests",
+      "kind": "test",
+      "outgoingDependencies": 1,
+      "incomingDependencies": 0,
+      "packageReferences": 0
+    },
+    {
+      "name": "Extras",
+      "kind": "library",
+      "outgoingDependencies": 0,
+      "incomingDependencies": 1,
+      "packageReferences": 0
+    },
+    {
+      "name": "Native",
+      "kind": "library",
+      "outgoingDependencies": 0,
+      "incomingDependencies": 0,
+      "packageReferences": 0
+    }
+  ],
+  "notes": [],
+  "warnings": [
+    "1 conditional ProjectReference item(s) were detected and may vary by configuration.",
+    "1 circular project-dependency group(s) detected involving 2 project(s).",
+    "1 circular namespace-dependency group(s) detected across 7 namespace(s)."
+  ],
+  "mermaid": "flowchart LR\n  subgraph G0[\"native\"]\n    P0[\"Native\\nlibrary\"]\n  end\n  subgraph G1[\"src\"]\n    P1[\"App\\napp\"]\n    P2[\"Core\\nlibrary\"]\n    P3[\"Extras\\nlibrary\"]\n    P4[\"Util\\nlibrary\"]\n  end\n  subgraph G2[\"tests\"]\n    P5[\"Core.Tests\\ntest\"]\n  end\n  P1 E0@--> P2\n  P1 E1@--> P3\n  P1 E2@--> P4\n  P2 E3@--> P4\n  P5 E4@--> P2\n  P4 E5@--> P2\n  style P2 stroke:#e5484d,stroke-width:2px\n  style P4 stroke:#e5484d,stroke-width:2px\n  linkStyle 3,5 stroke:#e5484d,stroke-width:2px",
+  "projects": [
+    {
+      "name": "App",
+      "relativePath": "src/App/App.csproj",
+      "groupPath": "src",
+      "kind": "app",
+      "targetFramework": "net10.0",
+      "outgoingDependencies": 3,
+      "incomingDependencies": 0,
+      "packageReferences": 0
+    },
+    {
+      "name": "Core",
+      "relativePath": "src/Core/Core.csproj",
+      "groupPath": "src",
+      "kind": "library",
+      "targetFramework": "net10.0",
+      "outgoingDependencies": 1,
+      "incomingDependencies": 3,
+      "packageReferences": 0
+    },
+    {
+      "name": "Core.Tests",
+      "relativePath": "tests/Core.Tests/Core.Tests.csproj",
+      "groupPath": "tests",
+      "kind": "test",
+      "targetFramework": "net10.0",
+      "outgoingDependencies": 1,
+      "incomingDependencies": 0,
+      "packageReferences": 0
+    },
+    {
+      "name": "Extras",
+      "relativePath": "src/Extras/Extras.csproj",
+      "groupPath": "src",
+      "kind": "library",
+      "targetFramework": "net10.0",
+      "outgoingDependencies": 0,
+      "incomingDependencies": 1,
+      "packageReferences": 0
+    },
+    {
+      "name": "Native",
+      "relativePath": "native/Native.vcxproj",
+      "groupPath": "native",
+      "kind": "library",
+      "targetFramework": "(not specified)",
+      "outgoingDependencies": 0,
+      "incomingDependencies": 0,
+      "packageReferences": 0
+    },
+    {
+      "name": "Util",
+      "relativePath": "src/Util/Util.csproj",
+      "groupPath": "src",
+      "kind": "library",
+      "targetFramework": "net10.0",
+      "outgoingDependencies": 1,
+      "incomingDependencies": 2,
+      "packageReferences": 0
+    }
+  ],
+  "diagramProjects": [
+    {
+      "nodeId": "P0",
+      "lookupKey": "<FIXTURE_ROOT>/native/native.vcxproj",
+      "name": "Native",
+      "kind": "library",
+      "inCycle": false,
+      "representativeFile": null
+    },
+    {
+      "nodeId": "P1",
+      "lookupKey": "<FIXTURE_ROOT>/src/app/app.csproj",
+      "name": "App",
+      "kind": "app",
+      "inCycle": false,
+      "representativeFile": null
+    },
+    {
+      "nodeId": "P2",
+      "lookupKey": "<FIXTURE_ROOT>/src/core/core.csproj",
+      "name": "Core",
+      "kind": "library",
+      "inCycle": true,
+      "representativeFile": null
+    },
+    {
+      "nodeId": "P3",
+      "lookupKey": "<FIXTURE_ROOT>/src/extras/extras.csproj",
+      "name": "Extras",
+      "kind": "library",
+      "inCycle": false,
+      "representativeFile": null
+    },
+    {
+      "nodeId": "P4",
+      "lookupKey": "<FIXTURE_ROOT>/src/util/util.csproj",
+      "name": "Util",
+      "kind": "library",
+      "inCycle": true,
+      "representativeFile": null
+    },
+    {
+      "nodeId": "P5",
+      "lookupKey": "<FIXTURE_ROOT>/tests/core.tests/core.tests.csproj",
+      "name": "Core.Tests",
+      "kind": "test",
+      "inCycle": false,
+      "representativeFile": null
+    }
+  ],
+  "diagramEdges": [
+    {
+      "edgeId": "E0",
+      "sourceKey": "<FIXTURE_ROOT>/src/app/app.csproj",
+      "targetKey": "<FIXTURE_ROOT>/src/core/core.csproj",
+      "sourceNodeId": "P1",
+      "targetNodeId": "P2",
+      "sourceName": "App",
+      "targetName": "Core",
+      "count": 1,
+      "inCycle": false
+    },
+    {
+      "edgeId": "E1",
+      "sourceKey": "<FIXTURE_ROOT>/src/app/app.csproj",
+      "targetKey": "<FIXTURE_ROOT>/src/extras/extras.csproj",
+      "sourceNodeId": "P1",
+      "targetNodeId": "P3",
+      "sourceName": "App",
+      "targetName": "Extras",
+      "count": 1,
+      "inCycle": false
+    },
+    {
+      "edgeId": "E2",
+      "sourceKey": "<FIXTURE_ROOT>/src/app/app.csproj",
+      "targetKey": "<FIXTURE_ROOT>/src/util/util.csproj",
+      "sourceNodeId": "P1",
+      "targetNodeId": "P4",
+      "sourceName": "App",
+      "targetName": "Util",
+      "count": 1,
+      "inCycle": false
+    },
+    {
+      "edgeId": "E3",
+      "sourceKey": "<FIXTURE_ROOT>/src/core/core.csproj",
+      "targetKey": "<FIXTURE_ROOT>/src/util/util.csproj",
+      "sourceNodeId": "P2",
+      "targetNodeId": "P4",
+      "sourceName": "Core",
+      "targetName": "Util",
+      "count": 1,
+      "inCycle": true
+    },
+    {
+      "edgeId": "E4",
+      "sourceKey": "<FIXTURE_ROOT>/tests/core.tests/core.tests.csproj",
+      "targetKey": "<FIXTURE_ROOT>/src/core/core.csproj",
+      "sourceNodeId": "P5",
+      "targetNodeId": "P2",
+      "sourceName": "Core.Tests",
+      "targetName": "Core",
+      "count": 1,
+      "inCycle": false
+    },
+    {
+      "edgeId": "E5",
+      "sourceKey": "<FIXTURE_ROOT>/src/util/util.csproj",
+      "targetKey": "<FIXTURE_ROOT>/src/core/core.csproj",
+      "sourceNodeId": "P4",
+      "targetNodeId": "P2",
+      "sourceName": "Util",
+      "targetName": "Core",
+      "count": 1,
+      "inCycle": true
+    }
+  ],
+  "projectCycles": [
+    {
+      "scope": "project",
+      "nodes": ["Core", "Util"],
+      "length": 2
+    }
+  ],
+  "namespaces": {
+    "namespaceCount": 7,
+    "dependencyCount": 9,
+    "mermaid": "flowchart LR\n  subgraph G0[\"App\"]\n    P0[\"App\\napp\"]\n    P1[\"App.Services\\napp\"]\n  end\n  subgraph G1[\"Core\"]\n    P2[\"Core\\nlibrary\"]\n    P3[\"Core.Legacy\\nlibrary\"]\n  end\n  subgraph G2[\"Core.Tests\"]\n    P4[\"Core.Tests\\ntest\"]\n  end\n  subgraph G3[\"Extras\"]\n    P5[\"Extras\\nlibrary\"]\n  end\n  subgraph G4[\"Util\"]\n    P6[\"Util\\nlibrary\"]\n  end\n  P2 E0@--> P6\n  P6 E1@--> P2\n  P0 E2@--> P1\n  P0 E3@--> P2\n  P1 E4@--> P2\n  P1 E5@--> P6\n  P3 E6@--> P6\n  P4 E7@--> P1\n  P4 E8@--> P3\n  style P2 stroke:#e5484d,stroke-width:2px\n  style P6 stroke:#e5484d,stroke-width:2px\n  linkStyle 0,1 stroke:#e5484d,stroke-width:2px",
+    "diagramNodes": [
+      {
+        "nodeId": "P0",
+        "lookupKey": "App",
+        "name": "App",
+        "kind": "app",
+        "inCycle": false,
+        "representativeFile": "<FIXTURE_ROOT>/src/App/Program.cs"
+      },
+      {
+        "nodeId": "P1",
+        "lookupKey": "App.Services",
+        "name": "App.Services",
+        "kind": "app",
+        "inCycle": false,
+        "representativeFile": "<FIXTURE_ROOT>/src/App/Services/OrderService.cs"
+      },
+      {
+        "nodeId": "P2",
+        "lookupKey": "Core",
+        "name": "Core",
+        "kind": "library",
+        "inCycle": true,
+        "representativeFile": "<FIXTURE_ROOT>/src/Core/Order.cs"
+      },
+      {
+        "nodeId": "P3",
+        "lookupKey": "Core.Legacy",
+        "name": "Core.Legacy",
+        "kind": "library",
+        "inCycle": false,
+        "representativeFile": "<FIXTURE_ROOT>/src/Core/Legacy/LegacyStore.cs"
+      },
+      {
+        "nodeId": "P4",
+        "lookupKey": "Core.Tests",
+        "name": "Core.Tests",
+        "kind": "test",
+        "inCycle": false,
+        "representativeFile": "<FIXTURE_ROOT>/tests/Core.Tests/OrderTests.cs"
+      },
+      {
+        "nodeId": "P5",
+        "lookupKey": "Extras",
+        "name": "Extras",
+        "kind": "library",
+        "inCycle": false,
+        "representativeFile": "<FIXTURE_ROOT>/src/Extras/Extra.cs"
+      },
+      {
+        "nodeId": "P6",
+        "lookupKey": "Util",
+        "name": "Util",
+        "kind": "library",
+        "inCycle": true,
+        "representativeFile": "<FIXTURE_ROOT>/src/Util/Helpers.cs"
+      }
+    ],
+    "diagramEdges": [
+      {
+        "edgeId": "E0",
+        "sourceKey": "Core",
+        "targetKey": "Util",
+        "sourceNodeId": "P2",
+        "targetNodeId": "P6",
+        "sourceName": "Core",
+        "targetName": "Util",
+        "count": 2,
+        "inCycle": true
+      },
+      {
+        "edgeId": "E1",
+        "sourceKey": "Util",
+        "targetKey": "Core",
+        "sourceNodeId": "P6",
+        "targetNodeId": "P2",
+        "sourceName": "Util",
+        "targetName": "Core",
+        "count": 2,
+        "inCycle": true
+      },
+      {
+        "edgeId": "E2",
+        "sourceKey": "App",
+        "targetKey": "App.Services",
+        "sourceNodeId": "P0",
+        "targetNodeId": "P1",
+        "sourceName": "App",
+        "targetName": "App.Services",
+        "count": 1,
+        "inCycle": false
+      },
+      {
+        "edgeId": "E3",
+        "sourceKey": "App",
+        "targetKey": "Core",
+        "sourceNodeId": "P0",
+        "targetNodeId": "P2",
+        "sourceName": "App",
+        "targetName": "Core",
+        "count": 1,
+        "inCycle": false
+      },
+      {
+        "edgeId": "E4",
+        "sourceKey": "App.Services",
+        "targetKey": "Core",
+        "sourceNodeId": "P1",
+        "targetNodeId": "P2",
+        "sourceName": "App.Services",
+        "targetName": "Core",
+        "count": 1,
+        "inCycle": false
+      },
+      {
+        "edgeId": "E5",
+        "sourceKey": "App.Services",
+        "targetKey": "Util",
+        "sourceNodeId": "P1",
+        "targetNodeId": "P6",
+        "sourceName": "App.Services",
+        "targetName": "Util",
+        "count": 1,
+        "inCycle": false
+      },
+      {
+        "edgeId": "E6",
+        "sourceKey": "Core.Legacy",
+        "targetKey": "Util",
+        "sourceNodeId": "P3",
+        "targetNodeId": "P6",
+        "sourceName": "Core.Legacy",
+        "targetName": "Util",
+        "count": 1,
+        "inCycle": false
+      },
+      {
+        "edgeId": "E7",
+        "sourceKey": "Core.Tests",
+        "targetKey": "App.Services",
+        "sourceNodeId": "P4",
+        "targetNodeId": "P1",
+        "sourceName": "Core.Tests",
+        "targetName": "App.Services",
+        "count": 1,
+        "inCycle": false
+      },
+      {
+        "edgeId": "E8",
+        "sourceKey": "Core.Tests",
+        "targetKey": "Core.Legacy",
+        "sourceNodeId": "P4",
+        "targetNodeId": "P3",
+        "sourceName": "Core.Tests",
+        "targetName": "Core.Legacy",
+        "count": 1,
+        "inCycle": false
+      }
+    ],
+    "cycles": [
+      {
+        "scope": "namespace",
+        "nodes": ["Core", "Util"],
+        "length": 2
+      }
+    ],
+    "notes": [
+      "Namespace edges are derived from `using` directives among 7 solution namespace(s) (C# syntax only).",
+      "Parsed 10 C# source file(s) across 5 C# project(s)."
+    ]
+  }
+}

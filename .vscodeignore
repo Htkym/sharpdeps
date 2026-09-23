@@ -1,5 +1,9 @@
 .vscode/**
 .vscode-test/**
+.local/**
+docs/**
+tests/**
+schemas/**
 src/**
 scripts/**
 node_modules/**
