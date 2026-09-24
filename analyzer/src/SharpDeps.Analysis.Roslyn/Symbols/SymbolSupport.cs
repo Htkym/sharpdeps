@@ -15,6 +15,8 @@ public sealed class SourceDocumentRegistry
     private readonly string _rootId;
     private readonly string _rootDirectory;
     private readonly Dictionary<string, SourceDocument> _byPath = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _generatedPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<SourceDocument> _unkeyedGenerated = [];
 
     public SourceDocumentRegistry(string rootId, string rootDirectory)
     {
@@ -23,6 +25,7 @@ public sealed class SourceDocumentRegistry
     }
 
     public IReadOnlyList<SourceDocument> Documents => _byPath.Values
+        .Concat(_unkeyedGenerated)
         .OrderBy(document => document.RelativePath, StringComparer.Ordinal)
         .ToArray();
 
@@ -53,6 +56,88 @@ public sealed class SourceDocumentRegistry
         var document = new SourceDocument(id, relativePath, "userSource", hash, bytes.LongLength, null);
         _byPath[normalized] = document;
         return document;
+    }
+
+    /// <summary>
+    /// Registers a source-generated document (SD-011). The relative path is virtual:
+    /// the workspace's obj path never reaches the report, and the generated content is
+    /// read from the analysis result, not from the user's repository.
+    /// </summary>
+    /// <param name="fullPath">
+    /// The workspace path of the generated document. Evidence from the compilation is
+    /// matched by this path; null means the document is only listed in the manifest.
+    /// </param>
+    public SourceDocument RegisterGenerated(
+        string? fullPath,
+        string projectName,
+        string hintName,
+        string contentHash,
+        long byteLength)
+    {
+        var normalized = string.IsNullOrEmpty(fullPath) ? null : Path.GetFullPath(fullPath);
+        if (normalized is not null && _byPath.TryGetValue(normalized, out var existing))
+        {
+            return existing;
+        }
+
+        var relativePath = UniqueGeneratedPath(projectName, hintName);
+        var document = new SourceDocument(
+            Identity.DocumentId(_rootId, relativePath, "generatedSource"),
+            relativePath,
+            "generatedSource",
+            contentHash,
+            byteLength,
+            null);
+
+        if (normalized is not null)
+        {
+            _byPath[normalized] = document;
+        }
+        else
+        {
+            _unkeyedGenerated.Add(document);
+        }
+
+        return document;
+    }
+
+    /// <summary>
+    /// A virtual path under <c>generated/</c>. Hint names can repeat across projects or
+    /// generators, so a collision gets a suffix instead of silently merging documents.
+    /// </summary>
+    private string UniqueGeneratedPath(string projectName, string hintName)
+    {
+        var project = SanitizeSegment(projectName);
+        var hint = SanitizeHint(hintName);
+        var basePath = $"generated/{project}/{hint}";
+        var candidate = basePath;
+        var counter = 1;
+        while (!_generatedPaths.Add(candidate))
+        {
+            counter++;
+            var extension = Path.GetExtension(basePath);
+            var stem = extension.Length > 0 ? basePath[..^extension.Length] : basePath;
+            candidate = $"{stem}-{counter}{extension}";
+        }
+
+        return candidate;
+    }
+
+    private static string SanitizeSegment(string value)
+    {
+        var cleaned = value.Replace('\\', '_').Replace('/', '_').Trim();
+        return cleaned.Length == 0 ? "project" : cleaned;
+    }
+
+    private static string SanitizeHint(string hintName)
+    {
+        var segments = hintName
+            .Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Where(segment => segment is not "." and not "..")
+            .ToArray();
+        var relative = string.Join('/', segments);
+        return relative.Length == 0 ? "document.cs" : relative;
     }
 }
 

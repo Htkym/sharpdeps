@@ -10,6 +10,8 @@ import type { CodeMapReport } from './analyzer/types';
 import { buildViewModel } from './view/viewModel';
 import { CodeMapPanel } from './view/codeMapPanel';
 import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
+import { createGeneratedDocumentProvider } from './generatedDocuments/generatedDocumentProvider';
+import { GENERATED_DOCUMENT_SCHEME } from './generatedDocuments/documentUri';
 
 const STAGE_LABELS: Record<AnalysisStage, string> = {
   discover: 'Discovering projects…',
@@ -25,6 +27,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = new CycleDiagnostics(output);
   const store = new ReportStore();
   context.subscriptions.push(output, diagnostics);
+
+  // Generated code is opened read-only from the analysis result (SD-011): the provider
+  // serves the retained content and never writes a file into the workspace.
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      GENERATED_DOCUMENT_SCHEME,
+      createGeneratedDocumentProvider(store)
+    )
+  );
 
   const workRoot = path.join(
     context.globalStorageUri?.fsPath ?? context.extensionUri.fsPath,

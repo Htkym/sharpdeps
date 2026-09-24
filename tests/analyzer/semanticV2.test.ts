@@ -105,6 +105,21 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
         true
       );
 
+      // SD-011: the generated documents the workspace obtained are part of the result,
+      // evidence inside them is counted as generated, and no obj path is exposed.
+      expect(snapshot.capabilities.generatedDocuments).toBe(true);
+      const generated = snapshot.sourceManifest.filter(
+        (document) => document.origin === 'generatedSource'
+      );
+      expect(generated.length).toBeGreaterThan(0);
+      for (const document of generated) {
+        expect(document.relativePath.startsWith('generated/')).toBe(true);
+        expect(document.relativePath).not.toContain('obj/');
+        expect(document.contentHash).toMatch(/^[0-9a-f]{64}$/);
+      }
+
+      expect(snapshot.relations.some((relation) => relation.generatedEvidenceCount > 0)).toBe(true);
+
       const serialized = `${JSON.stringify(snapshot)}\n${fs.readFileSync(
         path.join(directory, 'evidence.ndjson'),
         'utf8'
@@ -130,6 +145,15 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
       const page = await store.getEvidencePage(snapshot.analysisId, relation!.id, { limit: 1 });
       expect(page.total).toBe(relation!.evidenceCount);
       expect(page.items[0].confidence).toBe('resolved');
+
+      // The retained generated content is served read-only from the result directory.
+      const generated = snapshot.sourceManifest.find(
+        (document) => document.origin === 'generatedSource'
+      );
+      expect(generated).toBeDefined();
+      const content = await store.readGeneratedDocument(snapshot.analysisId, generated!.id);
+      expect(content?.text).toContain('class OrderFactory');
+      expect(fs.existsSync(path.join(directory, 'generated', `${generated!.id}.cs`))).toBe(true);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

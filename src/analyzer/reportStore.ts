@@ -17,7 +17,13 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { AnalysisRelation, AnalysisSnapshot, EvidenceRecord, Granularity } from './reportV2';
+import type {
+  AnalysisRelation,
+  AnalysisSnapshot,
+  EvidenceRecord,
+  Granularity,
+  SourceDocument
+} from './reportV2';
 import { validateEvidenceRecord, validateSnapshot } from './reportV2Validation';
 
 export const DEFAULT_PAGE_SIZE = 100;
@@ -28,12 +34,14 @@ export interface ReportStoreLimits {
   maxReportBytes: number;
   maxEvidenceBytes: number;
   maxRegisteredAnalyses: number;
+  maxGeneratedDocumentBytes: number;
 }
 
 const DEFAULT_LIMITS: ReportStoreLimits = {
   maxReportBytes: 32 * 1024 * 1024,
   maxEvidenceBytes: 512 * 1024 * 1024,
-  maxRegisteredAnalyses: 2
+  maxRegisteredAnalyses: 2,
+  maxGeneratedDocumentBytes: 4 * 1024 * 1024
 };
 
 export class ReportStoreError extends Error {
@@ -475,6 +483,52 @@ export class ReportStore {
           ? this.issueCursor({ analysisId, kind: 'evidence', key: relationId, offset: nextOffset })
           : undefined
     };
+  }
+
+  /**
+   * Content of a generated document the analysis retained (SD-011), or undefined when
+   * the document is not generated or its content was not kept. The content lives beside
+   * the report as `generated/<documentId>.cs`, so opening it never reads or writes the
+   * user's repository. The id is opaque and must match the document id shape; the
+   * resolved path is checked to stay inside the report directory.
+   */
+  async readGeneratedDocument(
+    analysisId: string,
+    documentId: string
+  ): Promise<{ document: SourceDocument; text: string } | undefined> {
+    const analysis = this.requireAnalysis(analysisId);
+    const document = analysis.report.sourceManifest.find((entry) => entry.id === documentId);
+    if (
+      !document ||
+      document.origin !== 'generatedSource' ||
+      !/^doc_[a-f0-9]{16}$/.test(documentId)
+    ) {
+      return undefined;
+    }
+
+    const filePath = safeJoin(
+      path.join(path.dirname(analysis.evidencePath), 'generated'),
+      `${documentId}.cs`
+    );
+
+    let size: number;
+    try {
+      const stats = await fs.promises.stat(filePath);
+      if (!stats.isFile()) {
+        return undefined;
+      }
+
+      size = stats.size;
+    } catch {
+      // The content was not retained (budget) or the result directory was cleaned up.
+      return undefined;
+    }
+
+    if (size > this.limits.maxGeneratedDocumentBytes) {
+      return undefined;
+    }
+
+    return { document, text: await fs.promises.readFile(filePath, 'utf8') };
   }
 
   private buildAnalysis(

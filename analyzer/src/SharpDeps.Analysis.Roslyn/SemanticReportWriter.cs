@@ -288,7 +288,11 @@ public static class SemanticReportWriter
         var failed = report.Variants.Count(variant => variant.LoadState == "failed");
         var complete = failed == 0
             && operationStats.UnresolvedOperations == 0
-            && !limitations.Any(limitation => limitation.Code is "semantic.compilationErrors" or "semantic.referencesUnresolved");
+            && !limitations.Any(limitation => limitation.Code
+                is "semantic.compilationErrors"
+                or "semantic.referencesUnresolved"
+                or "semantic.generatedDocumentsUnavailable"
+                or "semantic.generatedDocumentContentUnavailable");
 
         var createdAtText = createdAt.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
         var resolvedAnalysisId = analysisId ?? Identity.AnalysisId(rootId, Mode, profileHash, createdAtText);
@@ -307,7 +311,7 @@ public static class SemanticReportWriter
             Capabilities: new AnalysisCapabilities(
                 TypeGraph: true,
                 Evidence: true,
-                GeneratedDocuments: false,
+                GeneratedDocuments: load.GeneratedDocuments.Count > 0,
                 CycleWitness: true,
                 Search: true),
             Completeness: complete ? "completeWithinScope" : "partial",

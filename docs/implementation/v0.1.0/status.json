@@ -412,25 +412,37 @@
       "id": "SD-011",
       "title": "生成コード・証拠位置の保持",
       "milestone": "M2",
-      "status": "in_progress",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Generated/GeneratedSourceDocuments.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticLoader.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Symbols/SymbolSupport.cs",
         "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticReportWriter.cs",
-        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/ExternalTypeRegistry.cs",
-        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/DeclarationDependencyCollector.cs",
-        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/OperationDependencyCollector.cs",
         "analyzer/src/SharpDeps.SemanticHost/Program.cs",
+        "src/analyzer/reportStore.ts",
+        "src/generatedDocuments/documentUri.ts",
+        "src/generatedDocuments/generatedDocumentProvider.ts",
+        "src/generatedDocuments/documentUri.test.ts",
+        "src/extension.ts",
+        "tests/fixtures/semantic-baseline/src/Generator/GeneratedOrderFactory.cs",
+        "tests/fixtures/semantic-baseline/src/Generator/Generator.csproj",
+        "tests/fixtures/semantic-baseline/src/Domain/Domain.csproj",
+        "analyzer/tests/SharpDeps.Analysis.Tests/SemanticLoaderIntegrationTests.cs",
         "tests/analyzer/semanticV2.test.ts",
+        "src/analyzer/reportStore.test.ts",
         "docs/implementation/v0.1.0/tasks/SD-011.md"
       ],
       "tests": [
         "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 101テスト成功",
-        "tests/analyzer/semanticV2.test.ts — 実出力の契約検証・参照整合・Store登録と根拠ページング",
-        "npm test — 16ファイル / 146テスト成功"
+        "SemanticLoaderIntegrationTests — 生成文書の取得・内容・ハッシュ（13テスト成功）",
+        "tests/analyzer/semanticV2.test.ts — capabilities.generatedDocuments・仮想パス・generatedEvidenceCount・保持内容の読み出し",
+        "npm test — 18ファイル / 154テスト成功",
+        "実測: 生成文書2件を保持、生成由来の根拠を持つ関係4件（objパスはレポートに出ない）"
       ],
       "evidence": ["docs/implementation/v0.1.0/tasks/SD-011.md"],
       "blockers": [],
-      "notes": "完了：証拠位置、sourceManifest、外部型の材料化、v2契約検証。未完：生成文書の保持とsnapshot反映、read-only provider、生成失敗のcompleteness反映。"
+      "notes": "完了：生成文書の取得・区分・内容保持、read-only provider、capabilities/completeness反映。未検証：大規模生成物、SDKなし環境、VS Code実機表示（SD-028/029）。"
     },
     {
       "id": "SD-012",

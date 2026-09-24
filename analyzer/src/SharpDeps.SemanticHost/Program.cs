@@ -75,6 +75,36 @@ try
     var documents = new SourceDocumentRegistry(
         Identity.WorkspaceRootId(solutionDirectory),
         solutionDirectory);
+
+    // Generated documents are known before the index and the collectors run, so evidence
+    // and declaration locations inside them are marked generatedSource from the start.
+    var generatedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+    foreach (var generated in load.GeneratedDocuments)
+    {
+        var document = documents.RegisterGenerated(
+            generated.FilePath,
+            generated.ProjectName,
+            generated.HintName,
+            generated.ContentHash,
+            generated.ByteLength);
+        if (generated.Text is null)
+        {
+            continue;
+        }
+
+        // The content lives with the analysis result. Nothing is written into the user's
+        // repository; the read-only document provider serves these files.
+        var fileName = $"{document.Id}.cs";
+        var filePath = Path.Combine(outputDirectory, "generated", fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(
+            filePath,
+            generated.Text,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            CancellationToken.None);
+        generatedFiles[document.Id] = fileName;
+    }
+
     var inputs = report.Variants
         .Where(variant => variant.LoadState == "loaded" && load.Compilations.ContainsKey(variant.VariantKey))
         .Select(variant => new SymbolIndexInput(
@@ -134,6 +164,8 @@ try
             unresolved = report.Coverage.Unresolved,
             diagnostics = report.Diagnostics.Count,
             compilations = load.Compilations.Count,
+            generatedDocuments = load.GeneratedDocuments.Count,
+            generatedContentRetained = generatedFiles.Count,
             elapsedMs = stopwatch.ElapsedMilliseconds
         });
 

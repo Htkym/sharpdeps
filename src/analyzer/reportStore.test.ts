@@ -394,6 +394,57 @@ describe('ReportStore analysis lifetime', () => {
   });
 });
 
+describe('ReportStore generated documents', () => {
+  const generatedId = 'doc_abcdefabcdefabcd';
+
+  function snapshotWithGeneratedDocument(): AnalysisSnapshot {
+    return {
+      ...snapshotWithEntities([]),
+      sourceManifest: [
+        ...makeSnapshot().sourceManifest,
+        {
+          id: generatedId,
+          relativePath: 'generated/App/Generated.g.cs',
+          origin: 'generatedSource' as const,
+          contentHash: 'abcdef',
+          byteLength: 9
+        }
+      ]
+    };
+  }
+
+  it('serves retained generated content and never serves anything else', async () => {
+    const snapshot = snapshotWithGeneratedDocument();
+    const { directory } = writeAnalysis(snapshot, []);
+    fs.mkdirSync(path.join(directory, 'generated'), { recursive: true });
+    fs.writeFileSync(path.join(directory, 'generated', `${generatedId}.cs`), 'class C {}', 'utf8');
+    const store = new ReportStore();
+    await store.register({ directory, reportFileName: 'report-v2.json' });
+
+    const generated = await store.readGeneratedDocument(snapshot.analysisId, generatedId);
+    expect(generated?.text).toBe('class C {}');
+    expect(generated?.document.relativePath).toBe('generated/App/Generated.g.cs');
+
+    // A user document, an unknown id, and an unregistered analysis resolve to nothing.
+    expect(await store.readGeneratedDocument(snapshot.analysisId, IDS.document)).toBeUndefined();
+    expect(
+      await store.readGeneratedDocument(snapshot.analysisId, 'doc_0000000000000000')
+    ).toBeUndefined();
+    await expect(store.readGeneratedDocument('an_ffffffffffffffff', generatedId)).rejects.toThrow(
+      ReportStoreError
+    );
+  });
+
+  it('returns undefined when the content was not retained', async () => {
+    const snapshot = snapshotWithGeneratedDocument();
+    const { directory } = writeAnalysis(snapshot, []);
+    const store = new ReportStore();
+    await store.register({ directory, reportFileName: 'report-v2.json' });
+
+    expect(await store.readGeneratedDocument(snapshot.analysisId, generatedId)).toBeUndefined();
+  });
+});
+
 describe('ReportStore projection and details', () => {
   it('reports totals and truncation, and honours a local scope', async () => {
     const base = snapshotWithEntities(['Alpha', 'Beta', 'Gamma']);

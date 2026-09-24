@@ -5,4 +5,13 @@
     <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The generator keeps its output in memory: no file is written to obj/ and none to
+         the repository. The loader can only see the result through generated documents. -->
+    <ProjectReference Include="..\Generator\Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
 </Project>

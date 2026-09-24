@@ -105,7 +105,8 @@ public sealed class SemanticLoaderIntegrationTests
     [Fact]
     public async Task ReportsGeneratedDocumentsWithoutFailing()
     {
-        var report = await LoadAsync("semantic-baseline/SemanticBaseline.sln");
+        var load = await LoadResultAsync("semantic-baseline/SemanticBaseline.sln");
+        var report = load.Report;
 
         Assert.All(
             report.Variants,
@@ -113,15 +114,43 @@ public sealed class SemanticLoaderIntegrationTests
         Assert.DoesNotContain(
             report.Limitations,
             limitation => limitation.Code == "semantic.generatedDocumentsUnavailable");
+
+        // Domain references an in-memory generator that writes no file itself, so the
+        // workspace is the only way to see its output; each TFM variant sees it.
+        var generated = load.GeneratedDocuments
+            .Where(entry => entry.ProjectName.StartsWith("Domain", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, generated.Length);
+        Assert.All(
+            generated,
+            entry =>
+            {
+                Assert.EndsWith(
+                    "OrderFactory.g.cs",
+                    entry.FilePath ?? string.Empty,
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.Matches("^[0-9a-f]{64}$", entry.ContentHash);
+                Assert.Contains("class OrderFactory", entry.Text ?? string.Empty, StringComparison.Ordinal);
+            });
+        Assert.Equal(
+            2,
+            report.Variants
+                .Where(variant => variant.ProjectName.StartsWith("Domain", StringComparison.Ordinal))
+                .Sum(variant => variant.GeneratedDocumentCount));
     }
 
     [Fact]
     public async Task LoadsSlnxAndSingleProjectTargets()
     {
         var slnx = await LoadAsync("semantic-baseline/SemanticBaseline.slnx");
-        Assert.Equal(5, slnx.Variants.Count);
+        // Domain references an in-memory source generator; the workspace loads the
+        // referenced project too, so it appears as a variant of the graph.
+        Assert.Equal(6, slnx.Variants.Count);
+        Assert.Contains(slnx.Variants, variant => variant.ProjectName == "Generator");
         // Direct ProjectReference items only: Application -> Domain,
-        // Infrastructure -> Domain, Infrastructure.Tests -> Infrastructure.
+        // Infrastructure -> Domain, Infrastructure.Tests -> Infrastructure. The
+        // generator reference is analyzer-only (ReferenceOutputAssembly=false), so the
+        // workspace exposes it as a project of the graph but not as a reference edge.
         Assert.Equal(3, slnx.References.Count);
         Assert.Equal(0, slnx.Coverage.Unresolved);
 
@@ -239,10 +268,17 @@ public sealed class SemanticLoaderIntegrationTests
 
     private static async Task<SemanticProbeReport> LoadAsync(string relativeTarget, string configuration = "Debug")
     {
+        var load = await LoadResultAsync(relativeTarget, configuration);
+        return load.Report;
+    }
+
+    private static async Task<SemanticLoadResult> LoadResultAsync(
+        string relativeTarget,
+        string configuration = "Debug")
+    {
         var target = Path.Combine(RepositoryRoot, "tests", "fixtures", relativeTarget.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(target), $"Fixture not found: {target}");
-        var load = await SemanticLoader.LoadAsync(new SemanticLoadOptions(target, configuration));
-        return load.Report;
+        return await SemanticLoader.LoadAsync(new SemanticLoadOptions(target, configuration));
     }
 
     private static string FindRepositoryRoot()

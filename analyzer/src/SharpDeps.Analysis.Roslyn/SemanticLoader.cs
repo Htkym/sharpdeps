@@ -20,7 +20,8 @@ public sealed record SemanticLoadOptions(
 public sealed record SemanticLoadResult(
     SemanticProbeReport Report,
     IReadOnlyDictionary<string, Compilation> Compilations,
-    IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> DefiningVariantByAssembly);
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> DefiningVariantByAssembly,
+    IReadOnlyList<GeneratedSourceDocumentInfo> GeneratedDocuments);
 
 /// <summary>
 /// Loads a solution or project with MSBuildWorkspace and reports what was actually
@@ -41,6 +42,12 @@ public static class SemanticLoader
 {
     /// <summary>Document paths are evidence, but a report must stay small.</summary>
     private const int MaxDocumentPaths = 100;
+
+    /// <summary>
+    /// Generated content is retained with the analysis result; one document above this
+    /// stays in the report as a hash only, and the limitation says so.
+    /// </summary>
+    private const int MaxGeneratedDocumentChars = 1 << 20;
 
     /// <summary>
     /// Compiler errors the user can act on. Restore and language-version problems are
@@ -111,7 +118,8 @@ public static class SemanticLoader
                     Limitations: limitations,
                     Coverage: new ProbeCoverage(0, 0, 0, 0, 0, 0)),
                 new Dictionary<string, Compilation>(),
-                new Dictionary<string, IReadOnlyDictionary<string, string>>());
+                new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                []);
         }
 
         var addedReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -127,6 +135,7 @@ public static class SemanticLoader
         var unresolvedReferences = 0;
         var errorHints = new List<(string Project, string Hint, string Id, string Message)>();
         var loadedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var generatedDocuments = new List<GeneratedSourceDocumentInfo>();
 
         foreach (var project in solution.Projects.OrderBy(entry => entry.Name, StringComparer.Ordinal))
         {
@@ -156,8 +165,21 @@ public static class SemanticLoader
             string? generatedError = null;
             try
             {
-                var generatedDocuments = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
-                generatedCount = generatedDocuments.Count();
+                var projectDocuments = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
+                foreach (var generated in projectDocuments.OrderBy(
+                             entry => entry.FilePath,
+                             StringComparer.Ordinal))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    generatedDocuments.Add(
+                        await DescribeGeneratedDocumentAsync(
+                            generated,
+                            variantKey,
+                            project.Name,
+                            limitations,
+                            cancellationToken));
+                    generatedCount++;
+                }
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
@@ -378,7 +400,70 @@ public static class SemanticLoader
             solution,
             project => VariantKeyFor(project, options));
 
-        return new SemanticLoadResult(report, compilations, referenceMap);
+        return new SemanticLoadResult(report, compilations, referenceMap, generatedDocuments);
+    }
+
+    /// <summary>
+    /// Reads one generated document while the workspace is alive. The content is kept
+    /// with the analysis result; a document above the retention budget is reported by
+    /// hash only, so the caller can still show that it existed.
+    /// </summary>
+    private static async Task<GeneratedSourceDocumentInfo> DescribeGeneratedDocumentAsync(
+        Document document,
+        string variantKey,
+        string projectName,
+        List<ProbeLimitation> limitations,
+        CancellationToken cancellationToken)
+    {
+        var hintName = string.IsNullOrWhiteSpace(document.Name)
+            ? Path.GetFileName(document.FilePath ?? string.Empty)
+            : document.Name;
+
+        try
+        {
+            var text = await document.GetTextAsync(cancellationToken);
+            var content = text.ToString();
+            var byteLength = System.Text.Encoding.UTF8.GetByteCount(content);
+            var hash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+            var truncated = content.Length > MaxGeneratedDocumentChars;
+            if (truncated)
+            {
+                limitations.Add(new ProbeLimitation(
+                    "semantic.generatedDocumentTooLarge",
+                    $"The generated document '{hintName}' in '{projectName}' exceeds the retained-content budget; "
+                    + "the analysis keeps its hash only.",
+                    1));
+            }
+
+            return new GeneratedSourceDocumentInfo(
+                variantKey,
+                projectName,
+                hintName,
+                document.FilePath,
+                hash,
+                byteLength,
+                truncated ? null : content,
+                truncated);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            limitations.Add(new ProbeLimitation(
+                "semantic.generatedDocumentContentUnavailable",
+                $"The content of the generated document '{hintName}' in '{projectName}' could not be read: "
+                + error.Message,
+                1));
+            return new GeneratedSourceDocumentInfo(
+                variantKey,
+                projectName,
+                hintName,
+                document.FilePath,
+                "unavailable",
+                0,
+                null,
+                false);
+        }
     }
 
     /// <summary>
