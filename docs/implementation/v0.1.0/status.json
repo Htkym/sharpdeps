@@ -550,12 +550,33 @@
       "id": "SD-016",
       "title": "ツリー・全体検索・Table view",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "media/app/query.ts",
+        "media/components/entityTable.ts",
+        "media/components/navigationPane.ts",
+        "media/app/state.ts",
+        "media/app/app.ts",
+        "tests/webview/query.test.ts",
+        "docs/implementation/v0.1.0/evidence/sd016-tree-search.png",
+        "docs/implementation/v0.1.0/tasks/SD-016.md"
+      ],
+      "tests": [
+        "npm test — 15ファイル / 144テスト成功（SD-016で+7）",
+        "フィルターのカテゴリ内OR/カテゴリ間AND",
+        "安定ソート（名前→ID）と方向トグル",
+        "ページングの境界と範囲外クランプ、再現性",
+        "検索結果の可視/表示予算外/フィルター外の分類",
+        "Playwright: 100件ページング・ソート・ツリー遅延展開・射影外の検索結果バッジと一時表示",
+        "Playwright: Graph/Table切替で選択・検索・フィルターを維持"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-016.md",
+        "docs/implementation/v0.1.0/evidence/sd016-tree-search.png"
+      ],
+      "blockers": [],
+      "notes": "射影外の子ノード取得はSD-017で接続。検索debounceと性能はSD-028、フィルターUIの作り込みはSD-024。"
     },
     {
       "id": "SD-017",

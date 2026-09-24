@@ -6,10 +6,15 @@
 // explicit rendering, so none of them looks like "no dependencies".
 
 import { buildShell, type NavTab, type ShellElements } from '../components/shell';
+import { renderEntityTable } from '../components/entityTable';
+import type { SortState } from './query';
+import { buildNavigationTree, renderNavigationTree } from '../components/navigationPane';
 import {
   INITIAL_STATE,
   selectBreadcrumbs,
+  selectSearchPresentation,
   selectStatusFooter,
+  selectTableRows,
   selectVisibleData,
   viewReducer,
   type ViewAction,
@@ -29,11 +34,11 @@ export interface ViewerAppOptions {
   onStateChanged?: (state: ViewState) => void;
 }
 
-const MAX_TABLE_ROWS = 200;
-
 export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {}): ViewerApp {
   let state: ViewState = INITIAL_STATE;
   let activeTab: NavTab = 'structure';
+  /** Tree expansion is a transient UI detail; it is not part of the persisted state. */
+  const expandedTreeNodes = new Set<string>();
 
   const elements = buildShell(root, {
     onAnalyze: () =>
@@ -46,7 +51,12 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       }),
     onGranularity: (granularity) => dispatch({ type: 'granularityChanged', granularity }),
     onViewKind: (viewKind) => dispatch({ type: 'viewKindChanged', viewKind }),
-    onSearch: (search) => dispatch({ type: 'searchChanged', search }),
+    onSearch: (search) => {
+      dispatch({ type: 'searchChanged', search });
+      // The full analysis index is searched host-side; results arrive as
+      // `searchResultsReceived` (SD-013 bridge).
+      options.onHostAction?.({ type: 'searchStarted', query: search });
+    },
     onExport: () => options.onHostAction?.({ type: 'selectionCleared' }),
     onCopyContext: () => options.onHostAction?.({ type: 'selectionCleared' }),
     onNavTab: (tab) => {
@@ -63,6 +73,39 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     const detail = (event as CustomEvent<{ entityId: string }>).detail;
     if (detail?.entityId) {
       dispatch({ type: 'entitySelected', entityId: detail.entityId });
+    }
+  });
+
+  elements.navPaneBody.addEventListener('sd-show-temporary', (event) => {
+    const detail = (event as CustomEvent<{ entityId: string }>).detail;
+    if (detail?.entityId) {
+      dispatch({ type: 'temporaryDisplayAdded', entityId: detail.entityId });
+    }
+  });
+
+  elements.navPaneBody.addEventListener('sd-hide-temporary', () =>
+    dispatch({ type: 'temporaryDisplayCleared' })
+  );
+
+  elements.mapHost.addEventListener('sd-sort', (event) => {
+    const detail = (event as CustomEvent<{ key: SortState['key'] }>).detail;
+    if (detail?.key) {
+      dispatch({ type: 'tableSortChanged', key: detail.key });
+    }
+  });
+
+  elements.mapHost.addEventListener('sd-page', (event) => {
+    const detail = (event as CustomEvent<{ page: number }>).detail;
+    if (typeof detail?.page === 'number') {
+      dispatch({ type: 'tablePageChanged', page: detail.page });
+    }
+  });
+
+  elements.mapHost.addEventListener('sd-activate', (event) => {
+    const detail = (event as CustomEvent<{ entityId: string }>).detail;
+    if (detail?.entityId) {
+      dispatch({ type: 'entitySelected', entityId: detail.entityId });
+      dispatch({ type: 'inspectorToggled' });
     }
   });
 
@@ -84,7 +127,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   function render(): void {
     renderTopBar(elements, state);
     renderError(elements, state);
-    renderNavigation(elements, state, activeTab);
+    renderNavigation(elements, state, activeTab, { expanded: expandedTreeNodes, rerender: render });
     renderCenter(elements, state);
     renderInspector(elements, state);
     elements.footer.textContent = selectStatusFooter(state);
@@ -130,7 +173,17 @@ function renderError(elements: ShellElements, state: ViewState): void {
   elements.errorBar.textContent = `${state.error.code}: ${state.error.message}`;
 }
 
-function renderNavigation(elements: ShellElements, state: ViewState, activeTab: NavTab): void {
+interface StructureContext {
+  expanded: Set<string>;
+  rerender: () => void;
+}
+
+function renderNavigation(
+  elements: ShellElements,
+  state: ViewState,
+  activeTab: NavTab,
+  context: StructureContext
+): void {
   for (const tabButton of Array.from(
     elements.navTabs.querySelectorAll<HTMLButtonElement>('button')
   )) {
@@ -141,7 +194,7 @@ function renderNavigation(elements: ShellElements, state: ViewState, activeTab: 
 
   elements.navPaneBody.replaceChildren();
   if (activeTab === 'structure') {
-    renderStructureTab(elements, state);
+    renderStructureTab(elements, state, context);
   } else if (activeTab === 'cycles') {
     renderCyclesTab(elements, state);
   } else {
@@ -149,42 +202,107 @@ function renderNavigation(elements: ShellElements, state: ViewState, activeTab: 
   }
 }
 
-function renderStructureTab(elements: ShellElements, state: ViewState): void {
+function renderStructureTab(
+  elements: ShellElements,
+  state: ViewState,
+  context: StructureContext
+): void {
+  renderSearchResults(elements, state);
+
   const visible = selectVisibleData(state);
-  if (visible.nodes.length === 0) {
-    elements.navPaneBody.append(message('The structure tree is empty for this scope.', 'sd-empty'));
+  const tree = buildNavigationTree(visible.nodes);
+  const container = document.createElement('div');
+  elements.navPaneBody.append(container);
+  renderNavigationTree(container, {
+    nodes: tree,
+    selectedId: state.selection.entityId,
+    expanded: context.expanded,
+    onSelect: (entityId) =>
+      elements.navPaneBody.dispatchEvent(
+        new CustomEvent('sd-select', { detail: { entityId }, bubbles: true })
+      ),
+    onToggle: (entityId) => {
+      if (context.expanded.has(entityId)) {
+        context.expanded.delete(entityId);
+      } else {
+        context.expanded.add(entityId);
+      }
+
+      context.rerender();
+    }
+  });
+}
+
+/** Search hits from the whole index, including entities the view does not show. */
+function renderSearchResults(elements: ShellElements, state: ViewState): void {
+  if (state.search.trim().length === 0) {
     return;
   }
 
+  const results = selectSearchPresentation(state);
+  const block = document.createElement('section');
+  block.className = 'sd-search-results';
+  const heading = document.createElement('h3');
+  heading.textContent =
+    results.length === 0 && !state.searchResults.pending
+      ? `No match for "${state.search}"`
+      : `Search results (${results.length}${state.searchResults.total > results.length ? ` of ${state.searchResults.total}` : ''})`;
+  block.append(heading);
+
+  if (state.searchResults.pending && results.length === 0) {
+    block.append(message('Searching the analyzed index...', 'sd-note'));
+  }
+
   const list = document.createElement('ul');
-  list.className = 'sd-node-list';
-  for (const node of visible.nodes.slice(0, 100)) {
+  for (const result of results.slice(0, 20)) {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'sd-node-item';
-    button.textContent = node.name;
-    button.dataset.entityId = node.id;
-    if (node.inCycle) {
-      button.dataset.inCycle = 'true';
-      button.append(badge('cycle'));
-    }
-
-    if (node.isExternal) {
-      button.append(badge('external'));
-    }
-
-    button.addEventListener('click', () => {
-      // The app dispatches through the closure created in createViewerApp.
+    button.textContent = result.entity.name;
+    button.addEventListener('click', () =>
       elements.navPaneBody.dispatchEvent(
-        new CustomEvent('sd-select', { detail: { entityId: node.id }, bubbles: true })
-      );
-    });
+        new CustomEvent('sd-select', { detail: { entityId: result.entity.id }, bubbles: true })
+      )
+    );
     item.append(button);
+
+    if (result.visibility !== 'visible') {
+      item.append(
+        badge(result.visibility === 'outsideBudget' ? 'outside view' : 'outside filters')
+      );
+      const show = document.createElement('button');
+      show.type = 'button';
+      show.className = 'sd-button sd-button-small';
+      show.textContent = 'Show';
+      show.addEventListener('click', () =>
+        elements.navPaneBody.dispatchEvent(
+          new CustomEvent('sd-show-temporary', {
+            detail: { entityId: result.entity.id },
+            bubbles: true
+          })
+        )
+      );
+      item.append(show);
+    }
+
     list.append(item);
   }
 
-  elements.navPaneBody.append(list);
+  block.append(list);
+
+  if (state.temporaryDisplayIds.length > 0) {
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'sd-button sd-button-small';
+    reset.textContent = `Hide ${state.temporaryDisplayIds.length} row(s) outside filters`;
+    reset.addEventListener('click', () =>
+      elements.navPaneBody.dispatchEvent(new CustomEvent('sd-hide-temporary', { bubbles: true }))
+    );
+    block.append(reset);
+  }
+
+  elements.navPaneBody.append(block);
 }
 
 function renderCyclesTab(elements: ShellElements, state: ViewState): void {
@@ -313,67 +431,38 @@ function renderCenter(elements: ShellElements, state: ViewState): void {
     return;
   }
 
-  if (state.viewKind === 'table') {
-    elements.mapHost.append(buildTable(visible.nodes, visible.edges));
-    return;
+  const tableOptions = {
+    rows: selectTableRows(state).rows,
+    sort: state.tableSort,
+    page: selectTableRows(state).page,
+    pageCount: selectTableRows(state).pageCount,
+    totalItems: selectTableRows(state).totalItems,
+    selectedId: state.selection.entityId,
+    onSort: (key: SortState['key']) =>
+      elements.mapHost.dispatchEvent(
+        new CustomEvent('sd-sort', { detail: { key }, bubbles: true })
+      ),
+    onPage: (page: number) =>
+      elements.mapHost.dispatchEvent(
+        new CustomEvent('sd-page', { detail: { page }, bubbles: true })
+      ),
+    onSelect: (entityId: string) =>
+      elements.mapHost.dispatchEvent(
+        new CustomEvent('sd-select', { detail: { entityId }, bubbles: true })
+      ),
+    onActivate: (entityId: string) =>
+      elements.mapHost.dispatchEvent(
+        new CustomEvent('sd-activate', { detail: { entityId }, bubbles: true })
+      )
+  };
+
+  if (state.viewKind === 'graph') {
+    elements.mapHost.append(
+      message('The interactive SVG graph replaces this table in SD-017.', 'sd-note')
+    );
   }
 
-  // The interactive SVG graph and the paged table are SD-017/SD-016. Until then the
-  // center shows the same projection as a readable list so no state looks empty.
-  elements.mapHost.append(buildTable(visible.nodes, visible.edges));
-  elements.mapHost.append(
-    message('The interactive SVG graph replaces this list in SD-017.', 'sd-note')
-  );
-}
-
-function buildTable(
-  nodes: ReturnType<typeof selectVisibleData>['nodes'],
-  edges: ReturnType<typeof selectVisibleData>['edges']
-): HTMLTableElement {
-  const table = document.createElement('table');
-  table.className = 'sd-table';
-  const head = document.createElement('thead');
-  const headRow = document.createElement('tr');
-  for (const label of ['Name', 'Kind', 'Project', 'Dependencies', 'Dependents', 'Cycle']) {
-    const cell = document.createElement('th');
-    cell.scope = 'col';
-    cell.textContent = label;
-    headRow.append(cell);
-  }
-
-  head.append(headRow);
-  table.append(head);
-
-  const outgoing = new Map<string, number>();
-  const incoming = new Map<string, number>();
-  for (const edge of edges) {
-    outgoing.set(edge.sourceId, (outgoing.get(edge.sourceId) ?? 0) + 1);
-    incoming.set(edge.targetId, (incoming.get(edge.targetId) ?? 0) + 1);
-  }
-
-  const body = document.createElement('tbody');
-  for (const node of nodes.slice(0, MAX_TABLE_ROWS)) {
-    const row = document.createElement('tr');
-    row.dataset.entityId = node.id;
-    row.tabIndex = 0;
-    for (const value of [
-      node.name,
-      node.kind ?? '—',
-      node.projectName ?? '—',
-      String(outgoing.get(node.id) ?? 0),
-      String(incoming.get(node.id) ?? 0),
-      node.inCycle ? 'yes' : 'no'
-    ]) {
-      const cell = document.createElement('td');
-      cell.textContent = value;
-      row.append(cell);
-    }
-
-    body.append(row);
-  }
-
-  table.append(body);
-  return table;
+  renderEntityTable(elements.mapHost, tableOptions);
 }
 
 function emptyStateMessage(state: ViewState): HTMLElement {

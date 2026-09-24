@@ -6,6 +6,16 @@
 
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { EntitySummary, Filters, Projection, Scope } from '../../src/view/protocolV2';
+import {
+  DEFAULT_SORT,
+  toggleSort,
+  TABLE_PAGE_SIZE,
+  classifySearchResult,
+  paginate,
+  sortEntities,
+  type SearchResultVisibility,
+  type SortState
+} from './query';
 
 export type ViewKind = 'graph' | 'table';
 
@@ -61,6 +71,13 @@ export interface ViewState {
   paneWidths: { navigation: number; inspector: number };
   inspectorOpen: boolean;
   history: HistoryEntry[];
+  /** Table view: sort and page. Both are state so the same input renders the same. */
+  tableSort: SortState;
+  tablePage: number;
+  /** Full-index search results, kept separately from the display projection. */
+  searchResults: { query: string; items: EntitySummary[]; total: number; pending: boolean };
+  /** Entities the user chose to show even though filters exclude them. */
+  temporaryDisplayIds: string[];
 }
 
 export const HISTORY_LIMIT = 20;
@@ -83,7 +100,11 @@ export const INITIAL_STATE: ViewState = {
   limitations: [],
   paneWidths: { navigation: 220, inspector: 320 },
   inspectorOpen: false,
-  history: []
+  history: [],
+  tableSort: DEFAULT_SORT,
+  tablePage: 0,
+  searchResults: { query: '', items: [], total: 0, pending: false },
+  temporaryDisplayIds: []
 };
 
 export type ViewAction =
@@ -123,6 +144,13 @@ export type ViewAction =
   | { type: 'viewKindChanged'; viewKind: ViewKind }
   | { type: 'scopeChanged'; scope: Scope }
   | { type: 'searchChanged'; search: string }
+  | { type: 'searchStarted'; query: string }
+  | { type: 'searchResultsReceived'; query: string; items: EntitySummary[]; total: number }
+  | { type: 'searchCleared' }
+  | { type: 'tableSortChanged'; key: SortState['key'] }
+  | { type: 'tablePageChanged'; page: number }
+  | { type: 'temporaryDisplayAdded'; entityId: string }
+  | { type: 'temporaryDisplayCleared' }
   | { type: 'filtersChanged'; filters: Filters }
   | { type: 'entitySelected'; entityId: string }
   | { type: 'relationSelected'; relationId: string }
@@ -262,7 +290,54 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       };
 
     case 'searchChanged':
-      return { ...state, search: action.search };
+      // The host query is asynchronous: mark it pending and reset the page so the
+      // table always shows the first page of the new query.
+      return {
+        ...state,
+        search: action.search,
+        tablePage: 0,
+        searchResults: { ...state.searchResults, query: action.search, pending: true }
+      };
+
+    case 'searchStarted':
+      return {
+        ...state,
+        searchResults: { ...state.searchResults, query: action.query, pending: true }
+      };
+
+    case 'searchResultsReceived':
+      return {
+        ...state,
+        searchResults: {
+          query: action.query,
+          items: action.items,
+          total: action.total,
+          pending: false
+        }
+      };
+
+    case 'searchCleared':
+      return {
+        ...state,
+        search: '',
+        tablePage: 0,
+        temporaryDisplayIds: [],
+        searchResults: { query: '', items: [], total: 0, pending: false }
+      };
+
+    case 'tableSortChanged':
+      return { ...state, tableSort: toggleSort(state.tableSort, action.key), tablePage: 0 };
+
+    case 'tablePageChanged':
+      return { ...state, tablePage: Math.max(0, action.page) };
+
+    case 'temporaryDisplayAdded':
+      return state.temporaryDisplayIds.includes(action.entityId)
+        ? state
+        : { ...state, temporaryDisplayIds: [...state.temporaryDisplayIds, action.entityId] };
+
+    case 'temporaryDisplayCleared':
+      return state.temporaryDisplayIds.length === 0 ? state : { ...state, temporaryDisplayIds: [] };
 
     case 'filtersChanged':
       return { ...state, filters: action.filters };
@@ -426,7 +501,14 @@ export function selectVisibleData(state: ViewState): VisibleData {
 
   const needle = state.search.trim().toLowerCase();
   const filters = state.filters;
+  // Entities the user explicitly chose to show are kept even when they are outside
+  // the current filters; the table marks those rows.
+  const temporary = new Set(state.temporaryDisplayIds);
   const nodes = projection.nodes.filter((node) => {
+    if (temporary.has(node.id)) {
+      return true;
+    }
+
     if (needle.length > 0 && !node.name.toLowerCase().includes(needle)) {
       return false;
     }
@@ -507,6 +589,64 @@ export function selectStatusFooter(state: ViewState): string {
   }
 
   return parts.join(' · ');
+}
+
+/**
+ * Table rows: filtered, sorted, then paged. Temporary rows are marked so the UI can
+ * show that they are outside the current filters.
+ */
+export function selectTableRows(state: ViewState): {
+  rows: Array<{ entity: EntitySummary; temporary: boolean }>;
+  page: number;
+  pageCount: number;
+  totalItems: number;
+  isFilteredEmpty: boolean;
+} {
+  const visible = selectVisibleData(state);
+  const temporary = new Set(state.temporaryDisplayIds);
+  const dependencyCount = dependencyCounter(state);
+  const sorted = sortEntities(visible.nodes, state.tableSort, {
+    dependencyCount: (id) => dependencyCount.outgoing.get(id) ?? 0,
+    dependentCount: (id) => dependencyCount.incoming.get(id) ?? 0
+  });
+  const page = paginate(sorted, state.tablePage, TABLE_PAGE_SIZE);
+
+  return {
+    rows: page.items.map((entity) => ({ entity, temporary: temporary.has(entity.id) })),
+    page: page.page,
+    pageCount: page.pageCount,
+    totalItems: page.totalItems,
+    isFilteredEmpty: visible.isFilteredEmpty
+  };
+}
+
+/** Search hits with their relation to the current view, so none look "not found". */
+export function selectSearchPresentation(
+  state: ViewState
+): Array<{ entity: EntitySummary; visibility: SearchResultVisibility }> {
+  const visibleIds = new Set(selectVisibleData(state).nodes.map((node) => node.id));
+  return state.searchResults.items.map((entity) => ({
+    entity,
+    visibility: classifySearchResult(entity, {
+      visibleIds,
+      filters: state.filters,
+      search: state.search
+    })
+  }));
+}
+
+function dependencyCounter(state: ViewState): {
+  outgoing: Map<string, number>;
+  incoming: Map<string, number>;
+} {
+  const outgoing = new Map<string, number>();
+  const incoming = new Map<string, number>();
+  for (const edge of state.projection?.edges ?? []) {
+    outgoing.set(edge.sourceId, (outgoing.get(edge.sourceId) ?? 0) + 1);
+    incoming.set(edge.targetId, (incoming.get(edge.targetId) ?? 0) + 1);
+  }
+
+  return { outgoing, incoming };
 }
 
 export function countFilters(filters: Filters): number {
