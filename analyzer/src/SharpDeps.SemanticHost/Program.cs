@@ -41,7 +41,14 @@ if (!SemanticEnvironment.TryRegister(Path.GetDirectoryName(Path.GetFullPath(targ
     return 2;
 }
 
+// The host cancels cooperatively when the parent closes stdin (the extension host
+// stopping the analysis closes the pipe first) or when the timeout elapses.
 using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)));
+if (args.Contains("--watch-stdin", StringComparer.Ordinal))
+{
+    // Opt-in: a closed stdin means the caller stopped us.
+    _ = WatchForCancellationAsync(cancellation);
+}
 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
 Progress("discover", new { target = targetPath, configuration, platform });
@@ -51,6 +58,8 @@ try
     var load = await SemanticLoader.LoadAsync(
         new SemanticLoadOptions(targetPath, configuration, platform, timeoutSeconds),
         cancellation.Token);
+    // The semantic v2 report writer is not implemented yet (SD-011/SD-013); the probe
+    // report is written as-is and the caller's analysis id is not applied here.
     var report = load.Report;
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
     await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, json), CancellationToken.None);
@@ -71,13 +80,31 @@ try
 }
 catch (OperationCanceledException)
 {
-    Console.Error.WriteLine($"Semantic analysis timed out after {timeoutSeconds}s.");
-    return 1;
+    Console.Error.WriteLine("Semantic analysis was cancelled.");
+    return 3;
 }
 catch (Exception error)
 {
     Console.Error.WriteLine(error.ToString());
     return 1;
+}
+
+// Cooperative cancellation: stdin EOF means the caller stopped us.
+async Task WatchForCancellationAsync(CancellationTokenSource source)
+{
+    try
+    {
+        using var reader = new StreamReader(Console.OpenStandardInput());
+        while (await reader.ReadLineAsync() is not null)
+        {
+        }
+    }
+    catch
+    {
+        // Falling through to cancel is the safe behaviour.
+    }
+
+    source.Cancel();
 }
 
 void Progress(string stage, object payload)
@@ -102,6 +129,7 @@ internal static class CliOptions
     public static CliArguments? Parse(string[] args)
     {
         string? solution = null;
+
         string? output = null;
         var configuration = "Debug";
         string? platform = null;
@@ -123,6 +151,7 @@ internal static class CliOptions
                 case "--platform" when index + 1 < args.Length:
                     platform = args[++index];
                     break;
+
                 case "--timeout" when index + 1 < args.Length:
                     if (!int.TryParse(args[++index], out timeout) || timeout < 1)
                     {

@@ -32,6 +32,9 @@ public sealed class CliOptions
             ? value
             : throw new InvalidOperationException($"Missing required option --{key}");
 
+    public string? GetOptional(string key)
+        => _values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+
     public int GetInt(string key, int fallback)
         => _values.TryGetValue(key, out var value) && int.TryParse(value, out var parsed) && parsed > 0
             ? parsed

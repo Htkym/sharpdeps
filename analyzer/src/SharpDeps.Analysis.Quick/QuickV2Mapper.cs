@@ -28,7 +28,8 @@ public static class QuickV2Mapper
         CodeMapReport report,
         QuickSourceIndex index,
         DateTimeOffset createdAt,
-        string analyzerVersion = AnalyzerVersion)
+        string analyzerVersion = AnalyzerVersion,
+        string? analysisId = null)
     {
         var solutionDirectory = Path.GetDirectoryName(report.SolutionPath) ?? report.SolutionPath;
         var rootId = Identity.WorkspaceRootId(solutionDirectory);
@@ -310,12 +311,14 @@ public static class QuickV2Mapper
             ambiguousRelations,
             index.Skips);
 
-        var analysisId = Identity.AnalysisId(rootId, Mode, profileHash, createdAtText);
+        // The caller (extension host) may fix the id up front so progress messages and
+        // the stored result refer to the same analysis.
+        var resolvedAnalysisId = analysisId ?? Identity.AnalysisId(rootId, Mode, profileHash, createdAtText);
 
         var snapshot = new AnalysisSnapshot(
             SchemaVersion: 2,
             AnalyzerVersion: analyzerVersion,
-            AnalysisId: analysisId,
+            AnalysisId: resolvedAnalysisId,
             CreatedAt: createdAtText,
             Target: new TargetDescriptor(TargetKind(report.SolutionPath), rootId, Identity.NormalizeRelativePath(Path.GetFileName(report.SolutionPath))),
             Mode: Mode,
@@ -347,7 +350,7 @@ public static class QuickV2Mapper
                     message,
                     null,
                     null,
-                    analysisId))
+                    resolvedAnalysisId))
                 .ToArray(),
             EvidenceIndex: evidenceIndex,
             SourceManifest: index.Documents

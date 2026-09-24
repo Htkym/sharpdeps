@@ -1,0 +1,32 @@
+{
+  "task": "SD-014",
+  "recordedAt": "2026-09-24T00:30:00Z",
+  "environment": {
+    "os": "Windows 11 (10.0.26200)",
+    "dotnetSdk": "10.0.300",
+    "analyzer": "analyzer/bin/quick/code-map.dll"
+  },
+  "target": "analyzer/SharpDeps.Analyzer.slnx (6 projects)",
+  "probes": [
+    {
+      "name": "stdin closed immediately (stdio ignore)",
+      "exitCode": 3,
+      "cancelledCleanly": true,
+      "stderr": "Quick analysis was cancelled.",
+      "leftoverSharpdepsDotnetProcesses": 0
+    },
+    {
+      "name": "stdin closed 400 ms after start (--watch-stdin)",
+      "exitCode": 3,
+      "cancelledCleanly": true,
+      "elapsedMs": 462,
+      "stderr": "Quick analysis was cancelled.",
+      "leftoverSharpdepsDotnetProcesses": 0
+    }
+  ],
+  "notes": [
+    "Cancellation is cooperative first: the host watches stdin and cancels its token between projects and source files.",
+    "The controller additionally force-kills only the process tree it started (taskkill /T on Windows, process group on POSIX).",
+    "Leftover processes were checked with Get-CimInstance filtering on the sharpdeps command line; no other dotnet processes were touched."
+  ]
+}

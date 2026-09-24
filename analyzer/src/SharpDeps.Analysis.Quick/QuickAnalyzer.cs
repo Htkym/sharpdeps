@@ -15,7 +15,8 @@ public static class QuickAnalyzer
         string solutionPath,
         int maxProjects,
         int maxEdges,
-        QuickSourceIndexCollector? collector = null)
+        QuickSourceIndexCollector? collector = null,
+        CancellationToken cancellationToken = default)
         {
             var resolvedSolutionPath = Path.GetFullPath(string.IsNullOrWhiteSpace(solutionPath)
                 ? throw new InvalidOperationException("A solution path is required.")
@@ -81,6 +82,7 @@ public static class QuickAnalyzer
             var loadedProjects = new List<LoadedProject>();
             foreach (var project in parsedSolution.Projects)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     loadedProjects.Add(await ProjectLoader.LoadProjectAsync(project, parsedSolution.SolutionDirectoryPath, collector));
@@ -259,7 +261,12 @@ public static class QuickAnalyzer
                 projectCycleResult.CycleNodeKeys,
                 projectCycleResult.CycleEdgeKeys);
 
-            var namespaceGraph = await NamespaceAnalyzer.AnalyzeAsync(loadedProjects, maxProjects, maxEdges, collector);
+            var namespaceGraph = await NamespaceAnalyzer.AnalyzeAsync(
+            loadedProjects,
+            maxProjects,
+            maxEdges,
+            collector,
+            cancellationToken);
             if (namespaceGraph.Cycles.Count > 0)
             {
                 warnings.Add(

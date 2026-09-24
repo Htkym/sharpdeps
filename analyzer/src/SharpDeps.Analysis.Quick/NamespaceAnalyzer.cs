@@ -26,7 +26,8 @@ public static class NamespaceAnalyzer
         IReadOnlyList<LoadedProject> projects,
         int maxNodes,
         int maxEdges,
-        QuickSourceIndexCollector? collector = null)
+        QuickSourceIndexCollector? collector = null,
+        CancellationToken cancellationToken = default)
     {
         var csharpProjects = projects
             .Where(project => project.FullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
@@ -59,6 +60,7 @@ public static class NamespaceAnalyzer
 
             foreach (var file in EnumerateCSharpFiles(projectDirectory))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (parsedFiles >= MaxSourceFiles)
                 {
                     truncatedFiles = true;

@@ -478,12 +478,37 @@
       "id": "SD-014",
       "title": "解析実行の進捗・キャンセル・世代管理",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "src/analyzer/analysisController.ts",
+        "src/analyzer/analysisController.test.ts",
+        "src/extension.ts",
+        "src/analyzer/runAnalyzer.ts",
+        "analyzer/src/SharpDeps.QuickHost/Program.cs",
+        "analyzer/src/SharpDeps.SemanticHost/Program.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/QuickAnalyzer.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/NamespaceAnalyzer.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/QuickV2Mapper.cs",
+        "analyzer/src/SharpDeps.Analysis.Core/Cli/CliOptions.cs",
+        "package.json",
+        "docs/implementation/v0.1.0/evidence/sd014-cancellation.json",
+        "docs/implementation/v0.1.0/tasks/SD-014.md"
+      ],
+      "tests": [
+        "npm test — 13ファイル / 131テスト成功（SD-014で+8）",
+        "上書き防止（世代番号、onCompletedは最新のみ）",
+        "プロセスツリー停止（孫プロセス含む）と無関係プロセスの生存確認",
+        "timeout・dispose・ログ上限",
+        "実ホストの協調キャンセル（終了コード3、残存プロセス0）",
+        "dotnet test — 101テスト成功"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/evidence/sd014-cancellation.json",
+        "docs/implementation/v0.1.0/tasks/SD-014.md"
+      ],
+      "blockers": [],
+      "notes": "Semanticモードの実行配線はSD-011/013のwriter実装後。UI経由のキャンセル操作確認はSD-027。"
     },
     {
       "id": "SD-015",

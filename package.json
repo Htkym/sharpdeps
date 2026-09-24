@@ -106,6 +106,21 @@
           "minimum": 1,
           "markdownDescription": "Maximum number of dependency edges to include in the graph. Passed to the analyzer as `--max-edges`."
         },
+        "sharpdeps.analysisMode": {
+          "type": "string",
+          "enum": [
+            "quick",
+            "semantic"
+          ],
+          "default": "quick",
+          "markdownDescription": "Analysis mode. Quick works without the .NET SDK; Semantic uses MSBuild and Roslyn and is only used when selected explicitly."
+        },
+        "sharpdeps.analysisTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 10,
+          "markdownDescription": "Time limit for one analysis run, in seconds. When exceeded, the run is stopped and the process tree it started is terminated."
+        },
         "sharpdeps.dotnetPath": {
           "type": "string",
           "default": "",
