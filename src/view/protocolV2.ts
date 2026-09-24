@@ -89,6 +89,18 @@ export interface ProjectionEdge {
   }>;
 }
 
+export interface ProjectionCycleGroup {
+  id: string;
+  scope: string;
+  basis: string;
+  /** Members as a set: the order is not a path. */
+  memberIds: string[];
+  internalRelationIds: string[];
+  /** The cycle the analyzer verified; the order of these ids is a real path. */
+  witness: { memberIds: string[]; relationIds: string[] } | null;
+  truncated?: boolean;
+}
+
 export interface Projection {
   scope: Scope;
   granularity: Granularity;
@@ -98,6 +110,11 @@ export interface Projection {
   totalEdgeCount: number;
   truncated: boolean;
   includedOutOfFilterIds?: string[];
+  /**
+   * SCC groups and their verified cycles, sent with the projection so the cycle view has
+   * both the member set and the real path in one round trip.
+   */
+  cycleGroups?: ProjectionCycleGroup[];
 }
 
 export interface AnalysisProgress {

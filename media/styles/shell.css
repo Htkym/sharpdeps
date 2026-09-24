@@ -513,3 +513,43 @@ body {
 .sd-note-warning {
   color: var(--vscode-editorWarning-foreground, #cca700);
 }
+
+/* Cycle view (SD-020): the member set and the verified path are visually separate. */
+
+.sd-cycle-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sd-cycle-item {
+  padding: 6px;
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+  border-radius: 4px;
+}
+
+.sd-cycle-header {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.sd-cycle-members,
+.sd-cycle-path {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.sd-cycle-members {
+  list-style: none;
+  padding-left: 0;
+}
+
+.sd-cycle-path li {
+  margin: 2px 0;
+}

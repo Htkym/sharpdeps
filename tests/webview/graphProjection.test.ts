@@ -156,6 +156,19 @@ describe('buildProjection', () => {
     expect(dependentsOfCore.nodes.map((node) => node.name).sort()).toEqual(['App', 'Core']);
   });
 
+  it('keeps the scope origin inside the display budget', () => {
+    const snapshot = snapshotWithHierarchy();
+    // A high-degree node would normally win the budget; the scoped origin must stay.
+    const budgeted = buildProjection(snapshot, {
+      granularity: 'namespace',
+      scope: { kind: 'dependencies', id: IDS.namespaceA, depth: 1 },
+      maxNodes: 1
+    });
+
+    expect(budgeted.nodes.map((node) => node.id)).toEqual([IDS.namespaceA]);
+    expect(budgeted.truncated).toBe(true);
+  });
+
   it('applies the display budget and reports what it omitted', () => {
     const snapshot = snapshotWithHierarchy();
     const budgeted = buildProjection(snapshot, { granularity: 'type', maxNodes: 1, maxEdges: 1 });

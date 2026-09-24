@@ -5,7 +5,13 @@
 // failed, stale, filtered-to-empty) can be produced from a fixture in tests.
 
 import type { Granularity } from '../../src/analyzer/reportV2';
-import type { EntitySummary, Filters, Projection, Scope } from '../../src/view/protocolV2';
+import type {
+  EntitySummary,
+  Filters,
+  Projection,
+  ProjectionCycleGroup,
+  Scope
+} from '../../src/view/protocolV2';
 import {
   DEFAULT_SORT,
   toggleSort,
@@ -59,6 +65,8 @@ export interface ViewState {
   projection: Projection | null;
   /** True when the projection only contains part of the analysis. */
   projectionTruncated: boolean;
+  /** SCC groups and their verified cycles, from the current projection. */
+  cycles: ProjectionCycleGroup[];
   details: { entityId: string; dependencies: EntitySummary[]; dependents: EntitySummary[] } | null;
   evidence: {
     relationId: string;
@@ -97,6 +105,7 @@ export const INITIAL_STATE: ViewState = {
   statusMessage: 'No analysis target selected.',
   projection: null,
   projectionTruncated: false,
+  cycles: [],
   details: null,
   evidence: null,
   limitations: [],
@@ -259,6 +268,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         ...state,
         projection: action.projection,
         projectionTruncated: action.projection.truncated,
+        cycles: action.projection.cycleGroups ?? [],
         details: null,
         evidence: null
       };

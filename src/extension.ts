@@ -149,6 +149,9 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     lastTarget = target;
+    // A new run replaces the Problems entries: findings from a previous analysis are
+    // never left behind while this one is running or after it fails.
+    diagnostics.clear();
 
     await vscode.window.withProgress(
       {
@@ -214,11 +217,16 @@ export function activate(context: vscode.ExtensionContext): void {
           const report = JSON.parse(await fs.promises.readFile(v1Path, 'utf8')) as CodeMapReport;
 
           const panel = CodeMapPanel.show(context.extensionUri, panelHost());
-          diagnostics.update(report);
 
           const analysisId = store.currentAnalysisId;
           if (analysisId) {
             panel.notifyAnalysis(analysisId);
+            if (store.getReport(analysisId).mode === 'semantic') {
+              // Semantic cycles are anchored at a real evidence position.
+              void diagnostics.updateFromStore(store, analysisId, rootDirectory());
+            } else {
+              diagnostics.update(report, analysisId, 'quick');
+            }
             const stored = store.getReport(analysisId);
             progress.report({
               message: `Analyzed ${stored.coverage.analyzed} project(s) · ${stored.relations.length} relation(s)`

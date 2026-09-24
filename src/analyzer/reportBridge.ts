@@ -191,7 +191,23 @@ export function createReportBridge(
             })),
             totalNodeCount: projection.totalNodeCount,
             totalEdgeCount: projection.totalEdgeCount,
-            truncated: projection.truncated
+            truncated: projection.truncated,
+            // SCC groups and their verified path: the view shows the set and the path as
+            // separate things, so a sorted member list is never read as a route.
+            cycleGroups: store.getReport(request.analysisId).cycleGroups.map((group) => ({
+              id: group.id,
+              scope: group.scope,
+              basis: group.basis,
+              memberIds: group.memberIds,
+              internalRelationIds: group.internalRelationIds,
+              witness: group.witness
+                ? {
+                    memberIds: group.witness.memberIds,
+                    relationIds: group.witness.relationIds
+                  }
+                : null,
+              truncated: group.truncated ?? false
+            }))
           };
 
           return {

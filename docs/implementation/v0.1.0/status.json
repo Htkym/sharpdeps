@@ -729,12 +729,36 @@
       "id": "SD-020",
       "title": "循環の調査と被依存候補ビュー",
       "milestone": "M2",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "src/analyzer/graphProjection.ts",
+        "src/view/protocolV2.ts",
+        "schemas/protocol-v2.schema.json",
+        "src/analyzer/reportBridge.ts",
+        "media/app/hostMessages.ts",
+        "media/app/state.ts",
+        "media/app/app.ts",
+        "media/styles/shell.css",
+        "src/diagnostics/cycleDiagnostics.ts",
+        "src/extension.ts",
+        "tests/webview/graphProjection.test.ts",
+        "tests/webview/hostMessages.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-020.md",
+        "docs/implementation/v0.1.0/evidence/sd-020-cycles.json"
+      ],
+      "tests": [
+        "npm test — 21ファイル / 175テスト成功",
+        "dotnet test — 101テスト成功",
+        "ブラウザ: Cyclesタブの集合/経路の分離、辺→根拠（rel_...0001）、cycleスコープ、analyze要求0件",
+        "単体: 表示予算がスコープ起点を保持"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-020.md",
+        "docs/implementation/v0.1.0/evidence/sd-020-cycles.json"
+      ],
+      "blockers": [],
+      "notes": "完了：SCC一覧と実在閉路の分離、辺→根拠、スコープ起点の予算優先、Problemsの解析ID管理・Quick推定明示・Semantic根拠アンカー。未完：推移的被依存のホップ数表示、実機Problems（SD-027）。"
     },
     {
       "id": "SD-021",

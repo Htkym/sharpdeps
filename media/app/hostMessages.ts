@@ -5,7 +5,7 @@
 // leave the shell in a half-updated state.
 
 import type { AnalysisStage } from './state';
-import type { EntitySummary, Scope } from '../../src/view/protocolV2';
+import type { EntitySummary, ProjectionCycleGroup, Scope } from '../../src/view/protocolV2';
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
 
@@ -235,7 +235,46 @@ function readProjection(value: unknown): ProjectionLike | undefined {
     edges,
     totalNodeCount: numberOrUndefined(value.totalNodeCount) ?? nodes.length,
     totalEdgeCount: numberOrUndefined(value.totalEdgeCount) ?? edges.length,
-    truncated: value.truncated === true
+    truncated: value.truncated === true,
+    cycleGroups: readCycleGroups(value.cycleGroups)
+  };
+}
+
+function readCycleGroups(value: unknown): ProjectionCycleGroup[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .filter(isRecord)
+    .filter((group) => typeof group.id === 'string' && Array.isArray(group.memberIds))
+    .map((group) => ({
+      id: group.id as string,
+      scope: typeof group.scope === 'string' ? group.scope : 'type',
+      basis: typeof group.basis === 'string' ? group.basis : 'unknown',
+      memberIds: (group.memberIds as unknown[]).filter(
+        (id): id is string => typeof id === 'string'
+      ),
+      internalRelationIds: Array.isArray(group.internalRelationIds)
+        ? group.internalRelationIds.filter((id): id is string => typeof id === 'string')
+        : [],
+      witness: readWitness(group.witness),
+      truncated: group.truncated === true
+    }));
+}
+
+function readWitness(value: unknown): { memberIds: string[]; relationIds: string[] } | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    memberIds: Array.isArray(value.memberIds)
+      ? value.memberIds.filter((id): id is string => typeof id === 'string')
+      : [],
+    relationIds: Array.isArray(value.relationIds)
+      ? value.relationIds.filter((id): id is string => typeof id === 'string')
+      : []
   };
 }
 
@@ -265,6 +304,15 @@ interface ProjectionLike {
   totalNodeCount: number;
   totalEdgeCount: number;
   truncated: boolean;
+  cycleGroups?: Array<{
+    id: string;
+    scope: string;
+    basis: string;
+    memberIds: string[];
+    internalRelationIds: string[];
+    witness: { memberIds: string[]; relationIds: string[] } | null;
+    truncated?: boolean;
+  }>;
 }
 
 function readScope(value: unknown): Scope {

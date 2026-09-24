@@ -95,7 +95,12 @@ export function buildProjection(
       left.name.localeCompare(right.name) ||
       left.id.localeCompare(right.id)
   );
-  const selected = ordered.slice(0, maxNodes);
+  // The origin of a local scope is never dropped by the display budget: a node the user
+  // explicitly scoped to (or a cycle member) must stay visible.
+  const prioritySet = new Set(priorityIds ?? []);
+  const priority = ordered.filter((node) => prioritySet.has(node.id));
+  const rest = ordered.filter((node) => !prioritySet.has(node.id));
+  const selected = [...priority, ...rest].slice(0, maxNodes);
   const selectedIds = new Set(selected.map((node) => node.id));
   const edges = scopedEdges
     .filter((edge) => selectedIds.has(edge.sourceId) && selectedIds.has(edge.targetId))

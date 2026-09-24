@@ -1,0 +1,35 @@
+{
+  "task": "SD-020",
+  "checkedAt": "2026-09-24",
+  "unitTests": {
+    "budgetKeepsScopeOrigin": "With maxNodes=1 the scoped origin is the only node shown and truncated stays true.",
+    "cycleGroupsReading": "Member set, internal relations, and witness are read separately; a group without a witness keeps a null witness and an empty relation list."
+  },
+  "browser": {
+    "page": "tests/webview/fixtures/shell-fixture.html (synthetic SCC with a verified 2-edge cycle)",
+    "cyclesTab": {
+      "header": "2 member(s) · 2 edge(s)",
+      "badge": "実在する閉路あり",
+      "memberSetSorted": ["在庫管理", "注文サービス"],
+      "memberNote": "メンバーの並びは経路ではありません（集合を名前順に表示）。",
+      "witnessEdges": ["在庫管理 → 注文サービス", "注文サービス → 在庫管理"]
+    },
+    "edgeToEvidence": {
+      "request": "getEvidencePage",
+      "relationId": "rel_0000000000000001",
+      "inspectorTitle": "在庫管理 → 注文サービス"
+    },
+    "cycleScope": { "scope": { "kind": "cycle", "id": "cyc_0000000000000001", "depth": null } },
+    "analyzeRequests": 0
+  },
+  "conclusions": {
+    "setVersusPath": "The member list is shown as a sorted set with an explicit note; only the witness is presented as a path, so a sorted list is never read as a route.",
+    "problemSelectionSurvivesBudget": "The projection budget now keeps the scope origin (and cycle members) first, so a revealed or cycle-scoped node cannot disappear.",
+    "noStaleDiagnostics": "CycleDiagnostics clears on every run start and carries the analysis id; Quick findings say they are inferred, semantic ones are anchored at real evidence positions."
+  },
+  "notVerifiedHere": [
+    "Numeric hop depth for transitive dependents (scope depth works; per-node depth is not implemented).",
+    "Problems panel behaviour in real VS Code (SD-027) and cycles in a real solution.",
+    "Large cycle-group lists are not virtualised."
+  ]
+}

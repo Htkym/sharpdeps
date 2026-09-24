@@ -444,6 +444,49 @@
           "type": "array",
           "items": { "$ref": "#/$defs/entityId" },
           "description": "Members temporarily added for cycle inspection; the UI must offer a way back to the previous filter state."
+        },
+        "cycleGroups": {
+          "type": "array",
+          "description": "SCC groups with their verified cycle, sent with the projection so the cycle view has both the member set and the real path.",
+          "items": {
+            "type": "object",
+            "required": ["id", "scope", "basis", "memberIds", "internalRelationIds"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^cyc_[0-9a-f]{16}$" },
+              "scope": { "type": "string", "enum": ["type", "namespace", "project"] },
+              "basis": { "type": "string" },
+              "memberIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/entityId" },
+                "description": "Members as a set; the order is not a path."
+              },
+              "internalRelationIds": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" }
+              },
+              "witness": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["memberIds", "relationIds"],
+                    "properties": {
+                      "memberIds": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/entityId" },
+                        "description": "In path order: this is the verified route."
+                      },
+                      "relationIds": {
+                        "type": "array",
+                        "items": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" }
+                      }
+                    }
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "truncated": { "type": "boolean" }
+            }
+          }
         }
       }
     }

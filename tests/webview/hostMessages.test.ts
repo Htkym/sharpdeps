@@ -216,6 +216,60 @@ describe('toViewActions', () => {
     ]);
   });
 
+  it('reads the cycle groups and keeps the witness separate from the member set', () => {
+    const actions = toViewActions(
+      {
+        type: 'projection',
+        requestId: 'req_0000000000000006',
+        analysisId,
+        projection: {
+          scope: { kind: 'root' },
+          granularity: 'type',
+          nodes: [
+            { id: 'ty_1111111111111111', name: 'A', granularity: 'type' },
+            { id: 'ty_2222222222222222', name: 'B', granularity: 'type' }
+          ],
+          edges: [],
+          totalNodeCount: 2,
+          totalEdgeCount: 0,
+          truncated: false,
+          cycleGroups: [
+            {
+              id: 'cyc_1111111111111111',
+              scope: 'type',
+              basis: 'symbolResolved',
+              memberIds: ['ty_2222222222222222', 'ty_1111111111111111'],
+              internalRelationIds: ['rel_1111111111111111'],
+              witness: {
+                memberIds: ['ty_1111111111111111', 'ty_2222222222222222'],
+                relationIds: ['rel_1111111111111111']
+              }
+            },
+            { id: 'cyc_2222222222222222', memberIds: ['ty_1111111111111111'] }
+          ]
+        }
+      },
+      queries
+    );
+
+    expect(actions[0]).toMatchObject({
+      type: 'projectionReceived',
+      projection: {
+        cycleGroups: [
+          {
+            id: 'cyc_1111111111111111',
+            memberIds: ['ty_2222222222222222', 'ty_1111111111111111'],
+            witness: {
+              memberIds: ['ty_1111111111111111', 'ty_2222222222222222'],
+              relationIds: ['rel_1111111111111111']
+            }
+          },
+          { id: 'cyc_2222222222222222', witness: null, internalRelationIds: [] }
+        ]
+      }
+    });
+  });
+
   it('reads the aggregated relation breakdown defensively', () => {
     const actions = toViewActions(
       {

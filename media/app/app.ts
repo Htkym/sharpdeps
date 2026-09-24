@@ -139,7 +139,11 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   function render(): void {
     renderTopBar(elements, state);
     renderError(elements, state);
-    renderNavigation(elements, state, activeTab, { expanded: expandedTreeNodes, rerender: render });
+    renderNavigation(elements, state, activeTab, {
+      expanded: expandedTreeNodes,
+      rerender: render,
+      dispatch
+    });
     renderCenter(elements, state, graphView, () => graphRuntime.error);
     renderDetails();
     elements.footer.textContent = selectStatusFooter(state);
@@ -288,6 +292,7 @@ function renderError(elements: ShellElements, state: ViewState): void {
 interface StructureContext {
   expanded: Set<string>;
   rerender: () => void;
+  dispatch: (action: ViewAction) => void;
 }
 
 function renderNavigation(
@@ -308,7 +313,7 @@ function renderNavigation(
   if (activeTab === 'structure') {
     renderStructureTab(elements, state, context);
   } else if (activeTab === 'cycles') {
-    renderCyclesTab(elements, state);
+    renderCyclesTab(elements, state, context.dispatch);
   } else {
     renderAnalysisTab(elements, state);
   }
@@ -417,22 +422,100 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   elements.navPaneBody.append(block);
 }
 
-function renderCyclesTab(elements: ShellElements, state: ViewState): void {
-  const visible = selectVisibleData(state);
-  const cycleNodes = visible.nodes.filter((node) => node.inCycle);
-  if (cycleNodes.length === 0) {
-    elements.navPaneBody.append(message('No dependency cycles in this scope.', 'sd-empty'));
+function renderCyclesTab(
+  elements: ShellElements,
+  state: ViewState,
+  dispatch: (action: ViewAction) => void
+): void {
+  const cycles = state.cycles;
+  if (cycles.length === 0) {
+    elements.navPaneBody.append(message('No dependency cycles in this analysis.', 'sd-empty'));
     return;
   }
 
   elements.navPaneBody.append(
-    message(`${cycleNodes.length} node(s) participate in a cycle.`, 'sd-note')
+    message(
+      `${cycles.length} cycle group(s). A group is a set of mutually reachable types; only the witness is a real path.`,
+      'sd-note'
+    )
   );
+
+  const nameOf = (id: string): string =>
+    state.projection?.nodes.find((node) => node.id === id)?.name ?? id;
+
   const list = document.createElement('ul');
-  list.className = 'sd-node-list';
-  for (const node of cycleNodes) {
+  list.className = 'sd-cycle-list';
+  for (const group of cycles) {
     const item = document.createElement('li');
-    item.textContent = node.name;
+    item.className = 'sd-cycle-item';
+    item.dataset.cycleId = group.id;
+
+    const header = document.createElement('div');
+    header.className = 'sd-cycle-header';
+    const label = document.createElement('strong');
+    label.textContent = `${group.memberIds.length} member(s) · ${group.internalRelationIds.length} edge(s)`;
+    header.append(label);
+    header.append(badge(group.witness ? '実在する閉路あり' : '閉路未確認'));
+    item.append(header);
+
+    const focus = document.createElement('button');
+    focus.type = 'button';
+    focus.className = 'sd-button sd-button-small';
+    focus.textContent = 'この循環を表示';
+    focus.addEventListener('click', () =>
+      dispatch({
+        type: 'scopeChanged',
+        scope: { kind: 'cycle', id: group.id, depth: null }
+      })
+    );
+    item.append(focus);
+
+    // The member list is a sorted set and is labelled as such: it is never a route.
+    const members = document.createElement('ul');
+    members.className = 'sd-cycle-members';
+    for (const memberId of [...group.memberIds].sort()) {
+      const memberItem = document.createElement('li');
+      const memberButton = document.createElement('button');
+      memberButton.type = 'button';
+      memberButton.className = 'sd-node-item';
+      memberButton.textContent = nameOf(memberId);
+      memberButton.title = memberId;
+      memberButton.addEventListener('click', () =>
+        dispatch({ type: 'entitySelected', entityId: memberId })
+      );
+      memberItem.append(memberButton);
+      members.append(memberItem);
+    }
+
+    item.append(
+      members,
+      message('メンバーの並びは経路ではありません（集合を名前順に表示）。', 'sd-note')
+    );
+
+    if (group.witness && group.witness.relationIds.length > 0) {
+      const pathHeading = document.createElement('h4');
+      pathHeading.textContent = `実在する閉路（${group.witness.relationIds.length} 辺）`;
+      item.append(pathHeading);
+      const path = document.createElement('ol');
+      path.className = 'sd-cycle-path';
+      group.witness.relationIds.forEach((relationId, index) => {
+        const pathItem = document.createElement('li');
+        const edge = document.createElement('button');
+        edge.type = 'button';
+        edge.className = 'sd-node-item';
+        edge.textContent = `${nameOf(group.witness!.memberIds[index])} → ${nameOf(
+          group.witness!.memberIds[index + 1] ?? group.witness!.memberIds[0]
+        )}`;
+        edge.title = `${relationId}（この辺の根拠を表示）`;
+        edge.addEventListener('click', () => dispatch({ type: 'relationSelected', relationId }));
+        pathItem.append(edge);
+        path.append(pathItem);
+      });
+      item.append(path);
+    } else {
+      item.append(message('実在する閉路は確認できていません（相互到達のみ）。', 'sd-note'));
+    }
+
     list.append(item);
   }
 
