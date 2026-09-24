@@ -7,7 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { toViewActions } from '../../media/app/hostMessages';
 
 const analysisId = 'an_0123456789abcdef';
-const queries = new Map([['req_0000000000000001', 'OrderStore']]);
+const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
+  ['req_0000000000000001', { query: 'OrderStore' }]
+]);
 
 describe('toViewActions', () => {
   it('maps analysis progress and completion', () => {
@@ -131,5 +133,103 @@ describe('toViewActions', () => {
     expect(
       toViewActions({ type: 'error', code: 'bridge.notImplemented', message: 'x' }, queries)
     ).toEqual([{ type: 'errorRaised', code: 'bridge.notImplemented', message: 'x' }]);
+  });
+
+  it('marks an evidence page that continues the list', () => {
+    const paging = new Map([
+      ['req_0000000000000003', { appendEvidence: true }],
+      ['req_0000000000000004', { query: 'Order' }]
+    ]);
+    const append = toViewActions(
+      {
+        type: 'evidencePage',
+        requestId: 'req_0000000000000003',
+        analysisId,
+        relationId: 'rel_1111111111111111',
+        total: 3,
+        items: [{ id: 'ev_2222222222222222', documentPath: 'src/Domain/Order.cs' }],
+        nextCursor: null
+      },
+      paging
+    );
+    expect(append[0]).toMatchObject({
+      type: 'evidenceReceived',
+      append: true,
+      total: 3,
+      items: [{ documentPath: 'src/Domain/Order.cs' }]
+    });
+
+    const replace = toViewActions(
+      {
+        type: 'evidencePage',
+        requestId: 'req_0000000000000004',
+        analysisId,
+        relationId: 'rel_1111111111111111',
+        total: 3,
+        items: []
+      },
+      paging
+    );
+    expect(replace[0]).toMatchObject({ type: 'evidenceReceived', append: false });
+  });
+
+  it('reads the aggregated relation breakdown defensively', () => {
+    const actions = toViewActions(
+      {
+        type: 'projection',
+        requestId: 'req_0000000000000005',
+        analysisId,
+        projection: {
+          scope: { kind: 'root' },
+          granularity: 'namespace',
+          nodes: [{ id: 'ns_1111111111111111', name: 'Core', granularity: 'namespace' }],
+          edges: [
+            {
+              id: 'rel_1111111111111111',
+              sourceId: 'ns_1111111111111111',
+              targetId: 'ns_2222222222222222',
+              basis: 'symbolResolved',
+              kinds: ['calls'],
+              evidenceCount: 3,
+              inCycle: false,
+              underlyingRelationIds: ['rel_1111111111111111', 'rel_2222222222222222'],
+              underlyingRelations: [
+                {
+                  id: 'rel_1111111111111111',
+                  basis: 'symbolResolved',
+                  kinds: ['calls'],
+                  evidenceCount: 2
+                },
+                {
+                  id: 'rel_2222222222222222',
+                  basis: 'symbolResolved',
+                  kinds: ['typeUse'],
+                  evidenceCount: 1
+                },
+                { id: 'broken' }
+              ]
+            }
+          ],
+          totalNodeCount: 2,
+          totalEdgeCount: 1,
+          truncated: false
+        }
+      },
+      queries
+    );
+
+    expect(actions[0]).toMatchObject({
+      type: 'projectionReceived',
+      projection: {
+        edges: [
+          {
+            underlyingRelations: [
+              { id: 'rel_1111111111111111', evidenceCount: 2 },
+              { id: 'rel_2222222222222222', evidenceCount: 1 }
+            ]
+          }
+        ]
+      }
+    });
   });
 });

@@ -96,6 +96,17 @@ export interface ProjectionView {
     generatedEvidenceCount: number;
     publicSurfaceEvidenceCount: number;
     underlyingRelationIds: string[];
+    /**
+     * Per-relation detail of an aggregated edge, representative first. The inspector
+     * shows the breakdown so the edge count and the paged totals can be reconciled.
+     */
+    underlyingRelations: Array<{
+      id: string;
+      basis: string;
+      kinds: string[];
+      evidenceCount: number;
+      confidence: string | null;
+    }>;
   }>;
   totalNodeCount: number;
   totalEdgeCount: number;
@@ -363,7 +374,17 @@ export class ReportStore {
         inCycle: edge.inCycle,
         generatedEvidenceCount: edge.generatedEvidenceCount ?? 0,
         publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount ?? 0,
-        underlyingRelationIds: edge.underlyingRelationIds ?? [edge.id]
+        underlyingRelationIds: edge.underlyingRelationIds ?? [edge.id],
+        underlyingRelations: (edge.underlyingRelationIds ?? [edge.id]).map((relationId) => {
+          const relation = analysis.relationById.get(relationId);
+          return {
+            id: relationId,
+            basis: relation?.basis ?? edge.basis,
+            kinds: relation?.kinds ?? edge.kinds,
+            evidenceCount: relation?.evidenceCount ?? 0,
+            confidence: relation?.confidence ?? null
+          };
+        })
       })),
       totalNodeCount: projection.totalNodeCount,
       totalEdgeCount: projection.totalEdgeCount,

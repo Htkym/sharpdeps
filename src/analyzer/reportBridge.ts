@@ -103,6 +103,14 @@ export function createReportBridge(
             request.relationId,
             { limit: request.limit ?? pageSize, cursor: request.cursor }
           );
+          // The webview must not hold the source manifest, so each record carries the
+          // relative path of the document it came from (the manifest is part of the
+          // report anyway) and the inspector can show where the reference is.
+          const documentPaths = new Map(
+            store
+              .getReport(request.analysisId)
+              .sourceManifest.map((document) => [document.id, document.relativePath])
+          );
           return {
             type: 'evidencePage',
             requestId: request.requestId,
@@ -110,7 +118,11 @@ export function createReportBridge(
             relationId: page.relationId,
             total: page.total,
             items: page.items.map(
-              (record) => ({ ...record }) as unknown as Record<string, unknown>
+              (record) =>
+                ({
+                  ...record,
+                  documentPath: documentPaths.get(record.documentId) ?? null
+                }) as unknown as Record<string, unknown>
             ),
             nextCursor: page.nextCursor ?? null
           };
@@ -174,7 +186,8 @@ export function createReportBridge(
               inCycle: edge.inCycle,
               generatedEvidenceCount: edge.generatedEvidenceCount,
               publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount,
-              underlyingRelationIds: edge.underlyingRelationIds
+              underlyingRelationIds: edge.underlyingRelationIds,
+              underlyingRelations: edge.underlyingRelations
             })),
             totalNodeCount: projection.totalNodeCount,
             totalEdgeCount: projection.totalEdgeCount,

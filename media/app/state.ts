@@ -65,6 +65,8 @@ export interface ViewState {
     total: number;
     items: Record<string, unknown>[];
     nextCursor?: string | null;
+    /** True while the next page is on its way. */
+    pending: boolean;
   } | null;
   limitations: Array<{ code: string; message: string }>;
   error?: { code: string; message: string };
@@ -139,7 +141,10 @@ export type ViewAction =
       total: number;
       items: Record<string, unknown>[];
       nextCursor?: string | null;
+      /** True when the answer continues the current list instead of replacing it. */
+      append?: boolean;
     }
+  | { type: 'evidencePageRequested' }
   | { type: 'granularityChanged'; granularity: Granularity }
   | { type: 'viewKindChanged'; viewKind: ViewKind }
   | { type: 'scopeChanged'; scope: Scope }
@@ -160,6 +165,25 @@ export type ViewAction =
   | { type: 'historyBack' }
   | { type: 'errorRaised'; code: string; message: string }
   | { type: 'stateRestored'; state: Partial<ViewState> };
+
+function mergeEvidence(
+  existing: Record<string, unknown>[],
+  incoming: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const seen = new Set(existing.map((item) => String(item.id ?? '')));
+  const merged = [...existing];
+  for (const item of incoming) {
+    const id = String(item.id ?? '');
+    if (id.length > 0 && seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    merged.push(item);
+  }
+
+  return merged;
+}
 
 export function viewReducer(state: ViewState, action: ViewAction): ViewState {
   switch (action.type) {
@@ -249,11 +273,20 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         evidence: {
           relationId: action.relationId,
           total: action.total,
-          items: action.items,
-          nextCursor: action.nextCursor
+          items:
+            action.append && state.evidence?.relationId === action.relationId
+              ? mergeEvidence(state.evidence.items, action.items)
+              : action.items,
+          nextCursor: action.nextCursor,
+          pending: false
         },
         inspectorOpen: true
       };
+
+    case 'evidencePageRequested':
+      return state.evidence?.nextCursor
+        ? { ...state, evidence: { ...state.evidence, pending: true } }
+        : state;
 
     case 'granularityChanged':
       return {
@@ -343,10 +376,12 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return { ...state, filters: action.filters };
 
     case 'entitySelected':
-      return { ...state, selection: { entityId: action.entityId } };
+      // Selecting something opens the details pane right away; the content arrives with
+      // the details response, so the pane never waits on an analysis.
+      return { ...state, selection: { entityId: action.entityId }, inspectorOpen: true };
 
     case 'relationSelected':
-      return { ...state, selection: { relationId: action.relationId } };
+      return { ...state, selection: { relationId: action.relationId }, inspectorOpen: true };
 
     case 'selectionCleared':
       return { ...state, selection: {}, details: null, evidence: null };

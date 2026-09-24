@@ -8,6 +8,11 @@
 import { buildShell, type NavTab, type ShellElements } from '../components/shell';
 import { renderEntityTable } from '../components/entityTable';
 import { createGraphView, type GraphView } from '../components/graphView';
+import {
+  renderInspector,
+  type InspectorEdgeOptions,
+  type InspectorEntityOptions
+} from '../components/inspector';
 import type { SortState } from './query';
 import { buildNavigationTree, renderNavigationTree } from '../components/navigationPane';
 import {
@@ -136,9 +141,70 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     renderError(elements, state);
     renderNavigation(elements, state, activeTab, { expanded: expandedTreeNodes, rerender: render });
     renderCenter(elements, state, graphView, () => graphRuntime.error);
-    renderInspector(elements, state);
+    renderDetails();
     elements.footer.textContent = selectStatusFooter(state);
     options.onStateChanged?.(state);
+  }
+
+  function renderDetails(): void {
+    elements.inspectorPane.classList.toggle('open', state.inspectorOpen);
+    elements.inspectorToggle.setAttribute('aria-expanded', state.inspectorOpen ? 'true' : 'false');
+
+    const projection = state.projection;
+    const selectedEdgeId = state.selection.relationId;
+    const selectedEntityId = state.selection.entityId;
+
+    let edge: InspectorEdgeOptions | undefined;
+    if (selectedEdgeId) {
+      const relation = projection?.edges.find((entry) => entry.id === selectedEdgeId);
+      const nameOf = (id: string | undefined): string =>
+        projection?.nodes.find((node) => node.id === id)?.name ?? id ?? '?';
+      edge = {
+        id: selectedEdgeId,
+        edge: relation,
+        sourceName: nameOf(relation?.sourceId),
+        targetName: nameOf(relation?.targetId),
+        evidence: state.evidence?.relationId === selectedEdgeId ? state.evidence : null
+      };
+    }
+
+    let entity: InspectorEntityOptions | undefined;
+    if (selectedEntityId) {
+      const details = state.details?.entityId === selectedEntityId ? state.details : undefined;
+      entity = {
+        id: selectedEntityId,
+        summary: projection?.nodes.find((node) => node.id === selectedEntityId),
+        dependencies: details?.dependencies,
+        dependents: details?.dependents,
+        edges: projection?.edges.filter(
+          (entry) => entry.sourceId === selectedEntityId || entry.targetId === selectedEntityId
+        ),
+        pending: !details
+      };
+    }
+
+    renderInspector(elements.inspectorTitle, elements.inspectorBody, {
+      edge,
+      entity,
+      limitations: state.limitations,
+      mode: state.mode,
+      onSelectEntity: (entityId) => dispatch({ type: 'entitySelected', entityId }),
+      onLoadMoreEvidence: () => dispatch({ type: 'evidencePageRequested' }),
+      onCopyReference: (reference) => void copyReference(reference)
+    });
+  }
+
+  async function copyReference(reference: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(reference);
+      elements.inspectorBody.append(message(`Copied: ${reference}`, 'sd-note'));
+    } catch {
+      // A failed copy must not look like a success; the text is shown so it can be
+      // selected manually.
+      elements.inspectorBody.append(
+        message(`Copy failed. ${reference}`, 'sd-note sd-note-warning')
+      );
+    }
   }
 
   const app: ViewerApp = { dispatch, getState: () => state, elements };
@@ -590,65 +656,6 @@ function emptyStateMessage(state: ViewState): HTMLElement {
     default:
       return message('No projection for this scope.', 'sd-empty');
   }
-}
-
-function renderInspector(elements: ShellElements, state: ViewState): void {
-  elements.inspectorPane.classList.toggle('open', state.inspectorOpen);
-  elements.inspectorToggle.setAttribute('aria-expanded', state.inspectorOpen ? 'true' : 'false');
-  elements.inspectorBody.replaceChildren();
-
-  if (state.selection.relationId && state.evidence?.relationId === state.selection.relationId) {
-    elements.inspectorTitle.textContent = `Relation ${state.selection.relationId}`;
-    elements.inspectorBody.append(
-      message(`${state.evidence.total} evidence record(s)`, 'sd-note'),
-      message(
-        state.evidence.items.length > 0
-          ? 'Evidence details open in the editor from the evidence list (SD-018).'
-          : 'No evidence page loaded yet.',
-        'sd-note'
-      )
-    );
-    return;
-  }
-
-  if (state.details && state.selection.entityId === state.details.entityId) {
-    elements.inspectorTitle.textContent = state.details.entityId;
-    elements.inspectorBody.append(
-      factList(
-        'Dependencies',
-        state.details.dependencies.map((entry) => entry.name)
-      ),
-      factList(
-        'Dependents',
-        state.details.dependents.map((entry) => entry.name)
-      )
-    );
-    return;
-  }
-
-  elements.inspectorTitle.textContent = 'Details';
-  elements.inspectorBody.append(message('Select a node or relation to inspect it.', 'sd-empty'));
-}
-
-function factList(label: string, values: string[]): HTMLElement {
-  const block = document.createElement('section');
-  const heading = document.createElement('h3');
-  heading.textContent = `${label} (${values.length})`;
-  block.append(heading);
-  if (values.length === 0) {
-    block.append(message('none', 'sd-empty'));
-    return block;
-  }
-
-  const list = document.createElement('ul');
-  for (const value of values.slice(0, 50)) {
-    const item = document.createElement('li');
-    item.textContent = value;
-    list.append(item);
-  }
-
-  block.append(list);
-  return block;
 }
 
 function message(text: string, className: string): HTMLElement {

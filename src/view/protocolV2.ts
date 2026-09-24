@@ -79,6 +79,14 @@ export interface ProjectionEdge {
    * type-level relations, and each can be paged for evidence.
    */
   underlyingRelationIds?: string[];
+  /** Per-relation detail of an aggregated edge, representative first. */
+  underlyingRelations?: Array<{
+    id: string;
+    basis: string;
+    kinds: string[];
+    evidenceCount: number;
+    confidence?: string | null;
+  }>;
 }
 
 export interface Projection {

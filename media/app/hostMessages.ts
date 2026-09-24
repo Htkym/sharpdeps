@@ -9,9 +9,16 @@ import type { EntitySummary, Scope } from '../../src/view/protocolV2';
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
 
+export interface RequestContext {
+  /** The search query a request carried, so the answer can be matched to it. */
+  query?: string;
+  /** True when the request asked for the next evidence page. */
+  appendEvidence?: boolean;
+}
+
 export function toViewActions(
   message: unknown,
-  queryByRequestId: ReadonlyMap<string, string>
+  requestContext: ReadonlyMap<string, RequestContext>
 ): ViewAction[] {
   if (!isRecord(message) || typeof message.type !== 'string') {
     return [];
@@ -106,13 +113,16 @@ export function toViewActions(
         return [];
       }
 
+      const context =
+        typeof message.requestId === 'string' ? requestContext.get(message.requestId) : undefined;
       return [
         {
           type: 'evidenceReceived',
           relationId: message.relationId,
           total: numberOrUndefined(message.total) ?? 0,
           items: Array.isArray(message.items) ? (message.items as Record<string, unknown>[]) : [],
-          nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : null
+          nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : null,
+          append: context?.appendEvidence === true
         }
       ];
     }
@@ -120,7 +130,7 @@ export function toViewActions(
     case 'searchResults': {
       const query =
         typeof message.requestId === 'string'
-          ? (queryByRequestId.get(message.requestId) ?? '')
+          ? (requestContext.get(message.requestId)?.query ?? '')
           : '';
       return [
         {
@@ -179,6 +189,23 @@ function readProjection(value: unknown): ProjectionLike | undefined {
       publicSurfaceEvidenceCount: numberOrUndefined(edge.publicSurfaceEvidenceCount),
       underlyingRelationIds: Array.isArray(edge.underlyingRelationIds)
         ? edge.underlyingRelationIds.filter((id): id is string => typeof id === 'string')
+        : undefined,
+      underlyingRelations: Array.isArray(edge.underlyingRelations)
+        ? edge.underlyingRelations
+            .filter(isRecord)
+            .filter(
+              (relation) =>
+                typeof relation.id === 'string' && typeof relation.evidenceCount === 'number'
+            )
+            .map((relation) => ({
+              id: relation.id as string,
+              basis: typeof relation.basis === 'string' ? relation.basis : 'unknown',
+              kinds: Array.isArray(relation.kinds)
+                ? relation.kinds.filter((kind): kind is string => typeof kind === 'string')
+                : [],
+              evidenceCount: relation.evidenceCount as number,
+              confidence: typeof relation.confidence === 'string' ? relation.confidence : null
+            }))
         : undefined
     }));
 
@@ -208,6 +235,13 @@ interface ProjectionLike {
     generatedEvidenceCount?: number;
     publicSurfaceEvidenceCount?: number;
     underlyingRelationIds?: string[];
+    underlyingRelations?: Array<{
+      id: string;
+      basis: string;
+      kinds: string[];
+      evidenceCount: number;
+      confidence: string | null;
+    }>;
   }>;
   totalNodeCount: number;
   totalEdgeCount: number;

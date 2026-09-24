@@ -650,12 +650,37 @@
       "id": "SD-018",
       "title": "Inspectorと根拠一覧",
       "milestone": "M1",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "media/app/evidenceView.ts",
+        "media/components/inspector.ts",
+        "media/app/state.ts",
+        "media/app/app.ts",
+        "media/app/entry.ts",
+        "media/app/hostMessages.ts",
+        "src/analyzer/reportStore.ts",
+        "src/analyzer/reportBridge.ts",
+        "src/view/protocolV2.ts",
+        "schemas/protocol-v2.schema.json",
+        "media/styles/shell.css",
+        "tests/webview/evidenceView.test.ts",
+        "tests/webview/hostMessages.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-018.md",
+        "docs/implementation/v0.1.0/evidence/sd-018-inspector.json",
+        "docs/implementation/v0.1.0/evidence/sd-018-inspector.png"
+      ],
+      "tests": [
+        "npm test — 21ファイル / 169テスト成功",
+        "ブラウザ検証: 辺クリック→根拠要求（関係ID一致）、コピー内容、ページング（カーソル付与・重複排除）、ノード→依存→移動、analyze要求0件"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-018.md",
+        "docs/implementation/v0.1.0/evidence/sd-018-inspector.json",
+        "docs/implementation/v0.1.0/evidence/sd-018-inspector.png"
+      ],
+      "blockers": [],
+      "notes": "完了：Node/Edge Inspector、根拠一覧（位置・origin・確信度・公開・生成）、ページング、コピー、関連型への移動、不完全性の注記。未検証：集約辺の実画面表示（SD-027）、エディターで開く（SD-019）。"
     },
     {
       "id": "SD-019",

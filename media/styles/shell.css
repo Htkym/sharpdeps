@@ -428,3 +428,88 @@ body {
     flex: 1 1 100%;
   }
 }
+
+/* Inspector: evidence list and related entities (SD-018). */
+
+.sd-evidence-list,
+.sd-relation-list,
+.sd-entity-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-evidence-item {
+  padding: 6px;
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+  border-radius: 4px;
+}
+
+.sd-evidence-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.sd-evidence-kind {
+  font-weight: 600;
+}
+
+.sd-evidence-location {
+  margin: 2px 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.sd-evidence-mapped {
+  margin: 2px 0;
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+  font-size: 11px;
+}
+
+.sd-evidence-snippet {
+  display: block;
+  margin: 2px 0 4px;
+  padding: 2px 4px;
+  background: var(--vscode-textCodeBlock-background, #2b2b2b);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sd-badge-resolved {
+  background: var(--vscode-charts-green, #2ea043);
+  color: var(--vscode-editor-background, #1f1f1f);
+}
+
+.sd-badge-inferred {
+  background: var(--vscode-charts-yellow, #cca700);
+  color: var(--vscode-editor-background, #1f1f1f);
+}
+
+.sd-badge-generated {
+  background: var(--vscode-charts-purple, #b180d7);
+  color: var(--vscode-editor-background, #1f1f1f);
+}
+
+.sd-badge-public {
+  background: var(--vscode-charts-blue, #3794ff);
+  color: var(--vscode-editor-background, #1f1f1f);
+}
+
+.sd-relation-list li,
+.sd-entity-list li {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sd-note-warning {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}

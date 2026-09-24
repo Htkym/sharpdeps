@@ -7,7 +7,7 @@
 
 import { PROTOCOL_VERSION } from '../../src/view/protocolV2';
 import { createViewerApp, type ViewerApp } from './app';
-import { toViewActions } from './hostMessages';
+import { toViewActions, type RequestContext } from './hostMessages';
 import type { ViewAction, ViewState } from './state';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -21,8 +21,8 @@ declare global {
 const root = document.getElementById('app');
 if (root) {
   const host = createWebviewLink(root);
-  const queryByRequestId = new Map<string, string>();
-  const requested = { projection: '', details: '', evidence: '' };
+  const requestContext = new Map<string, RequestContext>();
+  const requested = { projection: '', details: '', evidence: '', evidencePage: '' };
 
   const app = createViewerApp(root, {
     workerUrl: root.dataset.workerUri,
@@ -33,7 +33,7 @@ if (root) {
     onHostAction: (action) => {
       if (action.type === 'searchStarted') {
         const requestId = nextRequestId();
-        queryByRequestId.set(requestId, action.query);
+        requestContext.set(requestId, { query: action.query });
         host.post({
           type: 'searchEntities',
           requestId,
@@ -51,7 +51,7 @@ if (root) {
   });
 
   host.subscribe((message) => {
-    for (const action of toViewActions(message, queryByRequestId)) {
+    for (const action of toViewActions(message, requestContext)) {
       app.dispatch(action);
     }
   });
@@ -99,12 +99,32 @@ if (root) {
     const relationId = state.selection.relationId ?? '';
     if (relationId && requested.evidence !== `${analysisId}|${relationId}`) {
       requested.evidence = `${analysisId}|${relationId}`;
+      requested.evidencePage = '';
       host.post({
         type: 'getEvidencePage',
         requestId: nextRequestId(),
         analysisId,
         relationId
       });
+    }
+
+    // Paging: only the explicit request action asks for the next page, so a re-render
+    // never loads more evidence on its own.
+    const cursor = state.evidence?.nextCursor;
+    if (relationId && cursor && state.evidence?.pending) {
+      const pageKey = `${analysisId}|${relationId}|${cursor}`;
+      if (requested.evidencePage !== pageKey) {
+        requested.evidencePage = pageKey;
+        const requestId = nextRequestId();
+        requestContext.set(requestId, { appendEvidence: true });
+        host.post({
+          type: 'getEvidencePage',
+          requestId,
+          analysisId,
+          relationId,
+          cursor
+        });
+      }
     }
   }
 }

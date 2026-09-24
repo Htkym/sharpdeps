@@ -401,7 +401,27 @@
               "evidenceCount": { "type": "integer", "minimum": 1 },
               "inCycle": { "type": "boolean" },
               "generatedEvidenceCount": { "type": "integer", "minimum": 0 },
-              "publicSurfaceEvidenceCount": { "type": "integer", "minimum": 0 }
+              "publicSurfaceEvidenceCount": { "type": "integer", "minimum": 0 },
+              "underlyingRelationIds": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+                "description": "Relations an aggregated edge is derived from; the edge id is the representative one."
+              },
+              "underlyingRelations": {
+                "type": "array",
+                "description": "Per-relation detail of an aggregated edge, representative first.",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "basis", "kinds", "evidenceCount"],
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+                    "basis": { "type": "string" },
+                    "kinds": { "type": "array", "items": { "type": "string" } },
+                    "evidenceCount": { "type": "integer", "minimum": 1 },
+                    "confidence": { "type": ["string", "null"] }
+                  }
+                }
+              }
             }
           }
         },

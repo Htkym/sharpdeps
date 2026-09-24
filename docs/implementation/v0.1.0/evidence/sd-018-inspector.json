@@ -1,0 +1,50 @@
+{
+  "task": "SD-018",
+  "checkedAt": "2026-09-24",
+  "page": "tests/webview/fixtures/shell-fixture.html (strict CSP, served by scripts/serve-webview.mjs)",
+  "program": "playwright-cli run-code (Chromium, 1280x720), host responses simulated as protocol v2 messages",
+  "measured": {
+    "edgeSelection": {
+      "request": "getEvidencePage",
+      "relationId": "rel_0000000000000001",
+      "firstPageHasCursor": false,
+      "inspectorTitle": "注文サービス → RepositoryFactory",
+      "occurrencesShown": 2,
+      "evidenceHeading": "Evidence (1 of 2)",
+      "semanticLabel": true,
+      "partialNote": true,
+      "badges": ["解決", "公開"]
+    },
+    "copy": {
+      "clipboard": "src/Domain/OrderService.cs:21:9 constructs",
+      "noticeShown": true
+    },
+    "paging": {
+      "loadMoreClicked": true,
+      "requestCarriedCursor": true,
+      "itemsAfterAppend": 2,
+      "generatedItemMarked": true,
+      "mappedLocationShown": true,
+      "loadMoreHiddenAtEnd": true
+    },
+    "nodeSelection": {
+      "title": "注文サービス",
+      "dependenciesShown": true,
+      "outgoingOccurrencesShown": true,
+      "dependencyNavigatedTo": "ty_0000000000000003"
+    },
+    "analyzeRequests": 0,
+    "evidenceRequests": 2,
+    "detailsRequests": ["ty_0000000000000001", "ty_0000000000000003"]
+  },
+  "conclusions": {
+    "edgeToEvidence": "Selecting a Semantic edge asks for that relation's evidence and shows it; the edge occurrence count equals the paged total for a type-granularity edge.",
+    "noAnalysisOnDetails": "Zero analyze requests: opening details and paging evidence only read the stored result.",
+    "quickVsSemantic": "The basis is labelled (Semantic（解決済み参照）/ Quick（推定）) and inferred edges carry an explicit warning.",
+    "verticalFlow": "Edge → evidence → copy, edge → next page, node → dependencies → navigate, all in one session."
+  },
+  "notVerifiedHere": [
+    "Aggregated edges (namespace/project) show the per-relation breakdown; the browser fixture used type granularity, so the breakdown was verified by unit tests only.",
+    "Opening an evidence record in the editor is SD-019; the clipboard reference is the SD-018 deliverable."
+  ]
+}
