@@ -181,6 +181,31 @@ export interface EvidenceIndex {
   byteLength: number;
   relations: EvidenceIndexEntry[];
 }
+
+export interface DeclarationIndexEntry {
+  typeId: string;
+  startByte: number;
+  count: number;
+}
+
+/** Where a type's declarations are in the declarations file (SD-019). */
+export interface DeclarationIndex {
+  format: 'ndjson';
+  fileName: string;
+  byteLength: number;
+  types: DeclarationIndexEntry[];
+}
+
+/** One declaration of a type, in declaration order within its type. */
+export interface DeclarationRecord {
+  typeId: string;
+  projectVariantId: string;
+  documentId: string;
+  relativePath: string;
+  span: PhysicalSpan;
+  declarationIndex: number;
+  isPartial: boolean;
+}
 export interface SourceDocument {
   id: string;
   relativePath: string;
@@ -248,6 +273,7 @@ export interface AnalysisSnapshot {
    * evidence in memory (the legacy adapter) or cannot provide evidence.
    */
   evidenceIndex: EvidenceIndex | null;
+  declarationIndex?: DeclarationIndex | null;
   sourceManifest: SourceDocument[];
   limitations: Limitation[];
 }

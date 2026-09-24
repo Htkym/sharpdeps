@@ -23,7 +23,7 @@ public static class SemanticReportWriter
     private const string Basis = "symbolResolved";
     private const string Mode = "semantic";
 
-    public sealed record Result(AnalysisSnapshot Snapshot, string EvidenceNdjson);
+    public sealed record Result(AnalysisSnapshot Snapshot, string EvidenceNdjson, string DeclarationsNdjson);
 
     public static Result Write(
         SemanticLoadResult load,
@@ -282,6 +282,10 @@ public static class SemanticReportWriter
             .ToArray();
 
         var (evidenceNdjson, evidenceIndex) = WriteEvidence(evidenceLines);
+        var (declarationsNdjson, declarationIndex) = WriteDeclarations(
+            index.Types,
+            entityIds,
+            variantIdByVariantKey);
         var limitations = BuildLimitations(report, operationStats);
 
         var loaded = report.Variants.Count(variant => variant.LoadState == "loaded");
@@ -338,10 +342,67 @@ public static class SemanticReportWriter
                     resolvedAnalysisId))
                 .ToArray(),
             EvidenceIndex: evidenceIndex,
+            DeclarationIndex: declarationIndex,
             SourceManifest: index.Documents,
             Limitations: limitations);
 
-        return new Result(snapshot, evidenceNdjson);
+        return new Result(snapshot, evidenceNdjson, declarationsNdjson);
+    }
+
+    /// <summary>
+    /// Declarations grouped by type id, in declaration order, so the editor can resolve a
+    /// cursor to a type and a type back to its declaration without the compilation.
+    /// </summary>
+    private static (string Ndjson, DeclarationIndex? Index) WriteDeclarations(
+        IReadOnlyList<Symbols.IndexedType> types,
+        IReadOnlyDictionary<string, string> entityIds,
+        IReadOnlyDictionary<string, string> variantIds)
+    {
+        var builder = new System.Text.StringBuilder();
+        var entries = new List<DeclarationIndexEntry>();
+        long offset = 0;
+
+        foreach (var type in types.OrderBy(entry => entry.Id, StringComparer.Ordinal))
+        {
+            // Types that are not part of the v2 model (external or compiler-generated)
+            // have no snapshot id, so their declarations cannot be addressed.
+            if (type.Declarations.Count == 0 || !entityIds.TryGetValue(type.Id, out var typeId))
+            {
+                continue;
+            }
+
+            var variantId = variantIds.TryGetValue(type.ProjectVariantId, out var mapped)
+                ? mapped
+                : type.ProjectVariantId;
+            var start = offset;
+            var index = 0;
+            foreach (var declaration in type.Declarations)
+            {
+                var record = new DeclarationRecord(
+                    typeId,
+                    variantId,
+                    declaration.DocumentId,
+                    declaration.RelativePath,
+                    declaration.ToPhysicalSpan(),
+                    index,
+                    type.IsPartial);
+                var line = System.Text.Json.JsonSerializer.Serialize(
+                    record,
+                    EvidenceJsonContext.Default.DeclarationRecord) + "\n";
+                builder.Append(line);
+                offset += System.Text.Encoding.UTF8.GetByteCount(line);
+                index++;
+            }
+
+            entries.Add(new DeclarationIndexEntry(typeId, start, index));
+        }
+
+        if (entries.Count == 0)
+        {
+            return (string.Empty, null);
+        }
+
+        return (builder.ToString(), new DeclarationIndex("ndjson", "declarations.ndjson", offset, entries));
     }
 
     private static string? Translate(

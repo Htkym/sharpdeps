@@ -686,12 +686,44 @@
       "id": "SD-019",
       "title": "エディターからの型探索とコード移動",
       "milestone": "M2",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Contracts/AnalysisSnapshot.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticReportWriter.cs",
+        "analyzer/src/SharpDeps.SemanticHost/Program.cs",
+        "analyzer/src/SharpDeps.Analysis.Quick/QuickV2Mapper.cs",
+        "src/analyzer/reportV2.ts",
+        "src/analyzer/reportV2Validation.ts",
+        "schemas/report-v2.schema.json",
+        "src/analyzer/reportStore.ts",
+        "src/commands/typeNavigation.ts",
+        "src/commands/openLocation.ts",
+        "src/view/codeMapPanel.ts",
+        "src/extension.ts",
+        "package.json",
+        "src/view/protocolV2.ts",
+        "schemas/protocol-v2.schema.json",
+        "media/app/hostMessages.ts",
+        "media/app/state.ts",
+        "src/analyzer/reportStore.test.ts",
+        "tests/analyzer/semanticV2.test.ts",
+        "tests/webview/hostMessages.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-019.md",
+        "docs/implementation/v0.1.0/evidence/sd-019-navigation.json"
+      ],
+      "tests": [
+        "npm test — 21ファイル / 173テスト成功",
+        "dotnet test — 101テスト成功",
+        "実SemanticHost出力: declarationIndex件数一致、class Order位置からDomain.Orderを解決、findDeclaration/findEvidence",
+        "ブラウザ: reveal→dependenciesスコープの射影要求・選択・Inspector・analyze要求0件"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-019.md",
+        "docs/implementation/v0.1.0/evidence/sd-019-navigation.json"
+      ],
+      "blockers": [],
+      "notes": "完了：宣言位置の永続化、カーソル→型（名前照合なし）、Quick等の案内、openEvidence/openDeclaration（ハッシュ照合・未保存・生成文書read-only）、reveal。実機操作記録はSD-027で取得。"
     },
     {
       "id": "SD-020",

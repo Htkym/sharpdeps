@@ -126,6 +126,15 @@
         }
       ]
     },
+    "declarationIndex": {
+      "oneOf": [
+        { "$ref": "#/$defs/declarationIndex" },
+        {
+          "type": "null",
+          "description": "Null when the producer has no declaration positions (Quick analysis)."
+        }
+      ]
+    },
     "sourceManifest": {
       "type": "array",
       "items": { "$ref": "#/$defs/sourceDocument" }
@@ -384,6 +393,30 @@
               "relationId": { "$ref": "#/$defs/relationId" },
               "startByte": { "type": "integer", "minimum": 0 },
               "count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "declarationIndex": {
+      "type": "object",
+      "required": ["format", "fileName", "byteLength", "types"],
+      "properties": {
+        "format": { "const": "ndjson" },
+        "fileName": {
+          "type": "string",
+          "description": "Relative to the report directory. The host resolves it; the webview never supplies paths."
+        },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["typeId", "startByte", "count"],
+            "properties": {
+              "typeId": { "$ref": "#/$defs/typeId" },
+              "startByte": { "type": "integer", "minimum": 0 },
+              "count": { "type": "integer", "minimum": 1 }
             }
           }
         }

@@ -193,6 +193,14 @@ export type HostToWebviewMessage =
     }
   | { type: 'projection'; requestId: string; analysisId: string; projection: Projection }
   | {
+      /** Editor-driven reveal (SD-019): select an entity, optionally in a new scope. */
+      type: 'reveal';
+      analysisId: string;
+      entityId: string;
+      scope?: Scope;
+      granularity?: Granularity;
+    }
+  | {
       type: 'searchResults';
       requestId: string;
       analysisId: string;

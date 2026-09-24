@@ -145,6 +145,13 @@ export type ViewAction =
       append?: boolean;
     }
   | { type: 'evidencePageRequested' }
+  | {
+      /** Editor-driven reveal (SD-019): select an entity, optionally in a new scope. */
+      type: 'revealRequested';
+      entityId: string;
+      scope?: Scope;
+      granularity?: Granularity;
+    }
   | { type: 'granularityChanged'; granularity: Granularity }
   | { type: 'viewKindChanged'; viewKind: ViewKind }
   | { type: 'scopeChanged'; scope: Scope }
@@ -287,6 +294,22 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return state.evidence?.nextCursor
         ? { ...state, evidence: { ...state.evidence, pending: true } }
         : state;
+
+    case 'revealRequested':
+      return {
+        ...state,
+        selection: { entityId: action.entityId },
+        inspectorOpen: true,
+        details: null,
+        evidence: null,
+        granularity: action.granularity ?? state.granularity,
+        scope: action.scope ?? state.scope,
+        history: pushHistory(state, {
+          scope: action.scope ?? state.scope,
+          granularity: action.granularity ?? state.granularity,
+          selectionId: action.entityId
+        })
+      };
 
     case 'granularityChanged':
       return {

@@ -20,11 +20,17 @@ import * as path from 'node:path';
 import type {
   AnalysisRelation,
   AnalysisSnapshot,
+  DeclarationRecord,
   EvidenceRecord,
   Granularity,
+  PhysicalSpan,
   SourceDocument
 } from './reportV2';
-import { validateEvidenceRecord, validateSnapshot } from './reportV2Validation';
+import {
+  validateDeclarationRecord,
+  validateEvidenceRecord,
+  validateSnapshot
+} from './reportV2Validation';
 import { buildProjection, type ProjectionRequest } from './graphProjection';
 
 export const DEFAULT_PAGE_SIZE = 100;
@@ -36,13 +42,15 @@ export interface ReportStoreLimits {
   maxEvidenceBytes: number;
   maxRegisteredAnalyses: number;
   maxGeneratedDocumentBytes: number;
+  maxDeclarationsBytes: number;
 }
 
 const DEFAULT_LIMITS: ReportStoreLimits = {
   maxReportBytes: 32 * 1024 * 1024,
   maxEvidenceBytes: 512 * 1024 * 1024,
   maxRegisteredAnalyses: 2,
-  maxGeneratedDocumentBytes: 4 * 1024 * 1024
+  maxGeneratedDocumentBytes: 4 * 1024 * 1024,
+  maxDeclarationsBytes: 64 * 1024 * 1024
 };
 
 export class ReportStoreError extends Error {
@@ -127,6 +135,17 @@ export interface EntityDetails {
   relations: AnalysisRelation[];
 }
 
+/** A type declaration that contains a document offset (SD-019). */
+export interface DeclarationMatch {
+  typeId: string;
+  projectVariantId: string;
+  declarationIndex: number;
+  span: PhysicalSpan;
+  documentId: string;
+  relativePath: string;
+  isPartial: boolean;
+}
+
 interface RelationOffset {
   startByte: number;
   count: number;
@@ -138,6 +157,14 @@ interface RegisteredAnalysis {
   evidencePath: string;
   evidenceBytes: number;
   relationOffsets: Map<string, RelationOffset>;
+  declarationsPath?: string;
+  declarationsBytes: number;
+  /** Built on first use: declarations by type and by document. */
+  declarationsByType?: Map<string, DeclarationRecord[]>;
+  declarationsByDocument?: Map<string, DeclarationRecord[]>;
+  /** Built on first use: evidence ids to their relation and line within the block. */
+  evidenceById?: Map<string, { relationId: string; lineIndex: number }>;
+  documentIdByPath: Map<string, string>;
   entities: EntityRecord[];
   entityById: Map<string, EntityRecord>;
   relationById: Map<string, AnalysisRelation>;
@@ -244,6 +271,43 @@ export class ReportStore {
     }
 
     const analysis = this.buildAnalysis(report, evidencePath, evidenceBytes, relationOffsets);
+
+    // Declarations are optional (Quick has none). When present, the file must satisfy
+    // the same path and count rules as the evidence file.
+    const declarationIndex = report.declarationIndex;
+    if (declarationIndex) {
+      if (path.basename(declarationIndex.fileName) !== declarationIndex.fileName) {
+        throw new ReportStoreError(
+          `The declarations file name must not contain a directory: ${declarationIndex.fileName}`,
+          'invalidReport'
+        );
+      }
+
+      const declarationsPath = safeJoin(options.directory, declarationIndex.fileName);
+      const declarationsBytes = await fileSize(declarationsPath);
+      if (declarationsBytes > this.limits.maxDeclarationsBytes) {
+        throw new ReportStoreError(
+          `The declarations file is larger than the ${this.limits.maxDeclarationsBytes} byte limit.`,
+          'limitExceeded'
+        );
+      }
+
+      const indexedDeclarations = declarationIndex.types.reduce(
+        (total, entry) => total + entry.count,
+        0
+      );
+      const actualDeclarations = await countLines(declarationsPath);
+      if (indexedDeclarations !== actualDeclarations) {
+        throw new ReportStoreError(
+          `The declaration index declares ${indexedDeclarations} record(s) but the file has ${actualDeclarations} line(s).`,
+          'invalidReport'
+        );
+      }
+
+      analysis.declarationsPath = declarationsPath;
+      analysis.declarationsBytes = declarationsBytes;
+    }
+
     this.evictIfNeeded();
     this.analyses.set(report.analysisId, analysis);
     return report;
@@ -330,6 +394,200 @@ export class ReportStore {
 
   getRelation(analysisId: string, relationId: string): AnalysisRelation | undefined {
     return this.requireAnalysis(analysisId).relationById.get(relationId);
+  }
+
+  /** Document id of a workspace-relative path, or undefined when it is not in the analysis. */
+  documentIdForPath(analysisId: string, relativePath: string): string | undefined {
+    return this.requireAnalysis(analysisId).documentIdByPath.get(
+      normalizeManifestPath(relativePath)
+    );
+  }
+
+  /**
+   * Types whose declaration contains the offset in a document (SD-019). One match per
+   * project variant, innermost declaration first, so a cursor is never bound to a type
+   * of another project by name alone.
+   */
+  async findTypesAt(
+    analysisId: string,
+    documentId: string,
+    offset: number
+  ): Promise<DeclarationMatch[]> {
+    const analysis = this.requireAnalysis(analysisId);
+    await this.ensureDeclarations(analysis);
+    const records = analysis.declarationsByDocument?.get(documentId) ?? [];
+
+    const matches = records
+      .filter(
+        (record) => offset >= record.span.start && offset < record.span.start + record.span.length
+      )
+      .sort((left, right) => left.span.length - right.span.length);
+
+    const perVariant: DeclarationMatch[] = [];
+    const seen = new Set<string>();
+    for (const record of matches) {
+      if (seen.has(record.projectVariantId)) {
+        continue;
+      }
+
+      seen.add(record.projectVariantId);
+      perVariant.push({
+        typeId: record.typeId,
+        projectVariantId: record.projectVariantId,
+        declarationIndex: record.declarationIndex,
+        span: record.span,
+        documentId: record.documentId,
+        relativePath: record.relativePath,
+        isPartial: record.isPartial
+      });
+    }
+
+    return perVariant;
+  }
+
+  /** One declaration of a type by its index (SD-019). */
+  async findDeclaration(
+    analysisId: string,
+    typeId: string,
+    declarationIndex = 0
+  ): Promise<DeclarationRecord | undefined> {
+    const analysis = this.requireAnalysis(analysisId);
+    await this.ensureDeclarations(analysis);
+    return analysis.declarationsByType?.get(typeId)?.[declarationIndex];
+  }
+
+  /** All declarations of a type, in declaration order (SD-019). */
+  async declarationsForType(analysisId: string, typeId: string): Promise<DeclarationRecord[]> {
+    const analysis = this.requireAnalysis(analysisId);
+    await this.ensureDeclarations(analysis);
+    return analysis.declarationsByType?.get(typeId) ?? [];
+  }
+
+  /**
+   * One evidence record by its id (SD-019). The id is opaque, so the host can open what
+   * the webview selected without the webview ever supplying a path or a position.
+   */
+  async findEvidence(analysisId: string, evidenceId: string): Promise<EvidenceRecord | undefined> {
+    const analysis = this.requireAnalysis(analysisId);
+    await this.ensureEvidenceIds(analysis);
+    const location = analysis.evidenceById?.get(evidenceId);
+    if (!location) {
+      return undefined;
+    }
+
+    const offset = analysis.relationOffsets.get(location.relationId);
+    if (!offset) {
+      return undefined;
+    }
+
+    const records = await readEvidenceLines(
+      analysis.evidencePath,
+      offset.startByte,
+      location.lineIndex,
+      1
+    );
+    const line = records.lines[0];
+    if (line === undefined) {
+      return undefined;
+    }
+
+    try {
+      const validation = validateEvidenceRecord(JSON.parse(line));
+      return validation.ok ? validation.value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Indexes evidence ids to their relation and position once per analysis. */
+  private async ensureEvidenceIds(analysis: RegisteredAnalysis): Promise<void> {
+    if (analysis.evidenceById) {
+      return;
+    }
+
+    const byId = new Map<string, { relationId: string; lineIndex: number }>();
+    analysis.evidenceById = byId;
+    for (const [relationId, offset] of analysis.relationOffsets) {
+      const records = await readEvidenceLines(
+        analysis.evidencePath,
+        offset.startByte,
+        0,
+        offset.count
+      );
+      records.lines.forEach((line, index) => {
+        try {
+          const parsed = JSON.parse(line) as { id?: unknown };
+          if (typeof parsed.id === 'string') {
+            byId.set(parsed.id, { relationId, lineIndex: index });
+          }
+        } catch {
+          // A malformed record cannot be opened; the page reader reports it if read.
+        }
+      });
+    }
+  }
+
+  /** Loads the declarations file once and indexes it by type and by document. */
+  private async ensureDeclarations(analysis: RegisteredAnalysis): Promise<void> {
+    if (analysis.declarationsByType && analysis.declarationsByDocument) {
+      return;
+    }
+
+    const byType = new Map<string, DeclarationRecord[]>();
+    const byDocument = new Map<string, DeclarationRecord[]>();
+    analysis.declarationsByType = byType;
+    analysis.declarationsByDocument = byDocument;
+    if (!analysis.declarationsPath) {
+      return;
+    }
+
+    const total = (analysis.report.declarationIndex?.types ?? []).reduce(
+      (sum, entry) => sum + entry.count,
+      0
+    );
+    const records = await readEvidenceLines(analysis.declarationsPath, 0, 0, total);
+    if (records.bytesRead > analysis.declarationsBytes) {
+      throw new ReportStoreError(
+        'The declarations file changed after registration.',
+        'invalidReport'
+      );
+    }
+
+    for (const line of records.lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        throw new ReportStoreError(
+          'The declarations file contains a malformed record.',
+          'invalidReport'
+        );
+      }
+
+      const validation = validateDeclarationRecord(parsed);
+      if (!validation.ok) {
+        throw new ReportStoreError(
+          `The declarations file contains an invalid record: ${validation.errors.join('; ')}`,
+          'invalidReport'
+        );
+      }
+
+      const record = validation.value;
+      const typeRecords = byType.get(record.typeId) ?? [];
+      typeRecords.push(record);
+      byType.set(record.typeId, typeRecords);
+      const documentRecords = byDocument.get(record.documentId) ?? [];
+      documentRecords.push(record);
+      byDocument.set(record.documentId, documentRecords);
+    }
+
+    for (const list of byDocument.values()) {
+      list.sort((left, right) => left.span.start - right.span.start);
+    }
+
+    for (const list of byType.values()) {
+      list.sort((left, right) => left.declarationIndex - right.declarationIndex);
+    }
   }
 
   /**
@@ -585,6 +843,13 @@ export class ReportStore {
       evidencePath,
       evidenceBytes,
       relationOffsets,
+      declarationsBytes: 0,
+      documentIdByPath: new Map(
+        report.sourceManifest.map((document) => [
+          normalizeManifestPath(document.relativePath),
+          document.id
+        ])
+      ),
       entities,
       entityById,
       relationById,
@@ -695,6 +960,10 @@ function safeJoin(directory: string, fileName: string): string {
   }
 
   return resolved;
+}
+
+function normalizeManifestPath(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/');
 }
 
 async function fileSize(filePath: string): Promise<number> {

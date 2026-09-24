@@ -353,6 +353,7 @@ public static class QuickV2Mapper
                     resolvedAnalysisId))
                 .ToArray(),
             EvidenceIndex: evidenceIndex,
+            DeclarationIndex: null,
             SourceManifest: index.Documents
                 .Select(document => new SourceDocument(
                     document.Id,

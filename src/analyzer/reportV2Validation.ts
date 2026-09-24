@@ -6,7 +6,13 @@
 // about structure and referential integrity and tolerant about extra properties,
 // so a newer analyzer can add fields without breaking an older host.
 
-import type { AnalysisSnapshot, EvidenceRecord, RelationBasis, RelationKind } from './reportV2';
+import type {
+  AnalysisSnapshot,
+  DeclarationRecord,
+  EvidenceRecord,
+  RelationBasis,
+  RelationKind
+} from './reportV2';
 
 export interface ValidationFailure {
   ok: false;
@@ -203,6 +209,7 @@ export function validateSnapshot(input: unknown): ValidationResult<AnalysisSnaps
   validateCycleGroups(snapshot.cycleGroups, errors, relationIds, entityIds);
   validateDiagnostics(snapshot.diagnostics, errors, projectIds, namespaceIds, typeIds);
   validateEvidenceIndex(snapshot.evidenceIndex, errors, relationIds);
+  validateDeclarationIndex(snapshot.declarationIndex, errors, typeIds);
   validateSourceManifest(snapshot.sourceManifest, errors);
   validateLimitations(snapshot.limitations, errors, '$.limitations');
 
@@ -671,6 +678,67 @@ function validateEvidenceIndex(
     requireCount(relation.startByte, `${path}.startByte`, errors);
     requireCount(relation.count, `${path}.count`, errors);
   });
+}
+
+function validateDeclarationIndex(
+  value: unknown,
+  errors: Errors,
+  typeIds: ReadonlySet<string>
+): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+  const index = requireRecord(value, '$.declarationIndex', errors);
+  if (!index) {
+    return;
+  }
+  if (index.format !== 'ndjson') {
+    errors.add('$.declarationIndex.format', 'expected ndjson');
+  }
+  requireString(index.fileName, '$.declarationIndex.fileName', errors);
+  requireCount(index.byteLength, '$.declarationIndex.byteLength', errors);
+  requireArray(index.types, '$.declarationIndex.types', errors, (entry, path) => {
+    const type = requireRecord(entry, path, errors);
+    if (!type) {
+      return;
+    }
+    const id = requireString(type.typeId, `${path}.typeId`, errors, ID_PATTERNS.type);
+    if (id && !typeIds.has(id)) {
+      errors.add(`${path}.typeId`, `unknown type id ${id}`);
+    }
+    requireCount(type.startByte, `${path}.startByte`, errors);
+    requireCount(type.count, `${path}.count`, errors);
+  });
+}
+
+/** Validates one declaration NDJSON record. */
+export function validateDeclarationRecord(input: unknown): ValidationResult<DeclarationRecord> {
+  const errors = new Errors();
+  const record = requireRecord(input, '$', errors);
+  if (!record) {
+    return { ok: false, errors: errors.messages };
+  }
+
+  requireString(record.typeId, '$.typeId', errors, ID_PATTERNS.type);
+  requireString(record.projectVariantId, '$.projectVariantId', errors, ID_PATTERNS.variant);
+  requireString(record.documentId, '$.documentId', errors, ID_PATTERNS.document);
+  requireString(record.relativePath, '$.relativePath', errors);
+  requireSpan(record.span, '$.span', errors);
+  requireCount(record.declarationIndex, '$.declarationIndex', errors);
+  requireBoolean(record.isPartial, '$.isPartial', errors);
+  return errors.messages.length === 0
+    ? { ok: true, value: input as DeclarationRecord }
+    : { ok: false, errors: errors.messages };
+}
+
+function requireSpan(value: unknown, path: string, errors: Errors): void {
+  const span = requireRecord(value, path, errors);
+  if (!span) {
+    return;
+  }
+  for (const key of ['start', 'length', 'startLine', 'startCharacter', 'endLine', 'endCharacter']) {
+    requireCount(span[key], `${path}.${key}`, errors);
+  }
 }
 
 function validateSourceManifest(value: unknown, errors: Errors): void {

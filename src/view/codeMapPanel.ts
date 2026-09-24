@@ -8,14 +8,18 @@
 import * as vscode from 'vscode';
 import type { ReportBridge } from '../analyzer/reportBridge';
 import type { ReportStore } from '../analyzer/reportStore';
+import { openDeclarationLocation, openEvidenceLocation } from '../commands/openLocation';
 import { getWebviewHtml } from './html';
 import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
-import type { Capabilities, HostToWebviewMessage } from './protocolV2';
+import type { Capabilities, HostToWebviewMessage, Scope } from './protocolV2';
+import type { Granularity } from '../analyzer/reportV2';
 
 export interface CodeMapPanelHost {
   store: ReportStore;
   bridge: ReportBridge;
   output: vscode.OutputChannel;
+  /** Directory the analysed paths are relative to, for opening locations. */
+  rootDirectory: () => string | undefined;
   /** Starts an analysis for the current target in the requested mode. */
   onAnalyze: (mode: 'quick' | 'semantic') => void;
   /** Stops the running analysis. */
@@ -52,6 +56,8 @@ export class CodeMapPanel {
   private readonly disposables: vscode.Disposable[] = [];
   private ready = false;
   private pendingAnalysisId: string | undefined;
+  private pendingReveal:
+    { analysisId: string; entityId: string; scope: Scope; granularity?: Granularity } | undefined;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -85,6 +91,39 @@ export class CodeMapPanel {
     this.postAnalysisState(analysisId);
   }
 
+  /**
+   * Asks the webview to select an entity (SD-019). The scope is sent with it, so the
+   * view requests the projection it needs; nothing is pushed unrequested.
+   */
+  revealEntity(entityId: string, scope: Scope, granularity?: Granularity): void {
+    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
+    if (!analysisId) {
+      void vscode.window.showInformationMessage(
+        'SharpDeps: 解析結果がありません。先に解析してください。'
+      );
+      return;
+    }
+
+    this.pendingReveal = { analysisId, entityId, scope, granularity };
+    this.flushReveal();
+  }
+
+  private flushReveal(): void {
+    if (!this.ready || !this.pendingReveal) {
+      return;
+    }
+
+    const reveal = this.pendingReveal;
+    this.pendingReveal = undefined;
+    this.post({
+      type: 'reveal',
+      analysisId: reveal.analysisId,
+      entityId: reveal.entityId,
+      scope: reveal.scope,
+      granularity: reveal.granularity
+    });
+  }
+
   private onMessage(message: unknown): void {
     const validation = validateWebviewMessage(message);
     if (!validation.ok) {
@@ -113,6 +152,18 @@ export class CodeMapPanel {
         return;
       case 'cancelAnalysis':
         this.host.onCancel();
+        return;
+      case 'openEvidence':
+        // Resolved host-side from the opaque id: the webview never sends a path.
+        void openEvidenceLocation(this.locationOptions, request.analysisId, request.evidenceId);
+        return;
+      case 'openDeclaration':
+        void openDeclarationLocation(
+          this.locationOptions,
+          request.analysisId,
+          request.entityId,
+          request.declarationIndex ?? 0
+        );
         return;
       default:
         // Everything else is answered from the store by the bridge; unimplemented host
@@ -184,6 +235,13 @@ export class CodeMapPanel {
       search: true
     };
   }
+
+  /** Stable options object for opening locations (SD-019). */
+  private readonly locationOptions = {
+    store: this.host.store,
+    output: this.host.output,
+    rootDirectory: () => this.host.rootDirectory()
+  };
 
   private post(message: HostToWebviewMessage): void {
     void this.panel.webview.postMessage(message);

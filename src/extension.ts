@@ -12,6 +12,7 @@ import { CodeMapPanel } from './view/codeMapPanel';
 import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
 import { createGeneratedDocumentProvider } from './generatedDocuments/generatedDocumentProvider';
 import { GENERATED_DOCUMENT_SCHEME } from './generatedDocuments/documentUri';
+import { resolveTypeAtCursor } from './commands/typeNavigation';
 
 const STAGE_LABELS: Record<AnalysisStage, string> = {
   discover: 'Discovering projects…',
@@ -98,6 +99,47 @@ export function activate(context: vscode.ExtensionContext): void {
 
   let lastTarget: vscode.Uri | undefined;
 
+  const rootDirectory = (): string | undefined =>
+    lastTarget ? path.dirname(lastTarget.fsPath) : undefined;
+
+  function panelHost(): Parameters<typeof CodeMapPanel.show>[1] {
+    return {
+      store,
+      bridge,
+      output,
+      rootDirectory,
+      onAnalyze: (mode) => void runAndShow(lastTarget, mode),
+      onCancel: () => controller.cancel('user')
+    };
+  }
+
+  async function showTypeFromEditor(kind: 'dependencies' | 'dependents'): Promise<void> {
+    const resolution = await resolveTypeAtCursor(store, rootDirectory(), output);
+    if (!resolution.ok) {
+      // No result, Quick only, or no declaration index: say why and offer to analyze.
+      const choice = await vscode.window.showInformationMessage(
+        `SharpDeps: ${resolution.reason}`,
+        '解析する'
+      );
+      if (choice === '解析する') {
+        await runAndShow(lastTarget);
+      }
+      return;
+    }
+
+    const panel = CodeMapPanel.show(context.extensionUri, panelHost());
+    panel.revealEntity(resolution.value.typeId, {
+      kind,
+      id: resolution.value.typeId,
+      depth: 1
+    });
+    output.appendLine(
+      `Revealing ${kind} of ${resolution.value.typeId} in ${
+        resolution.value.projectName ?? 'the current analysis'
+      }.`
+    );
+  }
+
   async function runAndShow(
     requestedTarget?: vscode.Uri,
     requestedMode?: 'quick' | 'semantic'
@@ -171,13 +213,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const v1Path = path.join(path.dirname(outcome.reportPath), 'report.json');
           const report = JSON.parse(await fs.promises.readFile(v1Path, 'utf8')) as CodeMapReport;
 
-          const panel = CodeMapPanel.show(context.extensionUri, {
-            store,
-            bridge,
-            output,
-            onAnalyze: (mode) => void runAndShow(lastTarget, mode),
-            onCancel: () => controller.cancel('user')
-          });
+          const panel = CodeMapPanel.show(context.extensionUri, panelHost());
           diagnostics.update(report);
 
           const analysisId = store.currentAnalysisId;
@@ -204,6 +240,12 @@ export function activate(context: vscode.ExtensionContext): void {
       runAndShow(uri)
     ),
     vscode.commands.registerCommand('sharpdeps.refresh', () => runAndShow(lastTarget)),
+    vscode.commands.registerCommand('sharpdeps.showTypeDependencies', () =>
+      showTypeFromEditor('dependencies')
+    ),
+    vscode.commands.registerCommand('sharpdeps.showTypeDependents', () =>
+      showTypeFromEditor('dependents')
+    ),
     vscode.commands.registerCommand(
       'sharpdeps.copyMermaid',
       () =>

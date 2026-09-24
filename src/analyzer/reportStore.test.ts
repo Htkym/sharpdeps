@@ -394,6 +394,155 @@ describe('ReportStore analysis lifetime', () => {
   });
 });
 
+describe('ReportStore declarations', () => {
+  function snapshotWithDeclarations(): AnalysisSnapshot {
+    return {
+      ...snapshotWithEntities([]),
+      types: [
+        {
+          id: IDS.typeA,
+          projectVariantId: IDS.variantA,
+          namespaceId: null,
+          name: 'Program',
+          fullName: 'App.Program',
+          documentationId: null,
+          kind: 'class',
+          accessibility: 'internal',
+          isPartial: true,
+          declarationCount: 2,
+          memberCount: 0
+        }
+      ],
+      declarationIndex: {
+        format: 'ndjson' as const,
+        fileName: 'declarations.ndjson',
+        byteLength: 0,
+        types: [{ typeId: IDS.typeA, startByte: 0, count: 2 }]
+      }
+    };
+  }
+
+  function declarationLines(): string {
+    return (
+      [
+        {
+          typeId: IDS.typeA,
+          projectVariantId: IDS.variantA,
+          documentId: IDS.document,
+          relativePath: 'src/App/Program.cs',
+          span: {
+            start: 40,
+            length: 20,
+            startLine: 4,
+            startCharacter: 0,
+            endLine: 6,
+            endCharacter: 1
+          },
+          declarationIndex: 0,
+          isPartial: true
+        },
+        {
+          typeId: IDS.typeA,
+          projectVariantId: IDS.variantA,
+          documentId: IDS.document,
+          relativePath: 'src/App/Program.cs',
+          span: {
+            start: 200,
+            length: 15,
+            startLine: 20,
+            startCharacter: 0,
+            endLine: 21,
+            endCharacter: 1
+          },
+          declarationIndex: 1,
+          isPartial: true
+        }
+      ]
+        .map((record) => JSON.stringify(record))
+        .join('\n') + '\n'
+    );
+  }
+
+  it('resolves a cursor offset to the declared type, never by name', async () => {
+    const snapshot = snapshotWithDeclarations();
+    const { directory } = writeAnalysis(snapshot, []);
+    fs.writeFileSync(path.join(directory, 'declarations.ndjson'), declarationLines(), 'utf8');
+    const store = new ReportStore();
+    await store.register({ directory, reportFileName: 'report-v2.json' });
+
+    const inside = await store.findTypesAt(snapshot.analysisId, IDS.document, 45);
+    expect(inside).toHaveLength(1);
+    expect(inside[0]).toMatchObject({
+      typeId: IDS.typeA,
+      projectVariantId: IDS.variantA,
+      declarationIndex: 0,
+      isPartial: true
+    });
+
+    // Outside every declaration: nothing is guessed from the name.
+    expect(await store.findTypesAt(snapshot.analysisId, IDS.document, 500)).toEqual([]);
+    expect(store.documentIdForPath(snapshot.analysisId, 'src/App/Program.cs')).toBe(IDS.document);
+    expect(store.documentIdForPath(snapshot.analysisId, 'src/Other/Program.cs')).toBeUndefined();
+  });
+
+  it('finds a declaration by type and index and rejects a mismatched index file', async () => {
+    const snapshot = snapshotWithDeclarations();
+    const { directory } = writeAnalysis(snapshot, []);
+    fs.writeFileSync(path.join(directory, 'declarations.ndjson'), declarationLines(), 'utf8');
+    const store = new ReportStore();
+    await store.register({ directory, reportFileName: 'report-v2.json' });
+
+    const declarations = await store.declarationsForType(snapshot.analysisId, IDS.typeA);
+    expect(declarations).toHaveLength(2);
+    expect(declarations[1].declarationIndex).toBe(1);
+    expect((await store.findDeclaration(snapshot.analysisId, IDS.typeA, 1))?.span.start).toBe(200);
+    expect(await store.findDeclaration(snapshot.analysisId, IDS.typeA, 5)).toBeUndefined();
+
+    // An index that disagrees with the file is rejected instead of being served.
+    const badIndex = snapshotWithDeclarations();
+    badIndex.declarationIndex = {
+      ...badIndex.declarationIndex!,
+      types: [{ typeId: IDS.typeA, startByte: 0, count: 1 }]
+    };
+    const secondWrite = writeAnalysis(badIndex, []);
+    fs.writeFileSync(
+      path.join(secondWrite.directory, 'declarations.ndjson'),
+      declarationLines(),
+      'utf8'
+    );
+    const strict = new ReportStore();
+    await expect(
+      strict.register({ directory: secondWrite.directory, reportFileName: 'report-v2.json' })
+    ).rejects.toThrow(/declaration index declares 1 record/);
+  });
+
+  it('finds an evidence record by its opaque id', async () => {
+    const snapshot = snapshotWithEntities(['Core']);
+    const records = [
+      makeEvidence({
+        id: 'ev_0000000000000001',
+        relationId: snapshot.relations[0].id,
+        kind: 'usingInferred',
+        physicalSpan: null
+      }),
+      makeEvidence({
+        id: 'ev_0000000000000002',
+        relationId: snapshot.relations[0].id,
+        kind: 'usingInferred',
+        physicalSpan: null
+      })
+    ];
+    const { directory } = writeAnalysis(snapshot, records);
+    const store = new ReportStore();
+    await store.register({ directory, reportFileName: 'report-v2.json' });
+
+    expect((await store.findEvidence(snapshot.analysisId, 'ev_0000000000000002'))?.id).toBe(
+      'ev_0000000000000002'
+    );
+    expect(await store.findEvidence(snapshot.analysisId, 'ev_ffffffffffffffff')).toBeUndefined();
+  });
+});
+
 describe('ReportStore generated documents', () => {
   const generatedId = 'doc_abcdefabcdefabcd';
 

@@ -49,6 +49,16 @@
         "category": "SharpDeps"
       },
       {
+        "command": "sharpdeps.showTypeDependencies",
+        "title": "Show Type Dependencies (cursor)",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.showTypeDependents",
+        "title": "Show Type Dependents (cursor)",
+        "category": "SharpDeps"
+      },
+      {
         "command": "sharpdeps.copyMermaid",
         "title": "Copy Mermaid Source",
         "category": "SharpDeps"

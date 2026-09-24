@@ -173,6 +173,49 @@ describe('toViewActions', () => {
     expect(replace[0]).toMatchObject({ type: 'evidenceReceived', append: false });
   });
 
+  it('maps a reveal to a selection with the requested scope', () => {
+    const actions = toViewActions(
+      {
+        type: 'reveal',
+        analysisId,
+        entityId: 'ty_1111111111111111',
+        scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 },
+        granularity: 'type'
+      },
+      queries
+    );
+
+    expect(actions).toEqual([
+      {
+        type: 'revealRequested',
+        entityId: 'ty_1111111111111111',
+        scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 },
+        granularity: 'type'
+      }
+    ]);
+
+    // A reveal without an entity, or with a broken scope, is ignored or repaired.
+    expect(toViewActions({ type: 'reveal', analysisId }, queries)).toEqual([]);
+    expect(
+      toViewActions(
+        {
+          type: 'reveal',
+          analysisId,
+          entityId: 'ty_1111111111111111',
+          scope: { kind: 'nonsense' }
+        },
+        queries
+      )
+    ).toEqual([
+      {
+        type: 'revealRequested',
+        entityId: 'ty_1111111111111111',
+        scope: { kind: 'root', id: null, depth: null },
+        granularity: undefined
+      }
+    ]);
+  });
+
   it('reads the aggregated relation breakdown defensively', () => {
     const actions = toViewActions(
       {

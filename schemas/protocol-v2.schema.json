@@ -192,6 +192,18 @@
     },
     {
       "type": "object",
+      "required": ["type", "analysisId", "entityId"],
+      "properties": {
+        "type": { "const": "reveal" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "granularity": { "$ref": "#/$defs/granularity" }
+      },
+      "description": "Editor-driven reveal (SD-019): select an entity, optionally in a new scope."
+    },
+    {
+      "type": "object",
       "required": ["type", "requestId", "analysisId", "projection"],
       "properties": {
         "type": { "const": "projection" },

@@ -152,6 +152,13 @@ try
         Path.Combine(outputDirectory, "evidence.ndjson"),
         semantic.EvidenceNdjson,
         CancellationToken.None);
+    if (semantic.DeclarationsNdjson.Length > 0)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "declarations.ndjson"),
+            semantic.DeclarationsNdjson,
+            CancellationToken.None);
+    }
 
     Progress(
         "write",

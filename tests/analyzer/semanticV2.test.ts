@@ -120,6 +120,26 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
 
       expect(snapshot.relations.some((relation) => relation.generatedEvidenceCount > 0)).toBe(true);
 
+      // SD-019: declaration positions are part of the result and match the file.
+      expect(snapshot.declarationIndex).toBeTruthy();
+      const declarationLines = fs
+        .readFileSync(path.join(directory, 'declarations.ndjson'), 'utf8')
+        .split('\n')
+        .filter((line) => line.trim().length > 0);
+      const indexedDeclarations = (snapshot.declarationIndex?.types ?? []).reduce(
+        (total, entry) => total + entry.count,
+        0
+      );
+      expect(indexedDeclarations).toBe(declarationLines.length);
+      const declaration = JSON.parse(declarationLines[0]) as {
+        typeId: string;
+        documentId: string;
+        relativePath: string;
+        span: { start: number; length: number };
+      };
+      expect(declaration.relativePath).not.toContain('obj/');
+      expect(declaration.span.length).toBeGreaterThan(0);
+
       const serialized = `${JSON.stringify(snapshot)}\n${fs.readFileSync(
         path.join(directory, 'evidence.ndjson'),
         'utf8'
@@ -132,7 +152,7 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
   }, 120000);
 
   it('registers in the result store and pages evidence', async () => {
-    const { directory, snapshot } = runSemanticHost();
+    const { directory, snapshot, evidence } = runSemanticHost();
     try {
       const store = new ReportStore();
       const registered = await store.register({ directory, reportFileName: 'report-v2.json' });
@@ -145,6 +165,33 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
       const page = await store.getEvidencePage(snapshot.analysisId, relation!.id, { limit: 1 });
       expect(page.total).toBe(relation!.evidenceCount);
       expect(page.items[0].confidence).toBe('resolved');
+
+      // SD-019: the cursor's type comes from declaration positions, never from a name,
+      // and a declaration and an evidence record can be found by their opaque ids.
+      const orderSource = fs.readFileSync(
+        path.join(fixtureDirectory, 'src', 'Domain', 'Order.cs'),
+        'utf8'
+      );
+      const offset = orderSource.indexOf('class Order') + 'class '.length;
+      const documentId = store.documentIdForPath(snapshot.analysisId, 'src/Domain/Order.cs');
+      expect(documentId).toBeTruthy();
+      const matches = await store.findTypesAt(snapshot.analysisId, documentId!, offset);
+      expect(matches.length).toBeGreaterThan(0);
+      expect(snapshot.types.find((type) => type.id === matches[0].typeId)?.fullName).toBe(
+        'Domain.Order'
+      );
+
+      const declaration = await store.findDeclaration(
+        snapshot.analysisId,
+        matches[0].typeId,
+        matches[0].declarationIndex
+      );
+      expect(declaration?.relativePath).toBe('src/Domain/Order.cs');
+      expect(declaration?.span.length).toBeGreaterThan(0);
+
+      const found = await store.findEvidence(snapshot.analysisId, evidence[0].id);
+      expect(found?.id).toBe(evidence[0].id);
+      expect(await store.findEvidence(snapshot.analysisId, 'ev_ffffffffffffffff')).toBeUndefined();
 
       // The retained generated content is served read-only from the result directory.
       const generated = snapshot.sourceManifest.find(

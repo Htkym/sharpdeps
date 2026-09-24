@@ -119,6 +119,28 @@ public sealed record EvidenceIndex(
     long ByteLength,
     IReadOnlyList<EvidenceIndexEntry> Relations);
 
+public sealed record DeclarationIndexEntry(string TypeId, long StartByte, int Count);
+
+/// <summary>
+/// Where a type's declarations are in the declarations file. Editor-driven lookups
+/// (SD-019) resolve a cursor position to a type and a type back to a declaration.
+/// </summary>
+public sealed record DeclarationIndex(
+    string Format,
+    string FileName,
+    long ByteLength,
+    IReadOnlyList<DeclarationIndexEntry> Types);
+
+/// <summary>One declaration of a type, in declaration order within its type.</summary>
+public sealed record DeclarationRecord(
+    string TypeId,
+    string ProjectVariantId,
+    string DocumentId,
+    string RelativePath,
+    PhysicalSpan Span,
+    int DeclarationIndex,
+    bool IsPartial);
+
 public sealed record SourceDocument(
     string Id,
     string RelativePath,
@@ -145,6 +167,7 @@ public sealed record AnalysisSnapshot(
     IReadOnlyList<CycleGroup> CycleGroups,
     IReadOnlyList<AnalysisDiagnostic> Diagnostics,
     EvidenceIndex? EvidenceIndex,
+    DeclarationIndex? DeclarationIndex,
     IReadOnlyList<SourceDocument> SourceManifest,
     IReadOnlyList<Limitation> Limitations);
 
@@ -186,4 +209,5 @@ public partial class CodeMapJsonContext : JsonSerializerContext;
 /// <summary>Compact (one line per record) serialization for the evidence file.</summary>
 [JsonSourceGenerationOptions(WriteIndented = false, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(EvidenceRecord))]
+[JsonSerializable(typeof(DeclarationRecord))]
 public partial class EvidenceJsonContext : JsonSerializerContext;

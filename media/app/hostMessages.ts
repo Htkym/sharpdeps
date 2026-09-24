@@ -152,10 +152,29 @@ export function toViewActions(
         }
       ];
 
+    case 'reveal': {
+      if (typeof message.entityId !== 'string') {
+        return [];
+      }
+
+      return [
+        {
+          type: 'revealRequested',
+          entityId: message.entityId,
+          scope: message.scope === undefined ? undefined : readScope(message.scope),
+          granularity: readGranularity(message.granularity)
+        }
+      ];
+    }
+
     default:
       // capabilities / cycleWitness and anything unknown: no state change.
       return [];
   }
+}
+
+function readGranularity(value: unknown): Granularity | undefined {
+  return value === 'project' || value === 'namespace' || value === 'type' ? value : undefined;
 }
 
 function readProjection(value: unknown): ProjectionLike | undefined {
