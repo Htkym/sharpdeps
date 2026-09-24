@@ -514,12 +514,37 @@
       "id": "SD-015",
       "title": "Shell・UI state・レスポンシブ骨格",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "media/app/state.ts",
+        "media/app/app.ts",
+        "media/app/entry.ts",
+        "media/components/shell.ts",
+        "media/styles/shell.css",
+        "tests/webview/state.test.ts",
+        "tests/webview/fixtures/shell-fixture.html",
+        "esbuild.js",
+        "docs/implementation/v0.1.0/evidence/sd015-shell-1440.png",
+        "docs/implementation/v0.1.0/evidence/sd015-shell-900.png",
+        "docs/implementation/v0.1.0/evidence/sd015-shell-360.png",
+        "docs/implementation/v0.1.0/tasks/SD-015.md"
+      ],
+      "tests": [
+        "npm test — 14ファイル / 137テスト成功（SD-015で+14）",
+        "reducerの状態遷移と旧射影の保持",
+        "Graph/Table切替での検索・フィルター・選択の維持、履歴上限と戻る",
+        "selectorのフィルター適用と0件の識別",
+        "状態復元の安全化（不正値のクランプ、analyzingを復元しない）",
+        "Playwright: 全UI状態の描画（分析中・部分成功・失敗・stale・0件）",
+        "Playwright: 1440/900/360で操作要素が可視・水平オーバーフローなし（中央92/55/48%）"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-015.md",
+        "docs/implementation/v0.1.0/evidence/sd015-shell-1440.png"
+      ],
+      "blockers": [],
+      "notes": "パネル接続とSVGグラフはSD-017、TableのページングはSD-016、狭幅の折り畳み・テーマ確認はSD-024、状態保存はSD-021。"
     },
     {
       "id": "SD-016",

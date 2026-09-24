@@ -1,0 +1,407 @@
+/* Shell styles (SD-015).
+   Layout targets: 1440 / 900 / 360 CSS px, VS Code theme tokens, no fixed heights
+   that would push the map or the toolbar off screen. */
+
+/* The webview has no theme reset of its own: the default body margin would push the
+   footer out of a 100vh shell. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* A flex column keeps the layout correct when the error bar is hidden (a grid with a
+   fixed row template would reflow the remaining children into the wrong rows). */
+.sd-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--vscode-foreground, #e6e6e6);
+  background: var(--vscode-editor-background, #1f1f1f);
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+.sd-body {
+  flex: 1 1 auto;
+}
+
+.sd-footer {
+  flex: 0 0 auto;
+}
+
+/* Top bar */
+
+.sd-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.sd-target {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.sd-target-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sd-target-path,
+.sd-status-text,
+.sd-map-summary {
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+  font-size: 11px;
+}
+
+.sd-target-path {
+  max-width: 32ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sd-topbar-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: auto;
+  min-width: 0;
+  text-align: right;
+}
+
+.sd-breadcrumbs {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  font-size: 11px;
+}
+
+.sd-crumb + .sd-crumb::before {
+  content: '›';
+  margin-right: 6px;
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+}
+
+.sd-overflow {
+  position: relative;
+  display: flex;
+  gap: 4px;
+}
+
+.sd-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: 4px;
+  background: var(--vscode-menu-background, #252526);
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+  border-radius: 4px;
+}
+
+/* Buttons and inputs */
+
+.sd-button {
+  padding: 3px 10px;
+  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background, #0e639c);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sd-button:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+.sd-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sd-button-danger {
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+}
+
+.sd-button-tab,
+.sd-button-toggle {
+  color: var(--vscode-foreground, #e6e6e6);
+  background: transparent;
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.sd-button-tab.active,
+.sd-button-toggle.active {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  border-color: var(--vscode-focusBorder, #4daafc);
+}
+
+.sd-select,
+.sd-search {
+  padding: 3px 6px;
+  color: var(--vscode-input-foreground, #e6e6e6);
+  background: var(--vscode-input-background, #3c3c3c);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  font: inherit;
+}
+
+.sd-search {
+  min-width: 16ch;
+  flex: 1 1 16ch;
+}
+
+.sd-button:focus-visible,
+.sd-select:focus-visible,
+.sd-search:focus-visible,
+.sd-node-item:focus-visible,
+.sd-table tr:focus-visible,
+.sd-splitter:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4daafc);
+  outline-offset: 1px;
+}
+
+/* Body: navigation | center | inspector */
+
+.sd-body {
+  display: grid;
+  grid-template-columns: minmax(0, var(--sd-nav-width, 220px)) 5px minmax(0, 1fr) 5px minmax(
+      0,
+      var(--sd-inspector-width, 320px)
+    );
+  min-height: 0;
+}
+
+.sd-nav,
+.sd-center,
+.sd-inspector {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sd-nav {
+  border-right: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.sd-inspector {
+  display: none;
+  border-left: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.sd-inspector.open {
+  display: flex;
+}
+
+.sd-nav-tabs,
+.sd-map-toolbar,
+.sd-inspector-header {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.sd-map-toolbar {
+  flex-wrap: wrap;
+}
+
+.sd-inspector-header {
+  justify-content: space-between;
+}
+
+.sd-inspector-title {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sd-nav-body,
+.sd-inspector-body {
+  padding: 8px;
+  overflow: auto;
+}
+
+.sd-splitter {
+  cursor: col-resize;
+  background: transparent;
+}
+
+.sd-splitter:hover,
+.sd-splitter[data-dragging='true'] {
+  background: var(--vscode-focusBorder, #4daafc);
+}
+
+.sd-center {
+  padding-bottom: 4px;
+}
+
+.sd-map-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 8px 8px;
+  overflow: auto;
+}
+
+/* Data lists */
+
+.sd-node-list,
+.sd-limitations,
+.sd-inspector-body ul {
+  margin: 4px 0;
+  padding-left: 16px;
+}
+
+.sd-node-item {
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 1px 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sd-node-item:hover {
+  text-decoration: underline;
+}
+
+.sd-badge {
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  border: 1px solid var(--vscode-descriptionForeground, #a0a0a0);
+  border-radius: 2px;
+}
+
+.sd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sd-table th,
+.sd-table td {
+  padding: 3px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sd-empty,
+.sd-note,
+.sd-facts dt,
+.sd-facts dd {
+  font-size: 12px;
+}
+
+.sd-empty {
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+}
+
+.sd-empty-error {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.sd-empty-stale {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.sd-note {
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+}
+
+.sd-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 8ch) minmax(0, 1fr);
+  gap: 2px 8px;
+  margin: 0;
+}
+
+.sd-facts dt {
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+}
+
+.sd-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Error bar and footer */
+
+.sd-error-bar {
+  padding: 6px 10px;
+  color: var(--vscode-inputValidation-errorForeground, #f48771);
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  border-bottom: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+.sd-footer {
+  padding: 4px 10px;
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+  border-top: 1px solid var(--vscode-panel-border, #3c3c3c);
+  font-size: 11px;
+}
+
+/* Narrow widths: the navigation pane collapses to a menu row, the inspector becomes
+   a drawer, and the toolbar wraps instead of clipping. */
+
+@media (max-width: 1199px) {
+  .sd-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sd-nav {
+    max-height: 30vh;
+    border-right: none;
+    border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+  }
+
+  .sd-splitter {
+    display: none;
+  }
+
+  .sd-inspector.open {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 90vw);
+    z-index: 20;
+    background: var(--vscode-editorWidget-background, #252526);
+    box-shadow: -2px 0 8px rgb(0 0 0 / 40%);
+  }
+}
+
+@media (max-width: 899px) {
+  .sd-topbar-meta {
+    display: none;
+  }
+
+  .sd-map-toolbar {
+    gap: 6px;
+  }
+
+  .sd-search {
+    flex: 1 1 100%;
+  }
+}

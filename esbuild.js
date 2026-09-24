@@ -90,13 +90,28 @@ const graphPrototypeConfig = {
   }
 };
 
+// New viewer shell (SD-015), driven by media/app/entry.ts.
+/** @type {import('esbuild').BuildOptions} */
+const shellConfig = {
+  ...common,
+  entryPoints: ['media/app/entry.ts'],
+  outfile: 'media/app/entry.js',
+  platform: 'browser',
+  format: 'iife',
+  target: 'es2020',
+  define: {
+    'process.env.NODE_ENV': production ? '"production"' : '"development"'
+  }
+};
+
 async function main() {
   if (watch) {
     const contexts = await Promise.all([
       esbuild.context(extensionConfig),
       esbuild.context(viewerConfig),
       esbuild.context(layoutWorkerConfig),
-      esbuild.context(graphPrototypeConfig)
+      esbuild.context(graphPrototypeConfig),
+      esbuild.context(shellConfig)
     ]);
     await Promise.all(contexts.map((c) => c.watch()));
     console.log('[esbuild] watching for changes...');
@@ -105,7 +120,8 @@ async function main() {
       esbuild.build(extensionConfig),
       esbuild.build(viewerConfig),
       esbuild.build(layoutWorkerConfig),
-      esbuild.build(graphPrototypeConfig)
+      esbuild.build(graphPrototypeConfig),
+      esbuild.build(shellConfig)
     ]);
     console.log('[esbuild] build complete');
   }

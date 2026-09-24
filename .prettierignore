@@ -5,6 +5,8 @@ media/graph/prototype.js
 media/graph/prototype.js.map
 media/workers/elkLayout.worker.js
 media/workers/elkLayout.worker.js.map
+media/app/entry.js
+media/app/entry.js.map
 analyzer/bin
 analyzer/obj
 analyzer/.build
