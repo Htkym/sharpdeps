@@ -453,12 +453,26 @@
       "id": "SD-013",
       "title": "結果ストア・ページング・bridge",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "in_progress",
+      "owner": "agent",
+      "changedFiles": [
+        "src/analyzer/reportStore.ts",
+        "src/analyzer/reportBridge.ts",
+        "src/analyzer/reportStore.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-013.md"
+      ],
+      "tests": [
+        "npm test — 12ファイル / 115テスト成功（SD-013で+22）",
+        "登録検証（契約違反・件数不一致・境界外ファイル名・サイズ超過・欠損）",
+        "検索/根拠のカーソルページングと改竄カーソルの拒否",
+        "UTF-8（日本語・絵文字）の行単位読み出しと安全な失敗",
+        "unknown/stale analysisIdの区別と最古の破棄",
+        "bridgeの未知type/不正ID拒否・未実装の明示",
+        "QuickHost実出力の登録と根拠ページング"
+      ],
+      "evidence": ["docs/implementation/v0.1.0/tasks/SD-013.md"],
+      "blockers": [],
+      "notes": "TS側（store/bridge/検証/ページング）はdone。C#側のSemantic writerが未完のため in_progress とする。writerはSD-011の生成文書対応と合わせて実装する。"
     },
     {
       "id": "SD-014",
