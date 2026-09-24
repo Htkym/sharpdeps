@@ -29,12 +29,16 @@ public sealed class DeclarationDependencyCollector
     private readonly Dictionary<string, string> _contentHashByDocument;
     private readonly HashSet<string> _seen;
 
+    private readonly ExternalTypeRegistry? _externalTypes;
+
     public DeclarationDependencyCollector(
         SymbolResolver resolver,
         SourceDocumentRegistry documents,
         SymbolIndex index,
-        string profileHash)
+        string profileHash,
+        ExternalTypeRegistry? externalTypes = null)
     {
+        _externalTypes = externalTypes;
         _resolver = resolver;
         _documents = documents;
         _index = index;
@@ -525,6 +529,11 @@ public sealed class DeclarationDependencyCollector
         if (targetTypeId is null)
         {
             return;
+        }
+
+        if (!_typesById.ContainsKey(targetTypeId))
+        {
+            _externalTypes?.Register(targetTypeId, target.ToDisplayString());
         }
 
         var tree = syntax.SyntaxTree;

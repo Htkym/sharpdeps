@@ -38,12 +38,16 @@ public sealed class OperationDependencyCollector
     private readonly string _profileHash;
     private readonly HashSet<string> _seen = [];
 
+    private readonly ExternalTypeRegistry? _externalTypes;
+
     public OperationDependencyCollector(
         SymbolResolver resolver,
         SourceDocumentRegistry documents,
         SymbolIndex index,
-        string profileHash)
+        string profileHash,
+        ExternalTypeRegistry? externalTypes = null)
     {
+        _externalTypes = externalTypes;
         _resolver = resolver;
         _documents = documents;
         _typesById = index.Types.ToDictionary(type => type.Id, StringComparer.Ordinal);
@@ -414,6 +418,11 @@ public sealed class OperationDependencyCollector
         if (targetTypeId is null)
         {
             return;
+        }
+
+        if (!_typesById.ContainsKey(targetTypeId))
+        {
+            _externalTypes?.Register(targetTypeId, target.ToDisplayString());
         }
 
         var tree = syntax.SyntaxTree;

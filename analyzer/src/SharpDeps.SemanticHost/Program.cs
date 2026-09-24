@@ -10,14 +10,19 @@
 //   exit 1 : unexpected error
 
 using System.Text.Json;
+using SharpDeps.Analysis.Contracts;
+using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn;
+using SharpDeps.Analysis.Roslyn.Evidence;
+using SharpDeps.Analysis.Roslyn.Symbols;
 
 var parsed = CliOptions.Parse(args);
 if (parsed is null)
 {
     Console.Error.WriteLine(
         "usage: sharpdeps-semantic-host --solution <path> --output <path> "
-        + "[--configuration Debug] [--platform <platform>] [--timeout <seconds>]");
+        + "[--configuration Debug] [--platform <platform>] [--timeout <seconds>] "
+        + "[--analysis-id <an_...>] [--watch-stdin]");
     return 2;
 }
 
@@ -26,6 +31,7 @@ var targetPath = parsed.Solution;
 var configuration = parsed.Configuration;
 var platform = parsed.Platform;
 var timeoutSeconds = parsed.TimeoutSeconds;
+var analysisId = parsed.AnalysisId;
 
 var json = new JsonSerializerOptions
 {
@@ -61,14 +67,69 @@ try
     // The semantic v2 report writer is not implemented yet (SD-011/SD-013); the probe
     // report is written as-is and the caller's analysis id is not applied here.
     var report = load.Report;
-    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+    var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath))!;
+    Directory.CreateDirectory(outputDirectory);
+
+    // v2 model: symbol index + declaration/usage evidence -> AnalysisSnapshot.
+    var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(targetPath)) ?? ".";
+    var documents = new SourceDocumentRegistry(
+        Identity.WorkspaceRootId(solutionDirectory),
+        solutionDirectory);
+    var inputs = report.Variants
+        .Where(variant => variant.LoadState == "loaded" && load.Compilations.ContainsKey(variant.VariantKey))
+        .Select(variant => new SymbolIndexInput(
+            variant.VariantKey,
+            variant.ProjectName,
+            load.Compilations[variant.VariantKey]))
+        .ToArray();
+
+    var symbolIndex = SymbolIndexBuilder.Build(documents, inputs, cancellation.Token);
+    var resolver = new SymbolResolver(load.DefiningVariantByAssembly);
+    var externalTypes = new ExternalTypeRegistry();
+    var declarations = new DeclarationDependencyCollector(
+        resolver,
+        documents,
+        symbolIndex,
+        report.Profile.ProfileHash,
+        externalTypes);
+    var operations = new OperationDependencyCollector(
+        resolver,
+        documents,
+        symbolIndex,
+        report.Profile.ProfileHash,
+        externalTypes);
+    var operationResult = operations.Collect(inputs, cancellation.Token);
+    var evidence = declarations.Collect(inputs, cancellation.Token)
+        .Concat(operationResult.Evidence)
+        .ToArray();
+
+    var semantic = SemanticReportWriter.Write(
+        load,
+        symbolIndex,
+        evidence,
+        operationResult.Stats,
+        DateTimeOffset.UtcNow,
+        targetPath,
+        analysisId,
+        externalTypes.Entries);
+
     await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, json), CancellationToken.None);
+    await File.WriteAllTextAsync(
+        Path.Combine(outputDirectory, "report-v2.json"),
+        JsonSerializer.Serialize(semantic.Snapshot, CodeMapJsonContext.Default.AnalysisSnapshot),
+        CancellationToken.None);
+    await File.WriteAllTextAsync(
+        Path.Combine(outputDirectory, "evidence.ndjson"),
+        semantic.EvidenceNdjson,
+        CancellationToken.None);
 
     Progress(
         "write",
         new
         {
             variants = report.Variants.Count,
+            relations = semantic.Snapshot.Relations.Count,
+            types = semantic.Snapshot.Types.Count,
             references = report.References.Count,
             unresolved = report.Coverage.Unresolved,
             diagnostics = report.Diagnostics.Count,
@@ -122,7 +183,8 @@ internal sealed record CliArguments(
     string Output,
     string Configuration,
     string? Platform,
-    int TimeoutSeconds);
+    int TimeoutSeconds,
+    string? AnalysisId);
 
 internal static class CliOptions
 {
@@ -134,6 +196,7 @@ internal static class CliOptions
         var configuration = "Debug";
         string? platform = null;
         var timeout = 180;
+        string? analysisId = null;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -152,6 +215,9 @@ internal static class CliOptions
                     platform = args[++index];
                     break;
 
+                case "--analysis-id" when index + 1 < args.Length:
+                    analysisId = args[++index];
+                    break;
                 case "--timeout" when index + 1 < args.Length:
                     if (!int.TryParse(args[++index], out timeout) || timeout < 1)
                     {
@@ -169,6 +235,6 @@ internal static class CliOptions
             return null;
         }
 
-        return new CliArguments(solution, output, configuration, platform, timeout);
+        return new CliArguments(solution, output, configuration, platform, timeout, analysisId);
     }
 }

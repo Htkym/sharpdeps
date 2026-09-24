@@ -412,12 +412,25 @@
       "id": "SD-011",
       "title": "生成コード・証拠位置の保持",
       "milestone": "M2",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "in_progress",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticReportWriter.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/ExternalTypeRegistry.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/DeclarationDependencyCollector.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/OperationDependencyCollector.cs",
+        "analyzer/src/SharpDeps.SemanticHost/Program.cs",
+        "tests/analyzer/semanticV2.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-011.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 101テスト成功",
+        "tests/analyzer/semanticV2.test.ts — 実出力の契約検証・参照整合・Store登録と根拠ページング",
+        "npm test — 16ファイル / 146テスト成功"
+      ],
+      "evidence": ["docs/implementation/v0.1.0/tasks/SD-011.md"],
+      "blockers": [],
+      "notes": "完了：証拠位置、sourceManifest、外部型の材料化、v2契約検証。未完：生成文書の保持とsnapshot反映、read-only provider、生成失敗のcompleteness反映。"
     },
     {
       "id": "SD-012",
@@ -453,7 +466,7 @@
       "id": "SD-013",
       "title": "結果ストア・ページング・bridge",
       "milestone": "M1",
-      "status": "in_progress",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
         "src/analyzer/reportStore.ts",
@@ -472,7 +485,7 @@
       ],
       "evidence": ["docs/implementation/v0.1.0/tasks/SD-013.md"],
       "blockers": [],
-      "notes": "TS側（store/bridge/検証/ページング）はdone。C#側のSemantic writerが未完のため in_progress とする。writerはSD-011の生成文書対応と合わせて実装する。"
+      "notes": "Semantic reporter（SemanticReportWriter）を追加し、実出力がv2契約を満たしてStoreへ登録・ページングできることを検証済み。生成文書の取り込みはSD-011の残り。"
     },
     {
       "id": "SD-014",

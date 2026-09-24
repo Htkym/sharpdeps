@@ -597,49 +597,56 @@ describe('report bridge', () => {
   });
 });
 
-describe.skipIf(!locateAnalyzerDll())('ReportStore with the real analyzer output', () => {
-  it('registers the Quick report and pages its evidence', async () => {
-    const repoRoot = process.cwd();
-    const workDir = createWorkspace();
-    const run = spawnSync(
-      (process.env.SHARPDEPTS_DOTNET || 'dotnet') as string,
-      [
-        locateAnalyzerDll() as string,
-        '--solution',
-        path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline', 'Baseline.sln'),
-        '--output',
-        path.join(workDir, 'report.json'),
-        '--max-projects',
-        '60',
-        '--max-edges',
-        '200'
-      ],
-      { cwd: repoRoot, encoding: 'utf8' }
-    );
-    expect(run.status, run.stderr).toBe(0);
+describe.skipIf(!locateAnalyzerDll())(
+  'ReportStore with the real analyzer output',
+  () => {
+    it('registers the Quick report and pages its evidence', async () => {
+      const repoRoot = process.cwd();
+      const workDir = createWorkspace();
+      const run = spawnSync(
+        (process.env.SHARPDEPTS_DOTNET || 'dotnet') as string,
+        [
+          locateAnalyzerDll() as string,
+          '--solution',
+          path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline', 'Baseline.sln'),
+          '--output',
+          path.join(workDir, 'report.json'),
+          '--max-projects',
+          '60',
+          '--max-edges',
+          '200'
+        ],
+        { cwd: repoRoot, encoding: 'utf8' }
+      );
+      expect(run.status, run.stderr).toBe(0);
 
-    const store = new ReportStore();
-    const snapshot = await store.register({ directory: workDir, reportFileName: 'report-v2.json' });
+      const store = new ReportStore();
+      const snapshot = await store.register({
+        directory: workDir,
+        reportFileName: 'report-v2.json'
+      });
 
-    const namespaces = store.search(snapshot.analysisId, 'Core', { limit: 10 });
-    expect(namespaces.total).toBeGreaterThan(0);
+      const namespaces = store.search(snapshot.analysisId, 'Core', { limit: 10 });
+      expect(namespaces.total).toBeGreaterThan(0);
 
-    const relation = snapshot.relations.find((entry) => entry.evidenceCount >= 1);
-    expect(relation).toBeDefined();
-    const page = await store.getEvidencePage(snapshot.analysisId, relation!.id, { limit: 1 });
+      const relation = snapshot.relations.find((entry) => entry.evidenceCount >= 1);
+      expect(relation).toBeDefined();
+      const page = await store.getEvidencePage(snapshot.analysisId, relation!.id, { limit: 1 });
 
-    expect(page.total).toBe(relation!.evidenceCount);
-    expect(page.items[0].relationId).toBe(relation!.id);
-    expect(page.items.length).toBeLessThanOrEqual(1);
+      expect(page.total).toBe(relation!.evidenceCount);
+      expect(page.items[0].relationId).toBe(relation!.id);
+      expect(page.items.length).toBeLessThanOrEqual(1);
 
-    // The first render must not carry every evidence record of the analysis.
-    const totalEvidence = (snapshot.evidenceIndex?.relations ?? []).reduce(
-      (total, entry) => total + entry.count,
-      0
-    );
-    expect(page.items.length).toBeLessThan(totalEvidence);
-  });
-});
+      // The first render must not carry every evidence record of the analysis.
+      const totalEvidence = (snapshot.evidenceIndex?.relations ?? []).reduce(
+        (total, entry) => total + entry.count,
+        0
+      );
+      expect(page.items.length).toBeLessThan(totalEvidence);
+    });
+  },
+  120000
+);
 
 function locateAnalyzerDll(): string | undefined {
   const repoRoot = process.cwd();

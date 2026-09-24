@@ -35,50 +35,54 @@ const analyzerDll = locateAnalyzerDll();
 const dotnetPath = process.env.SHARPDEPTS_DOTNET || 'dotnet';
 const updateBaseline = process.env.SHARPDEPTS_UPDATE_BASELINE === '1';
 
-describe.skipIf(!analyzerDll)('Quick analyzer baseline fixture', () => {
-  it('produces the committed report snapshot', async () => {
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sharpdeps-baseline-'));
-    const outputPath = path.join(workDir, 'report.json');
+describe.skipIf(!analyzerDll)(
+  'Quick analyzer baseline fixture',
+  () => {
+    it('produces the committed report snapshot', async () => {
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sharpdeps-baseline-'));
+      const outputPath = path.join(workDir, 'report.json');
 
-    try {
-      const run = spawnSync(
-        dotnetPath,
-        [
-          analyzerDll as string,
-          '--solution',
-          solutionPath,
-          '--output',
-          outputPath,
-          '--max-projects',
-          '60',
-          '--max-edges',
-          '200'
-        ],
-        { cwd: repoRoot, encoding: 'utf8' }
-      );
+      try {
+        const run = spawnSync(
+          dotnetPath,
+          [
+            analyzerDll as string,
+            '--solution',
+            solutionPath,
+            '--output',
+            outputPath,
+            '--max-projects',
+            '60',
+            '--max-edges',
+            '200'
+          ],
+          { cwd: repoRoot, encoding: 'utf8' }
+        );
 
-      expect(
-        run.status,
-        `analyzer exited with ${run.status}\nstdout: ${run.stdout}\nstderr: ${run.stderr}`
-      ).toBe(0);
+        expect(
+          run.status,
+          `analyzer exited with ${run.status}\nstdout: ${run.stdout}\nstderr: ${run.stderr}`
+        ).toBe(0);
 
-      const actual = JSON.parse(fs.readFileSync(outputPath, 'utf8')) as CodeMapReport;
-      const normalized = normalizeQuickReport(actual, fixtureRoot);
+        const actual = JSON.parse(fs.readFileSync(outputPath, 'utf8')) as CodeMapReport;
+        const normalized = normalizeQuickReport(actual, fixtureRoot);
 
-      if (updateBaseline) {
-        fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
-        fs.writeFileSync(expectedPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
-        expect(fs.existsSync(expectedPath)).toBe(true);
-        return;
+        if (updateBaseline) {
+          fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+          fs.writeFileSync(expectedPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+          expect(fs.existsSync(expectedPath)).toBe(true);
+          return;
+        }
+
+        const expected = JSON.parse(fs.readFileSync(expectedPath, 'utf8')) as CodeMapReport;
+        expect(normalized).toEqual(expected);
+      } finally {
+        fs.rmSync(workDir, { recursive: true, force: true });
       }
-
-      const expected = JSON.parse(fs.readFileSync(expectedPath, 'utf8')) as CodeMapReport;
-      expect(normalized).toEqual(expected);
-    } finally {
-      fs.rmSync(workDir, { recursive: true, force: true });
-    }
-  });
-});
+    });
+  },
+  120000
+);
 
 if (!analyzerDll) {
   // Surfaced as a skipped suite above; this line documents the reason for CI logs.

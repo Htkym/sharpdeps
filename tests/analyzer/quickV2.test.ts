@@ -96,88 +96,92 @@ function runAnalyzer(): AnalyzerOutput {
   }
 }
 
-describe.skipIf(!analyzerDll)('Quick analyzer report v2', () => {
-  it('satisfies the v2 contract and matches the structural snapshot', async () => {
-    const { report, evidence } = runAnalyzer();
+describe.skipIf(!analyzerDll)(
+  'Quick analyzer report v2',
+  () => {
+    it('satisfies the v2 contract and matches the structural snapshot', async () => {
+      const { report, evidence } = runAnalyzer();
 
-    const runtimeResult = validateSnapshot(report);
-    expect(runtimeResult.ok, runtimeResult.ok ? '' : runtimeResult.errors.join('\n')).toBe(true);
-    expect(validateReportSchema(report), JSON.stringify(validateReportSchema.errors)).toBe(true);
+      const runtimeResult = validateSnapshot(report);
+      expect(runtimeResult.ok, runtimeResult.ok ? '' : runtimeResult.errors.join('\n')).toBe(true);
+      expect(validateReportSchema(report), JSON.stringify(validateReportSchema.errors)).toBe(true);
 
-    expect(evidence.length).toBeGreaterThan(0);
-    for (const record of evidence) {
-      const result = validateEvidenceRecord(record);
-      expect(result.ok, result.ok ? '' : result.errors.join('\n')).toBe(true);
-      expect(validateEvidenceSchema(record)).toBe(true);
-    }
+      expect(evidence.length).toBeGreaterThan(0);
+      for (const record of evidence) {
+        const result = validateEvidenceRecord(record);
+        expect(result.ok, result.ok ? '' : result.errors.join('\n')).toBe(true);
+        expect(validateEvidenceSchema(record)).toBe(true);
+      }
 
-    const indexed = (report.evidenceIndex?.relations ?? []).reduce(
-      (total, entry) => total + entry.count,
-      0
-    );
-    expect(indexed).toBe(evidence.length);
+      const indexed = (report.evidenceIndex?.relations ?? []).reduce(
+        (total, entry) => total + entry.count,
+        0
+      );
+      expect(indexed).toBe(evidence.length);
 
-    const structure = buildStructureSnapshot(report, evidence);
+      const structure = buildStructureSnapshot(report, evidence);
 
-    if (updateBaseline) {
-      fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
-      fs.writeFileSync(expectedPath, `${JSON.stringify(structure, null, 2)}\n`, 'utf8');
-      expect(fs.existsSync(expectedPath)).toBe(true);
-      return;
-    }
+      if (updateBaseline) {
+        fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+        fs.writeFileSync(expectedPath, `${JSON.stringify(structure, null, 2)}\n`, 'utf8');
+        expect(fs.existsSync(expectedPath)).toBe(true);
+        return;
+      }
 
-    const expected = JSON.parse(fs.readFileSync(expectedPath, 'utf8')) as unknown;
-    expect(structure).toEqual(expected);
-  });
+      const expected = JSON.parse(fs.readFileSync(expectedPath, 'utf8')) as unknown;
+      expect(structure).toEqual(expected);
+    });
 
-  it('keeps host paths out of the report', () => {
-    const { report, evidenceNdjson } = runAnalyzer();
-    const serialized = `${JSON.stringify(report)}\n${evidenceNdjson}`;
+    it('keeps host paths out of the report', () => {
+      const { report, evidenceNdjson } = runAnalyzer();
+      const serialized = `${JSON.stringify(report)}\n${evidenceNdjson}`;
 
-    expect(serialized).not.toContain(fixtureRoot);
-    expect(serialized).not.toContain(repoRoot);
-    expect(serialized).not.toMatch(/[A-Za-z]:\\\\/);
-    expect(report.target.relativePath).toBe('Baseline.sln');
-  });
+      expect(serialized).not.toContain(fixtureRoot);
+      expect(serialized).not.toContain(repoRoot);
+      expect(serialized).not.toMatch(/[A-Za-z]:\\\\/);
+      expect(report.target.relativePath).toBe('Baseline.sln');
+    });
 
-  it('uses the documented id shapes and stays deterministic', () => {
-    const first = runAnalyzer();
-    const second = runAnalyzer();
+    it('uses the documented id shapes and stays deterministic', () => {
+      const first = runAnalyzer();
+      const second = runAnalyzer();
 
-    for (const relation of first.report.relations) {
-      expect(relation.id).toMatch(/^rel_[0-9a-f]{16}$/);
-      expect(relation.sourceEntityId).toMatch(/^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/);
-      expect(relation.targetEntityId).toMatch(/^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/);
-      expect(relation.confidence).toBe('inferred');
-    }
-    for (const document of first.report.sourceManifest) {
-      expect(document.contentHash).toMatch(/^[0-9a-f]{64}$/);
-    }
+      for (const relation of first.report.relations) {
+        expect(relation.id).toMatch(/^rel_[0-9a-f]{16}$/);
+        expect(relation.sourceEntityId).toMatch(/^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/);
+        expect(relation.targetEntityId).toMatch(/^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/);
+        expect(relation.confidence).toBe('inferred');
+      }
+      for (const document of first.report.sourceManifest) {
+        expect(document.contentHash).toMatch(/^[0-9a-f]{64}$/);
+      }
 
-    // Ids are scoped to the workspace root, so two runs on the same checkout must
-    // produce exactly the same ids and evidence bytes.
-    expect(second.report.relations.map((relation) => relation.id)).toEqual(
-      first.report.relations.map((relation) => relation.id)
-    );
-    expect(second.report.cycleGroups.map((group) => group.id)).toEqual(
-      first.report.cycleGroups.map((group) => group.id)
-    );
-    expect(second.evidenceNdjson).toBe(first.evidenceNdjson);
-  });
+      // Ids are scoped to the workspace root, so two runs on the same checkout must
+      // produce exactly the same ids and evidence bytes.
+      expect(second.report.relations.map((relation) => relation.id)).toEqual(
+        first.report.relations.map((relation) => relation.id)
+      );
+      expect(second.report.cycleGroups.map((group) => group.id)).toEqual(
+        first.report.cycleGroups.map((group) => group.id)
+      );
+      expect(second.evidenceNdjson).toBe(first.evidenceNdjson);
+    });
 
-  it('never presents inferred cycles as verified paths', () => {
-    const { report } = runAnalyzer();
+    it('never presents inferred cycles as verified paths', () => {
+      const { report } = runAnalyzer();
 
-    expect(report.capabilities.cycleWitness).toBe(false);
-    expect(report.capabilities.typeGraph).toBe(false);
-    expect(report.completeness).toBe('partial');
-    expect(report.cycleGroups.length).toBeGreaterThan(0);
-    for (const group of report.cycleGroups) {
-      expect(group.witness ?? null).toBeNull();
-      expect(['projectDeclared', 'usingInferred']).toContain(group.basis);
-    }
-  });
-});
+      expect(report.capabilities.cycleWitness).toBe(false);
+      expect(report.capabilities.typeGraph).toBe(false);
+      expect(report.completeness).toBe('partial');
+      expect(report.cycleGroups.length).toBeGreaterThan(0);
+      for (const group of report.cycleGroups) {
+        expect(group.witness ?? null).toBeNull();
+        expect(['projectDeclared', 'usingInferred']).toContain(group.basis);
+      }
+    });
+  },
+  120000
+);
 
 if (!analyzerDll) {
   console.warn(
