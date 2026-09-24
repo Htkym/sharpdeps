@@ -129,7 +129,11 @@ public static class SymbolIndexBuilder
 
             foreach (var typeSymbol in EnumerateTypes(input.Compilation.Assembly.GlobalNamespace))
             {
-                if (typeSymbol.IsImplicitlyDeclared || IsCompilerGenerated(typeSymbol))
+                // Implicit types stay out of the model, except the synthesized entry
+                // point that owns top-level statements: those statements are real code
+                // and must not disappear from the graph.
+                if ((typeSymbol.IsImplicitlyDeclared || IsCompilerGenerated(typeSymbol))
+                    && !IsTopLevelEntryPoint(typeSymbol))
                 {
                     continue;
                 }
@@ -339,6 +343,11 @@ public static class SymbolIndexBuilder
     private static bool ContainsTopLevelStatements(Compilation compilation)
         => compilation.SyntaxTrees.Any(tree =>
             tree.GetRoot().ChildNodes().Any(node => node is Microsoft.CodeAnalysis.CSharp.Syntax.GlobalStatementSyntax));
+
+    /// <summary>The compiler-generated type that owns top-level statements.</summary>
+    internal static bool IsTopLevelEntryPoint(INamedTypeSymbol type)
+        => type.GetMembers().OfType<IMethodSymbol>()
+            .Any(method => method.Name is "<Main>$" && method.IsImplicitlyDeclared);
 
     private static bool IsCompilerGenerated(INamedTypeSymbol type)
         => type.Name.StartsWith('<')

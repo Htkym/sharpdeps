@@ -384,12 +384,29 @@
       "id": "SD-010",
       "title": "Operationによる実使用依存抽出",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/OperationDependencyCollector.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Symbols/SymbolIndex.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/OperationDependencyCollectorTests.cs",
+        "docs/analysis-semantics.md",
+        "docs/implementation/v0.1.0/tasks/SD-010.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 91テスト成功",
+        "unused usingで参照集合が変化しない",
+        "完全修飾参照（usingなし）のconstructs",
+        "new式が1件（typeUseを重ねない）",
+        "呼出し・メンバーアクセス・typeUse・compileTimeNameの採取",
+        "エイリアス・拡張メソッド・target-typed new・インターフェース呼出し",
+        "dynamic/未解決を根拠にしない",
+        "トップレベル文→合成エントリーポイント、ラムダ/ローカル関数→包含メンバー",
+        "golden fixtureのcalls/memberAccess"
+      ],
+      "evidence": ["docs/analysis-semantics.md", "docs/implementation/v0.1.0/tasks/SD-010.md"],
+      "blockers": [],
+      "notes": "集計・件数はSD-012、v2出力はSD-013。既定引数値と関数ポインタは未採取として記録。"
     },
     {
       "id": "SD-011",
