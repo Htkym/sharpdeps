@@ -595,12 +595,22 @@
       "id": "SD-017",
       "title": "本番SVGグラフ・選択・camera",
       "milestone": "M1",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "in_progress",
+      "owner": "agent",
+      "changedFiles": [
+        "src/analyzer/graphProjection.ts",
+        "src/view/protocolV2.ts",
+        "tests/webview/graphProjection.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-017.md"
+      ],
+      "tests": [
+        "npm test — 17ファイル / 150テスト成功（SD-017前半で+4）",
+        "粒度集計（型→名前空間/プロジェクト、自己辺の除外、箇所数の合算、根拠IDの保持）",
+        "スコープ（近傍・方向・深さ）と表示予算"
+      ],
+      "evidence": ["docs/implementation/v0.1.0/tasks/SD-017.md"],
+      "blockers": [],
+      "notes": "完了：粒度集計と射影モジュール。未完：SVG描画への接続、codeMapPanelの新UI切替、ReportStore.getProjectionの集計射影への接続。"
     },
     {
       "id": "SD-018",

@@ -74,6 +74,11 @@ export interface ProjectionEdge {
   inCycle: boolean;
   generatedEvidenceCount?: number;
   publicSurfaceEvidenceCount?: number;
+  /**
+   * Relations this edge is derived from. A coarse-granularity edge aggregates several
+   * type-level relations, and each can be paged for evidence.
+   */
+  underlyingRelationIds?: string[];
 }
 
 export interface Projection {
