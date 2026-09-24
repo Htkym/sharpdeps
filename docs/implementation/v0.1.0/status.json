@@ -423,12 +423,31 @@
       "id": "SD-012",
       "title": "集計・局所探索・閉路抽出",
       "milestone": "M2",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "done",
+      "owner": "agent",
+      "changedFiles": [
+        "analyzer/src/SharpDeps.Analysis.Core/Graph/AnalysisGraph.cs",
+        "analyzer/src/SharpDeps.Analysis.Core/Graph/GraphCycles.cs",
+        "analyzer/src/SharpDeps.Analysis.Core/Graph/GraphIndex.cs",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/CollectedEvidence.cs",
+        "analyzer/tests/SharpDeps.Analysis.Tests/AnalysisGraphTests.cs",
+        "docs/implementation/v0.1.0/tasks/SD-012.md"
+      ],
+      "tests": [
+        "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 101テスト成功",
+        "集計と件数（関係数と箇所数の分離）",
+        "親の内部関係を上位粒度の辺にしない",
+        "自己参照（型粒度では保持、循環にはしない）",
+        "witnessの全辺が関係集合に存在し閉路を成す",
+        "basis分離（混ぜた偽の循環を作らない）",
+        "循環グラフでの探索停止と打ち切り報告",
+        "射影の優先ID・省略件数、射影後もSCC不変",
+        "実コレクターからの縦断（相互呼出し→循環→witness→探索）",
+        "fixtureの名前空間/プロジェクト集計"
+      ],
+      "evidence": ["docs/analysis-semantics.md", "docs/implementation/v0.1.0/tasks/SD-012.md"],
+      "blockers": [],
+      "notes": "Quickのマッパー統合とUI接続はSD-013/SD-016/018。"
     },
     {
       "id": "SD-013",

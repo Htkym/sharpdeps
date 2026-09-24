@@ -9,6 +9,7 @@
 namespace SharpDeps.Analysis.Roslyn.Evidence;
 
 using Microsoft.CodeAnalysis;
+using SharpDeps.Analysis.Core.Graph;
 using SharpDeps.Analysis.Contracts;
 
 public sealed record CollectedEvidence(
@@ -29,12 +30,32 @@ public sealed record CollectedEvidence(
     /// <summary>Same project variant: aggregation must not turn this into a project self-edge.</summary>
     public bool SameProjectVariant
         => SourceVariantId == TargetVariantId;
+
+    /// <summary>
+    /// Projects the collected record onto the shared graph model (SD-012). One
+    /// evidence record is one occurrence; the aggregator groups them into relations.
+    /// </summary>
+    public GraphEvidence ToGraphEvidence(string basis = "symbolResolved")
+        => new(
+            Basis: basis,
+            SourceEntityId: Evidence.SourceEntityId,
+            TargetEntityId: Evidence.TargetEntityId,
+            Kind: Evidence.Kind,
+            SourceMemberId: Evidence.SourceMemberId,
+            DocumentId: Evidence.DocumentId,
+            PublicSurface: Evidence.PublicSurface,
+            Generated: string.Equals(Evidence.Origin, "generatedSource", StringComparison.Ordinal),
+            Confidence: Evidence.Confidence,
+            SourceNamespaceId: SourceNamespaceId,
+            TargetNamespaceId: TargetNamespaceId,
+            SourceProjectId: SourceVariantId,
+            TargetProjectId: TargetVariantId,
+            TargetIsExternal: TargetIsExternal);
 }
 
 /// <summary>Effective accessibility, including the containing types.</summary>
 public static class PublicSurface
-{
-    public static bool IsExternallyVisible(ISymbol? symbol)
+{    public static bool IsExternallyVisible(ISymbol? symbol)
     {
         for (var current = symbol; current is not null; current = current.ContainingType)
         {
