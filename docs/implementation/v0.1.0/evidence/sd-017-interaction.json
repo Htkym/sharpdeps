@@ -1,0 +1,47 @@
+{
+  "task": "SD-017",
+  "checkedAt": "2026-09-24",
+  "page": "tests/webview/fixtures/shell-fixture.html (strict CSP, served by scripts/serve-webview.mjs)",
+  "program": "playwright-cli run-code (Chromium, 1280x720)",
+  "fixture": {
+    "nodes": 5,
+    "edges": 5,
+    "notes": "Japanese label, long generic name, cycle pair, bidirectional pair, generated + inferred evidence, external node"
+  },
+  "measured": {
+    "renderedNodes": 5,
+    "renderedEdges": 5,
+    "edgeArrows": 5,
+    "layoutRequests": 1,
+    "workers": 1,
+    "edgeClasses": [
+      "rel_0000000000000001|edge edge-symbolResolved in-cycle generated",
+      "rel_0000000000000002|edge edge-symbolResolved in-cycle",
+      "rel_0000000000000003|edge edge-inferred generated",
+      "rel_0000000000000004|edge edge-symbolResolved",
+      "rel_0000000000000005|edge edge-projectDeclared"
+    ],
+    "cameraViewBoxAfterFit": "0 0 800 140",
+    "edgeClick": {
+      "selectedEdge": "rel_0000000000000003",
+      "evidenceRequests": [
+        {
+          "relationId": "rel_0000000000000003",
+          "analysisId": "an_0000000000000001"
+        }
+      ]
+    },
+    "noRelayoutOnSelection": true,
+    "cameraStableAcrossSelectionAndInspector": true,
+    "consoleMessages": []
+  },
+  "conclusions": {
+    "edgeClickMatchesEvidence": "The clicked edge id is the relation id sent in getEvidencePage.",
+    "selectionDoesNotRerunElk": "layoutRequests stayed 1 through edge selection, node selection, and inspector open/close.",
+    "readability": "Cycle (in-cycle), generated evidence (generated), inferred basis (edge-inferred), direction arrows, Japanese and long labels all render; screenshot sd-017-graph.png."
+  },
+  "notVerifiedHere": [
+    "Wheel zoom was verified in SD-004; the synthetic ctrl+wheel dispatch in this run did not change the viewBox, so zoom itself was not re-verified.",
+    "The VS Code webview panel path (bridge + store + CSP nonce) needs the SD-028 end-to-end run."
+  ]
+}

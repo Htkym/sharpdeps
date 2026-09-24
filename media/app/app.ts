@@ -7,6 +7,7 @@
 
 import { buildShell, type NavTab, type ShellElements } from '../components/shell';
 import { renderEntityTable } from '../components/entityTable';
+import { createGraphView, type GraphView } from '../components/graphView';
 import type { SortState } from './query';
 import { buildNavigationTree, renderNavigationTree } from '../components/navigationPane';
 import {
@@ -32,6 +33,11 @@ export interface ViewerAppOptions {
   onHostAction?: (action: ViewAction) => void;
   /** Called after each render so the host can mirror derived values (pane widths). */
   onStateChanged?: (state: ViewState) => void;
+  /**
+   * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
+   * table stays available and the graph shows why it is missing.
+   */
+  workerUrl?: string;
 }
 
 export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {}): ViewerApp {
@@ -39,6 +45,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   let activeTab: NavTab = 'structure';
   /** Tree expansion is a transient UI detail; it is not part of the persisted state. */
   const expandedTreeNodes = new Set<string>();
+  const graphRuntime: { view?: GraphView; error?: string } = {};
 
   const elements = buildShell(root, {
     onAnalyze: () =>
@@ -128,7 +135,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     renderTopBar(elements, state);
     renderError(elements, state);
     renderNavigation(elements, state, activeTab, { expanded: expandedTreeNodes, rerender: render });
-    renderCenter(elements, state);
+    renderCenter(elements, state, graphView, () => graphRuntime.error);
     renderInspector(elements, state);
     elements.footer.textContent = selectStatusFooter(state);
     options.onStateChanged?.(state);
@@ -137,6 +144,45 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   const app: ViewerApp = { dispatch, getState: () => state, elements };
   render();
   return app;
+
+  /** The SVG graph view, created on first use and kept for the app's lifetime. */
+  function graphView(): GraphView | undefined {
+    if (graphRuntime.view) {
+      return graphRuntime.view;
+    }
+
+    if (!options.workerUrl) {
+      graphRuntime.error = 'The layout worker is not available in this build.';
+      return undefined;
+    }
+
+    graphRuntime.view = createGraphView({
+      workerUrl: options.workerUrl,
+      onSelect: (selection) => {
+        const entityId = selection.nodeIds[0];
+        const relationId = selection.edgeIds[0];
+        if (relationId) {
+          // The edge id is the representative relation, so evidence can be paged.
+          dispatch({ type: 'relationSelected', relationId });
+        } else if (entityId) {
+          dispatch({ type: 'entitySelected', entityId });
+        }
+      },
+      onActivate: (selection) => {
+        const entityId = selection.nodeIds[0];
+        if (entityId) {
+          dispatch({ type: 'entitySelected', entityId });
+          dispatch({ type: 'inspectorToggled' });
+        }
+      },
+      onError: (message) => {
+        graphRuntime.error = message;
+        render();
+      }
+    });
+    elements.graphHost.append(graphRuntime.view.element);
+    return graphRuntime.view;
+  }
 }
 
 function renderTopBar(elements: ShellElements, state: ViewState): void {
@@ -378,7 +424,12 @@ function renderAnalysisTab(elements: ShellElements, state: ViewState): void {
   }
 }
 
-function renderCenter(elements: ShellElements, state: ViewState): void {
+function renderCenter(
+  elements: ShellElements,
+  state: ViewState,
+  graphView: () => GraphView | undefined,
+  graphError: () => string | undefined
+): void {
   elements.granularitySelect.value = state.granularity;
   for (const kindButton of Array.from(
     elements.viewKindButtons.querySelectorAll<HTMLButtonElement>('button')
@@ -393,12 +444,14 @@ function renderCenter(elements: ShellElements, state: ViewState): void {
   }
 
   const visible = selectVisibleData(state);
-  elements.mapHost.replaceChildren();
+  elements.mapContent.replaceChildren();
   elements.mapHost.dataset.viewKind = state.viewKind;
 
   if (!state.projection) {
     elements.mapSummary.textContent = '';
-    elements.mapHost.append(emptyStateMessage(state));
+    elements.graphHost.hidden = true;
+    elements.mapContent.hidden = false;
+    elements.mapContent.append(emptyStateMessage(state));
     return;
   }
 
@@ -417,6 +470,8 @@ function renderCenter(elements: ShellElements, state: ViewState): void {
   elements.mapSummary.textContent = summaryParts.join(' · ');
 
   if (visible.isFilteredEmpty) {
+    elements.graphHost.hidden = true;
+    elements.mapContent.hidden = false;
     const empty = message('No match for the current search or filters.', 'sd-empty');
     const reset = document.createElement('button');
     reset.type = 'button';
@@ -427,7 +482,7 @@ function renderCenter(elements: ShellElements, state: ViewState): void {
       elements.mapHost.dispatchEvent(new CustomEvent('sd-reset-filters', { bubbles: true }));
     });
     empty.append(reset);
-    elements.mapHost.append(empty);
+    elements.mapContent.append(empty);
     return;
   }
 
@@ -456,13 +511,57 @@ function renderCenter(elements: ShellElements, state: ViewState): void {
       )
   };
 
+  let graphShown = false;
   if (state.viewKind === 'graph') {
-    elements.mapHost.append(
-      message('The interactive SVG graph replaces this table in SD-017.', 'sd-note')
-    );
+    const view = graphView();
+    if (view) {
+      graphShown = true;
+      elements.graphHost.hidden = false;
+      elements.mapContent.hidden = true;
+      // The graph shows exactly what the search and filters select, so the summary and
+      // the picture can never disagree; the host's totals stay in the summary.
+      view.update(
+        { ...state.projection, nodes: visible.nodes, edges: visible.edges },
+        scopeLabel(state)
+      );
+      // Selection and inspector state never change the layout; only the highlight.
+      view.setSelection(
+        state.selection.entityId ? [state.selection.entityId] : [],
+        state.selection.relationId ? [state.selection.relationId] : []
+      );
+    } else {
+      const reason = graphError() ?? 'the layout worker is unavailable';
+      elements.mapContent.append(
+        message(
+          `The interactive graph is unavailable (${reason}). The table below shows the same analysis.`,
+          'sd-note'
+        )
+      );
+    }
   }
 
-  renderEntityTable(elements.mapHost, tableOptions);
+  elements.graphHost.hidden = !graphShown;
+  elements.mapContent.hidden = graphShown;
+
+  // The table is rendered even while the graph is shown, so switching views never
+  // depends on the graph having succeeded.
+  renderEntityTable(elements.mapContent, tableOptions);
+}
+
+/** Human-readable scope label for the graph header/exports. */
+function scopeLabel(state: ViewState): string {
+  const scope = state.scope;
+  if (!scope || scope.kind === 'root') {
+    return `all ${state.granularity}`;
+  }
+
+  const origin = state.projection?.nodes.find((node) => node.id === scope.id);
+  const name = origin?.name ?? scope.id ?? '';
+  const depth =
+    scope.kind === 'dependencies' || scope.kind === 'dependents'
+      ? ` (depth ${scope.depth ?? 1})`
+      : '';
+  return `${scope.kind}: ${name}${depth}`;
 }
 
 function emptyStateMessage(state: ViewState): HTMLElement {

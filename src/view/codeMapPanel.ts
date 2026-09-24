@@ -1,14 +1,26 @@
+// SharpDeps map panel (SD-017: the v2 shell and the report bridge).
+//
+// The panel owns the webview and the message plumbing; everything that needs the
+// analysis result is answered by the report bridge, and everything that needs extension
+// work (starting or stopping an analysis) is delegated to the host callbacks. A message
+// type the bridge does not implement is answered with an explicit error, never ignored.
+
 import * as vscode from 'vscode';
+import type { ReportBridge } from '../analyzer/reportBridge';
+import type { ReportStore } from '../analyzer/reportStore';
 import { getWebviewHtml } from './html';
-import { saveExport } from '../export/exportGraph';
-import type {
-  CodeMapViewModel,
-  ExportFormat,
-  Granularity,
-  HostToWebviewMessage,
-  ThemeKind,
-  WebviewToHostMessage
-} from './protocol';
+import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
+import type { Capabilities, HostToWebviewMessage } from './protocolV2';
+
+export interface CodeMapPanelHost {
+  store: ReportStore;
+  bridge: ReportBridge;
+  output: vscode.OutputChannel;
+  /** Starts an analysis for the current target in the requested mode. */
+  onAnalyze: (mode: 'quick' | 'semantic') => void;
+  /** Stops the running analysis. */
+  onCancel: () => void;
+}
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
 export class CodeMapPanel {
@@ -19,12 +31,7 @@ export class CodeMapPanel {
     return CodeMapPanel.current;
   }
 
-  private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
-  private model: CodeMapViewModel | undefined;
-  private ready = false;
-
-  static show(extensionUri: vscode.Uri, output: vscode.OutputChannel): CodeMapPanel {
+  static show(extensionUri: vscode.Uri, host: CodeMapPanelHost): CodeMapPanel {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (CodeMapPanel.current) {
       CodeMapPanel.current.panel.reveal(column);
@@ -37,21 +44,26 @@ export class CodeMapPanel {
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
     });
 
-    CodeMapPanel.current = new CodeMapPanel(panel, extensionUri, output);
+    CodeMapPanel.current = new CodeMapPanel(panel, extensionUri, host);
     return CodeMapPanel.current;
   }
+
+  private readonly panel: vscode.WebviewPanel;
+  private readonly disposables: vscode.Disposable[] = [];
+  private ready = false;
+  private pendingAnalysisId: string | undefined;
 
   private constructor(
     panel: vscode.WebviewPanel,
     extensionUri: vscode.Uri,
-    private readonly output: vscode.OutputChannel
+    private readonly host: CodeMapPanelHost
   ) {
     this.panel = panel;
     this.panel.webview.html = getWebviewHtml(this.panel.webview, extensionUri);
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
-      (message: WebviewToHostMessage) => this.onMessage(message),
+      (message: unknown) => this.onMessage(message),
       null,
       this.disposables
     );
@@ -60,77 +72,117 @@ export class CodeMapPanel {
       null,
       this.disposables
     );
-    vscode.window.onDidChangeActiveColorTheme(
-      () => this.post({ type: 'theme', theme: currentTheme() }),
-      null,
-      this.disposables
-    );
 
     setPanelActiveContext(this.panel.active);
   }
 
-  setModel(model: CodeMapViewModel): void {
-    this.model = model;
-    this.panel.title = model.solutionName ? `SharpDeps — ${model.solutionName}` : 'SharpDeps';
-    if (this.ready) {
-      this.post({ type: 'render', model, theme: currentTheme() });
+  /**
+   * Tells the panel which analysis is current. The webview asks for its own projection,
+   * so nothing is pushed that the view did not request.
+   */
+  notifyAnalysis(analysisId: string): void {
+    this.pendingAnalysisId = analysisId;
+    this.postAnalysisState(analysisId);
+  }
+
+  private onMessage(message: unknown): void {
+    const validation = validateWebviewMessage(message);
+    if (!validation.ok) {
+      this.post({
+        type: 'error',
+        code:
+          validation.code === 'unknownType' ? 'protocol.unknownType' : 'protocol.invalidMessage',
+        message: validation.errors.join('; ')
+      });
+      return;
     }
-  }
 
-  copyMermaid(): void {
-    this.post({ type: 'doCopyMermaid' });
-  }
-
-  export(format: ExportFormat): void {
-    this.post({ type: 'doExport', format });
-  }
-
-  setGranularity(granularity: Granularity): void {
-    this.post({ type: 'setGranularity', granularity });
-  }
-
-  private onMessage(message: WebviewToHostMessage): void {
-    switch (message.type) {
+    const request = validation.value;
+    switch (request.type) {
       case 'ready':
         this.ready = true;
-        if (this.model) {
-          this.post({ type: 'render', model: this.model, theme: currentTheme() });
+        void this.host.bridge
+          .handle({ type: 'ready', protocolVersion: PROTOCOL_VERSION })
+          .then((response) => this.post(response));
+        if (this.pendingAnalysisId) {
+          this.postAnalysisState(this.pendingAnalysisId);
         }
-        break;
-      case 'refresh':
-        void vscode.commands.executeCommand('sharpdeps.refresh');
-        break;
-      case 'copyMermaid':
-        void vscode.env.clipboard
-          .writeText(message.text)
-          .then(() =>
-            vscode.window.showInformationMessage('SharpDeps: Mermaid source copied to clipboard.')
-          );
-        break;
-      case 'copyForAgent':
-        void vscode.env.clipboard
-          .writeText(message.text)
-          .then(() =>
-            vscode.window.showInformationMessage(
-              'SharpDeps: Analysis summary and Coding Agent prompt copied to clipboard.'
-            )
-          );
-        break;
-      case 'export':
-        void saveExport(
-          message.format,
-          message.data,
-          message.granularity,
-          this.model?.solutionName ?? ''
+        return;
+      case 'analyze':
+        this.host.onAnalyze(request.mode);
+        return;
+      case 'cancelAnalysis':
+        this.host.onCancel();
+        return;
+      default:
+        // Everything else is answered from the store by the bridge; unimplemented host
+        // work comes back as an explicit error message.
+        void this.host.bridge.handle(request).then(
+          (response) => this.post(response),
+          (error: unknown) =>
+            this.post({
+              type: 'error',
+              code: 'bridge.failed',
+              message: error instanceof Error ? error.message : String(error)
+            })
         );
-        break;
-      case 'exportError':
-        void vscode.window.showErrorMessage(`SharpDeps: Export failed. ${message.message}`);
-        break;
-      case 'log':
-        this.output.appendLine(`[viewer:${message.level}] ${message.message}`);
-        break;
     }
+  }
+
+  private postAnalysisState(analysisId: string): void {
+    if (!this.ready) {
+      return;
+    }
+
+    try {
+      const report = this.host.store.getReport(analysisId);
+      this.post({
+        type: 'analysisComplete',
+        analysisId,
+        completeness:
+          report.completeness === 'completeWithinScope' ? 'completeWithinScope' : 'partial',
+        coverage: report.coverage,
+        mode: report.mode === 'semantic' ? 'semantic' : 'quick',
+        limitations: report.limitations
+      });
+    } catch (error) {
+      this.host.output.appendLine(
+        `The result of ${analysisId} is no longer available: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      this.post({
+        type: 'stale',
+        analysisId,
+        reason: 'unknown'
+      });
+    }
+  }
+
+  private capabilities(): Capabilities {
+    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
+    if (analysisId) {
+      try {
+        const report = this.host.store.getReport(analysisId);
+        return {
+          typeGraph: report.capabilities.typeGraph,
+          evidence: report.capabilities.evidence,
+          generatedDocuments: report.capabilities.generatedDocuments,
+          cycleWitness: report.capabilities.cycleWitness,
+          search: report.capabilities.search
+        };
+      } catch {
+        // Falls through to the conservative defaults below.
+      }
+    }
+
+    return {
+      typeGraph: true,
+      evidence: true,
+      generatedDocuments: false,
+      cycleWitness: true,
+      search: true
+    };
   }
 
   private post(message: HostToWebviewMessage): void {
@@ -149,11 +201,4 @@ export class CodeMapPanel {
 
 function setPanelActiveContext(active: boolean): void {
   void vscode.commands.executeCommand('setContext', 'sharpdeps.panelActive', active);
-}
-
-function currentTheme(): ThemeKind {
-  const kind = vscode.window.activeColorTheme.kind;
-  return kind === vscode.ColorThemeKind.Light || kind === vscode.ColorThemeKind.HighContrastLight
-    ? 'light'
-    : 'dark';
 }

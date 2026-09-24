@@ -118,6 +118,9 @@ describe('buildProjection', () => {
     // Two type relations aggregate into one namespace edge; occurrence counts add up.
     expect(namespaceEdge?.evidenceCount).toBe(3);
     expect(namespaceEdge?.kinds.sort()).toEqual(['calls', 'constructs']);
+    // The edge id is the representative relation (most evidence first), so selecting the
+    // edge yields a relation the store can page.
+    expect(namespaceEdge?.id).toBe('rel_1111111111111111');
     expect(namespaceEdge?.underlyingRelationIds).toHaveLength(2);
     // The relation inside Core is not an edge of the Core namespace.
     expect(namespaces.edges.some((edge) => edge.sourceId === edge.targetId)).toBe(false);

@@ -3,8 +3,12 @@ import * as vscode from 'vscode';
 /** Build the webview HTML with a strict, nonce-based Content Security Policy. */
 export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = createNonce();
-  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'viewer.js'));
-  const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'viewer.css'));
+  const scriptUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, 'media', 'app', 'entry.js')
+  );
+  const styleUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, 'media', 'styles', 'shell.css')
+  );
   // The layout worker is fetched by the webview and started from a Blob URL
   // (workers cannot be loaded directly from the extension resource URI).
   const workerUri = webview.asWebviewUri(

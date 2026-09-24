@@ -38,6 +38,10 @@ export interface ShellElements {
   viewKindButtons: HTMLElement;
   searchInput: HTMLInputElement;
   mapHost: HTMLElement;
+  /** Persistent host for the SVG graph; hidden outside the graph view. */
+  graphHost: HTMLElement;
+  /** Per-render area for the table and state messages. */
+  mapContent: HTMLElement;
   mapSummary: HTMLElement;
   statusText: HTMLElement;
   errorBar: HTMLElement;
@@ -152,6 +156,12 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   const mapSummary = element('p', 'sd-map-summary', '');
   const mapHost = element('div', 'sd-map-host');
   mapHost.tabIndex = 0;
+  // The graph owns a persistent host so a redraw never destroys the SVG (and therefore
+  // never resets zoom); the table is rendered into a separate area each time.
+  const graphHost = element('div', 'sd-graph-host');
+  graphHost.hidden = true;
+  const mapContent = element('div', 'sd-map-content');
+  mapHost.append(graphHost, mapContent);
   center.append(mapToolbar, mapSummary, mapHost);
   mapToolbar.append(granularitySelect, viewKindButtons, searchInput);
 
@@ -214,6 +224,8 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     viewKindButtons,
     searchInput,
     mapHost,
+    graphHost,
+    mapContent,
     mapSummary,
     statusText,
     errorBar,

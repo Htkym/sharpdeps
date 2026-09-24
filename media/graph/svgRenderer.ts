@@ -288,7 +288,10 @@ function createEdgeElement(edge: GraphEdgeInput): SVGGElement {
 }
 
 function edgeClass(edge: GraphEdgeInput, state: RenderState): string {
-  const classes = ['edge', `edge-${edge.basis}`];
+  const classes = ['edge'];
+  // The styling class follows what the edge means, not the exact basis value: inferred
+  // bases share the dashed style, the resolved basis stays solid.
+  classes.push(edge.basis === 'usingInferred' ? 'edge-inferred' : `edge-${edge.basis}`);
   if (edge.inCycle) {
     classes.push('in-cycle');
   }

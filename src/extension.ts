@@ -6,8 +6,8 @@ import { ensureDotnet, DotnetNotAvailableError } from './runtime/ensureDotnet';
 import { AnalyzerError, locateAnalyzer } from './analyzer/runAnalyzer';
 import { AnalysisController, type AnalysisStage } from './analyzer/analysisController';
 import { ReportStore, ReportStoreError } from './analyzer/reportStore';
+import { createReportBridge } from './analyzer/reportBridge';
 import type { CodeMapReport } from './analyzer/types';
-import { buildViewModel } from './view/viewModel';
 import { CodeMapPanel } from './view/codeMapPanel';
 import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
 import { createGeneratedDocumentProvider } from './generatedDocuments/generatedDocumentProvider';
@@ -26,6 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('SharpDeps');
   const diagnostics = new CycleDiagnostics(output);
   const store = new ReportStore();
+  const bridge = createReportBridge(store, { maxProjectionNodes: 300, maxProjectionEdges: 1000 });
   context.subscriptions.push(output, diagnostics);
 
   // Generated code is opened read-only from the analysis result (SD-011): the provider
@@ -97,7 +98,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   let lastTarget: vscode.Uri | undefined;
 
-  async function runAndShow(requestedTarget?: vscode.Uri): Promise<void> {
+  async function runAndShow(
+    requestedTarget?: vscode.Uri,
+    requestedMode?: 'quick' | 'semantic'
+  ): Promise<void> {
     const target = await resolveAnalysisTarget(requestedTarget);
     if (!target) {
       return;
@@ -115,7 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const dotnet = await ensureDotnet(context);
           const analyzer = locateAnalyzer(context);
           const config = vscode.workspace.getConfiguration('sharpdeps');
-          const mode = config.get<'quick' | 'semantic'>('analysisMode', 'quick');
+          const mode = requestedMode ?? config.get<'quick' | 'semantic'>('analysisMode', 'quick');
           if (mode === 'semantic') {
             // Semantic analysis is wired in SD-007/SD-015; Quick stays the default and
             // the mode is never silently substituted.
@@ -162,17 +166,23 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          // The v1 report stays the panel's render input until the UI migration
-          // (SD-015); the v2 result is already registered for the new UI.
+          // The v1 report still feeds the cycle diagnostics; the panel itself renders
+          // the v2 shell from the result store.
           const v1Path = path.join(path.dirname(outcome.reportPath), 'report.json');
           const report = JSON.parse(await fs.promises.readFile(v1Path, 'utf8')) as CodeMapReport;
 
-          const panel = CodeMapPanel.show(context.extensionUri, output);
-          panel.setModel(buildViewModel(report));
+          const panel = CodeMapPanel.show(context.extensionUri, {
+            store,
+            bridge,
+            output,
+            onAnalyze: (mode) => void runAndShow(lastTarget, mode),
+            onCancel: () => controller.cancel('user')
+          });
           diagnostics.update(report);
 
           const analysisId = store.currentAnalysisId;
           if (analysisId) {
+            panel.notifyAnalysis(analysisId);
             const stored = store.getReport(analysisId);
             progress.report({
               message: `Analyzed ${stored.coverage.analyzed} project(s) · ${stored.relations.length} relation(s)`
@@ -194,14 +204,26 @@ export function activate(context: vscode.ExtensionContext): void {
       runAndShow(uri)
     ),
     vscode.commands.registerCommand('sharpdeps.refresh', () => runAndShow(lastTarget)),
-    vscode.commands.registerCommand('sharpdeps.copyMermaid', () =>
-      CodeMapPanel.currentPanel?.copyMermaid()
+    vscode.commands.registerCommand(
+      'sharpdeps.copyMermaid',
+      () =>
+        void vscode.window.showInformationMessage(
+          'SharpDeps: the Mermaid view is superseded by the interactive map; context export arrives with SD-022.'
+        )
     ),
-    vscode.commands.registerCommand('sharpdeps.exportSvg', () =>
-      CodeMapPanel.currentPanel?.export('svg')
+    vscode.commands.registerCommand(
+      'sharpdeps.exportSvg',
+      () =>
+        void vscode.window.showInformationMessage(
+          'SharpDeps: SVG export from the map arrives with SD-022. The graph can be inspected in the panel meanwhile.'
+        )
     ),
-    vscode.commands.registerCommand('sharpdeps.exportPng', () =>
-      CodeMapPanel.currentPanel?.export('png')
+    vscode.commands.registerCommand(
+      'sharpdeps.exportPng',
+      () =>
+        void vscode.window.showInformationMessage(
+          'SharpDeps: PNG export from the map arrives with SD-022.'
+        )
     )
   );
 }

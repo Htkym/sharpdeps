@@ -607,22 +607,44 @@
       "id": "SD-017",
       "title": "本番SVGグラフ・選択・camera",
       "milestone": "M1",
-      "status": "in_progress",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
+        "media/graph/projectionAdapter.ts",
+        "media/components/graphView.ts",
+        "media/app/hostMessages.ts",
+        "media/app/entry.ts",
+        "media/app/app.ts",
+        "media/components/shell.ts",
+        "media/graph/selection.ts",
+        "media/graph/svgRenderer.ts",
+        "media/styles/shell.css",
         "src/analyzer/graphProjection.ts",
-        "src/view/protocolV2.ts",
+        "src/analyzer/reportStore.ts",
+        "src/analyzer/reportBridge.ts",
+        "src/view/codeMapPanel.ts",
+        "src/view/html.ts",
+        "src/extension.ts",
+        "tests/webview/hostMessages.test.ts",
+        "tests/webview/projectionAdapter.test.ts",
         "tests/webview/graphProjection.test.ts",
-        "docs/implementation/v0.1.0/tasks/SD-017.md"
+        "tests/webview/fixtures/shell-fixture.html",
+        "docs/implementation/v0.1.0/tasks/SD-017.md",
+        "docs/implementation/v0.1.0/evidence/sd-017-graph.png",
+        "docs/implementation/v0.1.0/evidence/sd-017-interaction.json"
       ],
       "tests": [
-        "npm test — 17ファイル / 150テスト成功（SD-017前半で+4）",
-        "粒度集計（型→名前空間/プロジェクト、自己辺の除外、箇所数の合算、根拠IDの保持）",
-        "スコープ（近傍・方向・深さ）と表示予算"
+        "npm test — 20ファイル / 161テスト成功",
+        "ブラウザ検証（Playwright, shell-fixture）: 5ノード/5辺/矢印5、ELK要求1、辺クリック→根拠のrelationId一致、選択・Inspectorで再レイアウトなし・viewBox不変",
+        "npm run compile / lint / format:check / build — 成功"
       ],
-      "evidence": ["docs/implementation/v0.1.0/tasks/SD-017.md"],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-017.md",
+        "docs/implementation/v0.1.0/evidence/sd-017-interaction.json",
+        "docs/implementation/v0.1.0/evidence/sd-017-graph.png"
+      ],
       "blockers": [],
-      "notes": "完了：粒度集計と射影モジュール。未完：SVG描画への接続、codeMapPanelの新UI切替、ReportStore.getProjectionの集計射影への接続。"
+      "notes": "完了：集計射影の接続、SVGグラフ、選択→根拠、camera維持、worker世代管理、パネルのv2切替。未検証：VS Code実機（SD-028）、pinch、エクスポート（SD-022）。"
     },
     {
       "id": "SD-018",

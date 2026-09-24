@@ -18,6 +18,8 @@ export interface SelectionController {
   get(): GraphSelection;
   selectNode(id: string, additive?: boolean): void;
   selectEdge(id: string, additive?: boolean): void;
+  /** Replaces the whole selection in one change event. */
+  set(nodeIds: Iterable<string>, edgeIds: Iterable<string>): void;
   clear(): void;
   onChange(listener: (selection: GraphSelection) => void): () => void;
   /** Opens (activates) the current selection; used by Enter and double click. */
@@ -60,6 +62,23 @@ export function createSelectionController(
         edgeIds.add(id);
       }
       selection = { nodeIds: additive ? new Set(selection.nodeIds) : new Set<string>(), edgeIds };
+      emit();
+    },
+    set(nodeIds, edgeIds) {
+      const next: GraphSelection = {
+        nodeIds: new Set(nodeIds),
+        edgeIds: new Set(edgeIds)
+      };
+      if (
+        next.nodeIds.size === selection.nodeIds.size &&
+        next.edgeIds.size === selection.edgeIds.size &&
+        [...next.nodeIds].every((id) => selection.nodeIds.has(id)) &&
+        [...next.edgeIds].every((id) => selection.edgeIds.has(id))
+      ) {
+        return;
+      }
+
+      selection = next;
       emit();
     },
     clear() {

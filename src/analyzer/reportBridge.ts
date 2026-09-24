@@ -165,15 +165,16 @@ export function createReportBridge(
               isExternal: node.isExternal
             })),
             edges: projection.edges.map((edge) => ({
-              id: edge.relation.id,
+              id: edge.id,
               sourceId: edge.sourceId,
               targetId: edge.targetId,
-              basis: edge.relation.basis,
-              kinds: edge.relation.kinds,
-              evidenceCount: edge.relation.evidenceCount,
-              inCycle: projection.nodes.some((node) => node.id === edge.sourceId && node.inCycle),
-              generatedEvidenceCount: edge.relation.generatedEvidenceCount,
-              publicSurfaceEvidenceCount: edge.relation.publicSurfaceEvidenceCount
+              basis: edge.basis,
+              kinds: edge.kinds,
+              evidenceCount: edge.evidenceCount,
+              inCycle: edge.inCycle,
+              generatedEvidenceCount: edge.generatedEvidenceCount,
+              publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount,
+              underlyingRelationIds: edge.underlyingRelationIds
             })),
             totalNodeCount: projection.totalNodeCount,
             totalEdgeCount: projection.totalEdgeCount,

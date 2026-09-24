@@ -25,6 +25,7 @@ import type {
   SourceDocument
 } from './reportV2';
 import { validateEvidenceRecord, validateSnapshot } from './reportV2Validation';
+import { buildProjection, type ProjectionRequest } from './graphProjection';
 
 export const DEFAULT_PAGE_SIZE = 100;
 export const MAX_PAGE_SIZE = 500;
@@ -77,6 +78,28 @@ export interface SearchPage {
   total: number;
   items: EntityRecord[];
   nextCursor?: string;
+}
+
+/** Display projection served to the graph view; ids are real analysis ids. */
+export interface ProjectionView {
+  nodes: EntityRecord[];
+  edges: Array<{
+    /** Representative relation id: the one an evidence request should use. */
+    id: string;
+    sourceId: string;
+    targetId: string;
+    basis: string;
+    kinds: string[];
+    /** Occurrences across all relations this edge aggregates. */
+    evidenceCount: number;
+    inCycle: boolean;
+    generatedEvidenceCount: number;
+    publicSurfaceEvidenceCount: number;
+    underlyingRelationIds: string[];
+  }>;
+  totalNodeCount: number;
+  totalEdgeCount: number;
+  truncated: boolean;
 }
 
 export interface EvidencePage {
@@ -299,9 +322,11 @@ export class ReportStore {
   }
 
   /**
-   * Minimal display projection for the graph view: a scope, a granularity, and a
-   * display budget. Totals always describe the whole analysis, so the UI can say what
-   * was omitted. Filters and the full scope model arrive with SD-016/SD-017.
+   * Display projection for the graph view: scope, granularity, and a display budget.
+   * Relations are stored at the finest granularity, so a coarser view aggregates them
+   * (see graphProjection.ts). Each edge keeps the relations it is derived from, and its
+   * id is the representative relation, so an edge selection can always be paged for
+   * evidence. Totals describe the whole scope, never the display budget.
    */
   getProjection(
     analysisId: string,
@@ -311,91 +336,38 @@ export class ReportStore {
       maxNodes?: number;
       maxEdges?: number;
     } = {}
-  ): {
-    nodes: EntityRecord[];
-    edges: Array<{
-      relation: AnalysisRelation;
-      sourceId: string;
-      targetId: string;
-    }>;
-    totalNodeCount: number;
-    totalEdgeCount: number;
-    truncated: boolean;
-  } {
+  ): ProjectionView {
     const analysis = this.requireAnalysis(analysisId);
-    const granularity = options.granularity ?? 'type';
-    const maxNodes = Math.max(1, options.maxNodes ?? 300);
-    const maxEdges = Math.max(1, options.maxEdges ?? 1000);
-    const scope = options.scope ?? { kind: 'root' };
-    const depth = Math.min(Math.max(scope.depth ?? 1, 1), 3);
+    const projection = buildProjection(analysis.report, {
+      scope: options.scope as ProjectionRequest['scope'],
+      granularity: options.granularity,
+      maxNodes: options.maxNodes,
+      maxEdges: options.maxEdges
+    });
 
-    const candidates = analysis.entities.filter((entity) => entity.granularity === granularity);
-    let selected = candidates;
-    let relations = analysis.report.relations;
-
-    if (scope.kind !== 'root' && scope.id) {
-      const originId = scope.id;
-      const visited = new Set<string>([originId]);
-      let frontier = [originId];
-      const localRelations: AnalysisRelation[] = [];
-
-      for (let level = 0; level < depth && frontier.length > 0; level++) {
-        const next: string[] = [];
-        for (const current of frontier) {
-          for (const relation of analysis.relationsByEntity.get(current) ?? []) {
-            const neighbour =
-              relation.sourceEntityId === current
-                ? relation.targetEntityId
-                : relation.sourceEntityId;
-            localRelations.push(relation);
-            if (visited.has(neighbour)) {
-              continue;
-            }
-
-            visited.add(neighbour);
-            next.push(neighbour);
-          }
-        }
-
-        frontier = next;
-      }
-
-      selected = candidates.filter((entity) => visited.has(entity.id));
-      const localKeys = new Set(localRelations.map((relation) => relation.id));
-      relations = analysis.report.relations.filter((relation) => localKeys.has(relation.id));
-    }
-
-    const degree = new Map<string, number>();
-    for (const relation of relations) {
-      degree.set(relation.sourceEntityId, (degree.get(relation.sourceEntityId) ?? 0) + 1);
-      degree.set(relation.targetEntityId, (degree.get(relation.targetEntityId) ?? 0) + 1);
-    }
-
-    const ordered = [...selected].sort(
-      (left, right) =>
-        (degree.get(right.id) ?? 0) - (degree.get(left.id) ?? 0) ||
-        left.fullName.localeCompare(right.fullName)
-    );
-    const nodes = ordered.slice(0, maxNodes);
-    const nodeIds = new Set(nodes.map((node) => node.id));
-
-    const edges = relations
-      .filter(
-        (relation) => nodeIds.has(relation.sourceEntityId) && nodeIds.has(relation.targetEntityId)
-      )
-      .slice(0, maxEdges)
-      .map((relation) => ({
-        relation,
-        sourceId: relation.sourceEntityId,
-        targetId: relation.targetEntityId
-      }));
+    // Nodes come back as summaries from the snapshot; the store serves its own records
+    // so the caller sees the same full names and cycle flags as everywhere else.
+    const nodes = projection.nodes
+      .map((node) => analysis.entityById.get(node.id))
+      .filter((node): node is EntityRecord => node !== undefined);
 
     return {
       nodes,
-      edges,
-      totalNodeCount: selected.length,
-      totalEdgeCount: relations.length,
-      truncated: nodes.length < selected.length || edges.length < relations.length
+      edges: projection.edges.map((edge) => ({
+        id: edge.id,
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        basis: edge.basis,
+        kinds: edge.kinds,
+        evidenceCount: edge.evidenceCount,
+        inCycle: edge.inCycle,
+        generatedEvidenceCount: edge.generatedEvidenceCount ?? 0,
+        publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount ?? 0,
+        underlyingRelationIds: edge.underlyingRelationIds ?? [edge.id]
+      })),
+      totalNodeCount: projection.totalNodeCount,
+      totalEdgeCount: projection.totalEdgeCount,
+      truncated: projection.truncated
     };
   }
 

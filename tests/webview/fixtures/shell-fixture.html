@@ -19,10 +19,16 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="../../../media/styles/shell.css" rel="stylesheet" />
+    <link href="../../../media/styles/graph.css" rel="stylesheet" />
     <title>SharpDeps shell fixture (SD-015)</title>
   </head>
   <body>
-    <div id="app" data-fixture="true"></div>
+    <!-- The worker is fetched and started from a Blob URL, exactly as in the panel. -->
+    <div
+      id="app"
+      data-fixture="true"
+      data-worker-uri="../../../media/workers/elkLayout.worker.js"
+    ></div>
     <script nonce="shell-fixture" src="../../../media/app/entry.js"></script>
   </body>
 </html>

@@ -258,6 +258,29 @@ body {
   min-height: 0;
   padding: 0 8px 8px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The graph owns a persistent host (the SVG is never recreated by a redraw), while the
+   table lives in a separate area so switching views never depends on the graph. */
+.sd-graph-host {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sd-graph-host[hidden],
+.sd-map-content[hidden] {
+  display: none;
+}
+
+.sd-graph {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* Data lists */

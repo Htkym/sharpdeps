@@ -15,18 +15,13 @@ export interface ProjectionRequest {
   maxEdges?: number;
 }
 
-export interface ProjectionResult extends Projection {
-  /** Relations that an aggregated edge is derived from, keyed by projection edge id. */
-  underlyingByEdgeId: Record<string, string[]>;
-}
-
 const DEFAULT_MAX_NODES = 300;
 const DEFAULT_MAX_EDGES = 1000;
 
 export function buildProjection(
   snapshot: AnalysisSnapshot,
   request: ProjectionRequest = {}
-): ProjectionResult {
+): Projection {
   const granularity = request.granularity ?? 'type';
   const maxNodes = Math.max(1, request.maxNodes ?? DEFAULT_MAX_NODES);
   const maxEdges = Math.max(1, request.maxEdges ?? DEFAULT_MAX_EDGES);
@@ -106,12 +101,6 @@ export function buildProjection(
     .filter((edge) => selectedIds.has(edge.sourceId) && selectedIds.has(edge.targetId))
     .slice(0, maxEdges);
 
-  const underlyingByEdgeId: Record<string, string[]> = {};
-  for (const edge of edges) {
-    underlyingByEdgeId[edge.id] =
-      aggregated.get(edge.id)?.relations.map((relation) => relation.id) ?? [];
-  }
-
   return {
     scope,
     granularity,
@@ -119,8 +108,7 @@ export function buildProjection(
     edges,
     totalNodeCount: scopedNodes.length,
     totalEdgeCount: scopedEdges.length,
-    truncated: selected.length < scopedNodes.length || edges.length < scopedEdges.length,
-    underlyingByEdgeId
+    truncated: selected.length < scopedNodes.length || edges.length < scopedEdges.length
   };
 }
 
@@ -128,32 +116,34 @@ function toEdge(
   entry: { sourceId: string; targetId: string; relations: AnalysisRelation[] },
   cyclePairs: ReadonlySet<string>
 ): ProjectionEdge {
-  const kinds = [...new Set(entry.relations.flatMap((relation) => relation.kinds))].sort();
-  const evidenceCount = entry.relations.reduce(
-    (total, relation) => total + relation.evidenceCount,
-    0
+  // The representative relation is the one with the most evidence; its id becomes the
+  // edge id, so selecting an edge always yields a relation the store can page for
+  // evidence. Ties break on the id to stay deterministic.
+  const ordered = [...entry.relations].sort(
+    (left, right) => right.evidenceCount - left.evidenceCount || left.id.localeCompare(right.id)
   );
-  const id = `edge:${entry.sourceId}:${entry.targetId}`;
+  const representative = ordered[0];
+  const kinds = [...new Set(ordered.flatMap((relation) => relation.kinds))].sort();
 
   return {
-    id,
+    id: representative.id,
     sourceId: entry.sourceId,
     targetId: entry.targetId,
-    basis: entry.relations[0].basis,
+    basis: representative.basis,
     kinds,
-    evidenceCount,
+    evidenceCount: ordered.reduce((total, relation) => total + relation.evidenceCount, 0),
     // An aggregated edge is "in cycle" when both ends belong to the same cycle group;
     // the per-relation detail stays reachable through underlyingRelationIds.
     inCycle: cyclePairs.has(`${entry.sourceId}\u001f${entry.targetId}`),
-    generatedEvidenceCount: entry.relations.reduce(
+    generatedEvidenceCount: ordered.reduce(
       (total, relation) => total + relation.generatedEvidenceCount,
       0
     ),
-    publicSurfaceEvidenceCount: entry.relations.reduce(
+    publicSurfaceEvidenceCount: ordered.reduce(
       (total, relation) => total + relation.publicSurfaceEvidenceCount,
       0
     ),
-    underlyingRelationIds: entry.relations.map((relation) => relation.id)
+    underlyingRelationIds: ordered.map((relation) => relation.id)
   };
 }
 
