@@ -1,8 +1,8 @@
 {
-  "checkedAt": "2026-09-27T08:26:44.603Z",
+  "checkedAt": "2026-09-27T10:40:04.867Z",
   "vsix": "sharpdeps-check.vsix",
-  "bytes": 16889539,
-  "sha256": "22793c37daec272eca6fbacd2ea7c4ca401a86853752a8c3f299c3597890457b",
+  "bytes": 16810738,
+  "sha256": "fdc4e68308fc610b1ad9bafc8f11625fda607c52d75e1f7205455b63a3597258",
   "packagedEntries": 163,
   "required": [
     {

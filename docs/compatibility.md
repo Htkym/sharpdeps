@@ -56,7 +56,7 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
 | MSBuild未登録でのロード | `InvalidOperationException` で拒否 | 実装 |
 | 対象が存在しない | `FileNotFoundException` | 統合テスト `FailsCleanlyForAMissingTarget` |
 
-## 未確認の項目
+## 制約と追加検証の範囲
 
 | 項目 | 状態 |
 |---|---|
@@ -64,7 +64,7 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
 | Quickの初期化失敗がSemanticへ波及しないこと | プロセス分離の設計で担保するが、実機の失敗注入は未実施（SD-014） |
 | 旧式.NET Framework（`packages.config`・非SDKスタイル） | **未検証**。対応表へ追加しない |
 | VB / F# / C++ の意味解析 | 対象外。Quickの既存表示のみ |
-| Linux / macOS | Linux の runtime-only コンテナでは Quick の 6 projects / 7 namespaces / 15 relations が Windows と一致。macOS は未実施。詳細は SD-030 の completion.md |
+| Linux / macOS | Ubuntu CI と macOS 26.6.2 arm64（SDK 10.0.401）で C# 103件と Quick/Semantic golden・契約を確認。Linux runtime-only Quick も確認済み。macOS の VS Code UI は未検証。[最終記録](implementation/v0.1.0/evidence/sd-030-remote-verification.json) |
 | マルチTFMで `TargetFrameworks` に同一TFMが重複する場合 | 未実施 |
 | NuGet自動restore | 実装しない（初期値OFF）。assets不足は診断のみ |
 

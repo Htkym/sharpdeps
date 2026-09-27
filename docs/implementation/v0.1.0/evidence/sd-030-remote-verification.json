@@ -1,0 +1,61 @@
+{
+  "checkedAt": "2026-09-27T10:44:02.945624+00:00",
+  "decision": "go",
+  "published": false,
+  "productCommit": "c0902fadaf40acc053568cfef4b7ef4e858d7150",
+  "ciRun": "https://github.com/Htkym/sharpdeps/actions/runs/36313107236",
+  "checks": {
+    "ubuntu": {
+      "image": "ubuntu-24.04",
+      "csharpTests": 103,
+      "typescriptTests": 231,
+      "browserTests": 6,
+      "developmentE2E": 21,
+      "installedVsixE2E": 22,
+      "compile": "pass",
+      "lint": "pass",
+      "format": "pass",
+      "vsixContent": "pass"
+    },
+    "macos": {
+      "os": "26.6.2",
+      "build": "25G83",
+      "rid": "osx-arm64",
+      "sdk": "10.0.401",
+      "runtime": "10.0.12",
+      "msbuild": "18.9.11+e34a38d2a",
+      "csharpTests": 103,
+      "analyzerContractTests": 14
+    },
+    "windows": {
+      "installedCiVsixE2E": 22,
+      "vscode": "1.139.1",
+      "profile": ".local/e2e-ci-c0902fa"
+    }
+  },
+  "vsix": {
+    "vsix": "sharpdeps-check.vsix",
+    "bytes": 16810738,
+    "sha256": "fdc4e68308fc610b1ad9bafc8f11625fda607c52d75e1f7205455b63a3597258",
+    "packagedEntries": 163
+  },
+  "evidence": [
+    "sd-027-e2e-linux-ci.json",
+    "sd-027-e2e-vsix-linux-ci.json",
+    "sd-027-e2e-vsix.json",
+    "sd-028-browser-linux-ci.json",
+    "sd-029-vsix.json"
+  ],
+  "ciFailuresFixed": [
+    "Prepare source-generator fixture output and select explicit TFM; normalize test paths for POSIX.",
+    "Recognize POSIX failed-project diagnostic paths; normalize Windows report paths on any host.",
+    "Compare golden semantic objects independent of dictionary insertion order and normalize only platform-dependent lookup keys.",
+    "Terminate the owned POSIX process group and await termination even after the parent exits; cover SIGTERM-resistant children.",
+    "Update only changed SVG selection attributes; keep performance runs isolated and retain raw timings."
+  ],
+  "scopeLimits": [
+    "macOS verification covers analyzer hosts and contracts, not the VS Code UI.",
+    "Legacy non-SDK .NET Framework projects and non-C# semantic analysis are outside the verified support matrix."
+  ],
+  "unresolvedReleaseBlockers": []
+}

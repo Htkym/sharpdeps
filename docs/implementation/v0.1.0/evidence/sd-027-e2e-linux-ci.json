@@ -1,16 +1,11 @@
 {
-  "checkedAt": "2026-09-27T10:42:53.834Z",
+  "checkedAt": "2026-09-27T10:40:33.111Z",
   "vscodeVersion": "1.139.1",
   "results": [
     {
       "name": "extension installed",
       "ok": true,
       "detail": "htkym.sharpdeps"
-    },
-    {
-      "name": "SharpDeps is loaded from the installed VSIX",
-      "ok": true,
-      "detail": "D:\\gitroot\\sharpdeps\\.local\\e2e-ci-c0902fa\\extensions\\htkym.sharpdeps-0.1.0"
     },
     {
       "name": "commands are registered",
@@ -24,17 +19,17 @@
     {
       "name": "workspace folder is open",
       "ok": true,
-      "detail": "d:\\gitroot\\sharpdeps\\tests\\fixtures\\quick-baseline"
+      "detail": "/home/runner/work/sharpdeps/sharpdeps/tests/fixtures/quick-baseline"
     },
     {
       "name": "analysis result is registered",
       "ok": true,
-      "detail": "an_8237d8e6c2028799"
+      "detail": "an_6dc31b8c077521d7"
     },
     {
       "name": "current analysis is set",
       "ok": true,
-      "detail": "an_8237d8e6c2028799"
+      "detail": "an_6dc31b8c077521d7"
     },
     {
       "name": "problems collection is queryable",

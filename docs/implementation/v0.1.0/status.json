@@ -9,7 +9,7 @@
       "id": "M0",
       "name": "基準と技術成立性",
       "tasks": ["SD-001", "SD-002", "SD-003", "SD-004", "SD-005"],
-      "status": "blocked",
+      "status": "done",
       "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     },
     {
@@ -42,14 +42,14 @@
       "id": "M3",
       "name": "安全性・使用性・規模",
       "tasks": ["SD-023", "SD-024", "SD-025", "SD-026", "SD-027", "SD-028"],
-      "status": "blocked",
+      "status": "done",
       "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     },
     {
       "id": "M4",
       "name": "リリース候補",
       "tasks": ["SD-029", "SD-030"],
-      "status": "blocked",
+      "status": "done",
       "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     }
   ],
@@ -156,7 +156,7 @@
       "id": "SD-003",
       "title": "SDK/MSBuild/Roslynの実行互換性試作",
       "milestone": "M0",
-      "status": "blocked",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
         "analyzer/Directory.Build.props",
@@ -180,21 +180,23 @@
         "dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release — 25テスト成功",
         "SemanticHost実行（semantic-baseline） — 変種5・参照4・未解決0・約3.5秒",
         "npm run build:analyzer — 成功",
-        "npm test — 87テスト成功（TS回帰なし）"
+        "npm test — 87テスト成功（TS回帰なし）",
+        "最終検証: Windows runtime-only UI、Linux Quick/Semantic、macOS 26.6.2 arm64 の Quick/Semantic と C# 103件・契約14件を確認。 CI: https://github.com/Htkym/sharpdeps/actions/runs/36313107236"
       ],
       "evidence": [
         "docs/compatibility.md",
         "docs/adr/0001-semantic-loading.md",
         "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
         "docs/implementation/v0.1.0/completion.md",
-        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json",
+        "docs/implementation/v0.1.0/evidence/sd-030-remote-verification.json"
       ],
-      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
-      "notes": "Windows runtime-only UI、Linux runtime-only QuickとSDK-style Semanticは成功。macOS smokeは未実施。",
+      "blockers": [],
+      "notes": "Windows runtime-only UI、Linux Quick/Semantic、macOS 26.6.2 arm64 の Quick/Semantic と C# 103件・契約14件を確認。",
       "acceptanceAudit": {
         "date": "2026-09-27",
-        "assessment": "ローカル確認済み・外部検証待ち",
-        "evidenceAndRemaining": "Windows runtime-only UI、Linux runtime-only QuickとSDK-style Semanticは成功。macOS smokeは未実施。",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "Windows runtime-only UI、Linux Quick/Semantic、macOS 26.6.2 arm64 の Quick/Semantic と C# 103件・契約14件を確認。",
         "record": "docs/implementation/v0.1.0/completion.md"
       }
     },
@@ -1299,7 +1301,7 @@
       "id": "SD-027",
       "title": "Webview・Extension実機E2E",
       "milestone": "M3",
-      "status": "blocked",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
         "scripts/e2e.js",
@@ -1311,25 +1313,27 @@
       ],
       "tests": [
         "Windows VS Code 1.139.1: 開発版 E2E 17/17、インストール版 E2E 18/18",
-        "Playwright: 1440/900/360 px、SVG/PNG、profile、table 3/3"
+        "Playwright: 1440/900/360 px、SVG/PNG、profile、table 3/3",
+        "最終検証: Windows 配布版22件、Ubuntu 開発版21件・配布版22件が成功。macOS は解析ホストと契約の smoke を確認。 CI: https://github.com/Htkym/sharpdeps/actions/runs/36313107236"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-027.md",
         "docs/implementation/v0.1.0/evidence/sd-027-e2e.json",
         "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
         "docs/implementation/v0.1.0/completion.md",
-        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json",
+        "docs/implementation/v0.1.0/evidence/sd-030-remote-verification.json"
       ],
-      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
-      "notes": "Windows開発版・配布版と追加実機ケースは成功。macOS smokeとリモートCIは未実施。",
+      "blockers": [],
+      "notes": "Windows 配布版22件、Ubuntu 開発版21件・配布版22件が成功。macOS は解析ホストと契約の smoke を確認。",
       "reviewRemediation": {
         "date": "2026-09-27",
         "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
       },
       "acceptanceAudit": {
         "date": "2026-09-27",
-        "assessment": "ローカル確認済み・外部検証待ち",
-        "evidenceAndRemaining": "Windows開発版・配布版と追加実機ケースは成功。macOS smokeとリモートCIは未実施。",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "Windows 配布版22件、Ubuntu 開発版21件・配布版22件が成功。macOS は解析ホストと契約の smoke を確認。",
         "record": "docs/implementation/v0.1.0/completion.md"
       }
     },
@@ -1378,8 +1382,8 @@
       "id": "SD-029",
       "title": "ビルド・VSIX・ドキュメント整備",
       "milestone": "M4",
-      "status": "blocked",
-      "owner": null,
+      "status": "done",
+      "owner": "agent",
       "changedFiles": [
         "package.json",
         "package-lock.json",
@@ -1394,7 +1398,8 @@
       ],
       "tests": [
         "npm run check:vsix: 実 ZIP 内の Quick/Semantic/BuildHost/ELK license を検査",
-        "SHARPDEPTS_E2E_MODE=vsix npm run test:e2e: 18/18"
+        "SHARPDEPTS_E2E_MODE=vsix npm run test:e2e: 18/18",
+        "最終検証: CI 生成 VSIX の163 entriesとSHA-256を検査し、同一ファイルをUbuntu・Windowsで導入して22件ずつ成功。 CI: https://github.com/Htkym/sharpdeps/actions/runs/36313107236"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-029.md",
@@ -1402,18 +1407,19 @@
         "THIRD-PARTY-NOTICES.md",
         "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
         "docs/implementation/v0.1.0/completion.md",
-        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json",
+        "docs/implementation/v0.1.0/evidence/sd-030-remote-verification.json"
       ],
-      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
-      "notes": "VSIX内容とhash、Windows導入、Linux Quick/Semanticを確認。macOS smokeは未実施。",
+      "blockers": [],
+      "notes": "CI 生成 VSIX の163 entriesとSHA-256を検査し、同一ファイルをUbuntu・Windowsで導入して22件ずつ成功。",
       "reviewRemediation": {
         "date": "2026-09-27",
         "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
       },
       "acceptanceAudit": {
         "date": "2026-09-27",
-        "assessment": "ローカル確認済み・外部検証待ち",
-        "evidenceAndRemaining": "VSIX内容とhash、Windows導入、Linux Quick/Semanticを確認。macOS smokeは未実施。",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "CI 生成 VSIX の163 entriesとSHA-256を検査し、同一ファイルをUbuntu・Windowsで導入して22件ずつ成功。",
         "record": "docs/implementation/v0.1.0/completion.md"
       }
     },
@@ -1421,8 +1427,8 @@
       "id": "SD-030",
       "title": "リリース候補の最終判定",
       "milestone": "M4",
-      "status": "blocked",
-      "owner": null,
+      "status": "done",
+      "owner": "agent",
       "changedFiles": [
         "docs/implementation/v0.1.0/completion.md",
         "docs/implementation/v0.1.0/status.json",
@@ -1434,23 +1440,25 @@
         "配布 Quick DLL: runtime-only dotnet 配置で SDK 検出が失敗しても前後 2 回成功",
         "Semantic: loader references=1 / report v2 relations=0 を再現（RC-01）",
         "#line 120: mappedLocation=null を再現（RC-02）",
-        "全 30 タスクの成果物と受入条件を照合"
+        "全 30 タスクの成果物と受入条件を照合",
+        "最終検証: RC-01〜06、CIで判明したPOSIXの停止・パス処理、グラフ選択の性能を修正。全30タスクの受入条件を確認し、候補判定はGo。公開は未実施。 CI: https://github.com/Htkym/sharpdeps/actions/runs/36313107236"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
         "docs/implementation/v0.1.0/completion.md",
-        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json",
+        "docs/implementation/v0.1.0/evidence/sd-030-remote-verification.json"
       ],
-      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
-      "notes": "RC-01〜06のコード修正とローカル検証を完了。macOS・リモートCI未実施のため公開判定は保留。",
+      "blockers": [],
+      "notes": "RC-01〜06、CIで判明したPOSIXの停止・パス処理、グラフ選択の性能を修正。全30タスクの受入条件を確認し、候補判定はGo。公開は未実施。",
       "reviewRemediation": {
         "date": "2026-09-27",
         "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
       },
       "acceptanceAudit": {
         "date": "2026-09-27",
-        "assessment": "ローカル確認済み・外部検証待ち",
-        "evidenceAndRemaining": "RC-01〜06のコード修正とローカル検証を完了。macOS・リモートCI未実施のため公開判定は保留。",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "RC-01〜06、CIで判明したPOSIXの停止・パス処理、グラフ選択の性能を修正。全30タスクの受入条件を確認し、候補判定はGo。公開は未実施。",
         "record": "docs/implementation/v0.1.0/completion.md"
       }
     }
@@ -1459,18 +1467,21 @@
     "date": "2026-09-27",
     "status": "done",
     "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
-    "releaseReady": false
+    "releaseReady": true
   },
   "releaseCandidate": {
-    "decision": "no_go",
-    "checkedAt": "2026-09-27T08:27:28.848Z",
+    "decision": "go",
+    "checkedAt": "2026-09-27T10:44:02.945624+00:00",
     "version": "0.1.0",
     "assessmentPerformed": true,
-    "acceptanceComplete": false,
+    "acceptanceComplete": true,
     "completionReport": "docs/implementation/v0.1.0/completion.md",
-    "vsixSha256": "22793c37daec272eca6fbacd2ea7c4ca401a86853752a8c3f299c3597890457b",
-    "blockers": ["macOS Quick/Semantic smoke未実施", "最新変更に対するリモートCI未実施"],
+    "vsixSha256": "fdc4e68308fc610b1ad9bafc8f11625fda607c52d75e1f7205455b63a3597258",
+    "blockers": [],
     "published": false,
-    "resolvedCodeFindings": ["RC-01", "RC-02", "RC-03", "RC-04", "RC-05", "RC-06"]
+    "resolvedCodeFindings": ["RC-01", "RC-02", "RC-03", "RC-04", "RC-05", "RC-06"],
+    "productCommit": "c0902fadaf40acc053568cfef4b7ef4e858d7150",
+    "ciRun": "https://github.com/Htkym/sharpdeps/actions/runs/36313107236",
+    "evidence": "docs/implementation/v0.1.0/evidence/sd-030-remote-verification.json"
   }
 }
