@@ -108,6 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
       bridge,
       output,
       rootDirectory,
+      targetName: () => (lastTarget ? path.basename(lastTarget.fsPath) : ''),
       saveViewState: (state) => void context.workspaceState.update(VIEW_STATE_KEY, state),
       loadViewState: () => context.workspaceState.get<Record<string, unknown>>(VIEW_STATE_KEY),
       onAnalyze: (mode) => void runAndShow(lastTarget, mode),
@@ -316,16 +317,13 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand(
       'sharpdeps.copyMermaid',
-      () =>
-        void vscode.window.showInformationMessage(
-          'SharpDeps: the Mermaid view is superseded by the interactive map; context export arrives with SD-022.'
-        )
+      () => void CodeMapPanel.currentPanel?.copyMermaid()
     ),
     vscode.commands.registerCommand(
       'sharpdeps.exportSvg',
       () =>
         void vscode.window.showInformationMessage(
-          'SharpDeps: SVG export from the map arrives with SD-022. The graph can be inspected in the panel meanwhile.'
+          'SharpDeps: use Export ▾ in the map panel to save the current selection as SVG.'
         )
     ),
     vscode.commands.registerCommand(

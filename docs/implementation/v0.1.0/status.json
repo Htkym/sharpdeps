@@ -800,12 +800,32 @@
       "id": "SD-022",
       "title": "エクスポートと根拠付きAI引継ぎ",
       "milestone": "M2",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "src/export/contextExport.ts",
+        "src/view/codeMapPanel.ts",
+        "src/view/protocolV2.ts",
+        "schemas/protocol-v2.schema.json",
+        "media/app/app.ts",
+        "media/app/entry.ts",
+        "src/extension.ts",
+        "tests/webview/contextExport.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-022.md",
+        "docs/implementation/v0.1.0/evidence/sd-022-exports.json"
+      ],
+      "tests": [
+        "npm test — 23 files / 184 tests pass",
+        "npm run compile / lint / format:check / build — pass",
+        "context export: target, conditions, evidence positions, generated/inferred marks, cycles, do-not-assert, no absolute paths, snippets opt-in",
+        "JSON: schemaVersion and the same selection; Mermaid: same nodes, dashed inferred edges, aliased ids"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-022.md",
+        "docs/implementation/v0.1.0/evidence/sd-022-exports.json"
+      ],
+      "blockers": [],
+      "notes": "Done: Mermaid from the projection, JSON with schemaVersion and conditions, host-built evidence context with a do-not-assert section, SVG/PNG from the webview rendering, and the existing copyMermaid command restored. Not done: legend/profile options, real VS Code save/clipboard checks (SD-027), browser check of the request flow."
     },
     {
       "id": "SD-023",

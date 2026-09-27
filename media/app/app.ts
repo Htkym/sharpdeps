@@ -38,6 +38,10 @@ export interface ViewerAppOptions {
   onHostAction?: (action: ViewAction) => void;
   /** Called after each render so the host can mirror derived values (pane widths). */
   onStateChanged?: (state: ViewState) => void;
+  /** Export of the current selection (SD-022). Image formats carry the rendered data. */
+  onExport?: (format: 'mermaid' | 'svg' | 'png' | 'json', data?: string) => void;
+  /** Copy of the evidence-backed context (SD-022). Nothing is sent anywhere. */
+  onCopyContext?: () => void;
   /**
    * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
    * table stays available and the graph shows why it is missing.
@@ -69,8 +73,20 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       // `searchResultsReceived` (SD-013 bridge).
       options.onHostAction?.({ type: 'searchStarted', query: search });
     },
-    onExport: () => options.onHostAction?.({ type: 'selectionCleared' }),
-    onCopyContext: () => options.onHostAction?.({ type: 'selectionCleared' }),
+    onExport: (format) => {
+      if (format !== 'svg' && format !== 'png') {
+        options.onExport?.(format);
+        return;
+      }
+
+      // The graph renders the same selection; its data goes to the host for saving.
+      const view = graphRuntime.view;
+      void (async () => {
+        const data = format === 'svg' ? view?.exportSvg() : await view?.exportPng();
+        options.onExport?.(format, data);
+      })();
+    },
+    onCopyContext: () => options.onCopyContext?.(),
     onNavTab: (tab) => {
       activeTab = tab;
       render();

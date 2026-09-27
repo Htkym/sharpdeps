@@ -54,6 +54,34 @@ if (root) {
       if (message) {
         host.post(message);
       }
+    },
+    onExport: (format, data) => {
+      const state = app.getState();
+      if (!state.analysisId) {
+        return;
+      }
+
+      host.post({
+        type: 'export',
+        requestId: nextRequestId(),
+        analysisId: state.analysisId,
+        format,
+        scope: state.scope,
+        data
+      });
+    },
+    onCopyContext: () => {
+      const state = app.getState();
+      if (!state.analysisId) {
+        return;
+      }
+
+      host.post({
+        type: 'copyContext',
+        requestId: nextRequestId(),
+        analysisId: state.analysisId,
+        scope: state.scope
+      });
     }
   });
 

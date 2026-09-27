@@ -181,7 +181,15 @@ export type WebviewToHostMessage =
       scope: Scope;
       includeSnippets?: boolean;
     }
-  | { type: 'export'; requestId: string; analysisId: string; format: ExportFormat; scope: Scope }
+  | {
+      type: 'export';
+      requestId: string;
+      analysisId: string;
+      format: ExportFormat;
+      scope: Scope;
+      /** Rendered SVG text or PNG data URL, when the webview produced it (SD-022). */
+      data?: string;
+    }
   | { type: 'persistViewState'; viewState: Record<string, unknown> };
 
 // Extension host -> webview

@@ -131,7 +131,11 @@
         "requestId": { "$ref": "#/$defs/requestId" },
         "analysisId": { "$ref": "#/$defs/analysisId" },
         "format": { "enum": ["mermaid", "svg", "png", "json"] },
-        "scope": { "$ref": "#/$defs/scope" }
+        "scope": { "$ref": "#/$defs/scope" },
+        "data": {
+          "type": "string",
+          "description": "Rendered SVG text or PNG data URL when the webview produced the image (SD-022). Only used for svg/png."
+        }
       }
     },
     {

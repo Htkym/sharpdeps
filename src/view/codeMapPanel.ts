@@ -9,9 +9,11 @@ import * as vscode from 'vscode';
 import type { ReportBridge } from '../analyzer/reportBridge';
 import type { ReportStore } from '../analyzer/reportStore';
 import { openDeclarationLocation, openEvidenceLocation } from '../commands/openLocation';
+import { buildContextExport, buildExportJson, buildMermaid } from '../export/contextExport';
+import type { ContextEvidence, ContextExportInput } from '../export/contextExport';
 import { getWebviewHtml } from './html';
 import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
-import type { Capabilities, HostToWebviewMessage, Scope } from './protocolV2';
+import type { Capabilities, ExportFormat, HostToWebviewMessage, Scope } from './protocolV2';
 import type { Granularity } from '../analyzer/reportV2';
 
 export interface CodeMapPanelHost {
@@ -20,6 +22,8 @@ export interface CodeMapPanelHost {
   output: vscode.OutputChannel;
   /** Directory the analysed paths are relative to, for opening locations. */
   rootDirectory: () => string | undefined;
+  /** Target name for export file names. */
+  targetName: () => string;
   /** Persists the small view state (SD-021). Never starts an analysis. */
   saveViewState: (state: Record<string, unknown>) => void;
   /** Reads the last small view state, if any (SD-021). */
@@ -171,6 +175,13 @@ export class CodeMapPanel {
           request.declarationIndex ?? 0
         );
         return;
+      case 'copyContext':
+        // Built and copied locally; nothing is sent anywhere.
+        void this.copyContext(request.analysisId, request.scope, request.includeSnippets === true);
+        return;
+      case 'export':
+        void this.exportSelection(request.analysisId, request.format, request.scope, request.data);
+        return;
       default:
         // Everything else is answered from the store by the bridge; unimplemented host
         // work comes back as an explicit error message.
@@ -193,6 +204,196 @@ export class CodeMapPanel {
     relativePaths?: string[]
   ): void {
     this.post({ type: 'stale', analysisId, reason, relativePaths });
+  }
+
+  /** Builds the export input for the webview's current selection (SD-022). */
+  private async selectionExport(
+    analysisId: string,
+    scope: Scope,
+    includeSnippets: boolean
+  ): Promise<ContextExportInput> {
+    const store = this.host.store;
+    const report = store.getReport(analysisId);
+    const projection = store.getProjection(analysisId, {
+      scope: scope as { kind: string; id?: string | null; depth?: number | null },
+      granularity: 'type',
+      maxNodes: 300,
+      maxEdges: 1000
+    });
+
+    const evidenceByRelation: Record<string, ContextEvidence[]> = {};
+    for (const edge of projection.edges) {
+      try {
+        const page = await store.getEvidencePage(analysisId, edge.id, { limit: 5 });
+        evidenceByRelation[edge.id] = page.items.map((item) => ({
+          kind: item.kind,
+          origin: item.origin,
+          confidence: item.confidence,
+          documentPath: report.sourceManifest.find((document) => document.id === item.documentId)
+            ?.relativePath,
+          line: item.physicalSpan ? item.physicalSpan.startLine + 1 : undefined,
+          character: item.physicalSpan ? item.physicalSpan.startCharacter + 1 : undefined,
+          snippet: includeSnippets ? (item.snippet ?? undefined) : undefined
+        }));
+      } catch {
+        evidenceByRelation[edge.id] = [];
+      }
+    }
+
+    return {
+      analysisId,
+      mode: report.mode === 'semantic' ? 'semantic' : 'quick',
+      target: { name: this.host.targetName(), relativePath: report.target.relativePath },
+      completeness: report.completeness,
+      configuration: report.profile.configuration,
+      platform: report.profile.platform,
+      limitations: report.limitations.map((limitation) => ({
+        code: limitation.code,
+        message: limitation.message
+      })),
+      granularity: 'type',
+      scopeLabel: describeScope(scope),
+      nodes: projection.nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        granularity: node.granularity,
+        kind: node.kind,
+        projectName: node.projectName,
+        inCycle: node.inCycle,
+        isExternal: node.isExternal
+      })),
+      edges: projection.edges.map((edge) => ({
+        id: edge.id,
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        basis: edge.basis,
+        kinds: edge.kinds,
+        evidenceCount: edge.evidenceCount,
+        inCycle: edge.inCycle,
+        generatedEvidenceCount: edge.generatedEvidenceCount,
+        publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount,
+        underlyingRelationIds: edge.underlyingRelationIds
+      })),
+      totalNodeCount: projection.totalNodeCount,
+      totalEdgeCount: projection.totalEdgeCount,
+      truncated: projection.truncated,
+      cycles: report.cycleGroups.map((group) => ({
+        id: group.id,
+        scope: group.scope,
+        basis: group.basis,
+        memberIds: group.memberIds,
+        internalRelationIds: group.internalRelationIds,
+        witness: group.witness
+          ? { memberIds: group.witness.memberIds, relationIds: group.witness.relationIds }
+          : null
+      })),
+      evidenceByRelation,
+      includeSnippets
+    };
+  }
+
+  /** Copies Mermaid for the current selection (SD-022); keeps the existing command. */
+  async copyMermaid(): Promise<void> {
+    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
+    if (!analysisId) {
+      void vscode.window.showInformationMessage('SharpDeps: 解析結果がありません。');
+      return;
+    }
+
+    try {
+      const input = await this.selectionExport(analysisId, { kind: 'root' }, false);
+      await vscode.env.clipboard.writeText(buildMermaid(input));
+      void vscode.window.showInformationMessage(
+        `SharpDeps: Mermaid をコピーしました（${input.nodes.length} ノード / ${input.edges.length} 関係）。`
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `SharpDeps: Mermaid を作成できませんでした。${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  private async copyContext(
+    analysisId: string,
+    scope: Scope,
+    includeSnippets: boolean
+  ): Promise<void> {
+    try {
+      const input = await this.selectionExport(analysisId, scope, includeSnippets);
+      const text = buildContextExport(input);
+      await vscode.env.clipboard.writeText(text);
+      void vscode.window.showInformationMessage(
+        `SharpDeps: 解析コンテキストをコピーしました（${input.nodes.length} ノード / ${input.edges.length} 関係、根拠付き）。送信は行いません。`
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `SharpDeps: コンテキストを作成できませんでした。${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  private async exportSelection(
+    analysisId: string,
+    format: ExportFormat,
+    scope: Scope,
+    data: string | undefined
+  ): Promise<void> {
+    try {
+      if ((format === 'svg' || format === 'png') && data) {
+        // The webview rendered the same selection, so image and text agree. The SVG is
+        // standalone (no scripts, no external references) and the PNG is embedded base64.
+        const uri = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(
+            `${this.host.targetName() || 'sharpdeps'}-selection.${format}`
+          ),
+          filters: format === 'svg' ? { 'SVG image': ['svg'] } : { 'PNG image': ['png'] }
+        });
+        if (!uri) {
+          return;
+        }
+
+        const bytes =
+          format === 'svg'
+            ? Buffer.from(data, 'utf8')
+            : Buffer.from(data.replace(/^data:image\/png;base64,/, ''), 'base64');
+        await vscode.workspace.fs.writeFile(uri, bytes);
+        void vscode.window.showInformationMessage(
+          `SharpDeps: ${format.toUpperCase()} を保存しました。外部ビューアで開けます。`
+        );
+        return;
+      }
+
+      const input = await this.selectionExport(analysisId, scope, false);
+      const text = format === 'json' ? buildExportJson(input) : buildMermaid(input);
+      const extension = format === 'json' ? 'json' : 'mmd';
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(
+          `${this.host.targetName() || 'sharpdeps'}-${input.granularity}.${extension}`
+        ),
+        filters:
+          format === 'json'
+            ? { 'SharpDeps selection': ['json'] }
+            : { 'Mermaid diagram': ['mmd', 'mermaid'] }
+      });
+      if (!uri) {
+        return;
+      }
+
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
+      void vscode.window.showInformationMessage(
+        `SharpDeps: ${format.toUpperCase()} を保存しました（${input.nodes.length} ノード / ${input.edges.length} 関係）。`
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `SharpDeps: エクスポートに失敗しました。${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 
   /** Restores the last small state when the webview asks (SD-021). */
@@ -278,6 +479,18 @@ export class CodeMapPanel {
       this.disposables.pop()?.dispose();
     }
   }
+}
+
+function describeScope(scope: Scope): string {
+  if (!scope || scope.kind === 'root') {
+    return 'whole analysis';
+  }
+
+  const depth =
+    scope.kind === 'dependencies' || scope.kind === 'dependents'
+      ? ` (depth ${scope.depth ?? 1})`
+      : '';
+  return `${scope.kind}: ${scope.id ?? '?'}${depth}`;
 }
 
 function setPanelActiveContext(active: boolean): void {

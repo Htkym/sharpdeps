@@ -1,0 +1,27 @@
+{
+  "task": "SD-022",
+  "checkedAt": "2026-09-27",
+  "formats": {
+    "context": "Markdown with target, mode (Quick stated as not proof), conditions, completeness, scope and counts, nodes, relations with inferred/cycle marks, evidence at relative path:line:character with generated/inferred flags, cycles (verified path versus mutual reachability), limitations, and a Do-not-assert section.",
+    "json": "schemaVersion 1, kind sharpdeps.selection, conditions, selection (nodes/edges/cycles), evidence.",
+    "mermaid": "flowchart LR from the same selection; inferred edges are dashed; raw ids are aliased.",
+    "svgPng": "The webview renders the same selection and supplies the data; the host saves it. The SVG is standalone (no scripts, no external references)."
+  },
+  "unitTests": {
+    "contextExport": "Carries target/conditions/evidence/cycles/do-not-assert, no absolute paths, Quick marked as declared-or-inferred, snippets only when requested, backticks in snippets neutralised.",
+    "json": "schemaVersion and the same selection as the context export.",
+    "mermaid": "Same nodes as the selection, dashed inferred edges, no raw ids."
+  },
+  "boundaries": {
+    "relativePathsOnly": true,
+    "fullSourcesIncluded": false,
+    "snippetsOptIn": true,
+    "networkCalls": 0,
+    "userReview": "The host copies to the clipboard and reports the node/relation counts."
+  },
+  "notVerifiedHere": [
+    "Real VS Code save dialogs, clipboard, and opening the SVG/PNG in an external viewer (SD-027; the standalone SVG was verified in the browser in SD-004).",
+    "Legend and display-profile options are not implemented.",
+    "The export/copyContext request flow was not exercised in the browser fixture."
+  ]
+}
