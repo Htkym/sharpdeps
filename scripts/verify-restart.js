@@ -10,7 +10,8 @@ const executable =
   process.env.SHARPDEPTS_VSCODE ??
   path.join(process.env.LOCALAPPDATA, 'Programs/Microsoft VS Code/Code.exe');
 const report = { checkedAt: new Date().toISOString(), results: [] };
-const output = path.join(repo, 'docs/implementation/v0.1.0/evidence/sd-030-restart.json');
+const output = path.join(repo, '.local/verification/sd-030-restart.json');
+fs.mkdirSync(path.dirname(output), { recursive: true });
 const runs = () => {
   const dir = path.join(profile, 'User/globalStorage/htkym.sharpdeps/runs');
   return fs.existsSync(dir)

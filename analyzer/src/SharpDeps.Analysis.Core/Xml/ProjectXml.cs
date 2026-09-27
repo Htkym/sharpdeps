@@ -30,15 +30,17 @@ public static class ProjectXml
             ?.Trim();
 
     public static string ReadProjectSdk(XElement root)
-        => root.Attribute("Sdk")?.Value
-           ?? string.Join(
+        => string.Join(
                ";",
-               root.Elements()
-                   .Where(element => string.Equals(element.Name.LocalName, "Sdk", StringComparison.OrdinalIgnoreCase))
-                   .Select(element => element.Attribute("Name")?.Value)
+               new[] { root.Attribute("Sdk")?.Value }.Concat(root.Elements()
+                   .Select(element => element.Name.LocalName switch
+                   {
+                       "Sdk" => element.Attribute("Name")?.Value,
+                       "Import" => element.Attribute("Sdk")?.Value,
+                       _ => null
+                   }))
                    .Where(value => !string.IsNullOrWhiteSpace(value))
-                   .Cast<string>())
-           ?? string.Empty;
+                   .Cast<string>());
 
     public static string? GetPrimaryTargetFramework(string? targetFrameworks)
     {

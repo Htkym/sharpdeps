@@ -141,16 +141,16 @@ export function readThemeStyles(host: Element): string {
 export const GRAPH_EXPORT_STYLES = `
   .node rect { fill: var(--vscode-editor-background, #1f1f1f); stroke: var(--sd-kind-color, var(--vscode-panel-border, #6b6b6b)); }
   .node text { fill: var(--vscode-editor-foreground, #e6e6e6); font-family: var(--vscode-editor-font-family, sans-serif); font-size: 12px; }
-  .node-sublabel, .node-badge { fill: var(--vscode-descriptionForeground, #a0a0a0); font-size: 10px; }
+  .node .node-sublabel, .node .node-badge { fill: var(--vscode-descriptionForeground, #a0a0a0); font-size: 10px; }
   .node.in-cycle rect { stroke: var(--vscode-charts-red, #e5484d); stroke-width: 2; }
-  .node.selected rect { stroke: var(--vscode-focusBorder, #4daafc); stroke-width: 2; }
+  .node.selected rect { stroke: var(--vscode-focusBorder, #4daafc); stroke-width: 3; }
   .node.inferred rect { stroke-dasharray: 4 3; }
-  .edge-line { fill: none; stroke: var(--vscode-panel-border, #6b6b6b); stroke-width: 1.5; }
+  .edge-line { fill: none; stroke: var(--vscode-descriptionForeground, #a0a0a0); stroke-width: 1.5; }
   .edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
-  .edge-arrow { fill: var(--vscode-panel-border, #6b6b6b); }
+  .edge-arrow { fill: var(--vscode-descriptionForeground, #a0a0a0); }
   .edge.in-cycle .edge-line { stroke: var(--vscode-charts-red, #e5484d); stroke-width: 2.5; }
   .edge.in-cycle .edge-arrow { fill: var(--vscode-charts-red, #e5484d); }
-  .edge.selected .edge-line { stroke: var(--vscode-focusBorder, #4daafc); stroke-width: 2.5; }
+  .edge.selected .edge-line { stroke: var(--vscode-focusBorder, #4daafc); stroke-width: 3.5; }
   .edge.selected .edge-arrow { fill: var(--vscode-focusBorder, #4daafc); }
   .edge-inferred .edge-line { stroke-dasharray: 5 4; }
 `;

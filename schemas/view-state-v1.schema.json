@@ -12,6 +12,7 @@
       "description": "Opaque id of the analysis target (workspace root + relative path)."
     },
     "mode": { "enum": ["quick", "semantic"] },
+    "language": { "enum": ["en", "ja"] },
     "profile": {
       "type": ["object", "null"],
       "properties": {
@@ -29,6 +30,14 @@
     },
     "granularity": { "enum": ["project", "namespace", "type"] },
     "viewKind": { "enum": ["graph", "table"] },
+    "layout": {
+      "type": "object",
+      "properties": {
+        "direction": { "enum": ["RIGHT", "DOWN"] },
+        "nodeSpacing": { "type": "number", "minimum": 10, "maximum": 160 },
+        "rankSpacing": { "type": "number", "minimum": 20, "maximum": 240 }
+      }
+    },
     "search": { "type": "string" },
     "filters": {
       "type": ["object", "null"],

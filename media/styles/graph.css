@@ -1,45 +1,4 @@
-/* Graph styles for the interactive SVG renderer (SD-004).
-   Theme values come from VS Code webview variables with safe fallbacks. */
-
-.graph-host {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  min-height: 0;
-  color: var(--vscode-foreground, #e6e6e6);
-  background: var(--vscode-editor-background, #1f1f1f);
-  font-family: var(--vscode-font-family, sans-serif);
-  font-size: var(--vscode-font-size, 13px);
-}
-
-.prototype-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px;
-  border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
-}
-
-.prototype-toolbar button {
-  padding: 3px 10px;
-  color: var(--vscode-button-foreground, #ffffff);
-  background: var(--vscode-button-background, #0e639c);
-  border: 1px solid transparent;
-  border-radius: 3px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.prototype-toolbar button:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder, #4daafc);
-  outline-offset: 2px;
-}
-
-.prototype-status {
-  padding: 4px 8px;
-  color: var(--vscode-descriptionForeground, #a0a0a0);
-  border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
-}
+/* SVG graph styles using VS Code theme variables. */
 
 .graph-viewport {
   position: relative;
@@ -52,8 +11,26 @@
   cursor: grabbing;
 }
 
+.graph-viewport:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #4daafc);
+  outline-offset: -2px;
+}
+
+/* SVG groups use their shapes below as focus indicators, rather than a potentially
+   screen-sized browser outline around the group's bounding box. */
+.node:focus,
+.edge:focus {
+  outline: none;
+}
+
 .graph-svg {
   display: block;
+}
+
+/* Auto margins center a vertical graph when it fits, and become zero when it
+   overflows so the leftmost nodes remain reachable by scrolling. */
+.sd-graph[data-direction='DOWN'] .graph-svg {
+  margin-inline: auto;
 }
 
 /* Nodes */
@@ -71,8 +48,8 @@
   pointer-events: none;
 }
 
-.node-sublabel,
-.node-badge {
+.node .node-sublabel,
+.node .node-badge {
   fill: var(--vscode-descriptionForeground, #a0a0a0);
   font-size: 10px;
 }
@@ -101,10 +78,6 @@
   fill: var(--vscode-editorWidget-background, #252526);
 }
 
-.node.in-cycle .node-label::after {
-  content: ' ⟳';
-}
-
 /* Edges */
 
 .edge-hit {
@@ -116,13 +89,13 @@
 
 .edge-line {
   fill: none;
-  stroke: var(--vscode-panel-border, #6b6b6b);
+  stroke: var(--vscode-descriptionForeground, #a0a0a0);
   stroke-width: 1.5;
   pointer-events: none;
 }
 
 .edge-arrow {
-  fill: var(--vscode-panel-border, #6b6b6b);
+  fill: var(--vscode-descriptionForeground, #a0a0a0);
   pointer-events: none;
 }
 
@@ -152,6 +125,24 @@
 
 .edge-generated .edge-line {
   stroke-dasharray: 1 3;
+}
+
+/* Selection stays visible when the same entity is also in a cycle. */
+.node.selected rect,
+.node:focus-visible rect {
+  stroke: var(--vscode-focusBorder, #4daafc);
+  stroke-width: 3;
+}
+
+.edge.selected .edge-line,
+.edge:focus-visible .edge-line {
+  stroke: var(--vscode-focusBorder, #4daafc);
+  stroke-width: 3.5;
+}
+
+.edge.selected .edge-arrow,
+.edge:focus-visible .edge-arrow {
+  fill: var(--vscode-focusBorder, #4daafc);
 }
 
 @media (prefers-reduced-motion: reduce) {

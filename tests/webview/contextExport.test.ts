@@ -96,6 +96,38 @@ function input(overrides: Partial<ContextExportInput> = {}): ContextExportInput 
 }
 
 describe('buildContextExport', () => {
+  it('keeps inferred occurrence counts distinct inside a solid aggregated connection', () => {
+    const mixed = input();
+    mixed.edges = [
+      {
+        ...mixed.edges[0],
+        basis: 'projectDeclared',
+        evidenceCount: 11,
+        underlyingRelations: [
+          {
+            id: 'rel_1111111111111111',
+            basis: 'projectDeclared',
+            kinds: ['projectReference'],
+            evidenceCount: 1
+          },
+          {
+            id: 'rel_2222222222222222',
+            basis: 'usingInferred',
+            kinds: ['typeUse'],
+            evidenceCount: 10
+          }
+        ]
+      }
+    ];
+    const text = buildContextExport(mixed);
+    expect(text).toContain('projectDeclared: 1 occurrence(s)');
+    expect(text).toContain('usingInferred: 10 occurrence(s) · inferred');
+    const json = JSON.parse(buildExportJson(mixed));
+    expect(json.selection.edges[0].underlyingRelations).toEqual(mixed.edges[0].underlyingRelations);
+    expect(buildMermaid(mixed)).toContain('-->');
+    expect(buildMermaid(mixed)).not.toContain('-.->');
+  });
+
   it('carries the target, conditions, evidence, cycles, and the do-not-assert list', () => {
     const text = buildContextExport(input());
 

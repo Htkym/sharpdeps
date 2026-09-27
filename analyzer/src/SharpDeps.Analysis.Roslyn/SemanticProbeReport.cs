@@ -1,9 +1,7 @@
 namespace SharpDeps.Analysis.Roslyn;
 
 /// <summary>
-/// Output of the SD-003 semantic loading probe. This is a diagnostic artifact that
-/// proves what the loader can read; the v2 analysis snapshot (SD-007+) is a
-/// different contract and is not produced by the probe.
+/// Loader diagnostics and evaluated project variants used by the semantic report writer.
 /// </summary>
 public sealed record SemanticProbeReport(
     string SchemaVersion,
@@ -11,7 +9,8 @@ public sealed record SemanticProbeReport(
     SemanticEnvironmentInfo Environment,
     string TargetPath,
     string Configuration,
-    SemanticProfileInfo Profile,    IReadOnlyList<ProjectVariantInfo> Variants,
+    SemanticProfileInfo Profile,
+    IReadOnlyList<ProjectVariantInfo> Variants,
     IReadOnlyList<ReferenceEdgeInfo> References,
     IReadOnlyList<ProbeDiagnostic> Diagnostics,
     IReadOnlyList<ProbeLimitation> Limitations,
@@ -48,7 +47,8 @@ public sealed record ProjectVariantInfo(
     int AddedTransitiveReferences,
     bool CompilationObtained,
     int ErrorDiagnosticCount,
-    string? FailureReason);
+    string? FailureReason,
+    string Kind = "unknown");
 
 public sealed record ReferenceEdgeInfo(
     string SourceVariantKey,

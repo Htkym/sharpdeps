@@ -14,6 +14,7 @@ export const VIEW_STATE_VERSION = 1;
 export interface PersistedViewState {
   version: number;
   mode?: ViewState['mode'];
+  language?: ViewState['language'];
   profile?: ViewState['profile'];
   layout?: ViewState['layout'];
   imageOptions?: ViewState['imageOptions'];
@@ -53,6 +54,7 @@ export function serializeViewState(
   return {
     version: VIEW_STATE_VERSION,
     mode: state.mode,
+    language: state.language,
     profile: state.profile,
     layout: state.layout,
     imageOptions: state.imageOptions,
@@ -84,9 +86,11 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
   }
 
   const state: Partial<ViewState> = {};
+  if (value.language === 'en' || value.language === 'ja') state.language = value.language;
   const layout = recordOf(value.layout);
   if (layout && typeof layout.nodeSpacing === 'number' && typeof layout.rankSpacing === 'number')
     state.layout = {
+      direction: layout.direction === 'DOWN' ? 'DOWN' : 'RIGHT',
       nodeSpacing: Math.max(10, Math.min(160, layout.nodeSpacing)),
       rankSpacing: Math.max(20, Math.min(240, layout.rankSpacing))
     };

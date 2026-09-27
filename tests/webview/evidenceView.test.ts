@@ -56,7 +56,8 @@ describe('describeBasis', () => {
     expect(describeBasis('symbolResolved')).toMatchObject({ resolved: true });
     expect(describeBasis('symbolResolved').label).toContain('Semantic');
     expect(describeBasis('usingInferred')).toMatchObject({ resolved: false });
-    expect(describeBasis('usingInferred').label).toContain('推定');
+    expect(describeBasis('usingInferred').label).toContain('inferred');
+    expect(describeBasis('usingInferred', 'ja').label).toContain('推定');
     expect(describeBasis('projectDeclared')).toMatchObject({ resolved: false });
   });
 });

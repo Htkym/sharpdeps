@@ -362,7 +362,8 @@ export class CodeMapPanel {
         inCycle: edge.inCycle,
         generatedEvidenceCount: edge.generatedEvidenceCount,
         publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount,
-        underlyingRelationIds: edge.underlyingRelationIds
+        underlyingRelationIds: edge.underlyingRelationIds,
+        underlyingRelations: edge.underlyingRelations
       })),
       totalNodeCount: projection.totalNodeCount,
       totalEdgeCount: projection.totalEdgeCount,

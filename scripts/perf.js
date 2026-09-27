@@ -9,7 +9,8 @@ const repo = path.resolve(__dirname, '..');
 const root = path.join(repo, '.local', 'perf-v010');
 const fixture = path.join(root, 'medium');
 const host = path.join(repo, 'analyzer/bin/semantic/sharpdeps-semantic-host.dll');
-const evidencePath = path.join(repo, 'docs/implementation/v0.1.0/evidence/sd-028-acceptance.json');
+const evidencePath = path.join(repo, '.local/verification/sd-028-acceptance.json');
+fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
 const projects = 30,
   filesPerProject = 100;
 fs.mkdirSync(fixture, { recursive: true });

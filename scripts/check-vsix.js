@@ -2,7 +2,7 @@
 //
 // Packs the extension and asserts what a user installs: the analyzer hosts and their
 // runtime files, the webview entry point and worker, the styles, and the licence notices
-// are present, while development-only material (sources, tests, schemas, docs, local
+// are present, while development-only material (sources, tests, schemas, plans, local
 // state) is not. Run with `npm run check:vsix`.
 
 const { spawnSync } = require('node:child_process');
@@ -40,8 +40,16 @@ const REQUIRED = [
   'analyzer/bin/semantic/sharpdeps-semantic-host.runtimeconfig.json',
   'analyzer/bin/semantic/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
   'resources/ELK-LICENSE.md',
+  'resources/icon.png',
+  'LICENSE.txt',
   'package.json',
   'readme.md',
+  'README.ja.md',
+  'docs/guide.md',
+  'docs/guide.ja.md',
+  ...['overview', 'evidence', 'spacing', 'table'].flatMap((name) =>
+    ['en', 'ja'].map((language) => `images/${name}-${language}.png`)
+  ),
   'changelog.md',
   'THIRD-PARTY-NOTICES.md'
 ];
@@ -50,12 +58,20 @@ const FORBIDDEN = [
   'src/',
   'tests/',
   'schemas/',
-  'docs/',
+  'docs/implementation/',
+  'docs/adr/',
   '.local/',
   'node_modules/',
   'analyzer/src/',
   'analyzer/tests/',
-  'media/viewer.js.map'
+  'media/viewer.js',
+  'media/viewer.css',
+  'media/graph/prototype.js',
+  'out/extension.js.map',
+  'media/app/entry.js.map',
+  'media/workers/elkLayout.worker.js.map',
+  'analyzer/bin/quick/code-map.exe',
+  'analyzer/bin/semantic/sharpdeps-semantic-host.exe'
 ];
 
 async function main() {
@@ -95,7 +111,7 @@ async function main() {
     ok: missing.length === 0 && leaked.length === 0
   };
 
-  const evidenceDirectory = path.join(repoRoot, 'docs', 'implementation', 'v0.1.0', 'evidence');
+  const evidenceDirectory = path.join(repoRoot, '.local', 'verification');
   fs.mkdirSync(evidenceDirectory, { recursive: true });
   fs.writeFileSync(
     path.join(evidenceDirectory, 'sd-029-vsix.json'),

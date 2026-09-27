@@ -12,10 +12,8 @@ const repoRoot = path.resolve(__dirname, '..');
 const scenario = process.env.SHARPDEPTS_E2E_SCENARIO;
 const reportPath = path.join(
   repoRoot,
-  'docs',
-  'implementation',
-  'v0.1.0',
-  'evidence',
+  '.local',
+  'verification',
   scenario
     ? `sd-030-${scenario}.json`
     : process.env.SHARPDEPTS_E2E_MODE === 'vsix'

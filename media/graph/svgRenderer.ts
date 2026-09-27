@@ -15,10 +15,13 @@ import type {
   LayoutResult
 } from './types';
 import { projectKindColor } from './projectionAdapter';
+import { truncateLabel } from './nodeMetrics';
+import { translate, type Language } from '../app/i18n';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export interface RenderState {
+  language?: Language;
   selectedNodeIds: ReadonlySet<string>;
   selectedEdgeIds: ReadonlySet<string>;
   /** Hidden node ids stay in the layout but are not drawn. */
@@ -80,7 +83,9 @@ function renderNodes(
 
     group.setAttribute('transform', `translate(${round(layoutNode.x)} ${round(layoutNode.y)})`);
     group.setAttribute('class', nodeClass(node, state));
-    group.setAttribute('aria-label', nodeDescription(node));
+    group.setAttribute('aria-label', nodeDescription(node, state.language));
+    const title = group.querySelector('title');
+    if (title) title.textContent = nodeDescription(node, state.language);
     group.setAttribute('aria-selected', state.selectedNodeIds.has(node.id) ? 'true' : 'false');
     group.setAttribute('data-cycle', node.inCycle ? 'true' : 'false');
     group.setAttribute('data-inferred', node.isInferred ? 'true' : 'false');
@@ -95,14 +100,14 @@ function renderNodes(
 
     const label = group.querySelector<SVGTextElement>('text.node-label');
     if (label) {
-      label.textContent = node.label;
+      label.textContent = truncateLabel(node.label, nodeBadge(node) ? 36 : 42);
       label.setAttribute('x', String(layoutNode.width / 2));
       label.setAttribute('y', node.sublabel ? '15' : String(layoutNode.height / 2 + 5));
     }
 
     const sublabel = group.querySelector<SVGTextElement>('text.node-sublabel');
     if (sublabel) {
-      sublabel.textContent = node.sublabel ?? '';
+      sublabel.textContent = truncateLabel(nodeSublabel(node, state.language));
       sublabel.setAttribute('x', String(layoutNode.width / 2));
       sublabel.setAttribute('y', String(layoutNode.height - 7));
       sublabel.style.display = node.sublabel ? '' : 'none';
@@ -110,7 +115,7 @@ function renderNodes(
 
     const badge = group.querySelector<SVGTextElement>('text.node-badge');
     if (badge) {
-      badge.textContent = nodeBadge(node);
+      badge.textContent = nodeBadge(node, state.language);
       badge.setAttribute('x', String(layoutNode.width - 8));
       badge.setAttribute('y', '14');
       badge.style.display = nodeBadge(node) ? '' : 'none';
@@ -152,7 +157,8 @@ function createNodeElement(node: GraphNodeInput): SVGGElement {
   badge.setAttribute('class', 'node-badge');
   badge.setAttribute('text-anchor', 'end');
 
-  group.append(rect, label, sublabel, badge);
+  const title = document.createElementNS(SVG_NS, 'title');
+  group.append(title, rect, label, sublabel, badge);
   return group;
 }
 
@@ -176,27 +182,40 @@ function nodeClass(node: GraphNodeInput, state: RenderState): string {
   return classes.join(' ');
 }
 
-function nodeBadge(node: GraphNodeInput): string {
+function nodeBadge(node: GraphNodeInput, language: Language = 'en'): string {
   const badges: string[] = [];
+  if (node.inCycle) badges.push('⟳');
   if (node.isInferred) {
-    badges.push('推定');
+    badges.push(language === 'ja' ? translate(language, 'Inferred') : 'I');
   }
   if (node.isGenerated) {
-    badges.push('生成');
+    badges.push('G');
   }
   return badges.join(' ');
 }
 
-function nodeDescription(node: GraphNodeInput): string {
+function nodeSublabel(node: GraphNodeInput, language: Language = 'en'): string {
+  let label = node.sublabel ?? '';
+  if (node.isExternal) {
+    if (label === 'External') label = '';
+    else if (label.endsWith(' ・ External')) label = label.slice(0, -' ・ External'.length);
+  }
+  if (node.sublabelKind) label = translate(language, node.sublabelKind);
+  return [label, node.isExternal ? translate(language, 'External') : '']
+    .filter(Boolean)
+    .join(' ・ ');
+}
+
+function nodeDescription(node: GraphNodeInput, language: Language = 'en'): string {
   const parts = [node.label];
   if (node.sublabel) {
-    parts.push(node.sublabel);
+    parts.push(nodeSublabel(node, language));
   }
   if (node.inCycle) {
-    parts.push('循環に含まれる');
+    parts.push(translate(language, 'In dependency cycle'));
   }
   if (node.isInferred) {
-    parts.push('推定の依存');
+    parts.push(translate(language, 'Inferred dependency'));
   }
   return parts.join(', ');
 }
@@ -237,7 +256,7 @@ function renderEdges(
     }
 
     group.setAttribute('class', edgeClass(edge, state));
-    group.setAttribute('aria-label', edgeDescription(edge));
+    group.setAttribute('aria-label', edgeDescription(edge, state.language));
     group.setAttribute('aria-selected', state.selectedEdgeIds.has(edge.id) ? 'true' : 'false');
     group.setAttribute('data-basis', edge.basis);
     group.setAttribute('data-cycle', edge.inCycle ? 'true' : 'false');
@@ -306,10 +325,14 @@ function edgeClass(edge: GraphEdgeInput, state: RenderState): string {
   return classes.join(' ');
 }
 
-function edgeDescription(edge: GraphEdgeInput): string {
-  const parts = [`${edge.kinds.join(', ') || edge.basis}`, `根拠 ${edge.evidenceCount} 件`];
+function edgeDescription(edge: GraphEdgeInput, language: Language = 'en'): string {
+  const parts = [
+    edge.kinds.map((kind) => translate(language, kind)).join(', ') ||
+      translate(language, edge.basis),
+    translate(language, '{0} evidence record(s)', edge.evidenceCount)
+  ];
   if (edge.inCycle) {
-    parts.push('循環に含まれる');
+    parts.push(translate(language, 'In dependency cycle'));
   }
   return parts.join(', ');
 }

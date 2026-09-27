@@ -106,6 +106,39 @@ function snapshotWithHierarchy(): AnalysisSnapshot {
 }
 
 describe('buildProjection', () => {
+  it('draws a declared Quick connection once while retaining inferred evidence', () => {
+    const snapshot = snapshotWithHierarchy();
+    snapshot.relations = [
+      { ...snapshot.relations[0], basis: 'usingInferred', evidenceCount: 10 },
+      { ...snapshot.relations[1], basis: 'projectDeclared', evidenceCount: 1 },
+      // The opposite direction remains a separate connection.
+      {
+        ...snapshot.relations[2],
+        sourceEntityId: IDS.typeB,
+        targetEntityId: IDS.typeA,
+        basis: 'usingInferred'
+      }
+    ];
+    const projection = buildProjection(snapshot, { granularity: 'project' });
+    expect(projection.edges).toHaveLength(2);
+    expect(projection.totalEdgeCount).toBe(2);
+    const forward = projection.edges.find((edge) => edge.sourceId === IDS.projectA)!;
+    expect(forward.basis).toBe('projectDeclared');
+    expect(forward.id).toBe(snapshot.relations[1].id);
+    expect(forward.evidenceCount).toBe(11);
+    expect(forward.underlyingRelationIds).toEqual([
+      snapshot.relations[1].id,
+      snapshot.relations[0].id
+    ]);
+    const inferred = buildProjection(snapshot, {
+      granularity: 'project',
+      filters: { basis: ['usingInferred'] }
+    });
+    expect(inferred.edges).toHaveLength(2);
+    expect(inferred.edges.every((edge) => edge.basis === 'usingInferred')).toBe(true);
+    expect(inferred.edges.find((edge) => edge.sourceId === IDS.projectA)?.evidenceCount).toBe(10);
+  });
+
   it('aggregates type relations into namespace and project edges', () => {
     const snapshot = snapshotWithHierarchy();
 

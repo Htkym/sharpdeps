@@ -44,6 +44,7 @@ jobs:
       - name: Prepare semantic fixture
         run: |
           dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet restore tests/fixtures/project-kinds/ProjectKinds.slnx
           dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
 
       - name: C# tests
@@ -87,9 +88,9 @@ jobs:
         with:
           name: linux-verification
           path: |
-            docs/implementation/v0.1.0/evidence/sd-027-e2e*.json
-            docs/implementation/v0.1.0/evidence/sd-028-browser.json
-            docs/implementation/v0.1.0/evidence/sd-029-vsix.json
+            .local/verification/sd-027-e2e*.json
+            .local/verification/sd-028-browser.json
+            .local/verification/sd-029-vsix.json
             .local/browser-results/
 
   macos-smoke:
@@ -115,6 +116,7 @@ jobs:
       - name: Prepare semantic fixture
         run: |
           dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet restore tests/fixtures/project-kinds/ProjectKinds.slnx
           dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
       - name: C# tests
         run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet

@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check release version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$version"
+          echo "VSIX_PATH=sharpdeps-$version.vsix" >> "$GITHUB_ENV"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -31,21 +37,42 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test
+      - name: Check source
+        run: |
+          npm run lint
+          npm run format:check
+          npm run compile
+
+      - name: Build the analyzer hosts
+        run: npm run build:analyzer
+
+      - name: Prepare semantic fixture
+        run: |
+          dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet restore tests/fixtures/project-kinds/ProjectKinds.slnx
+          dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
+
+      - name: C# tests
+        run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release
+
+      - name: TypeScript and analyzer contract tests
         run: npm test
 
-      - name: Package VSIX
-        run: npm run package
+      - name: Check and package VSIX
+        run: |
+          npm run check:vsix
+          mv sharpdeps-check.vsix "$VSIX_PATH"
+          sha256sum "$VSIX_PATH" > "$VSIX_PATH.sha256"
 
       - name: Publish to Visual Studio Marketplace
         if: ${{ env.VSCE_PAT != '' }}
-        run: npx --yes @vscode/vsce publish --packagePath *.vsix --pat "$VSCE_PAT"
+        run: npx --no-install vsce publish --packagePath "$VSIX_PATH" --pat "$VSCE_PAT"
 
       - name: Publish to Open VSX
         if: ${{ env.OVSX_PAT != '' }}
-        run: npx --yes ovsx publish *.vsix --pat "$OVSX_PAT"
+        run: npx --yes ovsx publish "$VSIX_PATH" --pat "$OVSX_PAT"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" *.vsix --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" --verify-tag --notes-file CHANGELOG.md

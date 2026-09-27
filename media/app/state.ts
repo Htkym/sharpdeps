@@ -5,6 +5,7 @@
 // failed, stale, filtered-to-empty) can be produced from a fixture in tests.
 
 import type { Granularity } from '../../src/analyzer/reportV2';
+import { translate, translator, type Language } from './i18n';
 import type {
   EntitySummary,
   Filters,
@@ -47,13 +48,14 @@ export interface HistoryEntry {
 }
 
 export interface ViewState {
+  language: Language;
   /** Target shown in the top bar. */
   target: { name: string; relativePath: string } | null;
   mode: 'quick' | 'semantic';
   resultMode?: 'quick' | 'semantic';
   profile: ProfileRequest;
   resultProfile?: ProfileRequest;
-  layout: { nodeSpacing: number; rankSpacing: number };
+  layout: { direction: 'RIGHT' | 'DOWN'; nodeSpacing: number; rankSpacing: number };
   imageOptions: { profile: boolean; omissions: boolean; legend: boolean };
   variantOptions: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
   capabilities: Capabilities;
@@ -114,10 +116,11 @@ export interface ViewState {
 export const HISTORY_LIMIT = 20;
 
 export const INITIAL_STATE: ViewState = {
+  language: 'en',
   target: null,
   mode: 'quick',
   profile: { configuration: 'Debug' },
-  layout: { nodeSpacing: 40, rankSpacing: 80 },
+  layout: { direction: 'RIGHT', nodeSpacing: 40, rankSpacing: 80 },
   imageOptions: { profile: true, omissions: true, legend: true },
   variantOptions: [],
   capabilities: {
@@ -153,6 +156,7 @@ export const INITIAL_STATE: ViewState = {
 };
 
 export type ViewAction =
+  | { type: 'languageChanged'; language: Language }
   | { type: 'targetSelected'; name: string; relativePath: string }
   | { type: 'analyzeStarted'; analysisId: string; mode: 'quick' | 'semantic' }
   | { type: 'modeChanged'; mode: 'quick' | 'semantic' }
@@ -275,11 +279,13 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         }
       };
     case 'layoutChanged':
-      return { ...state, layout: action.layout };
+      return { ...state, layout: { ...state.layout, ...action.layout } };
     case 'imageOptionsChanged':
       return { ...state, imageOptions: action.options };
     case 'modeChanged':
       return { ...state, mode: action.mode };
+    case 'languageChanged':
+      return action.language === state.language ? state : { ...state, language: action.language };
     case 'profileChanged':
       return {
         ...state,
@@ -617,6 +623,7 @@ function sanitizeRestoredState(state: ViewState): ViewState {
     ...state,
     granularity,
     viewKind,
+    language: state.language === 'ja' ? 'ja' : 'en',
     paneWidths: {
       navigation: clampWidth(state.paneWidths?.navigation, INITIAL_STATE.paneWidths.navigation),
       inspector: clampWidth(state.paneWidths?.inspector, INITIAL_STATE.paneWidths.inspector)
@@ -749,9 +756,9 @@ export function selectVisibleData(state: ViewState): VisibleData {
 
 /** Breadcrumb segments for the current scope. */
 export function selectBreadcrumbs(state: ViewState): string[] {
-  const crumbs: string[] = [state.target?.name ?? 'No target'];
+  const crumbs: string[] = [state.target?.name ?? translate(state.language, 'No target')];
   if (state.scope.kind !== 'root') {
-    crumbs.push(state.scope.kind);
+    crumbs.push(translate(state.language, state.scope.kind));
     if (state.selection.entityId && state.details?.entityId === state.selection.entityId) {
       const entity = state.details.dependencies.concat(state.details.dependents);
       void entity;
@@ -763,22 +770,43 @@ export function selectBreadcrumbs(state: ViewState): string[] {
 
 /** Footer text: what is shown out of the analysis, always including the mode. */
 export function selectStatusFooter(state: ViewState): string {
+  const tr = translator(state.language);
   const visible = selectVisibleData(state);
-  const parts = [`Showing ${visible.nodes.length}/${visible.totalNodeCount} node(s)`];
-  parts.push(`${visible.edges.length}/${visible.totalEdgeCount} relation(s)`);
-  parts.push((state.resultMode ?? state.mode) === 'quick' ? 'Quick' : 'Semantic');
+  const parts = [tr('Showing {0}/{1} node(s)', visible.nodes.length, visible.totalNodeCount)];
+  parts.push(tr('{0}/{1} relation(s)', visible.edges.length, visible.totalEdgeCount));
+  parts.push(tr((state.resultMode ?? state.mode) === 'quick' ? 'Quick' : 'Semantic'));
   parts.push(state.profile.configuration ?? 'Debug');
   if (state.status === 'stale') {
-    parts.push('stale result');
+    parts.push(tr('stale result'));
   } else if (state.status === 'partial') {
-    parts.push('partial result');
+    parts.push(tr('partial result'));
   }
 
   if (state.projectionTruncated) {
-    parts.push('display budget applied');
+    parts.push(tr('display budget applied'));
   }
 
   return parts.join(' · ');
+}
+
+/** Translate generated status text when rendering, without restarting analysis. */
+export function selectStatusMessage(state: ViewState): string {
+  const tr = translator(state.language);
+  if (state.progress && state.status === 'analyzing') {
+    const parts = [tr(stageLabel(state.progress.stage))];
+    if (state.progress.loaded !== undefined) parts.push(tr('loaded {0}', state.progress.loaded));
+    if (state.progress.analyzed !== undefined)
+      parts.push(tr('analyzed {0}', state.progress.analyzed));
+    return parts.join(' · ');
+  }
+  const completion =
+    /^(Analysis complete(?: \(partial\))?|Analysis failed) · (\d+)\/(\d+) project\(s\) analyzed$/.exec(
+      state.statusMessage
+    );
+  if (completion)
+    return `${tr(completion[1])} · ${tr('{0}/{1} project(s) analyzed', completion[2], completion[3])}`;
+  if (state.status === 'cancelled') return tr('The analysis was stopped.');
+  return tr(state.statusMessage);
 }
 
 /**

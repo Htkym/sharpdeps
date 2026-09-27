@@ -57,5 +57,4 @@ npm run build:analyzer
 $env:SHARPDEPTS_UPDATE_BASELINE='1'; npm test -- tests/analyzer/quickBaseline.test.ts
 ```
 
-A changed snapshot is a behavior change: record the reason in
-`docs/implementation/v0.1.0/` before committing it.
+A changed snapshot is a behavior change: explain the reason in the commit message.

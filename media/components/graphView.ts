@@ -6,7 +6,8 @@
 // reported instead of swallowed, and the caller keeps the table as the fallback.
 
 import type { Projection } from '../../src/view/protocolV2';
-import { Camera } from '../graph/camera';
+import { translate, type Language } from '../app/i18n';
+import { Camera, CAMERA_LIMITS } from '../graph/camera';
 import {
   GRAPH_EXPORT_STYLES,
   readThemeStyles,
@@ -37,9 +38,14 @@ export interface GraphViewOptions {
 }
 
 export interface GraphView {
+  setLanguage(language: Language): void;
   readonly element: HTMLElement;
   update(projection: Projection, scopeLabel: string): Promise<void>;
-  setSpacing(options: { nodeSpacing: number; rankSpacing: number }): void;
+  setLayout(options: {
+    direction: 'RIGHT' | 'DOWN';
+    nodeSpacing: number;
+    rankSpacing: number;
+  }): void;
   cancelLayout(): void;
   retryLayout(): void;
   setSelection(nodeIds: readonly string[], edgeIds: readonly string[]): void;
@@ -84,9 +90,23 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   let rendered: RenderResult | undefined;
   let renderedKey = '';
   let renderedSelection = selection.get();
+  const edgeRepresentatives = new Map<string, string>();
+  const displaySelection = () => {
+    const current = selection.get();
+    return {
+      nodeIds: current.nodeIds,
+      edgeIds: new Set([...current.edgeIds].map((id) => edgeRepresentatives.get(id) ?? id))
+    };
+  };
   let generation = 0;
-  let spacing = { nodeSpacing: 40, rankSpacing: 80 };
+  let spacing: { direction: 'RIGHT' | 'DOWN'; nodeSpacing: number; rankSpacing: number } = {
+    direction: 'RIGHT',
+    nodeSpacing: 40,
+    rankSpacing: 80
+  };
   let fitOnResize = true;
+  let language: Language = 'en';
+  let minimumFitZoom: number = CAMERA_LIMITS.min;
   let pendingLayout: Promise<void> = Promise.resolve();
   let pendingCamera: { zoom: number; scrollLeft: number; scrollTop: number } | undefined;
 
@@ -99,7 +119,7 @@ export function createGraphView(options: GraphViewOptions): GraphView {
 
   const renderSelection = (): void => {
     if (!rendered || !layout) return;
-    const current = selection.get();
+    const current = displaySelection();
     const update = (
       elements: Map<string, SVGGElement>,
       previous: ReadonlySet<string>,
@@ -119,13 +139,14 @@ export function createGraphView(options: GraphViewOptions): GraphView {
 
   const renderLayout = (): void => {
     if (!projection || !layout) return;
-    const key = JSON.stringify(projection);
+    const key = JSON.stringify([projection, language]);
     if (key === renderedKey) {
       renderSelection();
       return;
     }
-    renderedSelection = selection.get();
+    renderedSelection = displaySelection();
     rendered = renderGraph(targets, projection, layout, {
+      language,
       selectedNodeIds: renderedSelection.nodeIds,
       selectedEdgeIds: renderedSelection.edgeIds
     });
@@ -187,7 +208,9 @@ export function createGraphView(options: GraphViewOptions): GraphView {
       pendingCamera = undefined;
     } else {
       camera.setContentSize(result.width, result.height);
-      camera.fit();
+      // Long horizontal graphs may scroll instead of shrinking text while height is free.
+      minimumFitZoom = spacing.direction === 'RIGHT' ? 1 : CAMERA_LIMITS.min;
+      camera.fit(24, minimumFitZoom);
     }
     options.onCameraChanged?.(camera.state);
   }
@@ -202,12 +225,19 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   viewport.addEventListener('pointerup', reportCamera);
   viewport.addEventListener('wheel', reportCamera, { passive: true });
   const resizeObserver = new ResizeObserver(() => {
-    if (layout && fitOnResize) camera.fit();
+    if (layout && fitOnResize) camera.fit(24, minimumFitZoom);
   });
   resizeObserver.observe(viewport);
 
   return {
     element,
+    setLanguage: (next) => {
+      if (language === next) return;
+      language = next;
+      viewport.setAttribute('aria-label', translate(language, 'Dependency graph'));
+      svg.setAttribute('aria-label', translate(language, 'Dependency graph'));
+      renderLayout();
+    },
     cancelLayout: () => {
       generation++;
       layoutClient.cancel();
@@ -218,10 +248,15 @@ export function createGraphView(options: GraphViewOptions): GraphView {
       currentKey = '';
       options.onError?.(undefined);
     },
-    setSpacing: (next) => {
+    setLayout: (next) => {
       spacing = next;
+      element.dataset.direction = next.direction;
     },
     update: (nextProjection, scopeLabel) => {
+      edgeRepresentatives.clear();
+      for (const edge of nextProjection.edges)
+        for (const id of edge.underlyingRelationIds ?? [edge.id])
+          edgeRepresentatives.set(id, edge.id);
       pendingLayout = apply(toGraphProjection(nextProjection, scopeLabel));
       return pendingLayout;
     },
@@ -236,6 +271,7 @@ export function createGraphView(options: GraphViewOptions): GraphView {
     cameraState: () => camera.state,
     fit: () => {
       fitOnResize = true;
+      minimumFitZoom = CAMERA_LIMITS.min;
       camera.fit();
       options.onCameraChanged?.(camera.state);
     },

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Core.Xml;
 
 namespace SharpDeps.Analysis.Roslyn;
 
@@ -280,7 +282,8 @@ public static class SemanticLoader
                     AddedTransitiveReferences: addedReferences.GetValueOrDefault(variantKey),
                     CompilationObtained: compilationObtained,
                     ErrorDiagnosticCount: errorDiagnostics,
-                    FailureReason: null));
+                    FailureReason: null,
+                    Kind: ReadProjectKind(project, limitations)));
 
             foreach (var reference in project.ProjectReferences)
             {
@@ -500,6 +503,30 @@ public static class SemanticLoader
     /// projects as compilation references. Nothing is written to the project files:
     /// the additions are in-memory only.
     /// </summary>
+    private static string ReadProjectKind(Project project, List<ProbeLimitation> limitations)
+    {
+        if (project.FilePath is null) return "unknown";
+        try
+        {
+            var root = XDocument.Load(project.FilePath).Root;
+            if (root is null) return "unknown";
+            var outputType = project.CompilationOptions?.OutputKind switch
+            {
+                OutputKind.ConsoleApplication => "Exe",
+                OutputKind.WindowsApplication => "WinExe",
+                _ => null
+            };
+            return ProjectKindDetection.FromProjectXml(
+                Path.GetFileNameWithoutExtension(project.FilePath), root, outputType);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            limitations.Add(new ProbeLimitation("semantic.projectKindUnavailable",
+                $"Project kind could not be read for '{project.Name}': {error.Message}", 1));
+            return "unknown";
+        }
+    }
+
     private static async Task<IReadOnlyDictionary<string, Compilation>> BuildCompilationsAsync(
         Solution solution,
         SemanticLoadOptions options,

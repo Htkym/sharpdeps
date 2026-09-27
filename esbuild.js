@@ -1,7 +1,5 @@
 // Build script for the SharpDeps extension.
-// Produces two bundles:
-//   - src/extension.ts  -> out/extension.js      (Node, CommonJS, 'vscode' external)
-//   - media/viewer.ts   -> media/viewer.js        (browser, IIFE, mermaid bundled in)
+// Bundles the extension host, webview shell, and ELK layout worker.
 const esbuild = require('esbuild');
 const fs = require('fs');
 
@@ -50,19 +48,6 @@ const extensionConfig = {
   external: ['vscode']
 };
 
-/** @type {import('esbuild').BuildOptions} */
-const viewerConfig = {
-  ...common,
-  entryPoints: ['media/viewer.ts'],
-  outfile: 'media/viewer.js',
-  platform: 'browser',
-  format: 'iife',
-  target: 'es2020',
-  define: {
-    'process.env.NODE_ENV': production ? '"production"' : '"development"'
-  }
-};
-
 // The layout worker is bundled on its own because the webview starts it from a
 // Blob URL (a worker script cannot be loaded directly from the resource URI).
 /** @type {import('esbuild').BuildOptions} */
@@ -76,21 +61,7 @@ const layoutWorkerConfig = {
   plugins: [elkFakeWorkerPlugin]
 };
 
-// SD-004 prototype entry, driven by tests/webview/fixtures/graph-prototype.html.
-/** @type {import('esbuild').BuildOptions} */
-const graphPrototypeConfig = {
-  ...common,
-  entryPoints: ['media/graph/prototype.ts'],
-  outfile: 'media/graph/prototype.js',
-  platform: 'browser',
-  format: 'iife',
-  target: 'es2020',
-  define: {
-    'process.env.NODE_ENV': production ? '"production"' : '"development"'
-  }
-};
-
-// New viewer shell (SD-015), driven by media/app/entry.ts.
+// Webview shell.
 /** @type {import('esbuild').BuildOptions} */
 const shellConfig = {
   ...common,
@@ -108,9 +79,7 @@ async function main() {
   if (watch) {
     const contexts = await Promise.all([
       esbuild.context(extensionConfig),
-      esbuild.context(viewerConfig),
       esbuild.context(layoutWorkerConfig),
-      esbuild.context(graphPrototypeConfig),
       esbuild.context(shellConfig)
     ]);
     await Promise.all(contexts.map((c) => c.watch()));
@@ -118,9 +87,7 @@ async function main() {
   } else {
     await Promise.all([
       esbuild.build(extensionConfig),
-      esbuild.build(viewerConfig),
       esbuild.build(layoutWorkerConfig),
-      esbuild.build(graphPrototypeConfig),
       esbuild.build(shellConfig)
     ]);
     console.log('[esbuild] build complete');

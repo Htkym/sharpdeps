@@ -1,4 +1,8 @@
 using SharpDeps.Analysis.Roslyn;
+using SharpDeps.Analysis.Roslyn.Symbols;
+using SharpDeps.Analysis.Roslyn.Evidence;
+using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Quick;
 using Xunit;
 
 namespace SharpDeps.Analysis.Tests;
@@ -11,6 +15,27 @@ namespace SharpDeps.Analysis.Tests;
 [Collection("semantic")]
 public sealed class SemanticLoaderIntegrationTests
 {
+    [Fact]
+    public async Task PreservesWebKindsFromSdkAttributesAndImportsInBothReports()
+    {
+        var target = TestPaths.Fixture("project-kinds", "ProjectKinds.slnx");
+        var load = await SemanticLoader.LoadAsync(new SemanticLoadOptions(target));
+        var root = Path.GetDirectoryName(target)!;
+        var index = SymbolIndexBuilder.Build(Identity.WorkspaceRootId(root), root,
+            load.Report.Variants.Select(variant => new SymbolIndexInput(
+                variant.VariantKey, variant.ProjectName, load.Compilations[variant.VariantKey])).ToArray());
+        var semantic = SemanticReportWriter.Write(load, index, [], new OperationCollectionStats(0, 0, 0, 0),
+            DateTimeOffset.UtcNow, target).Snapshot;
+        var quick = await QuickAnalyzer.AnalyzeAsync(target, 60, 200);
+        foreach (var name in new[] { "WebAttribute", "WebImport", "WebSupport" })
+        {
+            var expected = name == "WebSupport" ? "library" : "web";
+            Assert.Equal(expected, load.Report.Variants.Single(variant => variant.ProjectName == name).Kind);
+            Assert.Equal(expected, semantic.Projects.Single(project => project.Name == name).Kind);
+            Assert.Equal(expected, quick.Projects.Single(project => project.Name == name).Kind);
+        }
+    }
+
     private static readonly string RepositoryRoot = FindRepositoryRoot();
 
     static SemanticLoaderIntegrationTests()

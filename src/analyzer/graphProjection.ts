@@ -99,7 +99,7 @@ export function buildProjection(
       (included.has(node.id) || matchesEntity(node, request.filters ?? {}, request.search ?? ''))
   );
   const filteredIds = new Set(scopedNodes.map((node) => node.id));
-  const scopedEdges = allEdges.filter(
+  const filteredEdges = allEdges.filter(
     (edge) =>
       filteredIds.has(edge.sourceId) &&
       filteredIds.has(edge.targetId) &&
@@ -108,6 +108,35 @@ export function buildProjection(
           (!request.filters?.relationKinds?.length ||
             request.filters.relationKinds.some((kind) => edge.kinds.includes(kind)))))
   );
+  // Draw one directed connection per pair, after applying basis/kind filters.
+  // Retain every underlying relation so the inspector can show all its evidence.
+  const pairs = new Map<string, ProjectionEdge>();
+  for (const edge of filteredEdges) {
+    const key = `${edge.sourceId}\u001f${edge.targetId}`;
+    const previous = pairs.get(key);
+    if (!previous) {
+      pairs.set(key, edge);
+      continue;
+    }
+    const representative =
+      basisPriority(edge.basis) > basisPriority(previous.basis) ? edge : previous;
+    const other = representative === edge ? previous : edge;
+    pairs.set(key, {
+      ...representative,
+      kinds: [...new Set([...previous.kinds, ...edge.kinds])].sort(),
+      evidenceCount: previous.evidenceCount + edge.evidenceCount,
+      generatedEvidenceCount:
+        (previous.generatedEvidenceCount ?? 0) + (edge.generatedEvidenceCount ?? 0),
+      publicSurfaceEvidenceCount:
+        (previous.publicSurfaceEvidenceCount ?? 0) + (edge.publicSurfaceEvidenceCount ?? 0),
+      inCycle: previous.inCycle || edge.inCycle,
+      underlyingRelationIds: [
+        ...(representative.underlyingRelationIds ?? [representative.id]),
+        ...(other.underlyingRelationIds ?? [other.id])
+      ]
+    });
+  }
+  const scopedEdges = [...pairs.values()];
 
   const degree = new Map<string, number>();
   for (const edge of scopedEdges) {
@@ -146,6 +175,16 @@ export function buildProjection(
     totalEdgeCount: scopedEdges.length,
     truncated: selected.length < scopedNodes.length || edges.length < scopedEdges.length
   };
+}
+
+function basisPriority(basis: string): number {
+  return basis === 'symbolResolved'
+    ? 3
+    : basis === 'projectEvaluated'
+      ? 2
+      : basis === 'projectDeclared'
+        ? 1
+        : 0;
 }
 
 function toEdge(

@@ -24,6 +24,12 @@ function toNode(node: EntitySummary): GraphNodeInput {
     id: node.id,
     label: node.name,
     sublabel: sublabelOf(node),
+    sublabelKind:
+      (!node.projectName ||
+        node.projectName.trim().toLowerCase() === node.name.trim().toLowerCase()) &&
+      node.kind?.trim().toLowerCase() !== node.name.trim().toLowerCase()
+        ? node.kind
+        : undefined,
     kind: kindOf(node),
     projectKind: node.projectKind ?? (node.granularity === 'project' ? node.kind : undefined),
     inCycle: node.inCycle === true,
@@ -40,7 +46,7 @@ export function projectKindColor(kind: string): string {
     desktop: 'var(--vscode-charts-orange, #d18616)',
     app: 'var(--vscode-charts-yellow, #cca700)'
   };
-  return colors[kind] ?? 'var(--vscode-panel-border, #6b6b6b)';
+  return colors[kind] ?? 'var(--vscode-descriptionForeground, #a0a0a0)';
 }
 
 function kindOf(node: EntitySummary): NodeKind {
@@ -49,14 +55,15 @@ function kindOf(node: EntitySummary): NodeKind {
 
 function sublabelOf(node: EntitySummary): string | undefined {
   const parts: string[] = [];
-  if (node.projectName) {
+  const label = node.name.trim().toLowerCase();
+  if (node.projectName && node.projectName.trim().toLowerCase() !== label) {
     parts.push(node.projectName);
-  } else if (node.kind) {
+  } else if (node.kind && node.kind.trim().toLowerCase() !== label) {
     parts.push(node.kind);
   }
 
   if (node.isExternal) {
-    parts.push('外部');
+    parts.push('External');
   }
 
   return parts.length > 0 ? parts.join(' ・ ') : undefined;
@@ -81,10 +88,10 @@ function toEdge(edge: Projection['edges'][number]): GraphEdgeInput {
  * changes. Selection and inspector changes never affect it, so they never re-run ELK.
  */
 export function projectionKey(projection: GraphProjection): string {
-  return [
-    projection.granularity,
-    projection.scopeLabel,
-    projection.nodes.map((node) => node.id).join(','),
-    projection.edges.map((edge) => edge.id).join(',')
-  ].join('|');
+  return JSON.stringify({
+    granularity: projection.granularity,
+    scopeLabel: projection.scopeLabel,
+    nodes: projection.nodes.map((node) => [node.id, node.label, node.sublabel]),
+    edges: projection.edges.map((edge) => [edge.id, edge.sourceId, edge.targetId])
+  });
 }

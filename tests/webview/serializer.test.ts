@@ -21,7 +21,8 @@ describe('view state serialization', () => {
       scope: { kind: 'dependencies' as const, id: 'ty_1111111111111111', depth: 2 },
       search: 'Order',
       paneWidths: { navigation: 260, inspector: 400 },
-      tablePage: 2
+      tablePage: 2,
+      layout: { direction: 'DOWN' as const, nodeSpacing: 40, rankSpacing: 80 }
     };
 
     const stored = serializeViewState(state, { zoom: 1.4, scrollLeft: 30, scrollTop: 12 });
@@ -37,11 +38,22 @@ describe('view state serialization', () => {
       scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
       search: 'Order',
       paneWidths: { navigation: 260, inspector: 400 },
-      tablePage: 2
+      tablePage: 2,
+      layout: { direction: 'DOWN', nodeSpacing: 40, rankSpacing: 80 }
     });
 
     const withCamera = restoreViewState(stored);
     expect(withCamera.state.camera).toEqual({ zoom: 1.4, scrollLeft: 30, scrollTop: 12 });
+  });
+
+  it('restores old or invalid direction settings as horizontal', () => {
+    for (const direction of [undefined, 'UP', 3]) {
+      const restored = deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        layout: { direction, nodeSpacing: 40, rankSpacing: 80 }
+      });
+      expect(restored.state.layout?.direction).toBe('RIGHT');
+    }
   });
 
   it('ignores a different schema version instead of guessing', () => {

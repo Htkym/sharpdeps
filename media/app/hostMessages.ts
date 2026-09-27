@@ -167,7 +167,7 @@ export function toViewActions(
       return [
         {
           type: 'analysisStale',
-          message: 'The analysis result is out of date. Analyze again to refresh.'
+          message: 'This result is out of date. Analyze again to refresh.'
         }
       ];
 

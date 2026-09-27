@@ -138,10 +138,17 @@ describe('review regressions through the published analyzers', () => {
     const declared = snapshot.relations.find((relation) => relation.basis === 'projectDeclared')!;
     expect(declared.sourceEntityId).not.toBe(declared.targetEntityId);
     const graph = buildProjection(snapshot, { granularity: 'project' });
-    expect(graph.edges).toHaveLength(2);
-    expect(new Set(graph.edges.map((edge) => edge.basis))).toEqual(
-      new Set(['projectDeclared', 'usingInferred'])
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0].basis).toBe('projectDeclared');
+    expect(graph.edges[0].underlyingRelationIds).toEqual(
+      expect.arrayContaining(snapshot.relations.map((relation) => relation.id))
     );
+    const inferredOnly = buildProjection(snapshot, {
+      granularity: 'project',
+      filters: { basis: ['usingInferred'] }
+    });
+    expect(inferredOnly.edges).toHaveLength(1);
+    expect(inferredOnly.edges[0].basis).toBe('usingInferred');
   });
 
   it('retains initializer/type-argument evidence, file-local identity and complete cycle paths', () => {

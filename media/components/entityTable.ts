@@ -6,6 +6,7 @@
 
 import type { EntitySummary } from '../../src/view/protocolV2';
 import type { SortState } from '../app/query';
+import { translator, type Language } from '../app/i18n';
 
 export interface TableRow {
   entity: EntitySummary;
@@ -14,6 +15,7 @@ export interface TableRow {
 }
 
 export interface EntityTableOptions {
+  language?: Language;
   rows: TableRow[];
   sort: SortState;
   page: number;
@@ -36,11 +38,13 @@ const COLUMNS: Array<{ key: SortState['key'] | null; label: string }> = [
 ];
 
 export function renderEntityTable(container: HTMLElement, options: EntityTableOptions): void {
+  const tr = translator(options.language);
   container.replaceChildren();
   container.dataset.role = 'entity-table';
 
   const table = document.createElement('table');
   table.className = 'sd-table';
+  table.setAttribute('aria-label', tr('Dependencies'));
   table.dataset.rowsPerPage = '100';
 
   const head = document.createElement('thead');
@@ -53,12 +57,15 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
       button.type = 'button';
       button.className = 'sd-sort';
       const active = options.sort.key === column.key;
-      button.textContent = `${column.label}${active ? (options.sort.direction === 'asc' ? ' ▲' : ' ▼') : ''}`;
-      button.setAttribute('aria-sort', active ? options.sort.direction : 'none');
+      button.textContent = `${tr(column.label)}${active ? (options.sort.direction === 'asc' ? ' ▲' : ' ▼') : ''}`;
+      cell.setAttribute(
+        'aria-sort',
+        active ? (options.sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'
+      );
       button.addEventListener('click', () => options.onSort(column.key as SortState['key']));
       cell.append(button);
     } else {
-      cell.textContent = column.label;
+      cell.textContent = tr(column.label);
     }
 
     headRow.append(cell);
@@ -74,6 +81,7 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
     element.dataset.entityId = entity.id;
     element.tabIndex = 0;
     element.classList.toggle('sd-row-selected', entity.id === options.selectedId);
+    element.setAttribute('aria-selected', String(entity.id === options.selectedId));
     element.classList.toggle('sd-row-temporary', row.temporary);
     element.addEventListener('click', () => options.onSelect(entity.id));
     element.addEventListener('dblclick', () => options.onActivate(entity.id));
@@ -86,11 +94,11 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
 
     const values = [
       entity.name,
-      entity.kind ?? '—',
+      tr(entity.kind ?? '—'),
       entity.projectName ?? '—',
       String(entity.dependencyCount ?? 0),
       String(entity.dependentCount ?? 0),
-      entity.inCycle ? 'yes' : 'no'
+      tr(entity.inCycle ? 'yes' : 'no')
     ];
 
     values.forEach((value, index) => {
@@ -99,7 +107,7 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
       if (index === 0 && row.temporary) {
         const badge = document.createElement('span');
         badge.className = 'sd-badge';
-        badge.textContent = 'outside filters';
+        badge.textContent = tr('outside filters');
         cell.append(badge);
       }
 
@@ -115,14 +123,19 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
   const footer = document.createElement('div');
   footer.className = 'sd-table-footer';
   const summary = document.createElement('span');
-  summary.textContent = `${options.totalItems} row(s) · page ${options.page + 1}/${options.pageCount} · 100 per page`;
+  summary.textContent = tr(
+    '{0} row(s) · page {1}/{2} · 100 per page',
+    options.totalItems,
+    options.page + 1,
+    options.pageCount
+  );
   footer.append(summary);
 
   if (options.pageCount > 1) {
-    const previous = pageButton('Previous', options.page > 0, () =>
+    const previous = pageButton(tr('Previous'), options.page > 0, () =>
       options.onPage(options.page - 1)
     );
-    const next = pageButton('Next', options.page + 1 < options.pageCount, () =>
+    const next = pageButton(tr('Next'), options.page + 1 < options.pageCount, () =>
       options.onPage(options.page + 1)
     );
     footer.append(previous, next);

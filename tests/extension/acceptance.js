@@ -164,7 +164,7 @@ exports.run = async function () {
         await frame.getByRole('searchbox', { name: 'Search analyzed entities' }).fill('');
         await frame.locator('#sd-tab-cycles').press('Enter');
         await frame
-          .getByRole('button', { name: 'この循環を表示', exact: true })
+          .getByRole('button', { name: 'Show this cycle', exact: true })
           .first()
           .press('Enter');
         await expect.poll(async () => (await state()).scope.kind).toBe('cycle');
@@ -240,7 +240,7 @@ exports.run = async function () {
           );
         await frame.locator(`g.edge[data-id="${relation.id}"]`).press('Enter', { timeout: 20000 });
         await frame
-          .getByRole('button', { name: 'エディターで開く', exact: true })
+          .getByRole('button', { name: 'Open in editor', exact: true })
           .first()
           .press('Enter');
         await expect

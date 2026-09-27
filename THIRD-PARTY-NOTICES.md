@@ -12,13 +12,6 @@ short on purpose: everything else is a development dependency and is not package
 - Source: https://github.com/kieler/elkjs
 - Full licence text: [resources/ELK-LICENSE.md](resources/ELK-LICENSE.md).
 
-## mermaid (diagram rendering for the v1 viewer)
-
-- Package: `mermaid`
-- Licence: MIT
-- How it ships: bundled into `media/viewer.js`.
-- Source: https://github.com/mermaid-js/mermaid
-
 ## .NET runtime and Roslyn
 
 The VSIX includes Roslyn compiler and workspace libraries, MSBuildLocator, the Roslyn

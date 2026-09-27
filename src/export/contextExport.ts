@@ -126,6 +126,17 @@ export function buildContextExport(input: ContextExportInput): string {
     lines.push(
       `- ${source} → ${target} · ${edge.kinds.join(', ') || edge.basis} · ${edge.evidenceCount} occurrence(s)${inferred}${edge.inCycle ? ' · cycle' : ''}`
     );
+    if ((edge.underlyingRelations?.length ?? 0) > 1) {
+      const byBasis = new Map<string, number>();
+      for (const relation of edge.underlyingRelations ?? []) {
+        byBasis.set(relation.basis, (byBasis.get(relation.basis) ?? 0) + relation.evidenceCount);
+      }
+      for (const [basis, count] of byBasis) {
+        lines.push(
+          `  - ${basis}: ${count} occurrence(s)${basis === 'usingInferred' ? ' · inferred' : ''}`
+        );
+      }
+    }
 
     const evidence = input.evidenceByRelation[edge.id] ?? [];
     for (const record of evidence.slice(0, limit)) {
@@ -229,7 +240,8 @@ export function buildExportJson(input: ContextExportInput): string {
           inCycle: edge.inCycle,
           generatedEvidenceCount: edge.generatedEvidenceCount ?? 0,
           publicSurfaceEvidenceCount: edge.publicSurfaceEvidenceCount ?? 0,
-          underlyingRelationIds: edge.underlyingRelationIds ?? [edge.id]
+          underlyingRelationIds: edge.underlyingRelationIds ?? [edge.id],
+          underlyingRelations: edge.underlyingRelations
         })),
         cycles: input.cycles.map((group) => ({
           id: group.id,

@@ -1,7 +1,7 @@
 {
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
-  "description": "Visualize .NET solution dependencies at project and namespace granularity, with circular-dependency detection.",
+  "description": "Explore .NET project, namespace, and type dependencies with source evidence and cycle detection.",
   "version": "0.1.0",
   "publisher": "htkym",
   "license": "MIT",
@@ -185,10 +185,9 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
-    "mermaid": "^11.4.0",
     "prettier": "^3.9.4",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.62.1",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   }
 }

@@ -5,15 +5,21 @@
 // in `media/app/app.ts`. Panes and the toolbar stay reachable at 360 CSS px.
 
 import type { Filters, ProfileRequest } from '../../src/view/protocolV2';
+import { shellTranslations, type Language } from '../app/i18n';
 export type NavTab = 'structure' | 'cycles' | 'analysis';
 
 export interface ShellHandlers {
+  onLanguageToggled: () => void;
   onAnalyze: () => void;
   onStop: () => void;
   onCancelLayout: () => void;
   onRetryLayout: () => void;
   onZoom: (zoom: number | 'in' | 'out' | 'fit') => void;
-  onLayout: (layout: { nodeSpacing: number; rankSpacing: number }) => void;
+  onLayout: (layout: {
+    direction: 'RIGHT' | 'DOWN';
+    nodeSpacing: number;
+    rankSpacing: number;
+  }) => void;
   onImageOptions: (options: { profile: boolean; omissions: boolean; legend: boolean }) => void;
   onMode: (mode: 'quick' | 'semantic') => void;
   onProfile: (profile: ProfileRequest) => void;
@@ -32,6 +38,8 @@ export interface ShellHandlers {
 }
 
 export interface ShellElements {
+  languageToggle: HTMLButtonElement;
+  setLanguage: (language: Language) => void;
   root: HTMLElement;
   targetName: HTMLElement;
   targetPath: HTMLElement;
@@ -43,6 +51,7 @@ export interface ShellElements {
   zoom: HTMLInputElement;
   nodeSpacing: HTMLInputElement;
   rankSpacing: HTMLInputElement;
+  layoutDirection: HTMLSelectElement;
   legend: HTMLElement;
   imageOptions: {
     profile: HTMLInputElement;
@@ -53,10 +62,10 @@ export interface ShellElements {
     tests: HTMLInputElement;
     external: HTMLInputElement;
     generated: HTMLInputElement;
-    basis: HTMLSelectElement;
-    kinds: HTMLSelectElement;
-    projectKinds: HTMLSelectElement;
-    relations: HTMLSelectElement;
+    basis: HTMLFieldSetElement;
+    kinds: HTMLFieldSetElement;
+    projectKinds: HTMLFieldSetElement;
+    relations: HTMLFieldSetElement;
   };
   analyzeButton: HTMLButtonElement;
   stopButton: HTMLButtonElement;
@@ -73,6 +82,7 @@ export interface ShellElements {
   mapHost: HTMLElement;
   /** Persistent host for the SVG graph; hidden outside the graph view. */
   graphHost: HTMLElement;
+  graphControls: HTMLElement;
   /** Per-render area for the table and state messages. */
   mapContent: HTMLElement;
   mapSummary: HTMLElement;
@@ -102,12 +112,10 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     ['quick', 'Quick'],
     ['semantic', 'Semantic']
   ]);
+  modeSelect.setAttribute('aria-label', 'Analysis mode');
 
   const analyzeButton = button('sd-analyze', 'Analyze', 'primary');
-  const profilePicker = document.createElement('details');
-  const profileSummary = document.createElement('summary');
-  profileSummary.textContent = 'Profile';
-  profilePicker.append(profileSummary);
+  const { trigger: profileSummary, panel: profilePicker } = toolbarPopover('profile', 'Profile');
   const configuration = document.createElement('input');
   configuration.value = 'Debug';
   configuration.maxLength = 64;
@@ -133,9 +141,8 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   const stopButton = button('sd-stop', 'Stop', 'danger');
   stopButton.disabled = true;
 
-  const exportButton = button('sd-export', 'Export ▾');
-  const exportMenu = element('div', 'sd-menu');
-  exportMenu.hidden = true;
+  const { trigger: exportButton, panel: exportMenu } = toolbarPopover('export', 'Export ▾');
+  exportMenu.classList.add('sd-menu');
   for (const [format, label] of [
     ['mermaid', 'Mermaid'],
     ['svg', 'SVG'],
@@ -144,13 +151,15 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   ] as const) {
     const item = button(`sd-export-${format}`, label);
     item.addEventListener('click', () => {
-      exportMenu.hidden = true;
+      exportMenu.hidePopover();
       handlers.onExport(format);
     });
     exportMenu.append(item);
   }
 
   const copyButton = button('sd-copy', 'Copy for agent');
+  const languageToggle = button('sd-language', '日本語');
+  languageToggle.addEventListener('click', handlers.onLanguageToggled);
 
   const overflow = element('div', 'sd-overflow');
   overflow.append(exportButton, exportMenu, copyButton);
@@ -158,15 +167,18 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   const topBarMeta = element('div', 'sd-topbar-meta');
   topBarMeta.append(breadcrumbElement(), statusTextPlaceholder());
   const statusText = topBarMeta.querySelector('.sd-status-text') as HTMLElement;
+  statusText.setAttribute('role', 'status');
   const breadcrumbs = topBarMeta.querySelector('.sd-breadcrumbs') as HTMLElement;
 
   topBar.append(
     targetBlock,
     modeSelect,
+    profileSummary,
     profilePicker,
     analyzeButton,
     stopButton,
     overflow,
+    languageToggle,
     topBarMeta
   );
 
@@ -175,6 +187,8 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   const navTabs = element('div', 'sd-nav-tabs');
   navTabs.setAttribute('role', 'tablist');
   const navPaneBody = element('div', 'sd-nav-body');
+  navPaneBody.id = 'sd-navigation-panel';
+  navPaneBody.setAttribute('role', 'tabpanel');
   for (const [tab, label] of [
     ['structure', 'Structure'],
     ['cycles', 'Cycles'],
@@ -183,9 +197,25 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     const tabButton = button(`sd-tab-${tab}`, label, 'tab');
     tabButton.dataset.tab = tab;
     tabButton.setAttribute('role', 'tab');
+    tabButton.setAttribute('aria-controls', navPaneBody.id);
+    tabButton.tabIndex = tab === 'structure' ? 0 : -1;
     tabButton.addEventListener('click', () => handlers.onNavTab(tab));
     navTabs.append(tabButton);
   }
+  navTabs.addEventListener('keydown', (event) => {
+    const tabs = [...navTabs.querySelectorAll<HTMLButtonElement>('button')];
+    const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? tabs.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
+    event.preventDefault();
+    tabs[next].click();
+    tabs[next].focus();
+  });
 
   navPane.append(navTabs, navPaneBody);
 
@@ -202,7 +232,10 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     ['namespace', 'Namespaces'],
     ['type', 'Types']
   ]);
+  granularitySelect.setAttribute('aria-label', 'Graph level');
   const viewKindButtons = element('div', 'sd-viewkind');
+  viewKindButtons.setAttribute('role', 'group');
+  viewKindButtons.setAttribute('aria-label', 'Display mode');
   for (const [kind, label] of [
     ['graph', 'Graph'],
     ['table', 'Table']
@@ -239,10 +272,8 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     ['3', 'Depth 3']
   ]);
   depthSelect.addEventListener('change', () => handlers.onDepth(Number(depthSelect.value)));
-  const filterPicker = document.createElement('details');
-  const filterSummary = document.createElement('summary');
-  filterSummary.textContent = 'Filters';
-  filterPicker.append(filterSummary);
+  depthSelect.setAttribute('aria-label', 'Exploration depth');
+  const { trigger: filterSummary, panel: filterPicker } = toolbarPopover('filters', 'Filters');
   const checkbox = (name: string): HTMLInputElement => {
     const input = document.createElement('input');
     input.type = 'checkbox';
@@ -252,18 +283,24 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     filterPicker.append(label);
     return input;
   };
-  const multiple = (name: string, values: string[]): HTMLSelectElement => {
-    const input = select(
-      name,
-      values.map((value) => [value, value])
-    );
-    input.multiple = true;
-    input.size = 3;
-    const label = document.createElement('label');
-    label.textContent = name;
-    label.append(input);
-    filterPicker.append(label);
-    return input;
+  const multiple = (name: string, choices: string[]): HTMLFieldSetElement => {
+    const category = document.createElement('details');
+    category.className = 'sd-filter-category';
+    const summary = document.createElement('summary');
+    summary.textContent = name;
+    const group = document.createElement('fieldset');
+    group.setAttribute('aria-label', name);
+    for (const value of choices) {
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = value;
+      const label = document.createElement('label');
+      label.append(input, document.createTextNode(value));
+      group.append(label);
+    }
+    category.append(summary, group);
+    filterPicker.append(category);
+    return group;
   };
   const filterControls = {
     tests: checkbox('Include tests'),
@@ -302,8 +339,8 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
       'compileTimeName'
     ])
   };
-  const values = (input: HTMLSelectElement) =>
-    [...input.selectedOptions].map((option) => option.value);
+  const values = (group: HTMLFieldSetElement) =>
+    [...group.querySelectorAll<HTMLInputElement>('input:checked')].map((input) => input.value);
   for (const input of Object.values(filterControls))
     input.addEventListener('change', () =>
       handlers.onFilters({
@@ -316,46 +353,86 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
         relationKinds: values(filterControls.relations) as Filters['relationKinds']
       })
     );
-  mapToolbar.append(backButton, depthSelect, filterPicker);
+  mapToolbar.append(backButton, depthSelect, filterSummary, filterPicker);
 
-  const graphTools = document.createElement('details');
-  const graphSummary = document.createElement('summary');
-  graphSummary.textContent = 'Graph controls';
-  graphTools.append(graphSummary);
+  const graphControls = element('div', 'sd-graph-controls');
+  graphControls.setAttribute('role', 'group');
+  graphControls.setAttribute('aria-label', 'Graph controls');
+  const { trigger: spacingSummary, panel: graphTools } = toolbarPopover(
+    'spacing',
+    'Spacing',
+    'above'
+  );
+  const group = (name: string): HTMLFieldSetElement => {
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'sd-control-group';
+    const legend = document.createElement('legend');
+    legend.textContent = name;
+    fieldset.append(legend);
+    return fieldset;
+  };
+  const viewTools = group('View');
+  viewTools.classList.add('sd-graph-bar');
+  const spacingTools = group('Spacing');
+  const imageTools = group('Image export');
+  const layoutActions = element('div', 'sd-control-actions');
+  const layoutDirection = select('sd-layout-direction', [
+    ['RIGHT', 'Horizontal'],
+    ['DOWN', 'Vertical']
+  ]);
+  const directionLabel = document.createElement('label');
+  directionLabel.textContent = 'Direction';
+  directionLabel.htmlFor = layoutDirection.id;
+  directionLabel.append(layoutDirection);
+  viewTools.append(directionLabel);
   const cancelLayout = button('sd-cancel-layout', 'Cancel layout');
   cancelLayout.addEventListener('click', handlers.onCancelLayout);
   const retryLayout = button('sd-retry-layout', 'Retry layout');
   retryLayout.addEventListener('click', handlers.onRetryLayout);
-  graphTools.append(cancelLayout, retryLayout);
+  layoutActions.append(cancelLayout, retryLayout);
+  const zoomActions = element('div', 'sd-control-actions');
   for (const [label, action] of [
     ['Zoom in', 'in'],
     ['Zoom out', 'out'],
     ['Fit', 'fit']
   ] as const) {
     const control = button(`sd-${action}`, label);
+    if (action !== 'fit') {
+      control.textContent = action === 'in' ? '+' : '−';
+      control.setAttribute('aria-label', label);
+      control.title = label;
+    }
     control.addEventListener('click', () => handlers.onZoom(action));
-    graphTools.append(control);
+    zoomActions.append(control);
   }
+  viewTools.append(zoomActions);
   const range = (name: string, min: number, max: number, value: number) => {
     const input = document.createElement('input');
     input.type = 'range';
     input.min = String(min);
     input.max = String(max);
     input.value = String(value);
+    input.id = `sd-${name.toLowerCase().replaceAll(' ', '-')}`;
     input.setAttribute('aria-label', name);
     const label = document.createElement('label');
     label.textContent = name;
-    label.append(input);
-    graphTools.append(label);
+    label.className = 'sd-range-field';
+    label.htmlFor = input.id;
+    const output = document.createElement('output');
+    output.htmlFor = input.id;
+    output.value = String(value);
+    label.append(input, output);
+    (name === 'Zoom percent' ? viewTools : spacingTools).append(label);
     return input;
   };
   const zoom = range('Zoom percent', 20, 600, 100);
   zoom.addEventListener('input', () => handlers.onZoom(Number(zoom.value) / 100));
   const nodeSpacing = range('Node spacing', 10, 160, 40);
   const rankSpacing = range('Rank spacing', 20, 240, 80);
-  for (const input of [nodeSpacing, rankSpacing])
+  for (const input of [nodeSpacing, rankSpacing, layoutDirection])
     input.addEventListener('change', () =>
       handlers.onLayout({
+        direction: layoutDirection.value === 'DOWN' ? 'DOWN' : 'RIGHT',
         nodeSpacing: Number(nodeSpacing.value),
         rankSpacing: Number(rankSpacing.value)
       })
@@ -375,7 +452,7 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     input.checked = true;
     const label = document.createElement('label');
     label.append(input, document.createTextNode(labelText));
-    graphTools.append(label);
+    imageTools.append(label);
     input.addEventListener('change', () =>
       handlers.onImageOptions({
         profile: imageOptions.profile.checked,
@@ -384,7 +461,11 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
       })
     );
   }
-  mapToolbar.append(graphTools);
+  graphTools.append(spacingTools, layoutActions);
+  viewTools.append(spacingSummary);
+  graphControls.append(viewTools, graphTools);
+  center.append(graphControls);
+  exportMenu.append(imageTools);
   const legend = element('div', 'sd-legend');
   legend.setAttribute('aria-label', 'Graph legend');
   center.insertBefore(legend, mapHost);
@@ -398,6 +479,8 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   const inspectorPane = element('aside', 'sd-inspector');
   const inspectorHeader = element('div', 'sd-inspector-header');
   const inspectorTitle = element('h2', 'sd-inspector-title', 'Details');
+  inspectorTitle.id = 'sd-inspector-title';
+  inspectorPane.setAttribute('aria-labelledby', inspectorTitle.id);
   const inspectorClose = button('sd-inspector-close', 'Close');
   inspectorClose.addEventListener('click', () => handlers.onInspectorToggled());
   inspectorHeader.append(inspectorTitle, inspectorClose);
@@ -421,9 +504,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   modeSelect.addEventListener('change', () =>
     handlers.onMode(modeSelect.value as 'quick' | 'semantic')
   );
-  exportButton.addEventListener('click', () => {
-    exportMenu.hidden = !exportMenu.hidden;
-  });
   copyButton.addEventListener('click', () => handlers.onCopyContext());
   granularitySelect.addEventListener('change', () =>
     handlers.onGranularity(granularitySelect.value as 'project' | 'namespace' | 'type')
@@ -433,9 +513,12 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   wireSplitter(inspectorSplitter, 'inspector', handlers);
 
   const elements: ShellElements = {
+    languageToggle,
+    setLanguage: shellTranslations(root),
     zoom,
     nodeSpacing,
     rankSpacing,
+    layoutDirection,
     imageOptions,
     legend,
     root,
@@ -461,6 +544,7 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     searchInput,
     mapHost,
     graphHost,
+    graphControls,
     mapContent,
     mapSummary,
     statusText,
@@ -484,18 +568,22 @@ function wireSplitter(
   pane: 'navigation' | 'inspector',
   handlers: ShellHandlers
 ): void {
+  const paneElement = (
+    pane === 'navigation' ? splitter.previousElementSibling : splitter.nextElementSibling
+  ) as HTMLElement | null;
+  let startX = 0;
+  let startWidth = 0;
   const applyWith = (event: PointerEvent): void => {
-    const paneElement = splitter.previousElementSibling as HTMLElement | null;
-    if (!paneElement) {
-      return;
-    }
-
-    const rect = paneElement.getBoundingClientRect();
-    const width = pane === 'navigation' ? event.clientX - rect.left : rect.right - event.clientX;
+    const delta = event.clientX - startX;
+    const width = startWidth + (pane === 'navigation' ? delta : -delta);
     handlers.onPaneResized(pane, width);
   };
 
   splitter.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || !paneElement) return;
+    event.preventDefault();
+    startX = event.clientX;
+    startWidth = paneElement.getBoundingClientRect().width;
     splitter.setPointerCapture(event.pointerId);
     splitter.dataset.dragging = 'true';
   });
@@ -504,22 +592,29 @@ function wireSplitter(
       applyWith(event);
     }
   });
-  splitter.addEventListener('pointerup', (event) => {
-    splitter.releasePointerCapture(event.pointerId);
+  const stopDragging = (): void => {
     delete splitter.dataset.dragging;
+  };
+  splitter.addEventListener('pointerup', (event) => {
+    if (splitter.hasPointerCapture(event.pointerId)) {
+      splitter.releasePointerCapture(event.pointerId);
+    }
+    stopDragging();
   });
+  splitter.addEventListener('pointercancel', stopDragging);
+  splitter.addEventListener('lostpointercapture', stopDragging);
   splitter.addEventListener('keydown', (event) => {
-    const paneElement = splitter.previousElementSibling as HTMLElement | null;
     if (!paneElement) {
       return;
     }
 
     const current = paneElement.getBoundingClientRect().width;
+    const step = pane === 'navigation' ? 16 : -16;
     if (event.key === 'ArrowLeft') {
-      handlers.onPaneResized(pane, current - 16);
+      handlers.onPaneResized(pane, current - step);
       event.preventDefault();
     } else if (event.key === 'ArrowRight') {
-      handlers.onPaneResized(pane, current + 16);
+      handlers.onPaneResized(pane, current + step);
       event.preventDefault();
     }
   });
@@ -540,6 +635,41 @@ function element<K extends keyof HTMLElementTagNameMap>(
   }
 
   return node;
+}
+
+/** Native top-layer panels do not resize the toolbar or get clipped by the map. */
+function toolbarPopover(
+  id: string,
+  label: string,
+  placement: 'above' | 'below' = 'below'
+): {
+  trigger: HTMLButtonElement;
+  panel: HTMLDivElement;
+} {
+  const trigger = button(`sd-${id}-toggle`, label, 'toggle');
+  const panel = element('div', 'sd-toolbar-popover');
+  panel.id = `sd-${id}-panel`;
+  panel.setAttribute('popover', 'auto');
+  panel.setAttribute('role', 'group');
+  panel.setAttribute('aria-label', label);
+  trigger.setAttribute('popovertarget', panel.id);
+  trigger.setAttribute('aria-expanded', 'false');
+  panel.addEventListener('beforetoggle', (event) => {
+    const open = (event as ToggleEvent).newState === 'open';
+    trigger.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    const anchor = trigger.getBoundingClientRect();
+    const width = Math.min(320, window.innerWidth - 16);
+    const top = Math.min(anchor.bottom + 4, window.innerHeight - 80);
+    panel.style.width = `${width}px`;
+    panel.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8))}px`;
+    panel.style.top = placement === 'above' ? 'auto' : `${Math.max(8, top)}px`;
+    panel.style.bottom =
+      placement === 'above' ? `${window.innerHeight - anchor.top + 4}px` : 'auto';
+    panel.style.maxHeight = `${Math.max(0, placement === 'above' ? anchor.top - 12 : window.innerHeight - top - 8)}px`;
+  });
+  window.addEventListener('resize', () => panel.hidePopover());
+  return { trigger, panel };
 }
 
 function button(id: string, label: string, variant?: string): HTMLButtonElement {

@@ -138,6 +138,85 @@ async function run() {
       .poll(async () => (await state()).projection?.nodes.length ?? 0, { timeout: 20000 })
       .toBeGreaterThan(0);
     record('Quick renders a nonempty project view', (await state()).granularity === 'project');
+    const quickEdges = (await state()).projection.edges;
+    expect(new Set(quickEdges.map((edge) => `${edge.sourceId}:${edge.targetId}`)).size).toBe(
+      quickEdges.length
+    );
+    record('Quick draws one connection per directed project pair', true);
+    const repo = process.env.SHARPDEPTS_REPO;
+    const mapBounds = await frame.locator('.sd-map-host').boundingBox();
+    for (const id of ['filters', 'spacing', 'profile']) {
+      const trigger = frame.locator(`#sd-${id}-toggle`);
+      const panel = frame.locator(`#sd-${id}-panel`);
+      await trigger.click();
+      await expect(panel).toBeVisible();
+      expect(await frame.locator('.sd-map-host').boundingBox()).toEqual(mapBounds);
+      const visibleInFrame = await panel.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return (
+          rect.left >= 0 &&
+          rect.top >= 0 &&
+          rect.right <= innerWidth &&
+          rect.bottom <= innerHeight &&
+          element.contains(document.elementFromPoint(rect.left + 12, rect.top + 12))
+        );
+      });
+      expect(visibleInFrame).toBe(true);
+      if (id === 'spacing') {
+        const bounds = await panel.boundingBox();
+        const anchor = await trigger.boundingBox();
+        expect(bounds.y + bounds.height).toBeCloseTo(anchor.y - 4, 1);
+        expect(
+          await panel.evaluate((element) => element.scrollHeight - element.clientHeight)
+        ).toBeLessThanOrEqual(1);
+      }
+      await frame.locator('#app').screenshot({
+        path: path.join(repo, '.local', 'sd-030', `toolbar-${id}-vscode.png`)
+      });
+      await trigger.press('Escape');
+      await expect(panel).toBeHidden();
+      record(`${id} overlays the map without resizing it`, true);
+    }
+    const graphPositions = () =>
+      frame
+        .locator('g.node')
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('transform')).join('|'));
+    await expect.poll(async () => await frame.locator('g.node').count()).toBeGreaterThan(0);
+    const barBounds = await frame.locator('.sd-graph-controls').boundingBox();
+    expect(barBounds.y).toBeGreaterThanOrEqual(mapBounds.y + mapBounds.height);
+    expect(barBounds.height).toBeLessThan(65);
+    record('graph controls stay in a compact bottom bar', true);
+    const horizontalPositions = await graphPositions();
+    const beforeDirectionChange = api.getCurrentAnalysisId();
+    await frame.getByRole('combobox', { name: 'Direction', exact: true }).selectOption('DOWN');
+    await expect.poll(graphPositions).not.toBe(horizontalPositions);
+    await expect.poll(() => api.getViewState()?.layout?.direction).toBe('DOWN');
+    expect(api.getCurrentAnalysisId()).toBe(beforeDirectionChange);
+    const verticalPositions = await graphPositions();
+    await frame
+      .locator('#app')
+      .screenshot({ path: path.join(repo, '.local', 'sd-030', 'ui-vertical-vscode.png') });
+    record('vertical layout is persisted without rerunning analysis', true);
+    await expect
+      .poll(() =>
+        frame.locator('.graph-viewport').evaluate((viewport) => {
+          const svg = viewport.querySelector('.graph-svg').getBoundingClientRect();
+          const area = viewport.getBoundingClientRect();
+          return Math.abs(svg.x + svg.width / 2 - area.x - viewport.clientWidth / 2);
+        })
+      )
+      .toBeLessThan(1);
+    record('vertical graph is centered in the visible viewport', true);
+    await frame.getByRole('combobox', { name: 'Direction', exact: true }).selectOption('RIGHT');
+    await expect.poll(graphPositions).not.toBe(verticalPositions);
+    const duplicateLabels = await frame.locator('g.node').evaluateAll((nodes) =>
+      nodes.some((node) => {
+        const label = node.querySelector('.node-label')?.textContent;
+        return !!label && label === node.querySelector('.node-sublabel')?.textContent;
+      })
+    );
+    expect(duplicateLabels).toBe(false);
+    record('node captions contain no duplicate labels', true);
     await vscode.commands.executeCommand('sharpdeps.copyMermaid');
     await expect.poll(() => vscode.env.clipboard.readText()).toContain('flowchart');
     record(
@@ -155,6 +234,13 @@ async function run() {
     );
     await expect.poll(() => api.getViewState()?.viewKind, { timeout: 5000 }).toBe('table');
     record('view state reaches workspace storage', true);
+    const beforeLanguageChange = api.getCurrentAnalysisId();
+    await frame.getByRole('button', { name: 'Switch to Japanese', exact: true }).click();
+    await expect(frame.locator('#sd-analyze')).toHaveText('解析');
+    await expect.poll(() => api.getViewState()?.language).toBe('ja');
+    await frame
+      .locator('#app')
+      .screenshot({ path: path.join(repo, '.local', 'sd-030', 'localization-ja-vscode.png') });
 
     // Open an actual file, then return to the map: retainContextWhenHidden is false.
     await vscode.window.showTextDocument(
@@ -164,8 +250,14 @@ async function run() {
     frame = await mapFrame();
     await expect.poll(async () => (await state()).viewKind).toBe('table');
     record('hidden webview restores selection conditions', true);
+    await expect(frame.locator('#app')).toHaveAttribute('lang', 'ja');
+    expect(api.getCurrentAnalysisId()).toBe(beforeLanguageChange);
+    record('Japanese UI is restored without rerunning analysis', true);
+    await frame.getByRole('button', { name: '英語に切り替える', exact: true }).click();
+    await expect(frame.locator('#sd-analyze')).toHaveText('Analyze');
+    await expect.poll(() => api.getViewState()?.language).toBe('en');
+    record('top menu switches between English and Japanese', true);
 
-    const repo = process.env.SHARPDEPTS_REPO;
     await vscode.workspace
       .getConfiguration('sharpdeps')
       .update('analysisMode', 'semantic', vscode.ConfigurationTarget.Global);
@@ -193,10 +285,28 @@ async function run() {
       .press('Enter', { timeout: 20000 });
     await expect(frame.locator('.sd-evidence-item')).not.toHaveCount(0);
     record('real Semantic edge supplies evidence', true);
+    await expect(frame.locator(`g.edge[data-id="${generatedRelation.id}"]`)).toHaveCSS(
+      'outline-style',
+      'none'
+    );
+    record('focused graph edges use their path instead of a clipped rectangular outline', true);
+    const detailsSplitter = frame.getByRole('separator', { name: 'Resize details pane' });
+    if (await detailsSplitter.isVisible()) {
+      const detailsWidth = (await frame.locator('.sd-inspector').boundingBox()).width;
+      await detailsSplitter.press('ArrowLeft');
+      await expect
+        .poll(async () => (await frame.locator('.sd-inspector').boundingBox()).width)
+        .toBe(detailsWidth + 16);
+      await detailsSplitter.press('ArrowRight');
+      await expect
+        .poll(async () => (await frame.locator('.sd-inspector').boundingBox()).width)
+        .toBe(detailsWidth);
+      record('details splitter changes the right pane width in both directions', true);
+    }
     await frame
       .locator('#app')
       .screenshot({ path: path.join(repo, '.local', 'review-20260927', 'workbench-semantic.png') });
-    await frame.getByRole('button', { name: 'エディターで開く', exact: true }).first().click();
+    await frame.getByRole('button', { name: 'Open in editor', exact: true }).first().click();
     await expect
       .poll(() => vscode.window.activeTextEditor?.document.uri.scheme, { timeout: 10000 })
       .toBe('sharpdeps-generated');
@@ -229,10 +339,7 @@ async function run() {
       .getByRole('button', { name: /^Outgoing:/ })
       .first()
       .press('Enter');
-    await frame
-      .getByRole('button', { name: 'エディターで開く', exact: true })
-      .first()
-      .press('Enter');
+    await frame.getByRole('button', { name: 'Open in editor', exact: true }).first().press('Enter');
     await expect
       .poll(() => vscode.window.activeTextEditor?.document.uri.fsPath)
       .toBe(source.fsPath);

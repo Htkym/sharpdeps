@@ -67,8 +67,8 @@ describe('toGraphProjection', () => {
       sublabel: 'Domain'
     });
     // An external type without a project shows its kind and the external marker.
-    expect(graph.nodes[1]).toMatchObject({ sublabel: '外部', isExternal: true });
-    expect(graph.nodes[2]).toMatchObject({ kind: 'project', sublabel: 'app' });
+    expect(graph.nodes[1]).toMatchObject({ sublabel: 'External', isExternal: true });
+    expect(graph.nodes[2]).toMatchObject({ kind: 'project', sublabel: undefined });
     expect(graph.edges[0]).toMatchObject({
       id: 'rel_1111111111111111',
       basis: 'usingInferred',
@@ -78,11 +78,42 @@ describe('toGraphProjection', () => {
     });
   });
 
+  it('omits repeated project labels while retaining useful context', () => {
+    const graph = toGraphProjection(
+      {
+        ...projection,
+        nodes: [
+          {
+            id: 'prj_3333333333333333',
+            name: 'Domain',
+            projectName: 'Domain',
+            granularity: 'project'
+          },
+          {
+            id: 'ty_1111111111111111',
+            name: 'Customer',
+            projectName: 'Domain',
+            granularity: 'type'
+          }
+        ]
+      },
+      'test'
+    );
+    expect(graph.nodes[0].sublabel).toBeUndefined();
+    expect(graph.nodes[1].sublabel).toBe('Domain');
+  });
+
   it('keeps the layout key stable for selection-only changes', () => {
     const first = toGraphProjection(projection, 'all type');
     const second = toGraphProjection({ ...projection, nodes: [...projection.nodes] }, 'all type');
 
     expect(projectionKey(first)).toBe(projectionKey(second));
     expect(projectionKey(first)).not.toBe(projectionKey({ ...first, scopeLabel: 'other' }));
+    expect(projectionKey(first)).not.toBe(
+      projectionKey({
+        ...first,
+        nodes: first.nodes.map((node) => ({ ...node, label: node.label + ' changed' }))
+      })
+    );
   });
 });

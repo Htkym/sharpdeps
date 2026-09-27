@@ -4,6 +4,8 @@
 // field is read defensively. Lines and characters are stored 0-based (Roslyn
 // LinePosition) and are shown 1-based, which is what an editor shows.
 
+import { translator, type Language } from './i18n';
+
 export type EvidenceOrigin = 'userSource' | 'generatedSource' | 'unknown';
 export type EvidenceConfidence = 'resolved' | 'inferred' | 'unknown';
 
@@ -77,36 +79,37 @@ export interface BasisDescription {
   resolved: boolean;
 }
 
-export function describeBasis(basis: string): BasisDescription {
+export function describeBasis(basis: string, language: Language = 'en'): BasisDescription {
+  const tr = translator(language);
   switch (basis) {
     case 'symbolResolved':
       return {
-        label: 'Semantic（解決済み参照）',
-        detail: 'Roslynがシンボルを解決した実際の参照です。',
+        label: tr('Semantic (resolved references)'),
+        detail: tr('Roslyn resolved these symbol references.'),
         resolved: true
       };
     case 'projectDeclared':
       return {
-        label: 'Quick（宣言された依存）',
-        detail: 'プロジェクトファイル等に宣言された依存です。実参照は含みません。',
+        label: tr('Quick (declared dependencies)'),
+        detail: tr('Dependencies declared in project files; actual references are not included.'),
         resolved: false
       };
     case 'projectEvaluated':
       return {
-        label: 'Semantic（評価済みプロジェクト依存）',
-        detail: 'MSBuild評価に基づくプロジェクト依存です。',
+        label: tr('Semantic (evaluated project dependencies)'),
+        detail: tr('Project dependencies based on MSBuild evaluation.'),
         resolved: false
       };
     case 'usingInferred':
       return {
-        label: 'Quick（推定）',
-        detail: 'using等から推定した依存で、実際に使われている保証はありません。',
+        label: tr('Quick (inferred)'),
+        detail: tr('Dependencies inferred from using directives; actual use is not guaranteed.'),
         resolved: false
       };
     default:
       return {
         label: basis,
-        detail: 'この基盤の意味は不明です。',
+        detail: tr('The meaning of this basis is unknown.'),
         resolved: false
       };
   }

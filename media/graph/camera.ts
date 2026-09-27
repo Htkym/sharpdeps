@@ -86,13 +86,16 @@ export class Camera {
     const rect = this.viewport.getBoundingClientRect();
     const focusX = focusClientX === undefined ? rect.width / 2 : focusClientX - rect.left;
     const focusY = focusClientY === undefined ? rect.height / 2 : focusClientY - rect.top;
-    const contentX = (this.viewport.scrollLeft + focusX) / this.zoomValue;
+    const svgLeft = this.svg.getBoundingClientRect().left - rect.left;
+    const contentX = (focusX - svgLeft) / this.zoomValue;
     const contentY = (this.viewport.scrollTop + focusY) / this.zoomValue;
 
     this.zoomValue = next;
     this.apply();
 
-    this.viewport.scrollLeft = contentX * next - focusX;
+    const nextOffsetX =
+      this.svg.getBoundingClientRect().left - rect.left + this.viewport.scrollLeft;
+    this.viewport.scrollLeft = contentX * next + nextOffsetX - focusX;
     this.viewport.scrollTop = contentY * next - focusY;
   }
 
@@ -100,15 +103,23 @@ export class Camera {
     this.setZoom(this.zoomValue * factor, focusClientX, focusClientY);
   }
 
-  /** Fits the content into the viewport. Only called on an explicit request. */
-  fit(padding = 24): void {
-    if (this.contentWidth <= 0 || this.contentHeight <= 0) {
+  /** Fits the content; a width floor can preserve readable horizontal graphs. */
+  fit(padding = 24, minimumWidthZoom: number = CAMERA_LIMITS.min): void {
+    if (
+      this.contentWidth <= 0 ||
+      this.contentHeight <= 0 ||
+      this.viewport.clientWidth <= 0 ||
+      this.viewport.clientHeight <= 0
+    ) {
       return;
     }
     const availableWidth = Math.max(1, this.viewport.clientWidth - padding * 2);
     const availableHeight = Math.max(1, this.viewport.clientHeight - padding * 2);
     this.zoomValue = clamp(
-      Math.min(availableWidth / this.contentWidth, availableHeight / this.contentHeight),
+      Math.min(
+        Math.max(availableWidth / this.contentWidth, minimumWidthZoom),
+        availableHeight / this.contentHeight
+      ),
       CAMERA_LIMITS.min,
       1.5
     );

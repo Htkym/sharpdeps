@@ -8,8 +8,6 @@ export default tseslint.config(
       '.local/**',
       '.playwright-cli/**',
       'out/**',
-      'media/viewer.js',
-      'media/viewer.js.map',
       'analyzer/**',
       'node_modules/**',
       '**/*.vsix',

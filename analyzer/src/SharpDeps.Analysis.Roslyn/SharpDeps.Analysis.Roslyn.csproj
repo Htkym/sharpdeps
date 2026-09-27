@@ -3,7 +3,7 @@
   <PropertyGroup>
     <RootNamespace>SharpDeps.Analysis.Roslyn</RootNamespace>
     <AssemblyName>SharpDeps.Analysis.Roslyn</AssemblyName>
-    <Description>Roslyn/MSBuild semantic loading for SharpDeps (SD-003 prototype).</Description>
+    <Description>Roslyn/MSBuild semantic analysis for SharpDeps.</Description>
   </PropertyGroup>
 
   <ItemGroup>

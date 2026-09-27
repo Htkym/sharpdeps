@@ -88,7 +88,7 @@ public static class SemanticReportWriter
                 variant.ProjectName,
                 relativePath,
                 relativePath.Contains('/') ? relativePath[..relativePath.LastIndexOf('/')] : string.Empty,
-                KindOf(variant.ProjectName),
+                variant.Kind,
                 variant.TargetFramework ?? "(not specified)",
                 configuration,
                 platform,
@@ -537,6 +537,4 @@ public static class SemanticReportWriter
         _ => "project"
     };
 
-    private static string KindOf(string projectName)
-        => projectName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase) ? "test" : "library";
 }

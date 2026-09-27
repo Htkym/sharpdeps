@@ -1,9 +1,8 @@
 <Project>
 
   <!--
-    Central package versions for the analyzer solution. Versions are pinned from
-    the SD-003 compatibility probe; see docs/adr/0001-semantic-loading.md and
-    docs/compatibility.md before changing them.
+    Central package versions for the analyzer solution. Quick and Semantic run
+    in separate processes and use independently pinned Roslyn versions.
   -->
 
   <ItemGroup>

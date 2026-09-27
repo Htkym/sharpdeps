@@ -61,8 +61,7 @@ function main() {
 
   console.log(`Quick analyzer built: ${quickDll}`);
 
-  // The semantic host is a prototype until SD-007 wires it into the extension; it is
-  // published here so the build stays reproducible and the VSIX decision is explicit.
+  // Semantic loads MSBuild from the installed SDK.
   fs.rmSync(semanticOutDir, { recursive: true, force: true });
   if (!publish(semanticProject, semanticOutDir) || !fs.existsSync(semanticDll)) {
     console.error('Failed to build the semantic analyzer host.');

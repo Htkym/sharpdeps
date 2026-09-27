@@ -6,6 +6,7 @@
 // the display budget left out arrives with the graph projection work (SD-017).
 
 import type { EntitySummary } from '../../src/view/protocolV2';
+import { translator, type Language } from '../app/i18n';
 
 export interface NavigationTreeNode {
   id: string;
@@ -20,6 +21,7 @@ export interface NavigationTreeNode {
 }
 
 export interface NavigationPaneOptions {
+  language?: Language;
   nodes: NavigationTreeNode[];
   selectedId?: string;
   onSelect: (entityId: string) => void;
@@ -111,13 +113,14 @@ function namespaceOf(fullName: string): string {
 }
 
 export function renderNavigationTree(container: HTMLElement, options: NavigationPaneOptions): void {
+  const tr = translator(options.language);
   container.replaceChildren();
   container.dataset.role = 'navigation-tree';
 
   if (options.nodes.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'sd-empty';
-    empty.textContent = 'The structure tree is empty for this scope.';
+    empty.textContent = tr('The structure tree is empty for this scope.');
     container.append(empty);
     return;
   }
@@ -130,6 +133,7 @@ function renderLevel(
   options: NavigationPaneOptions,
   depth: number
 ): HTMLUListElement {
+  const tr = translator(options.language);
   const list = document.createElement('ul');
   list.className = 'sd-tree';
   list.dataset.depth = String(depth);
@@ -138,19 +142,27 @@ function renderLevel(
     const item = document.createElement('li');
     const row = document.createElement('div');
     row.className = 'sd-tree-row';
+    row.classList.toggle('selected', node.id === options.selectedId);
 
     const expandable = node.canExpand || node.children.length > 0;
     if (expandable) {
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'sd-tree-toggle';
-      toggle.textContent = options.expanded.has(node.id) ? '▾' : '▸';
+      toggle.dataset.entityId = node.id;
       toggle.setAttribute('aria-expanded', options.expanded.has(node.id) ? 'true' : 'false');
       toggle.setAttribute(
         'aria-label',
-        `${options.expanded.has(node.id) ? 'Collapse' : 'Expand'} ${node.label}`
+        tr(options.expanded.has(node.id) ? 'Collapse {0}' : 'Expand {0}', node.label)
       );
       toggle.addEventListener('click', () => options.onToggle(node.id));
+      toggle.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+          event.preventDefault();
+          if (options.expanded.has(node.id) === (event.key === 'ArrowLeft'))
+            options.onToggle(node.id);
+        }
+      });
       row.append(toggle);
     } else {
       const spacer = document.createElement('span');
@@ -161,7 +173,10 @@ function renderLevel(
     const label = document.createElement('button');
     label.type = 'button';
     label.className = 'sd-node-item';
-    label.textContent = node.label;
+    label.textContent =
+      node.label === '(unknown project)' || node.label === '(global namespace)'
+        ? tr(node.label)
+        : node.label;
     label.dataset.entityId = node.id;
     label.classList.toggle('sd-node-selected', node.id === options.selectedId);
     label.addEventListener('click', () => {
@@ -173,14 +188,14 @@ function renderLevel(
     if (node.inCycle) {
       const badge = document.createElement('span');
       badge.className = 'sd-badge';
-      badge.textContent = 'cycle';
+      badge.textContent = tr('cycle');
       row.append(badge);
     }
 
     if (node.isExternal) {
       const badge = document.createElement('span');
       badge.className = 'sd-badge';
-      badge.textContent = 'external';
+      badge.textContent = tr('external');
       row.append(badge);
     }
 
@@ -192,7 +207,8 @@ function renderLevel(
       if (node.moreCursor) {
         const more = document.createElement('button');
         more.type = 'button';
-        more.textContent = 'Load more';
+        more.className = 'sd-button';
+        more.textContent = tr('Load more');
         more.addEventListener('click', () => options.onLoadMore?.(node.id, node.moreCursor!));
         item.append(more);
       }

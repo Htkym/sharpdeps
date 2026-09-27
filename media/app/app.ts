@@ -15,6 +15,7 @@ import {
   type InspectorEntityOptions
 } from '../components/inspector';
 import { resolveShortcut } from './shortcuts';
+import { translate, translator, type Translator } from './i18n';
 import type { SortState } from './query';
 import {
   buildNavigationTree,
@@ -26,6 +27,7 @@ import {
   selectBreadcrumbs,
   selectSearchPresentation,
   selectStatusFooter,
+  selectStatusMessage,
   selectTableRows,
   selectVisibleData,
   viewReducer,
@@ -61,15 +63,18 @@ export interface ViewerAppOptions {
 
 export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {}): ViewerApp {
   let state: ViewState = INITIAL_STATE;
+  const tr: Translator = (message, ...values) => translate(state.language, message, ...values);
   let activeTab: NavTab = 'structure';
   /** Tree expansion is a transient UI detail; it is not part of the persisted state. */
   const expandedTreeNodes = new Set<string>();
   const graphRuntime: { view?: GraphView; error?: string } = {};
   /** Focus returns here when the inspector drawer closes (SD-024). */
-  let inspectorReturnFocus: HTMLElement | undefined;
+  let inspectorReturnFocus: HTMLElement | SVGElement | undefined;
   let inspectorWasOpen = false;
 
   const elements = buildShell(root, {
+    onLanguageToggled: () =>
+      dispatch({ type: 'languageChanged', language: state.language === 'en' ? 'ja' : 'en' }),
     onCancelLayout: () => graphRuntime.view?.cancelLayout(),
     onRetryLayout: () => graphRuntime.view?.retryLayout(),
     onZoom: (zoom) => {
@@ -197,16 +202,18 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     try {
       if (format === 'svg' || format === 'png') {
         const view = graphView();
-        if (!view || !state.projection) throw new Error('No graph is available to export.');
+        if (!view || !state.projection) throw new Error(tr('No graph is available to export.'));
         const visible = selectVisibleData(state);
-        view.setSpacing(state.layout);
+        view.setLanguage(state.language);
+        view.setLayout(state.layout);
         await view.update(
           { ...state.projection, nodes: visible.nodes, edges: visible.edges },
           scopeLabel(state)
         );
         const notes = imageMetadata(state);
         const data = format === 'svg' ? view.exportSvg(notes) : await view.exportPng(notes);
-        if (!data) throw new Error('The layout is not ready. Try again after the graph appears.');
+        if (!data)
+          throw new Error(tr('The layout is not ready. Try again after the graph appears.'));
         options.onExport?.(format, data);
       } else options.onExport?.(format, undefined, copy);
     } catch (error) {
@@ -221,6 +228,12 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     }
 
     state = next;
+    if (action.type === 'paneResized') {
+      // Only pane CSS widths and persistence change; keep the inspector's DOM,
+      // scroll position and expanded sections intact throughout the drag.
+      options.onStateChanged?.(state);
+      return;
+    }
     render();
   }
 
@@ -229,6 +242,8 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
    * inspector close, and graph zoom, all without a mouse.
    */
   window.addEventListener('keydown', (event) => {
+    // Escape first dismisses a native popover without clearing the graph selection.
+    if (event.key === 'Escape' && elements.root.querySelector(':popover-open')) return;
     const target = event.target as HTMLElement | null;
     const typing =
       target instanceof HTMLInputElement ||
@@ -301,14 +316,25 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     // user never lands at the top of the page (SD-024).
     if (state.inspectorOpen && !inspectorWasOpen) {
       inspectorReturnFocus =
-        document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+        document.activeElement instanceof HTMLElement ||
+        document.activeElement instanceof SVGElement
+          ? document.activeElement
+          : undefined;
     } else if (!state.inspectorOpen && inspectorWasOpen) {
-      inspectorReturnFocus?.focus();
+      const currentTrigger = inspectorReturnFocus?.isConnected
+        ? inspectorReturnFocus
+        : [...elements.navPaneBody.querySelectorAll<HTMLButtonElement>('.sd-node-item')].find(
+            (button) =>
+              !!inspectorReturnFocus?.dataset.entityId &&
+              button.dataset.entityId === inspectorReturnFocus.dataset.entityId
+          );
+      (currentTrigger ?? elements.inspectorToggle).focus();
       inspectorReturnFocus = undefined;
     }
 
     inspectorWasOpen = state.inspectorOpen;
     elements.inspectorPane.classList.toggle('open', state.inspectorOpen);
+    elements.root.classList.toggle('inspector-open', state.inspectorOpen);
     elements.inspectorToggle.setAttribute('aria-expanded', state.inspectorOpen ? 'true' : 'false');
 
     const projection = state.projection;
@@ -348,6 +374,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     }
 
     renderInspector(elements.inspectorTitle, elements.inspectorBody, {
+      language: state.language,
       edge,
       entity,
       limitations: state.limitations,
@@ -367,12 +394,12 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   async function copyReference(reference: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(reference);
-      elements.inspectorBody.append(message(`Copied: ${reference}`, 'sd-note'));
+      elements.inspectorBody.append(message(tr('Copied: {0}', reference), 'sd-note'));
     } catch {
       // A failed copy must not look like a success; the text is shown so it can be
       // selected manually.
       elements.inspectorBody.append(
-        message(`Copy failed. ${reference}`, 'sd-note sd-note-warning')
+        message(tr('Copy failed. {0}', reference), 'sd-note sd-note-warning')
       );
     }
   }
@@ -428,9 +455,21 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
 }
 
 function renderTopBar(elements: ShellElements, state: ViewState): void {
+  const tr = translator(state.language);
+  elements.setLanguage(state.language);
+  elements.languageToggle.textContent = state.language === 'en' ? '日本語' : 'English';
+  elements.languageToggle.setAttribute(
+    'aria-label',
+    tr(state.language === 'en' ? 'Switch to Japanese' : 'Switch to English')
+  );
   elements.zoom.value = String(Math.round((state.camera?.zoom ?? 1) * 100));
   elements.nodeSpacing.value = String(state.layout.nodeSpacing);
   elements.rankSpacing.value = String(state.layout.rankSpacing);
+  elements.layoutDirection.value = state.layout.direction;
+  for (const input of [elements.zoom, elements.nodeSpacing, elements.rankSpacing]) {
+    const output = input.parentElement?.querySelector('output');
+    if (output) output.value = `${input.value}${input === elements.zoom ? '%' : 'px'}`;
+  }
   for (const key of ['profile', 'omissions', 'legend'] as const)
     elements.imageOptions[key].checked = state.imageOptions[key];
   elements.legend.replaceChildren();
@@ -445,15 +484,17 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
   ].sort();
   for (const kind of kinds) {
     const item = document.createElement('span');
-    item.textContent = kind;
+    item.textContent = tr(kind);
     item.style.borderLeft = `4px solid ${projectKindColor(kind)}`;
     elements.legend.append(item);
   }
   const meaning = document.createElement('span');
-  meaning.textContent = 'Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external';
+  meaning.textContent = tr('Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external');
   elements.legend.append(meaning);
-  elements.targetName.textContent = state.target?.name ?? 'No target';
+  elements.targetName.textContent = state.target?.name ?? tr('No target');
   elements.targetPath.textContent = state.target?.relativePath ?? '';
+  elements.targetPath.hidden =
+    !state.target?.relativePath || state.target.relativePath === state.target.name;
   elements.modeSelect.value = state.mode;
   elements.modeSelect.disabled = state.status === 'analyzing';
   elements.configuration.value = state.profile.configuration ?? 'Debug';
@@ -467,7 +508,7 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     elements.granularitySelect.querySelector<HTMLOptionElement>('option[value="type"]');
   if (typeOption) {
     typeOption.disabled = !state.capabilities.typeGraph;
-    typeOption.title = state.capabilities.typeGraph ? '' : 'Type analysis requires Semantic';
+    typeOption.title = state.capabilities.typeGraph ? '' : tr('Type analysis requires Semantic');
   }
   const controls = elements.filterControls;
   controls.tests.checked = state.filters.includeTests !== false;
@@ -479,8 +520,8 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     [controls.projectKinds, state.filters.projectKinds],
     [controls.relations, state.filters.relationKinds]
   ] as const)
-    for (const option of input.options)
-      option.selected = selected?.includes(option.value as never) === true;
+    for (const option of input.querySelectorAll<HTMLInputElement>('input'))
+      option.checked = selected?.includes(option.value as never) === true;
 
   const analyzing = state.status === 'analyzing';
   elements.analyzeButton.disabled = analyzing;
@@ -495,7 +536,9 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     })
   );
 
-  elements.statusText.textContent = state.statusMessage;
+  const statusMessage = selectStatusMessage(state);
+  if (elements.statusText.textContent !== statusMessage)
+    elements.statusText.textContent = statusMessage;
   elements.statusText.dataset.status = state.status;
 }
 
@@ -527,12 +570,23 @@ function renderNavigation(
   activeTab: NavTab,
   context: StructureContext
 ): void {
+  elements.navPaneBody.setAttribute('aria-labelledby', `sd-tab-${activeTab}`);
+  const focused =
+    document.activeElement instanceof HTMLElement &&
+    elements.navPaneBody.contains(document.activeElement)
+      ? document.activeElement
+      : undefined;
+  const focusedId = focused?.dataset.entityId;
+  const focusClass = focused?.classList.contains('sd-tree-toggle')
+    ? 'sd-tree-toggle'
+    : 'sd-node-item';
   for (const tabButton of Array.from(
     elements.navTabs.querySelectorAll<HTMLButtonElement>('button')
   )) {
     const isActive = tabButton.dataset.tab === activeTab;
     tabButton.classList.toggle('active', isActive);
     tabButton.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    tabButton.tabIndex = isActive ? 0 : -1;
   }
 
   elements.navPaneBody.replaceChildren();
@@ -543,6 +597,10 @@ function renderNavigation(
   } else {
     renderAnalysisTab(elements, state, context.dispatch);
   }
+  if (focusedId)
+    [...elements.navPaneBody.querySelectorAll<HTMLButtonElement>(`.${focusClass}`)]
+      .find((button) => button.dataset.entityId === focusedId)
+      ?.focus();
 }
 
 function renderStructureTab(
@@ -550,6 +608,7 @@ function renderStructureTab(
   state: ViewState,
   context: StructureContext
 ): void {
+  const tr = translator(state.language);
   renderSearchResults(elements, state);
 
   const visible = selectVisibleData(state);
@@ -577,6 +636,7 @@ function renderStructureTab(
   const container = document.createElement('div');
   elements.navPaneBody.append(container);
   renderNavigationTree(container, {
+    language: state.language,
     nodes: tree,
     selectedId: state.selection.entityId,
     expanded: context.expanded,
@@ -606,7 +666,8 @@ function renderStructureTab(
   if (state.tree.root?.nextCursor) {
     const more = document.createElement('button');
     more.type = 'button';
-    more.textContent = 'Load more projects';
+    more.className = 'sd-button';
+    more.textContent = tr('Load more projects');
     more.addEventListener('click', () =>
       context.requestTree('root', 'project', state.tree.root.nextCursor)
     );
@@ -616,6 +677,7 @@ function renderStructureTab(
 
 /** Search hits from the whole index, including entities the view does not show. */
 function renderSearchResults(elements: ShellElements, state: ViewState): void {
+  const tr = translator(state.language);
   if (state.search.trim().length === 0) {
     return;
   }
@@ -626,12 +688,12 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   const heading = document.createElement('h3');
   heading.textContent =
     results.length === 0 && !state.searchResults.pending
-      ? `No match for "${state.search}"`
-      : `Search results (${results.length}${state.searchResults.total > results.length ? ` of ${state.searchResults.total}` : ''})`;
+      ? tr('No match for "{0}"', state.search)
+      : tr('Search results ({0} of {1})', results.length, state.searchResults.total);
   block.append(heading);
 
   if (state.searchResults.pending && results.length === 0) {
-    block.append(message('Searching the analyzed index...', 'sd-note'));
+    block.append(message(tr('Searching the analyzed index...'), 'sd-note'));
   }
 
   const list = document.createElement('ul');
@@ -650,12 +712,12 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
 
     if (result.visibility !== 'visible') {
       item.append(
-        badge(result.visibility === 'outsideBudget' ? 'outside view' : 'outside filters')
+        badge(result.visibility === 'outsideBudget' ? tr('outside view') : tr('outside filters'))
       );
       const show = document.createElement('button');
       show.type = 'button';
       show.className = 'sd-button sd-button-small';
-      show.textContent = 'Show';
+      show.textContent = tr('Show');
       show.addEventListener('click', () =>
         elements.navPaneBody.dispatchEvent(
           new CustomEvent('sd-show-temporary', {
@@ -676,7 +738,7 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.className = 'sd-button sd-button-small';
-    reset.textContent = `Hide ${state.temporaryDisplayIds.length} row(s) outside filters`;
+    reset.textContent = tr('Hide {0} row(s) outside filters', state.temporaryDisplayIds.length);
     reset.addEventListener('click', () =>
       elements.navPaneBody.dispatchEvent(new CustomEvent('sd-hide-temporary', { bubbles: true }))
     );
@@ -691,15 +753,19 @@ function renderCyclesTab(
   state: ViewState,
   dispatch: (action: ViewAction) => void
 ): void {
+  const tr = translator(state.language);
   const cycles = state.cycles;
   if (cycles.length === 0) {
-    elements.navPaneBody.append(message('No dependency cycles in this analysis.', 'sd-empty'));
+    elements.navPaneBody.append(message(tr('No dependency cycles in this analysis.'), 'sd-empty'));
     return;
   }
 
   elements.navPaneBody.append(
     message(
-      `${cycles.length} cycle group(s). A group is a set of mutually reachable types; only the witness is a real path.`,
+      tr(
+        '{0} cycle group(s). A group is a set of mutually reachable types; only the witness is a real path.',
+        cycles.length
+      ),
       'sd-note'
     )
   );
@@ -717,15 +783,19 @@ function renderCyclesTab(
     const header = document.createElement('div');
     header.className = 'sd-cycle-header';
     const label = document.createElement('strong');
-    label.textContent = `${group.memberIds.length} member(s) · ${group.internalRelationIds.length} edge(s)`;
+    label.textContent = tr(
+      '{0} member(s) · {1} edge(s)',
+      group.memberIds.length,
+      group.internalRelationIds.length
+    );
     header.append(label);
-    header.append(badge(group.witness ? '実在する閉路あり' : '閉路未確認'));
+    header.append(badge(group.witness ? tr('Verified cycle') : tr('Cycle unverified')));
     item.append(header);
 
     const focus = document.createElement('button');
     focus.type = 'button';
     focus.className = 'sd-button sd-button-small';
-    focus.textContent = 'この循環を表示';
+    focus.textContent = tr('Show this cycle');
     focus.addEventListener('click', () =>
       dispatch({
         type: 'scopeChanged',
@@ -753,14 +823,11 @@ function renderCyclesTab(
       members.append(memberItem);
     }
 
-    item.append(
-      members,
-      message('メンバーの並びは経路ではありません（集合を名前順に表示）。', 'sd-note')
-    );
+    item.append(members, message(tr('Members are a set sorted by name, not a path.'), 'sd-note'));
 
     if (group.witness && group.witness.relationIds.length > 0) {
       const pathHeading = document.createElement('h4');
-      pathHeading.textContent = `実在する閉路（${group.witness.relationIds.length} 辺）`;
+      pathHeading.textContent = tr('Verified cycle ({0} edges)', group.witness.relationIds.length);
       item.append(pathHeading);
       const path = document.createElement('ol');
       path.className = 'sd-cycle-path';
@@ -772,14 +839,16 @@ function renderCyclesTab(
         edge.textContent = `${nameOf(group.witness!.memberIds[index])} → ${nameOf(
           group.witness!.memberIds[index + 1] ?? group.witness!.memberIds[0]
         )}`;
-        edge.title = `${relationId}（この辺の根拠を表示）`;
+        edge.title = tr('{0} (show evidence for this edge)', relationId);
         edge.addEventListener('click', () => dispatch({ type: 'relationSelected', relationId }));
         pathItem.append(edge);
         path.append(pathItem);
       });
       item.append(path);
     } else {
-      item.append(message('実在する閉路は確認できていません（相互到達のみ）。', 'sd-note'));
+      item.append(
+        message(tr('No actual cycle has been verified; only mutual reachability.'), 'sd-note')
+      );
     }
 
     list.append(item);
@@ -793,11 +862,12 @@ function renderAnalysisTab(
   state: ViewState,
   dispatch: (action: ViewAction) => void
 ): void {
+  const tr = translator(state.language);
   const rows: Array<[string, string]> = [
-    ['Status', state.status],
+    ['Status', tr(state.status)],
     [
       'Mode',
-      state.mode === 'quick' ? 'Quick (declared/inferred)' : 'Semantic (resolved references)'
+      tr(state.mode === 'quick' ? 'Quick (declared/inferred)' : 'Semantic (resolved references)')
     ],
     ['Analysis id', state.analysisId ?? '—']
   ];
@@ -805,20 +875,29 @@ function renderAnalysisTab(
   if (state.coverage) {
     rows.push([
       'Coverage',
-      `discovered ${state.coverage.discovered} · loaded ${state.coverage.loaded} · analyzed ${state.coverage.analyzed}` +
-        ` · failed ${state.coverage.failed} · skipped ${state.coverage.skipped}`
+      tr(
+        'discovered {0} · loaded {1} · analyzed {2} · failed {3} · skipped {4}',
+        state.coverage.discovered,
+        state.coverage.loaded,
+        state.coverage.analyzed,
+        state.coverage.failed,
+        state.coverage.skipped
+      )
     ]);
   }
 
   if (state.progress) {
-    rows.push(['Progress', `${state.progress.stage} · ${Math.round(state.progress.elapsedMs)} ms`]);
+    rows.push([
+      'Progress',
+      `${tr(state.progress.stage)} · ${Math.round(state.progress.elapsedMs)} ms`
+    ]);
   }
 
   const list = document.createElement('dl');
   list.className = 'sd-facts';
   for (const [label, value] of rows) {
     const term = document.createElement('dt');
-    term.textContent = label;
+    term.textContent = tr(label);
     const definition = document.createElement('dd');
     definition.textContent = value;
     list.append(term, definition);
@@ -828,7 +907,9 @@ function renderAnalysisTab(
   if (state.variantOptions.length) {
     elements.navPaneBody.append(
       message(
-        'Target frameworks: Automatic keeps evaluated reference variants separate. A change requires Analyze.',
+        tr(
+          'Target frameworks: Automatic keeps evaluated reference variants separate. A change requires Analyze.'
+        ),
         'sd-note'
       )
     );
@@ -842,11 +923,11 @@ function renderAnalysisTab(
       const label = document.createElement('label');
       label.textContent = variants[0].projectPath;
       const picker = document.createElement('select');
-      picker.setAttribute('aria-label', `Target framework: ${variants[0].projectPath}`);
+      picker.setAttribute('aria-label', tr('Target framework: {0}', variants[0].projectPath));
       for (const tfm of ['', ...new Set(variants.map((variant) => variant.targetFramework))]) {
         const option = document.createElement('option');
         option.value = tfm;
-        option.textContent = tfm || 'Automatic';
+        option.textContent = tfm || tr('Automatic');
         picker.append(option);
       }
       picker.value =
@@ -874,7 +955,7 @@ function renderAnalysisTab(
 
   if (state.limitations.length > 0) {
     const heading = document.createElement('h3');
-    heading.textContent = 'Limitations';
+    heading.textContent = tr('Limitations');
     elements.navPaneBody.append(heading);
     const limitations = document.createElement('ul');
     limitations.className = 'sd-limitations';
@@ -895,6 +976,7 @@ function renderCenter(
   graphView: () => GraphView | undefined,
   graphError: () => string | undefined
 ): void {
+  const tr = translator(state.language);
   elements.granularitySelect.value = state.granularity;
   for (const kindButton of Array.from(
     elements.viewKindButtons.querySelectorAll<HTMLButtonElement>('button')
@@ -911,6 +993,7 @@ function renderCenter(
   const visible = selectVisibleData(state);
   elements.mapContent.replaceChildren();
   elements.mapHost.dataset.viewKind = state.viewKind;
+  elements.graphControls.hidden = state.viewKind !== 'graph';
 
   if (!state.projection) {
     elements.mapSummary.textContent = '';
@@ -921,15 +1004,15 @@ function renderCenter(
   }
 
   const summaryParts = [
-    `${visible.nodes.length} node(s) shown of ${visible.totalNodeCount}`,
-    `${visible.edges.length} relation(s) of ${visible.totalEdgeCount}`
+    tr('{0} node(s) shown of {1}', visible.nodes.length, visible.totalNodeCount),
+    tr('{0} relation(s) of {1}', visible.edges.length, visible.totalEdgeCount)
   ];
   if (visible.filterCount > 0) {
-    summaryParts.push(`${visible.filterCount} filter(s)`);
+    summaryParts.push(tr('{0} filter(s)', visible.filterCount));
   }
 
   if (visible.isFilteredEmpty) {
-    summaryParts.push('no match for the current search or filters');
+    summaryParts.push(tr('no match for the current search or filters'));
   }
 
   elements.mapSummary.textContent = summaryParts.join(' · ');
@@ -937,11 +1020,11 @@ function renderCenter(
   if (visible.isFilteredEmpty) {
     elements.graphHost.hidden = true;
     elements.mapContent.hidden = false;
-    const empty = message('No match for the current search or filters.', 'sd-empty');
+    const empty = message(tr('No match for the current search or filters.'), 'sd-empty');
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.className = 'sd-button';
-    reset.textContent = 'Clear search and filters';
+    reset.textContent = tr('Clear search and filters');
     reset.addEventListener('click', () => {
       elements.searchInput.value = '';
       elements.mapHost.dispatchEvent(new CustomEvent('sd-reset-filters', { bubbles: true }));
@@ -952,6 +1035,7 @@ function renderCenter(
   }
 
   const tableOptions = {
+    language: state.language,
     rows: selectTableRows(state).rows,
     sort: state.tableSort,
     page: selectTableRows(state).page,
@@ -980,7 +1064,8 @@ function renderCenter(
   if (state.viewKind === 'graph') {
     const view = graphView();
     if (view && !graphError()) {
-      view.setSpacing(state.layout);
+      view.setLanguage(state.language);
+      view.setLayout(state.layout);
       graphShown = true;
       elements.graphHost.hidden = false;
       elements.mapContent.hidden = true;
@@ -999,7 +1084,10 @@ function renderCenter(
       const reason = graphError() ?? 'the layout worker is unavailable';
       elements.mapContent.append(
         message(
-          `The interactive graph is unavailable (${reason}). The table below shows the same analysis.`,
+          tr(
+            'The interactive graph is unavailable ({0}). The table below shows the same analysis.',
+            reason
+          ),
           'sd-note'
         )
       );
@@ -1015,7 +1103,10 @@ function renderCenter(
   if (state.viewKind === 'graph' && !graphShown) {
     elements.mapContent.prepend(
       message(
-        `The interactive graph is unavailable (${graphError() ?? 'the layout worker is unavailable'}). The table below shows the same analysis.`,
+        tr(
+          'The interactive graph is unavailable ({0}). The table below shows the same analysis.',
+          graphError() ?? tr('the layout worker is unavailable')
+        ),
         'sd-note'
       )
     );
@@ -1024,76 +1115,109 @@ function renderCenter(
 
 /** Human-readable scope label for the graph header/exports. */
 export function imageMetadata(state: ViewState): string[] {
+  const tr = translator(state.language);
   const notes: string[] = [];
   const visible = selectVisibleData(state);
   if (state.imageOptions.profile) {
     const profile = state.resultProfile ?? state.profile;
     notes.push(
-      `SharpDeps: ${state.target?.relativePath ?? 'Unknown target'} · ${state.resultMode ?? state.mode} · ${state.status}`
+      `SharpDeps: ${state.target?.relativePath ?? tr('Unknown target')} · ${tr((state.resultMode ?? state.mode) === 'quick' ? 'Quick' : 'Semantic')} · ${tr(state.status)}`
     );
-    notes.push(`Profile: ${profile.configuration ?? 'Debug'} / ${profile.platform ?? 'Default'}`);
+    notes.push(
+      tr('Profile: {0} / {1}', profile.configuration ?? 'Debug', profile.platform ?? tr('Default'))
+    );
     for (const variant of state.variantOptions)
       notes.push(`TFM: ${variant.projectPath} — ${variant.targetFramework}`);
   }
   if (state.imageOptions.omissions) {
-    notes.push(`Scope: ${scopeLabel(state)} · Search: ${state.search || '(none)'}`);
     notes.push(
-      `Shown ${visible.nodes.length}/${visible.totalNodeCount} nodes; ${visible.edges.length}/${visible.totalEdgeCount} relations; truncated: ${state.projectionTruncated}`
+      tr(
+        'Scope: {0} · Search: {1}',
+        scopeLabel(state, state.language),
+        state.search || tr('(none)')
+      )
     );
-    notes.push(`Filters: ${JSON.stringify(state.filters)}`);
-    for (const limitation of state.limitations) notes.push(`Limitation: ${limitation.message}`);
+    notes.push(
+      tr(
+        'Shown {0}/{1} nodes; {2}/{3} relations; truncated: {4}',
+        visible.nodes.length,
+        visible.totalNodeCount,
+        visible.edges.length,
+        visible.totalEdgeCount,
+        tr(state.projectionTruncated ? 'yes' : 'no')
+      )
+    );
+    notes.push(tr('Filters: {0}', JSON.stringify(state.filters)));
+    for (const limitation of state.limitations)
+      notes.push(tr('Limitation: {0}', limitation.message));
   }
   if (state.imageOptions.legend) {
     notes.push(
-      'Legend: dashed = inferred; solid = declared/evaluated/resolved (see relation kind); red / ⟳ = cycle; G = generated; ext = external'
+      tr(
+        'Legend: dashed = inferred; solid = declared/evaluated/resolved (see relation kind); red / ⟳ = cycle; G = generated; ext = external'
+      )
     );
     notes.push(
-      `Project kinds: ${[...new Set(visible.nodes.map((node) => node.projectKind ?? node.kind).filter(Boolean))].sort().join(', ') || '(none)'}`
+      tr(
+        'Project kinds: {0}',
+        [
+          ...new Set(
+            visible.nodes
+              .map((node) => node.projectKind ?? node.kind)
+              .filter((kind): kind is string => !!kind)
+          )
+        ]
+          .sort()
+          .map((kind) => tr(kind))
+          .join(', ') || tr('(none)')
+      )
     );
   }
   return notes;
 }
 
-function scopeLabel(state: ViewState): string {
+function scopeLabel(state: ViewState, language: ViewState['language'] = 'en'): string {
+  const tr = translator(language);
   const scope = state.scope;
   if (!scope || scope.kind === 'root') {
-    return `all ${state.granularity}`;
+    return tr('all {0}', tr(state.granularity));
   }
 
   const origin = state.projection?.nodes.find((node) => node.id === scope.id);
   const name = origin?.name ?? scope.id ?? '';
   const depth =
     scope.kind === 'dependencies' || scope.kind === 'dependents'
-      ? ` (depth ${scope.depth ?? 1})`
+      ? tr(' (depth {0})', scope.depth ?? 1)
       : '';
-  return `${scope.kind}: ${name}${depth}`;
+  return `${tr(scope.kind)}: ${name}${depth}`;
 }
 
 function emptyStateMessage(state: ViewState): HTMLElement {
+  const tr = translator(state.language);
   switch (state.status) {
     case 'noTarget':
-      return message('Select a solution or project and choose Analyze.', 'sd-empty');
+      return message(tr('Select a solution or project and choose Analyze.'), 'sd-empty');
     case 'ready':
       return message(
-        'Ready to analyze. The previous result is not shown until a new one arrives.',
+        tr('Ready to analyze. The previous result is not shown until a new one arrives.'),
         'sd-empty'
       );
     case 'analyzing':
-      return message(state.statusMessage, 'sd-empty');
+      return message(selectStatusMessage(state), 'sd-empty');
     case 'failed':
       return message(
-        `The analysis failed: ${state.error?.message ?? 'unknown reason'}`,
+        tr('The analysis failed: {0}', state.error?.message ?? tr('unknown reason')),
         'sd-empty sd-empty-error'
       );
     case 'cancelled':
-      return message('The analysis was stopped.', 'sd-empty');
+      return message(tr('The analysis was stopped.'), 'sd-empty');
     case 'stale':
       return message(
-        'This result is out of date. Analyze again to refresh.',
+        tr('This result is out of date. Analyze again to refresh.'),
         'sd-empty sd-empty-stale'
       );
     default:
-      return message('No projection for this scope.', 'sd-empty');
+      return message(tr('No projection for this scope.'), 'sd-empty');
   }
 }
 

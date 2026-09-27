@@ -6,14 +6,16 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
     if (message.type() === 'error') console.log(message.text());
   });
   await page.goto('/tests/webview/fixtures/shell-fixture.html');
+  fs.mkdirSync('.local/verification', { recursive: true });
   const results = [];
-  for (const [nodes, edges, budgetMs] of [
-    [100, 200, 2000],
-    [300, 1000, 5000]
+  for (const [nodes, edges, budgetMs, direction] of [
+    [100, 200, 2000, 'RIGHT'],
+    [300, 1000, 5000, 'RIGHT'],
+    [300, 1000, 5000, 'DOWN']
   ]) {
     await page.reload();
     const result = await page.evaluate(
-      async ({ nodes, edges, budgetMs }) => {
+      async ({ nodes, edges, budgetMs, direction }) => {
         const app = window.sharpdepsApp;
         app.dispatch({
           type: 'analysisComplete',
@@ -53,7 +55,10 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
         const timer = setInterval(() => ticks++, 10);
         const samplesMs = [];
         for (let n = 0; n < 3; n++) {
-          app.dispatch({ type: 'layoutChanged', layout: { nodeSpacing: 40 + n, rankSpacing: 80 } });
+          app.dispatch({
+            type: 'layoutChanged',
+            layout: { direction, nodeSpacing: 40 + n, rankSpacing: 80 }
+          });
           const start = performance.now();
           app.dispatch({ type: 'projectionReceived', projection });
           await app.export('svg');
@@ -75,6 +80,7 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
         return {
           nodes,
           edges,
+          direction,
           budgetMs,
           samplesMs,
           responsiveTicks: ticks,
@@ -92,11 +98,11 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
           renderedNodes: document.querySelectorAll('g.node').length
         };
       },
-      { nodes, edges, budgetMs }
+      { nodes, edges, budgetMs, direction }
     );
     results.push(result);
     fs.writeFileSync(
-      'docs/implementation/v0.1.0/evidence/sd-028-browser.json',
+      '.local/verification/sd-028-browser.json',
       JSON.stringify(
         {
           checkedAt: new Date().toISOString(),

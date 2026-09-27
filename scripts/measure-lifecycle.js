@@ -16,7 +16,8 @@ require('esbuild').buildSync({
   outfile: path.join(root, 'controller.cjs')
 });
 const { AnalysisController } = require(path.join(root, 'controller.cjs'));
-const output = path.join(repo, 'docs/implementation/v0.1.0/evidence/sd-028-lifecycle.json');
+const output = path.join(repo, '.local/verification/sd-028-lifecycle.json');
+fs.mkdirSync(path.dirname(output), { recursive: true });
 const report = {
   checkedAt: new Date().toISOString(),
   methodology:

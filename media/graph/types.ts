@@ -1,7 +1,6 @@
 // Rendering model for the interactive SVG graph (SD-004).
 //
-// The projection is derived from the v2 analysis snapshot (or, for the prototype,
-// from a fixture). Node and edge ids are the analysis ids, so a redraw keeps the
+// The projection is derived from the v2 analysis snapshot. Node and edge ids are the analysis ids, so a redraw keeps the
 // same DOM keys and selection. Coordinates are never part of this model.
 
 export type NodeKind = 'project' | 'namespace' | 'type' | 'member';
@@ -10,6 +9,8 @@ export interface GraphNodeInput {
   id: string;
   label: string;
   sublabel?: string;
+  /** Kind supplied by the UI, as opposed to a code-derived project name. */
+  sublabelKind?: string;
   kind: NodeKind;
   projectKind?: string;
   inCycle: boolean;
