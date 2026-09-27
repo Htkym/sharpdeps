@@ -284,6 +284,9 @@ export interface ProtocolValidationFailure {
 
 export type ProtocolValidationResult<T> = { ok: true; value: T } | ProtocolValidationFailure;
 
+/** Query text is echoed back to the UI; it must not be an unbounded payload. */
+export const MAX_QUERY_LENGTH = 200;
+
 const PATTERNS = {
   requestId: /^req_[0-9a-f]{16}$/,
   analysisId: /^an_[0-9a-f]{16}$/,
@@ -464,7 +467,21 @@ const HOST_RULES: Record<string, MessageRule> = {
 export function validateWebviewMessage(
   input: unknown
 ): ProtocolValidationResult<WebviewToHostMessage> {
-  return validateMessage(input, WEBVIEW_RULES, 'webview');
+  const result = validateMessage<WebviewToHostMessage>(input, WEBVIEW_RULES, 'webview');
+  if (!result.ok) {
+    return result;
+  }
+
+  // Search text is echoed back to the UI and the host: keep it bounded (SD-023).
+  if (result.value.type === 'searchEntities' && result.value.query.length > MAX_QUERY_LENGTH) {
+    return {
+      ok: false,
+      code: 'invalidMessage',
+      errors: [`$.query: longer than ${MAX_QUERY_LENGTH} characters`]
+    };
+  }
+
+  return result;
 }
 
 /** Validates a message received by the webview. */

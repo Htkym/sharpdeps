@@ -13,6 +13,7 @@ import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
 import { createGeneratedDocumentProvider } from './generatedDocuments/generatedDocumentProvider';
 import { GENERATED_DOCUMENT_SCHEME } from './generatedDocuments/documentUri';
 import { resolveTypeAtCursor } from './commands/typeNavigation';
+import { trustDecision } from './security/trust';
 
 const STAGE_LABELS: Record<AnalysisStage, string> = {
   discover: 'Discovering projects…',
@@ -101,6 +102,27 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const rootDirectory = (): string | undefined =>
     lastTarget ? path.dirname(lastTarget.fsPath) : undefined;
+
+  /**
+   * An untrusted workspace must not run the analyzer: it evaluates MSBuild and project
+   * logic (SD-023). Reading a stored result stays allowed because it is data only.
+   */
+  function requireTrustedWorkspace(): boolean {
+    const decision = trustDecision(vscode.workspace.isTrusted);
+    if (decision.allowed) {
+      return true;
+    }
+
+    output.appendLine('Analysis refused: the workspace is not trusted.');
+    void vscode.window
+      .showWarningMessage(decision.message ?? 'SharpDeps: 解析できません。', '信頼を管理')
+      .then((choice) => {
+        if (choice === '信頼を管理') {
+          void vscode.commands.executeCommand('workbench.trust.manage');
+        }
+      });
+    return false;
+  }
 
   function panelHost(): Parameters<typeof CodeMapPanel.show>[1] {
     return {
@@ -213,6 +235,11 @@ export function activate(context: vscode.ExtensionContext): void {
     // A new run replaces the Problems entries: findings from a previous analysis are
     // never left behind while this one is running or after it fails.
     diagnostics.clear();
+
+    const trusted = requireTrustedWorkspace();
+    if (!trusted) {
+      return;
+    }
 
     await vscode.window.withProgress(
       {

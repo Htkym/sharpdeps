@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { buildWebviewCsp } from './csp';
 
 /** Build the webview HTML with a strict, nonce-based Content Security Policy. */
 export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -18,16 +19,7 @@ export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri
     vscode.Uri.joinPath(extensionUri, 'media', 'styles', 'graph.css')
   );
 
-  const csp = [
-    `default-src 'none'`,
-    `img-src ${webview.cspSource} data: blob:`,
-    `style-src ${webview.cspSource} 'unsafe-inline'`,
-    `font-src ${webview.cspSource}`,
-    `script-src 'nonce-${nonce}'`,
-    `worker-src blob:`,
-    // Only the webview's own resources may be fetched (the worker script).
-    `connect-src ${webview.cspSource}`
-  ].join('; ');
+  const csp = buildWebviewCsp(webview.cspSource, nonce);
 
   return `<!DOCTYPE html>
 <html lang="en">

@@ -12,6 +12,7 @@ import * as vscode from 'vscode';
 import type { PhysicalSpan, SourceDocument } from '../analyzer/reportV2';
 import type { ReportStore } from '../analyzer/reportStore';
 import { generatedDocumentUri } from '../generatedDocuments/generatedDocumentProvider';
+import { isInsideRoot } from '../security/paths';
 
 export interface OpenLocationOptions {
   store: ReportStore;
@@ -123,16 +124,24 @@ async function openSpan(
     );
   }
 
-  const verification = await verifyContent(fileUri, document.contentHash);
-  if (verification === 'mismatch') {
-    const choice = await vscode.window.showWarningMessage(
-      'SharpDeps: ファイルの内容が解析時と変わっています。古い行へ移動する可能性があります。',
-      { modal: false },
-      '開く'
-    );
-    if (choice !== '開く') {
-      return;
+  // A linked file outside the analysis root is legitimate and opens, but its content is
+  // not read for hash comparison: only paths inside the root are read (SD-023).
+  if (isInsideRoot(rootDirectory, document.relativePath)) {
+    const verification = await verifyContent(fileUri, document.contentHash);
+    if (verification === 'mismatch') {
+      const choice = await vscode.window.showWarningMessage(
+        'SharpDeps: ファイルの内容が解析時と変わっています。古い行へ移動する可能性があります。',
+        { modal: false },
+        '開く'
+      );
+      if (choice !== '開く') {
+        return;
+      }
     }
+  } else {
+    options.output.appendLine(
+      `The analysed file is outside the workspace root (linked file); the content hash was not compared: ${document.relativePath}`
+    );
   }
 
   const editor = await vscode.window.showTextDocument(textDocument, { preview: false });

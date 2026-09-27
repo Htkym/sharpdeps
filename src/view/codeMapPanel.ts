@@ -52,6 +52,10 @@ export class CodeMapPanel {
 
     const panel = vscode.window.createWebviewPanel(CodeMapPanel.viewType, 'SharpDeps', column, {
       enableScripts: true,
+      // No command URIs and no form submission from the map (SD-023); the script only
+      // talks through the validated message channel.
+      enableCommandUris: false,
+      enableForms: false,
       // Restore is verified (serializer + persistence + browser fixture), so the webview
       // is recreated when it is hidden instead of being kept alive (SD-021).
       retainContextWhenHidden: false,

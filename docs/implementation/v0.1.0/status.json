@@ -831,12 +831,34 @@
       "id": "SD-023",
       "title": "Trust・CSP・境界検証の横断実装",
       "milestone": "M3",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "src/security/trust.ts",
+        "src/security/paths.ts",
+        "src/view/csp.ts",
+        "src/view/html.ts",
+        "src/view/protocolV2.ts",
+        "src/view/codeMapPanel.ts",
+        "src/commands/openLocation.ts",
+        "src/export/contextExport.ts",
+        "src/extension.ts",
+        "tests/webview/security.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-023.md",
+        "docs/implementation/v0.1.0/evidence/sd-023-security.json"
+      ],
+      "tests": [
+        "npm test — 24 files / 192 tests pass (8 security tests added)",
+        "dotnet test — 101 tests pass",
+        "npm run compile / lint / format:check — pass",
+        "trust refusal, path containment, single-line text, CSP lockdown, query bound, hostile names inert in exports"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-023.md",
+        "docs/implementation/v0.1.0/evidence/sd-023-security.json"
+      ],
+      "blockers": [],
+      "notes": "Done: trust guard on analysis start, minimal nonce CSP with object/frame/base/form locked, explicit webview options, bounded search query, path containment that still opens linked files without reading them, and single-line sanitising for names in exports. Remaining: real VS Code trust/CSP checks (SD-027), symlink resolution, malicious-report integration fixture, exhaustive log review."
     },
     {
       "id": "SD-024",

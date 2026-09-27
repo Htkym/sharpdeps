@@ -5,6 +5,7 @@
 // what is inferred, and what the reader must not assert as fact.
 
 import type { EntitySummary, ProjectionEdge, ProjectionCycleGroup } from '../view/protocolV2';
+import { sanitizeSingleLine } from '../security/paths';
 
 export interface ContextEvidence {
   kind: string;
@@ -86,7 +87,7 @@ export function buildContextExport(input: ContextExportInput): string {
   lines.push('## Entities');
   lines.push('');
   for (const node of input.nodes.slice(0, MAX_NODES_LISTED)) {
-    const parts = [`\`${node.name}\``, node.granularity];
+    const parts = [`\`${sanitizeSingleLine(node.name)}\``, node.granularity];
     if (node.projectName) {
       parts.push(node.projectName);
     }
@@ -248,12 +249,13 @@ export function buildMermaid(input: ContextExportInput): string {
   };
 
   for (const node of input.nodes) {
-    const label = node.name.replace(/"/g, "'");
+    // A label is one line and one quoted string: a type name must not break out of it.
+    const label = sanitizeSingleLine(node.name).replace(/["`]/g, "'");
     lines.push(`  ${alias(node.id)}["${label}"]`);
   }
 
   for (const edge of input.edges) {
-    const label = edge.kinds.join(', ') || edge.basis;
+    const label = sanitizeSingleLine(edge.kinds.join(', ') || edge.basis, 80);
     const arrow = edge.basis === 'usingInferred' ? '-.->' : '-->';
     lines.push(`  ${alias(edge.sourceId)} ${arrow}|${label}| ${alias(edge.targetId)}`);
   }
@@ -262,5 +264,6 @@ export function buildMermaid(input: ContextExportInput): string {
 }
 
 function nameOf(nodes: readonly EntitySummary[], id: string): string {
-  return nodes.find((node) => node.id === id)?.name ?? id;
+  const name = nodes.find((node) => node.id === id)?.name ?? id;
+  return sanitizeSingleLine(name);
 }
