@@ -1,0 +1,99 @@
+{
+  "checkedAt": "2026-09-27T05:42:15.093Z",
+  "vsix": "sharpdeps-check.vsix",
+  "bytes": 7134294,
+  "packagedEntries": 46,
+  "required": [
+    {
+      "entry": "out/extension.js",
+      "present": true
+    },
+    {
+      "entry": "media/app/entry.js",
+      "present": true
+    },
+    {
+      "entry": "media/workers/elkLayout.worker.js",
+      "present": true
+    },
+    {
+      "entry": "media/styles/shell.css",
+      "present": true
+    },
+    {
+      "entry": "media/styles/graph.css",
+      "present": true
+    },
+    {
+      "entry": "analyzer/bin/quick/code-map.dll",
+      "present": true
+    },
+    {
+      "entry": "analyzer/bin/quick/code-map.runtimeconfig.json",
+      "present": true
+    },
+    {
+      "entry": "analyzer/bin/quick/SharpDeps.Analysis.Quick.dll",
+      "present": true
+    },
+    {
+      "entry": "package.json",
+      "present": true
+    },
+    {
+      "entry": "README.md",
+      "present": true
+    },
+    {
+      "entry": "CHANGELOG.md",
+      "present": true
+    },
+    {
+      "entry": "THIRD-PARTY-NOTICES.md",
+      "present": true
+    }
+  ],
+  "forbidden": [
+    {
+      "entry": "src/",
+      "present": false
+    },
+    {
+      "entry": "tests/",
+      "present": false
+    },
+    {
+      "entry": "schemas/",
+      "present": false
+    },
+    {
+      "entry": "docs/",
+      "present": false
+    },
+    {
+      "entry": ".local/",
+      "present": false
+    },
+    {
+      "entry": "node_modules/",
+      "present": false
+    },
+    {
+      "entry": "analyzer/src/",
+      "present": false
+    },
+    {
+      "entry": "analyzer/tests/",
+      "present": false
+    },
+    {
+      "entry": "analyzer/bin/semantic/",
+      "present": false
+    },
+    {
+      "entry": "media/viewer.js.map",
+      "present": false
+    }
+  ],
+  "ok": true
+}

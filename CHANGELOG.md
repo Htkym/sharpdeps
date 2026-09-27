@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-27
+
+### Added
+
+- Interactive SVG dependency map backed by a validated analysis result (report v2), with graph and table views of the same selection, a hierarchy tree, and whole-index search.
+- Inspector with node overview and a paged evidence list: `file:line:column`, resolved/inferred and generated markers, public-surface marks, per-edge occurrence counts, and the aggregated relation breakdown for coarse views.
+- Open evidence and declarations in the editor; generated documents open read-only, and a file whose content changed since the analysis asks before revealing a position.
+- `SharpDeps: Show Type Dependencies (cursor)` and `Show Type Dependents (cursor)`, resolved through declaration positions rather than names.
+- Cycles tab that separates the member set from the verified cycle path, with each path edge linked to its evidence.
+- Exports of the current selection as Mermaid, JSON, SVG, and PNG, plus an evidence-backed context copy for coding agents with an explicit "do not assert" section.
+- View state persistence (target, selection, filters, scope, panes, table page, camera) with a versioned serializer and clamped values.
+- Explicit states for stale results: unsaved edits, saves, and configuration changes mark the registered result as stale.
+- Security boundaries: nonce-based CSP with locked objects/frames/base/forms, a trust guard before analysis, bounded search queries, path containment for opening files, and single-line sanitising for names in exports.
+- Keyboard shortcuts (`/`, `g`/`t`, `Enter`, `Esc`, `+`/`-`/`0`) and focus return when the inspector closes.
+- Semantic precision golden (`semantic-summary.json`) and a normalised accuracy check that found multi-TFM project entries missing for the second target framework.
+- VS Code end-to-end suite (`npm run test:e2e`) that installs the extension into a dedicated profile and verifies activation, commands, trust, a real Quick analysis, and the Problems collection.
+- Performance measurements and a content check for the packaged VSIX (`npm run perf`, `npm run check:vsix`).
+
+### Changed
+
+- The panel renders the new UI; the previous Mermaid viewer remains in the extension only for the cycle diagnostics.
+- Run directories are kept for the two newest analyses so evidence paging and exports keep working, instead of being deleted after each run.
+
+### Fixed
+
+- Multi-targeted projects now publish one project entry per target framework, so the second TFM's types no longer reference a project that does not exist.
+- Concurrent graph layouts no longer create (and leak) a second layout worker.
+- Closing the inspector with Escape can no longer be undone by the graph's own selection handling.
+
+
 ## [0.0.4] - 2026-07-06
 
 ### Added

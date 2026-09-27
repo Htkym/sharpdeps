@@ -40,8 +40,23 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Build the analyzer hosts
+        run: npm run build:analyzer
+
+      - name: Check the packaged VSIX content
+        run: npm run check:vsix
+
       - name: Package VSIX
         run: npm run package
+
+      # The end-to-end suite needs a VS Code binary. On CI that comes from
+      # @vscode/test-electron, which the runner falls back to when no installation is
+      # present; locally the installed VS Code is used instead.
+      - name: End-to-end (VS Code)
+        run: |
+          npm install --no-save @vscode/test-electron
+          npm run test:e2e
+        continue-on-error: true
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4

@@ -9,6 +9,24 @@ The graph opens as a normal editor tab (a webview). Mermaid is bundled into the 
 
 ![SharpDeps showing the project-level dependency graph for a .NET solution](images/overview.png)
 
+## What's new in 0.1.0
+
+The map is now an interactive SVG view backed by an analysis result, not a rendered Mermaid
+diagram. The workflow is **select a dependency → check its evidence → jump to the code**:
+
+- **Graph and table views** of the same selection, with a hierarchy tree and whole-index search on the left.
+- **Inspector**: node overview (kind, project, dependencies, dependents, occurrence counts) and, for an edge, the evidence list with `file:line:column`, resolved/inferred and generated marks, paging, and a copy button.
+- **Open evidence or a declaration in the editor** from the inspector ("エディターで開く"); generated code opens read-only from the analysis result, and a changed file asks before jumping to a stale line.
+- **Editor commands**: `SharpDeps: Show Type Dependencies (cursor)` and `Show Type Dependents (cursor)` reveal the type under the cursor, resolved through declaration positions (never by name).
+- **Cycles tab**: the member set and the verified cycle path are shown separately; each path edge opens its evidence.
+- **Exports**: Mermaid, JSON, SVG, and PNG of the current selection, plus **Copy for agent** which copies an evidence-backed context (target, conditions, evidence, cycles, limits, and an explicit "do not assert" list). Nothing is sent anywhere.
+- **State restore**: the panel comes back with the target, selection, filters, and camera after hiding the tab or reloading the window, without starting an analysis.
+- **Keyboard**: `/` search, `g`/`t` graph/table, `Enter` select, `Esc` close the inspector, `+`/`-`/`0` zoom.
+- Measurements for the analyzer live in [docs/performance.md](docs/performance.md); the semantic model is described in [docs/analysis-semantics.md](docs/analysis-semantics.md).
+
+The screenshots below show the earlier UI; the commands and settings are unchanged unless
+noted here.
+
 ## Features
 
 - Interactive Mermaid dependency graph for a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`), shown in an editor tab.

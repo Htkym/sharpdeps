@@ -2,7 +2,7 @@
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
   "description": "Visualize .NET solution dependencies at project and namespace granularity, with circular-dependency detection.",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
@@ -152,7 +152,8 @@
     "test:watch": "vitest",
     "package": "vsce package",
     "test:e2e": "node scripts/e2e.js",
-    "perf": "node scripts/perf.js"
+    "perf": "node scripts/perf.js",
+    "check:vsix": "node scripts/check-vsix.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

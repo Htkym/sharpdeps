@@ -1012,12 +1012,32 @@
       "id": "SD-029",
       "title": "ビルド・VSIX・ドキュメント整備",
       "milestone": "M4",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "package.json",
+        "package-lock.json",
+        "scripts/check-vsix.js",
+        "scripts/e2e.js",
+        "THIRD-PARTY-NOTICES.md",
+        "README.md",
+        "CHANGELOG.md",
+        ".github/workflows/ci.yml",
+        "docs/implementation/v0.1.0/tasks/SD-029.md",
+        "docs/implementation/v0.1.0/evidence/sd-029-vsix.json"
+      ],
+      "tests": [
+        "npm run check:vsix — 46 entries, all 14 required files present, no forbidden paths",
+        "npm run package — pass; npm run compile / lint / format:check / npm test — pass",
+        "npm run test:e2e (development mode) — 7/7 on VS Code 1.139.1"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-029.md",
+        "docs/implementation/v0.1.0/evidence/sd-029-vsix.json",
+        "THIRD-PARTY-NOTICES.md"
+      ],
+      "blockers": [],
+      "notes": "Version 0.1.0, a scripted VSIX content check (required files present, semantic host and development material excluded), third-party notices, README/CHANGELOG for the new UI, and CI steps for the analyzer build, the VSIX check, and an optional end-to-end run. Remaining: installing the VSIX into a clean profile and re-running the suite (the CLI install did not finish here), new-UI screenshots, and the EPL-2.0 full text."
     },
     {
       "id": "SD-030",

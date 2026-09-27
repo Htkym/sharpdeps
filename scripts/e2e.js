@@ -60,13 +60,19 @@ async function main() {
 
   const workspace = path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline');
   const testsPath = path.join(repoRoot, 'tests', 'extension', 'suite.js');
+  // VSIX mode installs the packaged extension into a fresh profile and runs the same
+  // suite without a development path, which is how a user starts it (SD-029).
+  const vsixMode = process.env.SHARPDEPTS_E2E_MODE === 'vsix';
+  const vsixPath = path.join(repoRoot, 'sharpdeps-check.vsix');
   // A dedicated profile keeps the user's own VS Code untouched and holds the runtime
   // extension the product depends on.
-  const profile = process.env.SHARPDEPTS_E2E_PROFILE ?? path.join(repoRoot, '.local', 'e2e-vscode');
+  const profile =
+    process.env.SHARPDEPTS_E2E_PROFILE ??
+    path.join(repoRoot, '.local', vsixMode ? 'e2e-vsix' : 'e2e-vscode');
   const launchArgs = [workspace, '--disable-workspace-trust', `--user-data-dir=${profile}`];
   process.env.SHARPDEPTS_E2E_REPORT = reportPath;
 
-  async function installDependency() {
+  async function installExtensions(extensions) {
     if (typeof executable !== 'string') {
       return;
     }
@@ -75,12 +81,7 @@ async function main() {
     const exitCode = await new Promise((resolve) => {
       const child = spawn(
         executable,
-        [
-          `--user-data-dir=${profile}`,
-          '--install-extension',
-          'ms-dotnettools.vscode-dotnet-runtime',
-          '--force'
-        ],
+        [`--user-data-dir=${profile}`, '--install-extension', ...extensions, '--force'],
         { stdio: 'inherit' }
       );
       child.on('exit', (code) => resolve(code ?? 1));
@@ -128,10 +129,14 @@ async function main() {
   } else if (executable) {
     // No @vscode/test-electron: launch the installed VS Code directly. The test runner
     // is built into VS Code, so --extensionTestsPath works without extra dependencies.
-    await installDependency();
+    await installExtensions(
+      vsixMode
+        ? [vsixPath, 'ms-dotnettools.vscode-dotnet-runtime']
+        : ['ms-dotnettools.vscode-dotnet-runtime']
+    );
     const { spawn, execFile } = require('node:child_process');
     const args = [
-      `--extensionDevelopmentPath=${repoRoot}`,
+      ...(vsixMode ? [] : [`--extensionDevelopmentPath=${repoRoot}`]),
       `--extensionTestsPath=${testsPath}`,
       '--disable-gpu',
       '--no-sandbox',
