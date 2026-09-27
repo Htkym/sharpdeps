@@ -93,7 +93,7 @@ export function describeBasis(basis: string): BasisDescription {
       };
     case 'projectEvaluated':
       return {
-        label: 'Quick（評価済みプロジェクト依存）',
+        label: 'Semantic（評価済みプロジェクト依存）',
         detail: 'MSBuild評価に基づくプロジェクト依存です。',
         resolved: false
       };

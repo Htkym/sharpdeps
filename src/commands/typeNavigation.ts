@@ -46,6 +46,12 @@ export async function resolveTypeAtCursor(
   }
 
   const report = store.getReport(analysisId);
+  if (editor.document.isDirty || store.isStale(analysisId)) {
+    return {
+      ok: false,
+      reason: '解析後に変更されています。保存してSemanticで解析し直してください。'
+    };
+  }
   if (!report.declarationIndex) {
     return {
       ok: false,

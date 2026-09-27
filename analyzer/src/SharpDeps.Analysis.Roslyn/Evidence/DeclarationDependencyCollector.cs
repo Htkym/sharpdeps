@@ -493,9 +493,18 @@ public sealed class DeclarationDependencyCollector
                 }
 
                 break;
-            // Qualified/alias-qualified names are not expanded: GetTypeInfo already
-            // resolves the whole name, and recursing would count one written reference
-            // twice with different spans.
+            case QualifiedNameSyntax qualified when qualified.Right is GenericNameSyntax generic:
+                foreach (var argument in generic.TypeArgumentList.Arguments)
+                {
+                    yield return argument;
+                }
+                break;
+            case AliasQualifiedNameSyntax alias when alias.Name is GenericNameSyntax generic:
+                foreach (var argument in generic.TypeArgumentList.Arguments)
+                {
+                    yield return argument;
+                }
+                break;
             case ArrayTypeSyntax array:
                 yield return array.ElementType;
                 break;
@@ -578,7 +587,7 @@ public sealed class DeclarationDependencyCollector
                 document.Origin,
                 document.Id,
                 physicalSpan,
-                null,
+                _documents.MappedLocationFor(syntax),
                 contentHash,
                 "resolved",
                 publicSurface,

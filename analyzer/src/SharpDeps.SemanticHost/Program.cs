@@ -62,10 +62,9 @@ Progress("discover", new { target = targetPath, configuration, platform });
 try
 {
     var load = await SemanticLoader.LoadAsync(
-        new SemanticLoadOptions(targetPath, configuration, platform, timeoutSeconds),
+        new SemanticLoadOptions(targetPath, configuration, platform, timeoutSeconds, parsed.ProjectVariants),
         cancellation.Token);
-    // The semantic v2 report writer is not implemented yet (SD-011/SD-013); the probe
-    // report is written as-is and the caller's analysis id is not applied here.
+    // Keep the load diagnostics alongside the v2 snapshot and indexed evidence.
     var report = load.Report;
     var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath))!;
     Directory.CreateDirectory(outputDirectory);
@@ -223,7 +222,8 @@ internal sealed record CliArguments(
     string Configuration,
     string? Platform,
     int TimeoutSeconds,
-    string? AnalysisId);
+    string? AnalysisId,
+    IReadOnlyList<ProjectVariantSelection>? ProjectVariants);
 
 internal static class CliOptions
 {
@@ -236,11 +236,22 @@ internal static class CliOptions
         string? platform = null;
         var timeout = 180;
         string? analysisId = null;
+        IReadOnlyList<ProjectVariantSelection>? variants = null;
 
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
             {
+                case "--watch-stdin":
+                    break;
+                case "--project-variants" when index + 1 < args.Length:
+                    try
+                    {
+                        variants = JsonSerializer.Deserialize<ProjectVariantSelection[]>(args[++index], new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    }
+                    catch (JsonException) { return null; }
+                    if (variants is null || variants.Any(item => string.IsNullOrWhiteSpace(item.ProjectLogicalId) || string.IsNullOrWhiteSpace(item.TargetFramework))) return null;
+                    break;
                 case "--solution" when index + 1 < args.Length:
                     solution = args[++index];
                     break;
@@ -274,6 +285,6 @@ internal static class CliOptions
             return null;
         }
 
-        return new CliArguments(solution, output, configuration, platform, timeout, analysisId);
+        return new CliArguments(solution, output, configuration, platform, timeout, analysisId, variants);
     }
 }

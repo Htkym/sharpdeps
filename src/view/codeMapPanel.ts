@@ -13,15 +13,19 @@ import { buildContextExport, buildExportJson, buildMermaid } from '../export/con
 import type { ContextEvidence, ContextExportInput } from '../export/contextExport';
 import { getWebviewHtml } from './html';
 import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
-import type { Capabilities, ExportFormat, HostToWebviewMessage, Scope } from './protocolV2';
+import type { ExportFormat, HostToWebviewMessage, Scope } from './protocolV2';
 import type { Granularity } from '../analyzer/reportV2';
+import type { AnalysisProgressEvent } from '../analyzer/analysisController';
+import type { ProfileRequest, Filters } from './protocolV2';
+import { restoreViewState, serializeViewState } from '../../media/app/serializer';
+import { INITIAL_STATE } from '../../media/app/state';
 
 export interface CodeMapPanelHost {
   store: ReportStore;
   bridge: ReportBridge;
   output: vscode.OutputChannel;
   /** Directory the analysed paths are relative to, for opening locations. */
-  rootDirectory: () => string | undefined;
+  rootDirectory: (analysisId?: string) => string | undefined;
   /** Target name for export file names. */
   targetName: () => string;
   /** Persists the small view state (SD-021). Never starts an analysis. */
@@ -29,9 +33,11 @@ export interface CodeMapPanelHost {
   /** Reads the last small view state, if any (SD-021). */
   loadViewState: () => Record<string, unknown> | undefined;
   /** Starts an analysis for the current target in the requested mode. */
-  onAnalyze: (mode: 'quick' | 'semantic') => void;
+  onAnalyze: (mode: 'quick' | 'semantic', profile?: ProfileRequest) => void;
   /** Stops the running analysis. */
   onCancel: () => void;
+  onDispose?: () => void;
+  projectionLimits?: (granularity: Granularity) => { maxNodes: number; maxEdges: number };
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -46,6 +52,7 @@ export class CodeMapPanel {
   static show(extensionUri: vscode.Uri, host: CodeMapPanelHost): CodeMapPanel {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (CodeMapPanel.current) {
+      if (!CodeMapPanel.current.panel.visible) CodeMapPanel.current.ready = false;
       CodeMapPanel.current.panel.reveal(column);
       return CodeMapPanel.current;
     }
@@ -66,10 +73,27 @@ export class CodeMapPanel {
     return CodeMapPanel.current;
   }
 
+  static restore(
+    panel: vscode.WebviewPanel,
+    extensionUri: vscode.Uri,
+    host: CodeMapPanelHost
+  ): CodeMapPanel {
+    panel.webview.options = {
+      enableScripts: true,
+      enableCommandUris: false,
+      enableForms: false,
+      localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
+    };
+    CodeMapPanel.current = new CodeMapPanel(panel, extensionUri, host);
+    return CodeMapPanel.current;
+  }
+
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
   private ready = false;
   private pendingAnalysisId: string | undefined;
+  private runningMessage: Extract<HostToWebviewMessage, { type: 'analysisStarted' }> | undefined;
+  private viewState: Record<string, unknown> | undefined;
   private pendingReveal:
     { analysisId: string; entityId: string; scope: Scope; granularity?: Granularity } | undefined;
 
@@ -79,6 +103,7 @@ export class CodeMapPanel {
     private readonly host: CodeMapPanelHost
   ) {
     this.panel = panel;
+    this.viewState = host.loadViewState();
     this.panel.webview.html = getWebviewHtml(this.panel.webview, extensionUri);
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -88,7 +113,10 @@ export class CodeMapPanel {
       this.disposables
     );
     this.panel.onDidChangeViewState(
-      (event) => setPanelActiveContext(event.webviewPanel.active),
+      (event) => {
+        if (!event.webviewPanel.visible) this.ready = false;
+        setPanelActiveContext(event.webviewPanel.active);
+      },
       null,
       this.disposables
     );
@@ -101,8 +129,28 @@ export class CodeMapPanel {
    * so nothing is pushed that the view did not request.
    */
   notifyAnalysis(analysisId: string): void {
+    this.runningMessage = undefined;
     this.pendingAnalysisId = analysisId;
     this.postAnalysisState(analysisId);
+  }
+
+  notifyStarted(
+    analysisId: string,
+    mode: 'quick' | 'semantic',
+    target: { name: string; relativePath: string }
+  ): void {
+    this.runningMessage = { type: 'analysisStarted', analysisId, mode, target };
+    if (this.ready) this.post(this.runningMessage);
+  }
+  notifyProgress(event: AnalysisProgressEvent): void {
+    if (this.ready) this.post({ ...event, type: 'analysisProgress' });
+  }
+  notifyFailure(analysisId: string, message: string, cancelled = false): void {
+    this.runningMessage = undefined;
+    this.post({ type: 'analysisFailed', analysisId, message, cancelled });
+  }
+  requestExport(format: ExportFormat, copy?: boolean): void {
+    this.post({ type: 'requestExport', format, copy });
   }
 
   /**
@@ -154,16 +202,28 @@ export class CodeMapPanel {
     switch (request.type) {
       case 'ready':
         this.ready = true;
+        this.postViewState();
         void this.host.bridge
           .handle({ type: 'ready', protocolVersion: PROTOCOL_VERSION })
           .then((response) => this.post(response));
-        if (this.pendingAnalysisId) {
-          this.postAnalysisState(this.pendingAnalysisId);
+        if (this.pendingAnalysisId ?? this.host.store.currentAnalysisId) {
+          this.postAnalysisState((this.pendingAnalysisId ?? this.host.store.currentAnalysisId)!);
         }
+        if (this.runningMessage) this.post(this.runningMessage);
+        this.flushReveal();
         return;
       case 'analyze':
-        this.host.onAnalyze(request.mode);
+        this.host.onAnalyze(request.mode, request.profile);
         return;
+      case 'persistViewState': {
+        const restored = restoreViewState(request.viewState);
+        this.viewState = serializeViewState({
+          ...INITIAL_STATE,
+          ...restored.state
+        }) as unknown as Record<string, unknown>;
+        this.host.saveViewState(this.viewState);
+        return;
+      }
       case 'cancelAnalysis':
         this.host.onCancel();
         return;
@@ -176,15 +236,26 @@ export class CodeMapPanel {
           this.locationOptions,
           request.analysisId,
           request.entityId,
-          request.declarationIndex ?? 0
+          request.declarationIndex
         );
         return;
       case 'copyContext':
         // Built and copied locally; nothing is sent anywhere.
-        void this.copyContext(request.analysisId, request.scope, request.includeSnippets === true);
+        void this.copyContext(
+          request.analysisId,
+          request.scope,
+          request.includeSnippets === true,
+          request
+        );
         return;
       case 'export':
-        void this.exportSelection(request.analysisId, request.format, request.scope, request.data);
+        void this.exportSelection(
+          request.analysisId,
+          request.format,
+          request.scope,
+          request.data,
+          request
+        );
         return;
       default:
         // Everything else is answered from the store by the bridge; unimplemented host
@@ -214,15 +285,22 @@ export class CodeMapPanel {
   private async selectionExport(
     analysisId: string,
     scope: Scope,
-    includeSnippets: boolean
+    includeSnippets: boolean,
+    selection: {
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
+    } = {}
   ): Promise<ContextExportInput> {
     const store = this.host.store;
     const report = store.getReport(analysisId);
+    const granularity = selection.granularity ?? (report.mode === 'quick' ? 'project' : 'type');
     const projection = store.getProjection(analysisId, {
-      scope: scope as { kind: string; id?: string | null; depth?: number | null },
-      granularity: 'type',
-      maxNodes: 300,
-      maxEdges: 1000
+      scope,
+      ...selection,
+      granularity,
+      ...(this.host.projectionLimits?.(granularity) ?? { maxNodes: 300, maxEdges: 1000 })
     });
 
     const evidenceByRelation: Record<string, ContextEvidence[]> = {};
@@ -251,11 +329,19 @@ export class CodeMapPanel {
       completeness: report.completeness,
       configuration: report.profile.configuration,
       platform: report.profile.platform,
+      projectVariants: report.projects
+        .filter((project) => project.targetFramework !== 'external')
+        .map((project) => ({
+          projectPath: project.relativePath,
+          targetFramework: project.targetFramework
+        })),
+      filters: selection.filters as Record<string, unknown> | undefined,
+      search: selection.search,
       limitations: report.limitations.map((limitation) => ({
         code: limitation.code,
         message: limitation.message
       })),
-      granularity: 'type',
+      granularity,
       scopeLabel: describeScope(scope),
       nodes: projection.nodes.map((node) => ({
         id: node.id,
@@ -297,35 +383,23 @@ export class CodeMapPanel {
   }
 
   /** Copies Mermaid for the current selection (SD-022); keeps the existing command. */
-  async copyMermaid(): Promise<void> {
-    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
-    if (!analysisId) {
-      void vscode.window.showInformationMessage('SharpDeps: 解析結果がありません。');
-      return;
-    }
-
-    try {
-      const input = await this.selectionExport(analysisId, { kind: 'root' }, false);
-      await vscode.env.clipboard.writeText(buildMermaid(input));
-      void vscode.window.showInformationMessage(
-        `SharpDeps: Mermaid をコピーしました（${input.nodes.length} ノード / ${input.edges.length} 関係）。`
-      );
-    } catch (error) {
-      void vscode.window.showErrorMessage(
-        `SharpDeps: Mermaid を作成できませんでした。${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
+  copyMermaid(): void {
+    this.requestExport('mermaid', true);
   }
 
   private async copyContext(
     analysisId: string,
     scope: Scope,
-    includeSnippets: boolean
+    includeSnippets: boolean,
+    selection: {
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
+    } = {}
   ): Promise<void> {
     try {
-      const input = await this.selectionExport(analysisId, scope, includeSnippets);
+      const input = await this.selectionExport(analysisId, scope, includeSnippets, selection);
       const text = buildContextExport(input);
       await vscode.env.clipboard.writeText(text);
       void vscode.window.showInformationMessage(
@@ -344,7 +418,14 @@ export class CodeMapPanel {
     analysisId: string,
     format: ExportFormat,
     scope: Scope,
-    data: string | undefined
+    data: string | undefined,
+    selection: {
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
+      copy?: boolean;
+    } = {}
   ): Promise<void> {
     try {
       if ((format === 'svg' || format === 'png') && data) {
@@ -371,8 +452,17 @@ export class CodeMapPanel {
         return;
       }
 
-      const input = await this.selectionExport(analysisId, scope, false);
+      if (format === 'svg' || format === 'png')
+        throw new Error('The graph is not ready to export. Switch to Graph and wait for layout.');
+      const input = await this.selectionExport(analysisId, scope, false, selection);
       const text = format === 'json' ? buildExportJson(input) : buildMermaid(input);
+      if (selection.copy) {
+        await vscode.env.clipboard.writeText(text);
+        void vscode.window.showInformationMessage(
+          `SharpDeps: ${format.toUpperCase()} をコピーしました（${input.nodes.length} ノード / ${input.edges.length} 関係）。`
+        );
+        return;
+      }
       const extension = format === 'json' ? 'json' : 'mmd';
       const uri = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.file(
@@ -418,12 +508,24 @@ export class CodeMapPanel {
       this.post({
         type: 'analysisComplete',
         analysisId,
-        completeness:
-          report.completeness === 'completeWithinScope' ? 'completeWithinScope' : 'partial',
+        completeness: report.completeness,
         coverage: report.coverage,
         mode: report.mode === 'semantic' ? 'semantic' : 'quick',
-        limitations: report.limitations
+        limitations: report.limitations,
+        capabilities: report.capabilities,
+        target: { name: this.host.targetName(), relativePath: report.target.relativePath },
+        profile: { configuration: report.profile.configuration, platform: report.profile.platform },
+        variantOptions: report.profile.projectVariants
+          .filter((variant) => variant.targetFramework !== 'external')
+          .map((variant) => ({
+            projectLogicalId: variant.projectLogicalId,
+            targetFramework: variant.targetFramework,
+            projectPath:
+              report.projects.find((project) => project.variantId === variant.variantId)
+                ?.relativePath ?? variant.projectLogicalId
+          }))
       });
+      if (this.host.store.isStale(analysisId)) this.notifyStale(analysisId, 'unknown');
     } catch (error) {
       this.host.output.appendLine(
         `The result of ${analysisId} is no longer available: ${
@@ -438,37 +540,11 @@ export class CodeMapPanel {
     }
   }
 
-  private capabilities(): Capabilities {
-    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
-    if (analysisId) {
-      try {
-        const report = this.host.store.getReport(analysisId);
-        return {
-          typeGraph: report.capabilities.typeGraph,
-          evidence: report.capabilities.evidence,
-          generatedDocuments: report.capabilities.generatedDocuments,
-          cycleWitness: report.capabilities.cycleWitness,
-          search: report.capabilities.search
-        };
-      } catch {
-        // Falls through to the conservative defaults below.
-      }
-    }
-
-    return {
-      typeGraph: true,
-      evidence: true,
-      generatedDocuments: false,
-      cycleWitness: true,
-      search: true
-    };
-  }
-
   /** Stable options object for opening locations (SD-019). */
   private readonly locationOptions = {
     store: this.host.store,
     output: this.host.output,
-    rootDirectory: () => this.host.rootDirectory()
+    rootDirectory: (analysisId?: string) => this.host.rootDirectory(analysisId)
   };
 
   private post(message: HostToWebviewMessage): void {
@@ -476,6 +552,7 @@ export class CodeMapPanel {
   }
 
   dispose(): void {
+    this.host.onDispose?.();
     CodeMapPanel.current = undefined;
     setPanelActiveContext(false);
     this.panel.dispose();

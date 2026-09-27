@@ -75,7 +75,8 @@ public sealed record AnalysisType(
     bool IsPartial,
     int DeclarationCount,
     int? MemberCount,
-    bool? IsExternal);
+    bool? IsExternal,
+    bool? IsGenerated = null);
 
 public sealed record AnalysisRelation(
     string Id,

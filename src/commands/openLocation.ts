@@ -8,6 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { PhysicalSpan, SourceDocument } from '../analyzer/reportV2';
 import type { ReportStore } from '../analyzer/reportStore';
@@ -18,7 +19,7 @@ export interface OpenLocationOptions {
   store: ReportStore;
   output: vscode.OutputChannel;
   /** Directory the analysed paths are relative to; undefined when no target is known. */
-  rootDirectory: () => string | undefined;
+  rootDirectory: (analysisId?: string) => string | undefined;
 }
 
 export async function openEvidenceLocation(
@@ -34,7 +35,7 @@ export async function openEvidenceLocation(
     return;
   }
 
-  if (!evidence.physicalSpan) {
+  if (!evidence.physicalSpan && evidence.kind !== 'projectEvaluated') {
     void vscode.window.showInformationMessage(
       'SharpDeps: この根拠には位置情報がありません（宣言のみのため開けません）。'
     );
@@ -48,14 +49,73 @@ export async function openEvidenceLocation(
     return;
   }
 
-  await openSpan(options, analysisId, document, evidence.physicalSpan);
+  if (evidence.mappedLocation) {
+    const mapped = evidence.mappedLocation;
+    const choice = await vscode.window.showQuickPick(
+      [
+        { label: `Physical: ${document.relativePath}`, mapped: false },
+        { label: `Mapped: ${mapped.relativePath}:${mapped.line + 1}`, mapped: true }
+      ],
+      { placeHolder: 'Choose the physical or #line location' }
+    );
+    if (!choice) return;
+    if (choice.mapped) {
+      const root = options.rootDirectory(analysisId);
+      if (!root || !isInsideRoot(root, mapped.relativePath)) {
+        void vscode.window.showWarningMessage(
+          'SharpDeps: 変換先は解析ルート外のため開けません。物理位置を選択してください。'
+        );
+        return;
+      }
+      try {
+        const [realRoot, realFile] = await Promise.all([
+          fs.promises.realpath(root),
+          fs.promises.realpath(path.resolve(root, mapped.relativePath))
+        ]);
+        if (!isInsideRoot(realRoot, path.relative(realRoot, realFile)))
+          throw new Error('Mapped path leaves the analysis root.');
+        if (options.store.isStale(analysisId)) {
+          const proceed = await vscode.window.showWarningMessage(
+            'SharpDeps: 解析結果が古いため、変換先の位置も古い可能性があります。',
+            '開く'
+          );
+          if (proceed !== '開く') return;
+        }
+        await openSpan(
+          options,
+          analysisId,
+          {
+            ...document,
+            origin: 'userSource',
+            relativePath: mapped.relativePath,
+            contentHash: 'unavailable'
+          },
+          {
+            start: 0,
+            length: 0,
+            startLine: mapped.line,
+            startCharacter: mapped.character,
+            endLine: mapped.line,
+            endCharacter: mapped.character
+          }
+        );
+        return;
+      } catch (error) {
+        void vscode.window.showWarningMessage(
+          `SharpDeps: 変換先を開けません。物理位置を選択してください。${String(error)}`
+        );
+        return;
+      }
+    }
+  }
+  await openSpan(options, analysisId, document, evidence.physicalSpan ?? null);
 }
 
 export async function openDeclarationLocation(
   options: OpenLocationOptions,
   analysisId: string,
   typeId: string,
-  declarationIndex: number
+  declarationIndex?: number
 ): Promise<void> {
   const declarations = await options.store.declarationsForType(analysisId, typeId);
   if (declarations.length === 0) {
@@ -65,7 +125,20 @@ export async function openDeclarationLocation(
     return;
   }
 
-  const record = declarations[Math.min(Math.max(declarationIndex, 0), declarations.length - 1)];
+  if (declarations.length > 1 && declarationIndex === undefined) {
+    const chosen = await vscode.window.showQuickPick(
+      declarations.map((record) => ({
+        label: `${record.relativePath}:${record.span.startLine + 1}`,
+        description: `Declaration ${record.declarationIndex + 1}`,
+        record
+      })),
+      { placeHolder: 'Choose a declaration' }
+    );
+    if (!chosen) return;
+    declarationIndex = chosen.record.declarationIndex;
+  }
+  const record =
+    declarations[Math.min(Math.max(declarationIndex ?? 0, 0), declarations.length - 1)];
   const report = options.store.getReport(analysisId);
   const document = report.sourceManifest.find((entry) => entry.id === record.documentId);
   if (!document) {
@@ -86,14 +159,11 @@ async function openSpan(
   options: OpenLocationOptions,
   analysisId: string,
   document: SourceDocument,
-  span: PhysicalSpan
+  span: PhysicalSpan | null
 ): Promise<void> {
-  const range = new vscode.Range(
-    span.startLine,
-    span.startCharacter,
-    span.endLine,
-    span.endCharacter
-  );
+  const range = span
+    ? new vscode.Range(span.startLine, span.startCharacter, span.endLine, span.endCharacter)
+    : undefined;
 
   if (document.origin === 'generatedSource') {
     // Read-only: the content comes from the analysis result, never from a file that was
@@ -102,12 +172,14 @@ async function openSpan(
       generatedDocumentUri(analysisId, document.id)
     );
     const editor = await vscode.window.showTextDocument(textDocument, { preview: false });
-    editor.selection = new vscode.Selection(range.start, range.end);
-    editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    if (range) {
+      editor.selection = new vscode.Selection(range.start, range.end);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
     return;
   }
 
-  const rootDirectory = options.rootDirectory();
+  const rootDirectory = options.rootDirectory(analysisId);
   if (!rootDirectory) {
     void vscode.window.showWarningMessage(
       'SharpDeps: 解析対象のルートが不明なため、この場所を開けません。'
@@ -119,14 +191,18 @@ async function openSpan(
   const textDocument = await vscode.workspace.openTextDocument(fileUri);
 
   if (textDocument.isDirty) {
-    void vscode.window.showWarningMessage(
-      'SharpDeps: 未保存の変更があります。位置が実際の内容と異なる場合があります。'
+    const choice = await vscode.window.showWarningMessage(
+      'SharpDeps: 未保存の変更があります。古い位置へ移動しますか？',
+      '開く'
     );
+    if (choice !== '開く') return;
   }
 
   // A linked file outside the analysis root is legitimate and opens, but its content is
   // not read for hash comparison: only paths inside the root are read (SD-023).
-  if (isInsideRoot(rootDirectory, document.relativePath)) {
+  const realFile = await fs.promises.realpath(fileUri.fsPath).catch(() => undefined);
+  const realRoot = await fs.promises.realpath(rootDirectory).catch(() => undefined);
+  if (realFile && realRoot && isInsideRoot(realRoot, path.relative(realRoot, realFile))) {
     const verification = await verifyContent(fileUri, document.contentHash);
     if (verification === 'mismatch') {
       const choice = await vscode.window.showWarningMessage(
@@ -145,8 +221,10 @@ async function openSpan(
   }
 
   const editor = await vscode.window.showTextDocument(textDocument, { preview: false });
-  editor.selection = new vscode.Selection(range.start, range.end);
-  editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  if (range) {
+    editor.selection = new vscode.Selection(range.start, range.end);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  }
 }
 
 /** 'unknown' when the hash cannot be compared (no hash recorded, or the file is gone). */

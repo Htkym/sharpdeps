@@ -35,8 +35,7 @@ public static class QuickV2Mapper
         var rootId = Identity.WorkspaceRootId(solutionDirectory);
         var createdAtText = createdAt.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
 
-        var projectIdByName = new Dictionary<string, string>(StringComparer.Ordinal);
-        var projectIdByPath = new Dictionary<string, string>(StringComparer.Ordinal);
+                var projectIdByPath = new Dictionary<string, string>(StringComparer.Ordinal);
         var variantIdByProject = new Dictionary<string, string>(StringComparer.Ordinal);
         var projectNameById = new Dictionary<string, string>(StringComparer.Ordinal);
         var variants = new List<ProjectVariant>();
@@ -49,9 +48,9 @@ public static class QuickV2Mapper
             var logicalId = Identity.ProjectLogicalId(rootId, relativePath);
             var variantId = Identity.ProjectVariantId(logicalId, project.TargetFramework, Configuration, null);
 
-            projectIdByName[project.Name] = logicalId;
+
             projectIdByPath[ProjectPaths.NormalizePathKey(fullPath)] = logicalId;
-            variantIdByProject[project.Name] = variantId;
+            variantIdByProject[ProjectPaths.NormalizePathKey(fullPath)] = variantId;
             projectNameById[logicalId] = project.Name;
 
             variants.Add(new ProjectVariant(
@@ -88,17 +87,17 @@ public static class QuickV2Mapper
         var namespaceIdByProjectAndName = new Dictionary<(string Project, string Name), string>();
         var namespaceNameById = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var group in index.NamespaceDeclarations
-                     .GroupBy(declaration => (declaration.ProjectName, declaration.NamespaceName))
-                     .OrderBy(group => group.Key.ProjectName, StringComparer.Ordinal)
+                     .GroupBy(declaration => (declaration.ProjectPath, declaration.NamespaceName))
+                     .OrderBy(group => group.Key.ProjectPath, StringComparer.Ordinal)
                      .ThenBy(group => group.Key.NamespaceName, StringComparer.Ordinal))
         {
-            if (!variantIdByProject.TryGetValue(group.Key.ProjectName, out var variantId))
+            if (!variantIdByProject.TryGetValue(group.Key.ProjectPath, out var variantId))
             {
                 continue;
             }
 
             var id = Identity.NamespaceId(variantId, group.Key.NamespaceName);
-            namespaceIdByProjectAndName[(group.Key.ProjectName, group.Key.NamespaceName)] = id;
+            namespaceIdByProjectAndName[(group.Key.ProjectPath, group.Key.NamespaceName)] = id;
             namespaceNameById[id] = group.Key.NamespaceName;
             namespaces.Add(new AnalysisNamespace(
                 id,
@@ -192,7 +191,7 @@ public static class QuickV2Mapper
                 conditionalReferences++;
             }
 
-            if (!projectIdByName.TryGetValue(reference.SourceProjectName, out var sourceId))
+            if (!projectIdByPath.TryGetValue(reference.SourceProjectPath, out var sourceId))
             {
                 continue;
             }
@@ -209,7 +208,7 @@ public static class QuickV2Mapper
         }
 
         var globalUsingsByProject = index.GlobalUsings
-            .GroupBy(global => global.ProjectName, StringComparer.Ordinal)
+            .GroupBy(global => global.ProjectPath, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
 
         foreach (var usage in index.FileUsages)
@@ -223,7 +222,7 @@ public static class QuickV2Mapper
                 effectiveUsings.Add((directive, usageDocument));
             }
 
-            if (globalUsingsByProject.TryGetValue(usage.ProjectName, out var globals))
+            if (globalUsingsByProject.TryGetValue(usage.ProjectPath, out var globals))
             {
                 foreach (var global in globals)
                 {
@@ -241,7 +240,7 @@ public static class QuickV2Mapper
 
                 foreach (var declared in usage.DeclaredNamespaces)
                 {
-                    if (!namespaceIdByProjectAndName.TryGetValue((usage.ProjectName, declared), out var sourceId))
+                    if (!namespaceIdByProjectAndName.TryGetValue((usage.ProjectPath, declared), out var sourceId))
                     {
                         continue;
                     }

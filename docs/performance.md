@@ -1,42 +1,33 @@
 # SharpDeps performance measurements
 
-Measured with `npm run perf` (SD-028). Numbers come from a fixed synthetic fixture and a
-real solution; nothing here is estimated. Re-run the script to reproduce them on another
-machine, because wall time depends on the CPU and disk.
+Measured on 2026-09-27 with SDK 10.0.300, Windows, Intel Core Ultra 7 258V (8 logical processors). The checked-in evidence contains raw samples, environment, fixture definition and host hash. These measurements do not predict other hardware.
 
-## Fixture
+## Fixed Medium input
 
-- `.local/perf/big`: 400 generated C# files, 40 namespaces × 10 types, each type using two
-  types from the previous namespace and one from its own (a deterministic fan, so edges and
-  cycles are exercised).
-- Semantic runs against `tests/fixtures/semantic-baseline/SemanticBaseline.sln` (6 project
-  variants, one of them multi-TFM, plus an in-memory source generator).
+`npm run perf` creates 30 projects and 3,000 C# files. The project chain, local cycles, external types and a repeated relation produce 102,535 evidence records. Three fresh analyzer processes run the same input. Restore is excluded; the first run and subsequent file-cache-warm runs are retained. No claim of cold OS caches is made.
 
-## Results (2026-09-27, Windows 11, .NET 10 SDK)
+| Measurement | Result | Budget |
+|---|---|---|
+| Medium Semantic, three runs | 19.12 / 16.18 / 16.17 s | 120 s |
+| Sampled analyzer tree peak | 631 / 991 / 531 MiB | 2 GiB |
+| Host search p95, 25 samples | 0.315 ms | 250 ms |
+| Host entity detail p95 | 0.075 ms | 100 ms |
+| Host local projection p95 | 210 ms | 2 s |
+| Host evidence page, 100 actual records, p95 | 0.740 ms | 300 ms |
+| ELK + SVG, 100 nodes / 200 edges, maximum of 3 | 308 ms | 2 s |
+| ELK + SVG, 300 nodes / 1,000 edges, maximum of 3 | 967 ms | 5 s |
+| Browser selection-to-frame p95, 300 nodes | 72.0 ms | 100 ms |
+| Actual VS Code Stop-to-cancelled, maximum of 20 | 23.8 ms | 250 ms |
+| Owned process stop + verification, maximum of 20 | 1,052 ms | 5 s |
 
-| Measurement | Value |
-|---|---|
-| Quick, 400 files, median of 3 | **559 ms** (min 523, max 578) |
-| Quick report size | 135 KB (`report.json`) |
-| Semantic, baseline solution (5 runs averaged by the tool) | **5.4 s** |
-| Semantic peak working set | **170 MiB** |
-| Semantic output (report + evidence + declarations) | 116 KB |
-| dotnet processes before/after the measurement | 8 / 8 (no leftovers) |
-| Measurement directories left behind | 0 |
+The browser fixtures use an actual ELK worker, not a mocked layout. A timer continues running while layout executes. Layout cancellation and table fallback are browser-tested. Host timings include cached indexes after one warm-up; they do not include a VS Code message round trip. UI selection timings measure DOM update through the next animation frame. Memory samples may miss peaks between samples.
 
-### What was not measured
+Raw data: [Medium](implementation/v0.1.0/evidence/sd-028-acceptance.json), [browser](implementation/v0.1.0/evidence/sd-028-browser.json), [UI and Stop](implementation/v0.1.0/evidence/sd-030-experience.json), [owned processes](implementation/v0.1.0/evidence/sd-028-lifecycle.json).
 
-- **Peak memory of the Quick host**: the process finishes in well under the sampling
-  interval (250 ms), so the sampler records 0. Treat Quick memory as unmeasured.
-- **Cancel response time and UI blocking**: covered structurally (the controller stops
-  cooperatively and then kills the tree; the webview only receives messages) and by the
-  unit tests, not by a timed measurement.
-- **Large solutions**: the fixture is deliberately synthetic; a several-thousand-file
-  solution has not been measured.
+## Bounds and retention
 
-## Cleanup
+The Medium report is about 59 MB. The report cap is 128 MiB, with independent evidence/declaration bounds; see [ADR-0004](adr/0004-medium-result-capacity.md). Analysis is never truncated to satisfy the display budget.
 
-The controller creates one run directory per analysis under the work root and keeps the
-newest two, removing older ones. The store reads evidence from the newest directories on
-demand, so deleting them immediately (as an earlier version did) would break evidence
-paging; `analysisController.test.ts` pins both the retention and the pruning.
+The controller retains the latest two successful results and the latest two other attempts, plus in-flight runs. Evidence remains available after a cancellation or failed analysis. Twenty real Semantic cancellation cycles left no captured owned PID and no more than four completed run directories. This count is based on owned process IDs, not unrelated dotnet processes on the machine.
+
+The earlier 400-file Quick benchmark is historical and is not used as Medium acceptance evidence. Reproduce the current checks using `npm run perf`, `npx playwright test performance --workers=1`, and `node scripts/measure-lifecycle.js` on Windows. Keep other test/build workloads idle during timing runs.

@@ -1,8 +1,9 @@
 {
-  "checkedAt": "2026-09-27T05:42:15.093Z",
+  "checkedAt": "2026-09-27T08:26:44.603Z",
   "vsix": "sharpdeps-check.vsix",
-  "bytes": 7134294,
-  "packagedEntries": 46,
+  "bytes": 16889539,
+  "sha256": "22793c37daec272eca6fbacd2ea7c4ca401a86853752a8c3f299c3597890457b",
+  "packagedEntries": 163,
   "required": [
     {
       "entry": "out/extension.js",
@@ -37,15 +38,31 @@
       "present": true
     },
     {
+      "entry": "analyzer/bin/semantic/sharpdeps-semantic-host.dll",
+      "present": true
+    },
+    {
+      "entry": "analyzer/bin/semantic/sharpdeps-semantic-host.runtimeconfig.json",
+      "present": true
+    },
+    {
+      "entry": "analyzer/bin/semantic/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll",
+      "present": true
+    },
+    {
+      "entry": "resources/ELK-LICENSE.md",
+      "present": true
+    },
+    {
       "entry": "package.json",
       "present": true
     },
     {
-      "entry": "README.md",
+      "entry": "readme.md",
       "present": true
     },
     {
-      "entry": "CHANGELOG.md",
+      "entry": "changelog.md",
       "present": true
     },
     {
@@ -84,10 +101,6 @@
     },
     {
       "entry": "analyzer/tests/",
-      "present": false
-    },
-    {
-      "entry": "analyzer/bin/semantic/",
       "present": false
     },
     {

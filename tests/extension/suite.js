@@ -22,6 +22,12 @@ async function run() {
   }
 
   await extension.activate();
+  if (process.env.SHARPDEPTS_E2E_MODE === 'vsix')
+    record(
+      'SharpDeps is loaded from the installed VSIX',
+      extension.extensionPath.includes(`${path.sep}extensions${path.sep}htkym.sharpdeps-`),
+      extension.extensionPath
+    );
   const commands = await vscode.commands.getCommands(true);
   const expected = [
     'sharpdeps.showDependencyMap',
@@ -43,6 +49,13 @@ async function run() {
   }
 
   // Run the real Quick analysis through the command path.
+  const { chromium, expect } = require('@playwright/test');
+  const browser = await chromium.connectOverCDP(
+    `http://127.0.0.1:${process.env.SHARPDEPTS_E2E_DEBUG_PORT}`
+  );
+  await vscode.workspace
+    .getConfiguration('sharpdeps')
+    .update('analysisMode', 'quick', vscode.ConfigurationTarget.Global);
   await vscode.commands.executeCommand('sharpdeps.showDependencyMap', workspaceRoot);
   // The command awaits the analysis, but the panel's registration happens right after:
   // give it a moment before asserting.
@@ -68,6 +81,195 @@ async function run() {
     Array.isArray(diagnostics),
     `${diagnostics.length} file(s)`
   );
+
+  // Drive the real webview, not a fixture with hand-dispatched reducer actions.
+  try {
+    for (const context of browser.contexts())
+      for (const page of context.pages()) {
+        page.on('pageerror', (error) => console.log('PAGE ERROR', String(error)));
+        page.on('console', (message) => {
+          if (message.type() === 'error') console.log('CONSOLE ERROR', message.text());
+        });
+      }
+    const mapFrame = async () => {
+      let found;
+      await expect
+        .poll(
+          async () => {
+            for (const context of browser.contexts())
+              for (const page of context.pages())
+                for (const frame of page.frames()) {
+                  if (
+                    await frame
+                      .locator('#app.sd-shell')
+                      .count()
+                      .catch(() => 0)
+                  ) {
+                    found = frame;
+                    return true;
+                  }
+                }
+            return false;
+          },
+          { timeout: 20000, message: 'The real SharpDeps webview must load.' }
+        )
+        .toBe(true)
+        .catch(async (error) => {
+          for (const context of browser.contexts())
+            for (const page of context.pages())
+              for (const frame of page.frames()) {
+                console.log(
+                  'FRAME',
+                  frame.url(),
+                  await frame
+                    .evaluate(() => document.documentElement.outerHTML.slice(-15000))
+                    .catch(String)
+                );
+              }
+          const session = await browser.newBrowserCDPSession();
+          console.log('TARGETS', JSON.stringify(await session.send('Target.getTargets')));
+          throw error;
+        });
+      return found;
+    };
+    let frame = await mapFrame();
+    const state = () => frame.evaluate(() => window.sharpdepsApp.getState());
+    await expect
+      .poll(async () => (await state()).projection?.nodes.length ?? 0, { timeout: 20000 })
+      .toBeGreaterThan(0);
+    record('Quick renders a nonempty project view', (await state()).granularity === 'project');
+    await vscode.commands.executeCommand('sharpdeps.copyMermaid');
+    await expect.poll(() => vscode.env.clipboard.readText()).toContain('flowchart');
+    record(
+      'Quick exports the current nonempty view',
+      (await vscode.env.clipboard.readText()).includes((await state()).projection.nodes[0].name)
+    );
+    await expect(frame.locator('.sd-error-bar')).toBeHidden();
+    await frame.locator('#sd-view-table').click();
+    await expect(frame.locator('.sd-table tbody tr')).not.toHaveCount(0);
+    record(
+      'table displays dependency counts',
+      (await frame.locator('.sd-table tbody td:nth-child(4)').allTextContents()).some(
+        (text) => Number(text) > 0
+      )
+    );
+    await expect.poll(() => api.getViewState()?.viewKind, { timeout: 5000 }).toBe('table');
+    record('view state reaches workspace storage', true);
+
+    // Open an actual file, then return to the map: retainContextWhenHidden is false.
+    await vscode.window.showTextDocument(
+      vscode.Uri.joinPath(workspaceRoot, 'src', 'Core', 'Order.cs')
+    );
+    await vscode.commands.executeCommand('workbench.action.previousEditor');
+    frame = await mapFrame();
+    await expect.poll(async () => (await state()).viewKind).toBe('table');
+    record('hidden webview restores selection conditions', true);
+
+    const repo = process.env.SHARPDEPTS_REPO;
+    await vscode.workspace
+      .getConfiguration('sharpdeps')
+      .update('analysisMode', 'semantic', vscode.ConfigurationTarget.Global);
+    await vscode.commands.executeCommand(
+      'sharpdeps.showDependencyMap',
+      vscode.Uri.file(
+        path.join(repo, 'tests', 'fixtures', 'semantic-baseline', 'SemanticBaseline.sln')
+      )
+    );
+    frame = await mapFrame();
+    await expect.poll(async () => (await state()).resultMode, { timeout: 20000 }).toBe('semantic');
+    record(
+      'Semantic runs through the installed extension',
+      api.getCurrentReport()?.mode === 'semantic'
+    );
+    await frame.locator('#sd-granularity').selectOption('type');
+    await frame.locator('#sd-view-graph').click();
+    const report = api.getCurrentReport();
+    const generatedRelation = report.relations.find(
+      (relation) =>
+        relation.generatedEvidenceCount > 0 && relation.sourceEntityId !== relation.targetEntityId
+    );
+    await frame
+      .locator(`g.edge[data-id="${generatedRelation.id}"]`)
+      .press('Enter', { timeout: 20000 });
+    await expect(frame.locator('.sd-evidence-item')).not.toHaveCount(0);
+    record('real Semantic edge supplies evidence', true);
+    await frame
+      .locator('#app')
+      .screenshot({ path: path.join(repo, '.local', 'review-20260927', 'workbench-semantic.png') });
+    await frame.getByRole('button', { name: 'エディターで開く', exact: true }).first().click();
+    await expect
+      .poll(() => vscode.window.activeTextEditor?.document.uri.scheme, { timeout: 10000 })
+      .toBe('sharpdeps-generated');
+    record('generated evidence opens the read-only document provider', true);
+    await vscode.commands.executeCommand('workbench.action.previousEditor');
+    frame = await mapFrame();
+    const beforeCancel = api.getCurrentAnalysisId();
+    await frame.locator('#sd-analyze').click();
+    await expect(frame.locator('#sd-stop')).toBeEnabled();
+    await frame.locator('#sd-stop').click();
+    await expect.poll(async () => (await state()).status).toBe('cancelled');
+    record(
+      'stop preserves the previous registered result',
+      api.getCurrentAnalysisId() === beforeCancel
+    );
+    await frame.locator('#sd-tab-analysis').click();
+    await expect(frame.getByText('Target frameworks:', { exact: false })).toBeVisible();
+    record('profile and per-project TFMs are available', true);
+
+    const source = vscode.Uri.file(
+      path.join(repo, 'tests/fixtures/semantic-baseline/src/Application/OrderService.cs')
+    );
+    const editor = await vscode.window.showTextDocument(source);
+    editor.selection = new vscode.Selection(4, 22, 4, 22);
+    await vscode.commands.executeCommand('sharpdeps.showTypeDependencies');
+    frame = await mapFrame();
+    await expect.poll(async () => (await state()).scope.kind).toBe('dependencies');
+    await expect(frame.getByRole('button', { name: /^Outgoing:/ }).first()).toBeVisible();
+    await frame
+      .getByRole('button', { name: /^Outgoing:/ })
+      .first()
+      .press('Enter');
+    await frame
+      .getByRole('button', { name: 'エディターで開く', exact: true })
+      .first()
+      .press('Enter');
+    await expect
+      .poll(() => vscode.window.activeTextEditor?.document.uri.fsPath)
+      .toBe(source.fsPath);
+    record('cursor → dependencies → evidence → physical source using keyboard', true);
+    await vscode.commands.executeCommand('sharpdeps.showTypeDependents');
+    frame = await mapFrame();
+    await expect.poll(async () => (await state()).scope.kind).toBe('dependents');
+    record(
+      'cursor command also reveals dependents without reanalysis',
+      api.getCurrentAnalysisId() === beforeCancel
+    );
+    const linked = vscode.Uri.file(
+      path.join(repo, 'tests/fixtures/semantic-baseline/shared/Shared.cs')
+    );
+    const linkedEditor = await vscode.window.showTextDocument(linked);
+    const declarationLine = linkedEditor.document
+      .getText()
+      .split(/\r?\n/)
+      .findIndex((line) => line.includes('class '));
+    linkedEditor.selection = new vscode.Selection(declarationLine, 20, declarationLine, 20);
+    await vscode.commands.executeCommand('sharpdeps.showTypeDependencies');
+    frame = await mapFrame();
+    await expect.poll(async () => (await state()).details?.entity?.name).toContain('Shared');
+    record('linked source resolves through the declaration index', true);
+    const dirtyEditor = await vscode.window.showTextDocument(source);
+    await dirtyEditor.edit((edit) =>
+      edit.insert(new vscode.Position(0, 0), '// unsaved acceptance edit\n')
+    );
+    await frame.page().locator('.tab').filter({ hasText: 'SharpDeps' }).first().click();
+    frame = await mapFrame();
+    await expect.poll(async () => (await state()).status).toBe('stale');
+    record('unsaved source changes mark the existing result stale', true);
+    await vscode.window.showTextDocument(source);
+    await vscode.commands.executeCommand('workbench.action.files.revert');
+  } catch (error) {
+    record('Analyzer → Host → Webview → Editor', false, String(error?.stack ?? error));
+  }
 
   return finish(vscode, results);
 }

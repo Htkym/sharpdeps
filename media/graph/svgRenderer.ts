@@ -14,6 +14,7 @@ import type {
   LayoutPoint,
   LayoutResult
 } from './types';
+import { projectKindColor } from './projectionAdapter';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -88,6 +89,7 @@ function renderNodes(
       state.hiddenNodeIds && state.hiddenNodeIds.has(node.id) ? 'hidden' : 'visible';
 
     const rect = group.querySelector('rect');
+    rect?.style.setProperty('--sd-kind-color', projectKindColor(node.projectKind ?? 'unknown'));
     rect?.setAttribute('width', String(layoutNode.width));
     rect?.setAttribute('height', String(layoutNode.height));
 

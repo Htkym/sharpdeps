@@ -13,6 +13,12 @@ export const VIEW_STATE_VERSION = 1;
 
 export interface PersistedViewState {
   version: number;
+  mode?: ViewState['mode'];
+  profile?: ViewState['profile'];
+  layout?: ViewState['layout'];
+  imageOptions?: ViewState['imageOptions'];
+  history?: ViewState['history'];
+  temporaryDisplayIds?: string[];
   targetName?: string;
   targetRelativePath?: string;
   selection?: { entityId?: string; relationId?: string };
@@ -46,6 +52,12 @@ export function serializeViewState(
 ): PersistedViewState {
   return {
     version: VIEW_STATE_VERSION,
+    mode: state.mode,
+    profile: state.profile,
+    layout: state.layout,
+    imageOptions: state.imageOptions,
+    history: state.history.slice(-20),
+    temporaryDisplayIds: state.temporaryDisplayIds,
     targetName: state.target?.name,
     targetRelativePath: state.target?.relativePath,
     selection: { ...state.selection },
@@ -72,6 +84,65 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
   }
 
   const state: Partial<ViewState> = {};
+  const layout = recordOf(value.layout);
+  if (layout && typeof layout.nodeSpacing === 'number' && typeof layout.rankSpacing === 'number')
+    state.layout = {
+      nodeSpacing: Math.max(10, Math.min(160, layout.nodeSpacing)),
+      rankSpacing: Math.max(20, Math.min(240, layout.rankSpacing))
+    };
+  const imageOptions = recordOf(value.imageOptions);
+  if (imageOptions)
+    state.imageOptions = {
+      profile: imageOptions.profile !== false,
+      omissions: imageOptions.omissions !== false,
+      legend: imageOptions.legend !== false
+    };
+  if (value.mode === 'quick' || value.mode === 'semantic') state.mode = value.mode;
+  const profile = recordOf(value.profile);
+  if (profile)
+    state.profile = {
+      configuration: stringOf(profile.configuration, 64) ?? 'Debug',
+      platform: stringOf(profile.platform, 64),
+      projectVariants: Array.isArray(profile.projectVariants)
+        ? profile.projectVariants
+            .filter((item): item is { projectLogicalId: string; targetFramework: string } => {
+              const record = recordOf(item);
+              return (
+                !!record &&
+                typeof record.projectLogicalId === 'string' &&
+                /^prj_[0-9a-f]{16}$/.test(record.projectLogicalId) &&
+                typeof record.targetFramework === 'string' &&
+                record.targetFramework.length <= 100
+              );
+            })
+            .slice(0, 1000)
+        : undefined
+    };
+  state.temporaryDisplayIds =
+    stringArray(value.temporaryDisplayIds, 300)?.filter((id) =>
+      /^(prj|ns|ty)_[0-9a-f]{16}$/.test(id)
+    ) ?? [];
+  if (Array.isArray(value.history))
+    state.history = value.history.slice(-20).flatMap((item) => {
+      const record = recordOf(item);
+      const scope = sanitizeScope(record?.scope);
+      if (
+        !record ||
+        !scope ||
+        !['project', 'namespace', 'type'].includes(String(record.granularity))
+      )
+        return [];
+      return [
+        {
+          scope,
+          granularity: record.granularity as Granularity,
+          selectionId: stringOf(record.selectionId, 64),
+          camera: deserializeCamera(record.camera) ?? null,
+          search: stringOf(record.search, MAX_SEARCH_LENGTH),
+          filters: sanitizeFilters(recordOf(record.filters) ?? {})
+        }
+      ];
+    });
 
   const targetName = stringOf(value.targetName, 200);
   const targetRelativePath = stringOf(value.targetRelativePath, 500);
@@ -179,6 +250,8 @@ function sanitizeFilters(filters: Record<string, unknown>): Filters {
   if (basis) {
     sanitized.basis = basis;
   }
+  const relations = stringArray(filters.relationKinds, 20);
+  if (relations) sanitized.relationKinds = relations as Filters['relationKinds'];
 
   for (const key of ['includeGenerated', 'includeExternal', 'includeTests'] as const) {
     if (typeof filters[key] === 'boolean') {

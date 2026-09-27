@@ -1,0 +1,31 @@
+{
+  "checkedAt": "2026-09-27T07:59:12.372Z",
+  "vscodeVersion": "1.139.1",
+  "scenario": "exploration",
+  "results": [
+    {
+      "name": "real Quick UI has a result",
+      "ok": true
+    },
+    {
+      "name": "lazy hierarchy includes types outside the ten-node projection",
+      "ok": true
+    },
+    {
+      "name": "global search reveals a type outside the original display budget",
+      "ok": true
+    },
+    {
+      "name": "cycle scope retains every member beyond the display budget",
+      "ok": true,
+      "detail": {
+        "nodes": 100,
+        "edges": 500
+      }
+    },
+    {
+      "name": "cycle witness opens evidence without reanalysis",
+      "ok": true
+    }
+  ]
+}

@@ -90,7 +90,7 @@ async function runLayout(request: LayoutRequest): Promise<void> {
         'elk.spacing.nodeNode': String(request.nodeSpacing),
         'elk.edgeRouting': 'ORTHOGONAL',
         'elk.layered.mergeEdges': 'false',
-        'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+        'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
         'elk.layered.cycleBreaking.strategy': 'GREEDY'
       },
       children: request.nodes.map((node) => ({

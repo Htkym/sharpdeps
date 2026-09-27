@@ -20,6 +20,10 @@ export interface ReportBridgeOptions {
   pageSize?: number;
   maxProjectionNodes?: number;
   maxProjectionEdges?: number;
+  projectionLimits?: (granularity: import('./reportV2').Granularity) => {
+    maxNodes: number;
+    maxEdges: number;
+  };
 }
 
 export interface ReportBridge {
@@ -51,20 +55,23 @@ export function createReportBridge(
             type: 'capabilities',
             protocolVersion: PROTOCOL_VERSION,
             analysisId: store.currentAnalysisId ?? null,
-            capabilities: {
-              typeGraph: true,
-              evidence: true,
-              generatedDocuments: false,
-              cycleWitness: true,
-              search: true
-            }
+            capabilities: store.currentAnalysisId
+              ? store.getReport(store.currentAnalysisId).capabilities
+              : {
+                  typeGraph: false,
+                  evidence: false,
+                  generatedDocuments: false,
+                  cycleWitness: false,
+                  search: true
+                }
           };
 
         case 'searchEntities': {
           const page: SearchPage = store.search(request.analysisId, request.query, {
             limit: request.limit ?? pageSize,
             cursor: request.cursor,
-            granularity: request.granularity
+            granularity: request.granularity,
+            parentId: request.parentId
           });
           return {
             type: 'searchResults',
@@ -160,14 +167,19 @@ export function createReportBridge(
           const projection = store.getProjection(request.analysisId, {
             scope: request.scope,
             granularity: request.granularity,
+            filters: request.filters,
+            search: request.search,
+            includeIds: request.includeIds,
             maxNodes: options.maxProjectionNodes ?? 300,
-            maxEdges: options.maxProjectionEdges ?? 1000
+            maxEdges: options.maxProjectionEdges ?? 1000,
+            ...options.projectionLimits?.(request.granularity)
           });
 
           const payload: Projection = {
             scope: request.scope,
             granularity: request.granularity,
             nodes: projection.nodes.map((node): EntitySummary => ({
+              ...node,
               id: node.id,
               name: node.name,
               granularity: node.granularity,

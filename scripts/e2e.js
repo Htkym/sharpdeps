@@ -9,13 +9,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..');
+const scenario = process.env.SHARPDEPTS_E2E_SCENARIO;
 const reportPath = path.join(
   repoRoot,
   'docs',
   'implementation',
   'v0.1.0',
   'evidence',
-  'sd-027-e2e.json'
+  scenario
+    ? `sd-030-${scenario}.json`
+    : process.env.SHARPDEPTS_E2E_MODE === 'vsix'
+      ? 'sd-027-e2e-vsix.json'
+      : 'sd-027-e2e.json'
 );
 
 function findInstalledCode() {
@@ -45,170 +50,144 @@ function loadTestElectron() {
 }
 
 async function main() {
-  const executable = findInstalledCode();
+  const startedAt = Date.now();
+  fs.rmSync(reportPath, { force: true });
   const testElectron = loadTestElectron();
-
-  if (!executable && !testElectron) {
-    console.error(
-      'VS Code end-to-end run skipped: no VS Code installation was found and ' +
-        '@vscode/test-electron is not installed.\n' +
-        'Install one of them (npm install --save-dev @vscode/test-electron) and run ' +
-        '`npm run test:e2e` again, or set SHARPDEPTS_VSCODE to a Code executable.'
-    );
-    process.exit(2);
-  }
-
-  const workspace = path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline');
-  const testsPath = path.join(repoRoot, 'tests', 'extension', 'suite.js');
-  // VSIX mode installs the packaged extension into a fresh profile and runs the same
-  // suite without a development path, which is how a user starts it (SD-029).
+  if (!testElectron) throw new Error('Run npm ci to install the pinned VS Code test runner.');
+  const executable = findInstalledCode() ?? (await testElectron.downloadAndUnzipVSCode());
   const vsixMode = process.env.SHARPDEPTS_E2E_MODE === 'vsix';
-  const vsixPath = path.join(repoRoot, 'sharpdeps-check.vsix');
-  // A dedicated profile keeps the user's own VS Code untouched and holds the runtime
-  // extension the product depends on.
   const profile =
     process.env.SHARPDEPTS_E2E_PROFILE ??
-    path.join(repoRoot, '.local', vsixMode ? 'e2e-vsix' : 'e2e-vscode');
-  const launchArgs = [workspace, '--disable-workspace-trust', `--user-data-dir=${profile}`];
-  process.env.SHARPDEPTS_E2E_REPORT = reportPath;
-
-  async function installExtensions(extensions) {
-    if (typeof executable !== 'string') {
-      return;
-    }
-
-    const { spawn } = require('node:child_process');
-    const exitCode = await new Promise((resolve) => {
-      const child = spawn(
-        executable,
-        [`--user-data-dir=${profile}`, '--install-extension', ...extensions, '--force'],
-        { stdio: 'inherit' }
-      );
-      child.on('exit', (code) => resolve(code ?? 1));
-      child.on('error', () => resolve(1));
-    });
-    if (exitCode !== 0) {
-      // The marketplace may be unreachable from the CLI; an installed copy of the same
-      // extension in the user profile works just as well.
-      const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
-      const source = path.join(home, '.vscode', 'extensions');
-      const target = path.join(profile, 'extensions');
-      let copied = false;
-      try {
-        const match = fs
-          .readdirSync(source)
-          .find((entry) => entry.startsWith('ms-dotnettools.vscode-dotnet-runtime-'));
-        if (match) {
-          fs.mkdirSync(target, { recursive: true });
-          fs.cpSync(path.join(source, match), path.join(target, match), { recursive: true });
-          copied = true;
-        }
-      } catch {
-        copied = false;
+    path.join(repoRoot, '.local', vsixMode ? 'e2e-vsix-review' : 'e2e-review');
+  const extensions = path.join(profile, 'extensions');
+  fs.mkdirSync(extensions, { recursive: true });
+  const profileArgs = [`--user-data-dir=${profile}`, `--extensions-dir=${extensions}`];
+  // Run the CLI entry point, not Code.exe's graphical entry point.
+  const [cli, ...cliArgs] = testElectron.resolveCliArgsFromVSCodeExecutablePath(executable, {
+    reuseMachineInstall: true
+  });
+  const { spawnSync } = require('node:child_process');
+  const install = (extension) => {
+    const cliScript =
+      process.platform === 'win32'
+        ? fs.readFileSync(cli, 'utf8').match(/"%~dp0([^"]+cli\.js)"/i)?.[1]
+        : undefined;
+    if (process.platform === 'win32' && !cliScript)
+      throw new Error('The VS Code CLI entry point was not found.');
+    const result = spawnSync(
+      cliScript ? executable : cli,
+      [
+        ...(cliScript ? [path.resolve(path.dirname(cli), cliScript)] : cliArgs),
+        ...profileArgs,
+        '--install-extension',
+        extension,
+        '--force'
+      ],
+      {
+        encoding: 'utf8',
+        timeout: 120000,
+        windowsHide: true,
+        env: { ...process.env, ...(cliScript ? { ELECTRON_RUN_AS_NODE: '1', VSCODE_DEV: '' } : {}) }
       }
-
-      if (!copied) {
-        console.error(
-          'The .NET Install Tool extension could not be installed into the test profile; ' +
-            'the end-to-end run needs it because the extension depends on it.'
-        );
-        process.exit(1);
-      }
-
-      console.log('Copied the .NET Install Tool from the user profile into the test profile.');
-    }
-  }
-
-  if (testElectron?.runTests) {
-    await testElectron.runTests({
-      vscodeExecutablePath: executable,
-      extensionDevelopmentPath: repoRoot,
-      extensionTestsPath: testsPath,
-      launchArgs
-    });
-  } else if (executable) {
-    // No @vscode/test-electron: launch the installed VS Code directly. The test runner
-    // is built into VS Code, so --extensionTestsPath works without extra dependencies.
-    await installExtensions(
-      vsixMode
-        ? [vsixPath, 'ms-dotnettools.vscode-dotnet-runtime']
-        : ['ms-dotnettools.vscode-dotnet-runtime']
     );
-    const { spawn, execFile } = require('node:child_process');
-    const args = [
-      ...(vsixMode ? [] : [`--extensionDevelopmentPath=${repoRoot}`]),
-      `--extensionTestsPath=${testsPath}`,
+    if (result.status !== 0)
+      throw new Error(`Extension install failed: ${extension}\n${result.stderr ?? result.error}`);
+  };
+  install('ms-dotnettools.vscode-dotnet-runtime');
+  if (vsixMode) install(path.join(repoRoot, 'sharpdeps-check.vsix'));
+  // VS Code starts extension tests only in a development host. Use a separate,
+  // empty harness so SharpDeps itself is still loaded from the installed VSIX.
+  const harness = path.join(profile, 'test-harness');
+  if (vsixMode) {
+    fs.mkdirSync(harness, { recursive: true });
+    fs.writeFileSync(
+      path.join(harness, 'package.json'),
+      JSON.stringify({
+        name: 'sharpdeps-test-harness',
+        publisher: 'sharpdeps-tests',
+        version: '0.0.0',
+        engines: { vscode: '^1.90.0' }
+      })
+    );
+  }
+  const port = await new Promise((resolve) => {
+    const server = require('node:net').createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(() => resolve(port));
+    });
+  });
+  const options = {
+    vscodeExecutablePath: executable,
+    extensionDevelopmentPath: vsixMode ? harness : repoRoot,
+    extensionTestsPath: path.join(
+      repoRoot,
+      'tests',
+      'extension',
+      scenario ? 'acceptance.js' : 'suite.js'
+    ),
+    extensionTestsEnv: {
+      SHARPDEPTS_E2E_REPORT: reportPath,
+      SHARPDEPTS_E2E_DEBUG_PORT: String(port),
+      SHARPDEPTS_REPO: repoRoot
+    },
+    launchArgs: [
+      process.env.SHARPDEPTS_E2E_WORKSPACE ??
+        path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline'),
+      ...profileArgs,
+      `--remote-debugging-port=${port}`,
       '--disable-gpu',
-      '--no-sandbox',
-      // A fresh profile must not wait on onboarding or updates before running the tests.
-      '--skip-welcome',
-      '--skip-release-notes',
       '--disable-telemetry',
-      '--disable-updates',
-      ...launchArgs
-    ];
-    const exitCode = await new Promise((resolve) => {
-      const child = spawn(executable, args, { stdio: 'inherit', env: { ...process.env } });
-      // A stuck window must not hang the whole run: kill the whole test instance after a
-      // generous timeout (VS Code ignores a plain SIGTERM and keeps helper processes).
-      const watchdog = setTimeout(() => {
-        console.error('VS Code did not finish the end-to-end run in time; stopping it.');
-        stopTree(child.pid);
-        resolve(124);
-      }, 240_000);
-      child.on('exit', (code) => {
-        clearTimeout(watchdog);
-        resolve(code ?? 1);
-      });
-      child.on('error', (error) => {
-        clearTimeout(watchdog);
-        console.error(`VS Code could not be started: ${error.message}`);
-        resolve(1);
-      });
-    });
-    if (exitCode !== 0) {
-      console.error(`VS Code exited with code ${exitCode}.`);
-    }
-
-    function stopTree(pid) {
-      if (!pid) {
-        return;
-      }
-
-      if (process.platform === 'win32') {
-        execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => undefined);
-      } else {
-        process.kill(pid, 'SIGKILL');
-      }
-    }
-  } else if (testElectron?.runVSCodeCommand) {
-    // Older vscode-test API: resolve a version and run the tests the same way.
-    const cli = testElectron;
-    const vscodePath = executable ?? (await cli.downloadAndUnzipVSCode());
-    const { runTests } = await import('@vscode/test-electron');
-    await runTests({
-      vscodeExecutablePath: vscodePath,
-      extensionDevelopmentPath: repoRoot,
-      extensionTestsPath: testsPath,
-      launchArgs
-    });
-  }
-
-  if (!fs.existsSync(reportPath)) {
-    console.error(
-      'VS Code end-to-end run finished without a report; the suite probably did not run.'
+      '--disable-updates'
+    ],
+    reuseMachineInstall: true
+  };
+  if (scenario === 'trust') {
+    fs.mkdirSync(path.join(profile, 'User'), { recursive: true });
+    fs.writeFileSync(
+      path.join(profile, 'User', 'settings.json'),
+      JSON.stringify({
+        'security.workspace.trust.enabled': true,
+        'security.workspace.trust.startupPrompt': 'never',
+        'security.workspace.trust.emptyWindow': false
+      })
     );
-    process.exit(1);
-  }
-
+    // test-electron always adds --disable-workspace-trust. This case deliberately
+    // launches the same extension test host without that switch.
+    await new Promise((resolve, reject) => {
+      const child = require('node:child_process').spawn(
+        executable,
+        [
+          ...options.launchArgs,
+          '--no-sandbox',
+          '--skip-welcome',
+          '--skip-release-notes',
+          `--extensionDevelopmentPath=${options.extensionDevelopmentPath}`,
+          `--extensionTestsPath=${options.extensionTestsPath}`
+        ],
+        {
+          windowsHide: true,
+          env: { ...process.env, ...options.extensionTestsEnv },
+          stdio: 'inherit'
+        }
+      );
+      child.on('error', reject);
+      child.on('exit', (code) =>
+        code === 0 ? resolve() : reject(new Error(`Trust host exit ${code}`))
+      );
+    });
+  } else await testElectron.runTests(options);
+  if (!fs.existsSync(reportPath)) throw new Error('VS Code finished without a test report.');
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  if (
+    !Number.isFinite(Date.parse(report.checkedAt)) ||
+    Date.parse(report.checkedAt) < startedAt ||
+    !report.results?.length
+  )
+    throw new Error('The end-to-end report is stale or empty.');
   const failed = report.results.filter((entry) => !entry.ok);
-  console.log(
-    `E2E report: ${reportPath} (${report.results.length - failed.length}/${report.results.length} passed)`
-  );
-  if (failed.length > 0) {
-    process.exit(1);
-  }
+  console.log(`E2E: ${report.results.length - failed.length}/${report.results.length} passed`);
+  if (failed.length) process.exitCode = 1;
 }
 
 main().catch((error) => {

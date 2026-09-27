@@ -234,6 +234,10 @@ describe('selectors', () => {
 
     const visible = selectVisibleData(state);
     expect(visible.isFilteredEmpty).toBe(true);
+    expect(
+      selectVisibleData({ ...state, projection: { ...state.projection!, nodes: [], edges: [] } })
+        .isFilteredEmpty
+    ).toBe(true);
     expect(visible.nodes).toHaveLength(0);
     expect(visible.totalNodeCount).toBe(42);
   });
@@ -245,7 +249,7 @@ describe('selectors', () => {
       filters: { includeExternal: false, includeGenerated: true }
     });
 
-    expect(selectVisibleData(state).filterCount).toBe(2);
+    expect(selectVisibleData(state).filterCount).toBe(1);
     expect(selectStatusFooter(state)).toContain('display budget applied');
     expect(selectStatusFooter(state)).toContain('Quick');
   });

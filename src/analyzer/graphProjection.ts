@@ -6,13 +6,16 @@
 // the analysis, and totals always describe the whole scope.
 
 import type { AnalysisRelation, AnalysisSnapshot, Granularity } from './reportV2';
-import type { EntitySummary, Projection, ProjectionEdge, Scope } from '../view/protocolV2';
+import type { EntitySummary, Projection, ProjectionEdge, Scope, Filters } from '../view/protocolV2';
 
 export interface ProjectionRequest {
   scope?: Scope;
   granularity?: Granularity;
   maxNodes?: number;
   maxEdges?: number;
+  filters?: Filters;
+  search?: string;
+  includeIds?: string[];
 }
 
 const DEFAULT_MAX_NODES = 300;
@@ -50,25 +53,31 @@ export function buildProjection(
       continue;
     }
 
-    const key = `${sourceId}\u001f${targetId}`;
+    const key = `${relation.basis}\u001f${sourceId}\u001f${targetId}`;
     const entry = aggregated.get(key) ?? { sourceId, targetId, relations: [] };
     entry.relations.push(relation);
     aggregated.set(key, entry);
   }
 
   // Pairs that share a cycle group are flagged on the aggregated edge.
-  const cyclePairs = new Set<string>();
+  const cyclePairs = new Map<string, string>();
   for (const group of snapshot.cycleGroups) {
-    for (const source of group.memberIds) {
-      for (const target of group.memberIds) {
-        if (source !== target) {
-          cyclePairs.add(`${source}\u001f${target}`);
-        }
-      }
-    }
+    for (const id of group.memberIds) cyclePairs.set(`${group.basis}\u001f${id}`, group.id);
   }
 
   const allEdges = [...aggregated.values()].map((entry) => toEdge(entry, cyclePairs));
+  const outgoing = new Map<string, Set<string>>(),
+    incoming = new Map<string, Set<string>>();
+  for (const edge of allEdges) {
+    if (!outgoing.has(edge.sourceId)) outgoing.set(edge.sourceId, new Set());
+    if (!incoming.has(edge.targetId)) incoming.set(edge.targetId, new Set());
+    outgoing.get(edge.sourceId)!.add(edge.targetId);
+    incoming.get(edge.targetId)!.add(edge.sourceId);
+  }
+  for (const node of summaries.values()) {
+    node.dependencyCount = outgoing.get(node.id)?.size ?? 0;
+    node.dependentCount = incoming.get(node.id)?.size ?? 0;
+  }
 
   // Scope: the whole graph, one entity's neighbourhood, or a cycle under inspection.
   const scope = request.scope ?? { kind: 'root' };
@@ -76,11 +85,28 @@ export function buildProjection(
   const scopedNodeIds =
     priorityIds === null
       ? new Set(summaries.keys())
-      : neighbourhood(summaries, allEdges, priorityIds, scope);
+      : scope.kind === 'dependencies' || scope.kind === 'dependents' || scope.kind === 'type'
+        ? neighbourhood(summaries, allEdges, priorityIds, scope)
+        : new Set(priorityIds);
 
-  const scopedNodes = [...summaries.values()].filter((node) => scopedNodeIds.has(node.id));
+  const included = new Set(scope.kind === 'cycle' ? [] : (request.includeIds ?? []));
+  if (scope.kind === 'cycle') for (const id of priorityIds ?? []) included.add(id);
+  for (const id of included) if (summaries.has(id)) scopedNodeIds.add(id);
+
+  const scopedNodes = [...summaries.values()].filter(
+    (node) =>
+      scopedNodeIds.has(node.id) &&
+      (included.has(node.id) || matchesEntity(node, request.filters ?? {}, request.search ?? ''))
+  );
+  const filteredIds = new Set(scopedNodes.map((node) => node.id));
   const scopedEdges = allEdges.filter(
-    (edge) => scopedNodeIds.has(edge.sourceId) && scopedNodeIds.has(edge.targetId)
+    (edge) =>
+      filteredIds.has(edge.sourceId) &&
+      filteredIds.has(edge.targetId) &&
+      (scope.kind === 'cycle' ||
+        ((!request.filters?.basis?.length || request.filters.basis.includes(edge.basis)) &&
+          (!request.filters?.relationKinds?.length ||
+            request.filters.relationKinds.some((kind) => edge.kinds.includes(kind)))))
   );
 
   const degree = new Map<string, number>();
@@ -97,14 +123,19 @@ export function buildProjection(
   );
   // The origin of a local scope is never dropped by the display budget: a node the user
   // explicitly scoped to (or a cycle member) must stay visible.
-  const prioritySet = new Set(priorityIds ?? []);
+  const prioritySet = new Set([
+    ...(['dependencies', 'dependents', 'type', 'cycle'].includes(scope.kind)
+      ? (priorityIds ?? [])
+      : []),
+    ...included
+  ]);
   const priority = ordered.filter((node) => prioritySet.has(node.id));
   const rest = ordered.filter((node) => !prioritySet.has(node.id));
-  const selected = [...priority, ...rest].slice(0, maxNodes);
+  const selected = [...priority, ...rest].slice(0, Math.max(maxNodes, priority.length));
   const selectedIds = new Set(selected.map((node) => node.id));
   const edges = scopedEdges
     .filter((edge) => selectedIds.has(edge.sourceId) && selectedIds.has(edge.targetId))
-    .slice(0, maxEdges);
+    .slice(0, scope.kind === 'cycle' ? scopedEdges.length : maxEdges);
 
   return {
     scope,
@@ -119,7 +150,7 @@ export function buildProjection(
 
 function toEdge(
   entry: { sourceId: string; targetId: string; relations: AnalysisRelation[] },
-  cyclePairs: ReadonlySet<string>
+  cyclePairs: ReadonlyMap<string, string>
 ): ProjectionEdge {
   // The representative relation is the one with the most evidence; its id becomes the
   // edge id, so selecting an edge always yields a relation the store can page for
@@ -139,7 +170,10 @@ function toEdge(
     evidenceCount: ordered.reduce((total, relation) => total + relation.evidenceCount, 0),
     // An aggregated edge is "in cycle" when both ends belong to the same cycle group;
     // the per-relation detail stays reachable through underlyingRelationIds.
-    inCycle: cyclePairs.has(`${entry.sourceId}\u001f${entry.targetId}`),
+    inCycle:
+      cyclePairs.has(`${representative.basis}\u001f${entry.sourceId}`) &&
+      cyclePairs.get(`${representative.basis}\u001f${entry.sourceId}`) ===
+        cyclePairs.get(`${representative.basis}\u001f${entry.targetId}`),
     generatedEvidenceCount: ordered.reduce(
       (total, relation) => total + relation.generatedEvidenceCount,
       0
@@ -152,24 +186,45 @@ function toEdge(
   };
 }
 
-function entitiesOf(snapshot: AnalysisSnapshot, granularity: Granularity): EntitySummary[] {
+export function entitiesOf(snapshot: AnalysisSnapshot, granularity: Granularity): EntitySummary[] {
   const projectNameByVariant = new Map(
     snapshot.projects.map((project) => [project.variantId, project.name])
   );
+  const metadata = (variant: string) => {
+    const project = snapshot.projects.find((entry) => entry.variantId === variant);
+    return {
+      projectId: project?.id,
+      projectName: project?.name,
+      projectPath: project?.relativePath,
+      projectKind: project?.kind,
+      targetFramework: project?.targetFramework
+    };
+  };
 
   switch (granularity) {
     case 'project':
       return snapshot.projects.map((project) => ({
+        ...metadata(project.variantId),
         id: project.id,
         name: project.name,
         granularity: 'project',
         kind: project.kind,
+        analysisStatus:
+          project.loadState === 'loaded'
+            ? project.limitations?.length
+              ? 'partial'
+              : 'complete'
+            : project.loadState,
+        analysisLimitations: project.limitations?.map((item) => item.message) ?? [],
         projectName: project.name,
         inCycle: false,
         isExternal: project.kind === 'unknown' && project.name === '(external)'
       }));
     case 'namespace':
       return snapshot.namespaces.map((node) => ({
+        ...metadata(node.projectVariantId),
+        namespaceId: node.id,
+        namespaceName: node.name,
         id: node.id,
         name: node.name,
         granularity: 'namespace',
@@ -179,6 +234,11 @@ function entitiesOf(snapshot: AnalysisSnapshot, granularity: Granularity): Entit
       }));
     default:
       return snapshot.types.map((type) => ({
+        ...metadata(type.projectVariantId),
+        fullName: type.fullName,
+        namespaceId: type.namespaceId ?? undefined,
+        namespaceName: snapshot.namespaces.find((node) => node.id === type.namespaceId)?.name,
+        isGenerated: type.isGenerated,
         id: type.id,
         name: type.name,
         granularity: 'type',
@@ -198,6 +258,7 @@ function parentResolver(
   const projectByVariant = new Map(
     snapshot.projects.map((project) => [project.variantId, project.id])
   );
+  const projectIds = new Set(snapshot.projects.map((project) => project.id));
   const variantByType = new Map(snapshot.types.map((type) => [type.id, type.projectVariantId]));
   const namespaceByType = new Map(
     snapshot.types.map((type) => [type.id, type.namespaceId ?? undefined])
@@ -208,7 +269,7 @@ function parentResolver(
 
   return (entityId: string) => {
     if (granularity === 'type') {
-      return snapshot.types.some((type) => type.id === entityId) ? entityId : undefined;
+      return variantByType.has(entityId) ? entityId : undefined;
     }
 
     if (granularity === 'namespace') {
@@ -217,7 +278,7 @@ function parentResolver(
         return namespaceId;
       }
 
-      return snapshot.namespaces.some((node) => node.id === entityId) ? entityId : undefined;
+      return variantByNamespace.has(entityId) ? entityId : undefined;
     }
 
     const variantId = variantByType.get(entityId) ?? variantByNamespace.get(entityId);
@@ -225,7 +286,7 @@ function parentResolver(
       return projectByVariant.get(variantId);
     }
 
-    return snapshot.projects.some((project) => project.id === entityId) ? entityId : undefined;
+    return projectIds.has(entityId) ? entityId : undefined;
   };
 }
 
@@ -248,7 +309,33 @@ function scopePriorityIds(
     return group ? group.memberIds.filter((id) => summaries.has(id)) : [];
   }
 
+  if (scope.kind === 'project' && granularity !== 'project') {
+    return [...summaries.values()]
+      .filter((node) => node.projectId === scope.id)
+      .map((node) => node.id);
+  }
+  if (scope.kind === 'namespace' && granularity === 'type') {
+    return [...summaries.values()]
+      .filter((node) => node.namespaceId === scope.id)
+      .map((node) => node.id);
+  }
+
   return summaries.has(scope.id) ? [scope.id] : [];
+}
+
+export function matchesEntity(node: EntitySummary, filters: Filters, search = ''): boolean {
+  return (
+    (!search.trim() ||
+      `${node.fullName ?? node.name} ${node.projectPath ?? ''}`
+        .toLowerCase()
+        .includes(search.trim().toLowerCase())) &&
+    (!filters.kinds?.length || filters.kinds.includes(node.kind ?? '')) &&
+    (!filters.projectKinds?.length ||
+      filters.projectKinds.includes(node.projectKind ?? node.kind ?? '')) &&
+    (filters.includeTests !== false || (node.projectKind ?? node.kind) !== 'test') &&
+    (filters.includeExternal !== false || !node.isExternal) &&
+    (filters.includeGenerated !== false || !node.isGenerated)
+  );
 }
 
 function neighbourhood(

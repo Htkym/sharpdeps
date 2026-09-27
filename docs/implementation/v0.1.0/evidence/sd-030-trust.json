@@ -1,0 +1,23 @@
+{
+  "checkedAt": "2026-09-27T07:42:25.262Z",
+  "vscodeVersion": "1.139.1",
+  "scenario": "trust",
+  "results": [
+    {
+      "name": "actual VS Code workspace is untrusted",
+      "ok": true
+    },
+    {
+      "name": "both analyses refused before execution",
+      "ok": true,
+      "detail": [
+        "Analysis refused: the workspace is not trusted.",
+        "Analysis refused: the workspace is not trusted."
+      ]
+    },
+    {
+      "name": "custom executable and build target did not run",
+      "ok": true
+    }
+  ]
+}

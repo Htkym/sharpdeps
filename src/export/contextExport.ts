@@ -24,6 +24,9 @@ export interface ContextExportInput {
   completeness: string;
   configuration?: string;
   platform?: string | null;
+  projectVariants?: { projectPath: string; targetFramework: string }[];
+  filters?: Record<string, unknown>;
+  search?: string;
   limitations: Array<{ code: string; message: string }>;
   granularity: string;
   scopeLabel: string;
@@ -54,6 +57,12 @@ export function buildContextExport(input: ContextExportInput): string {
   );
   lines.push(`- Analysis id: \`${input.analysisId}\``);
   lines.push(`- Completeness: ${input.completeness}`);
+  for (const variant of input.projectVariants ?? [])
+    lines.push(
+      `- TFM: ${sanitizeSingleLine(variant.projectPath)} — ${sanitizeSingleLine(variant.targetFramework)}`
+    );
+  lines.push(`- Search: ${sanitizeSingleLine(input.search || '(none)')}`);
+  lines.push(`- Filters: ${sanitizeSingleLine(JSON.stringify(input.filters ?? {}))}`);
   if (input.configuration) {
     lines.push(
       `- Configuration: ${input.configuration}${input.platform ? ` / ${input.platform}` : ''}`
@@ -75,7 +84,7 @@ export function buildContextExport(input: ContextExportInput): string {
     );
   } else {
     lines.push(
-      '- Semantic results list **resolved references** with evidence positions. Edges are type-level; namespace and project views are aggregated from them.'
+      '- Semantic code relations list **resolved references** with evidence positions, aggregated for namespace and project views. `projectEvaluated` relations separately record evaluated project references; they do not prove code usage or an exact source position.'
     );
   }
   lines.push(
@@ -191,6 +200,9 @@ export function buildExportJson(input: ContextExportInput): string {
       completeness: input.completeness,
       configuration: input.configuration ?? null,
       platform: input.platform ?? null,
+      projectVariants: input.projectVariants ?? [],
+      filters: input.filters ?? {},
+      search: input.search ?? '',
       limitations: input.limitations,
       selection: {
         scopeLabel: input.scopeLabel,
@@ -235,7 +247,21 @@ export function buildExportJson(input: ContextExportInput): string {
 
 /** Mermaid for the same selection; inferred edges are dashed. */
 export function buildMermaid(input: ContextExportInput): string {
-  const lines: string[] = ['flowchart LR'];
+  const scopeLabel = input.scopeLabel.replace(
+    /(?:ty|ns|prj|pv)_[a-f0-9]+/g,
+    (id) => input.nodes.find((node) => node.id === id)?.name ?? '(outside view)'
+  );
+  const lines: string[] = [
+    'flowchart LR',
+    `  %% Target: ${sanitizeSingleLine(input.target.relativePath)}; ${input.mode}; ${input.completeness}`,
+    `  %% Profile: ${sanitizeSingleLine(input.configuration ?? 'Debug')} / ${sanitizeSingleLine(input.platform ?? 'Default')}`,
+    ...(input.projectVariants ?? []).map(
+      (variant) =>
+        `  %% TFM: ${sanitizeSingleLine(variant.projectPath)} — ${sanitizeSingleLine(variant.targetFramework)}`
+    ),
+    `  %% Shown: ${input.nodes.length}/${input.totalNodeCount} nodes; ${input.edges.length}/${input.totalEdgeCount} relations; truncated: ${input.truncated}`,
+    `  %% Scope: ${sanitizeSingleLine(scopeLabel)}; search: ${sanitizeSingleLine(input.search ?? '')}; filters: ${sanitizeSingleLine(JSON.stringify(input.filters ?? {}))}`
+  ];
   const ids = new Map<string, string>();
   const alias = (id: string): string => {
     const existing = ids.get(id);

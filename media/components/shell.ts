@@ -4,11 +4,22 @@
 // state from the DOM and never decides what to show: rendering is driven by the state
 // in `media/app/app.ts`. Panes and the toolbar stay reachable at 360 CSS px.
 
+import type { Filters, ProfileRequest } from '../../src/view/protocolV2';
 export type NavTab = 'structure' | 'cycles' | 'analysis';
 
 export interface ShellHandlers {
   onAnalyze: () => void;
   onStop: () => void;
+  onCancelLayout: () => void;
+  onRetryLayout: () => void;
+  onZoom: (zoom: number | 'in' | 'out' | 'fit') => void;
+  onLayout: (layout: { nodeSpacing: number; rankSpacing: number }) => void;
+  onImageOptions: (options: { profile: boolean; omissions: boolean; legend: boolean }) => void;
+  onMode: (mode: 'quick' | 'semantic') => void;
+  onProfile: (profile: ProfileRequest) => void;
+  onFilters: (filters: Filters) => void;
+  onBack: () => void;
+  onDepth: (depth: number) => void;
   onGranularity: (granularity: 'project' | 'namespace' | 'type') => void;
   onViewKind: (viewKind: 'graph' | 'table') => void;
   onSearch: (query: string) => void;
@@ -25,6 +36,28 @@ export interface ShellElements {
   targetName: HTMLElement;
   targetPath: HTMLElement;
   modeSelect: HTMLSelectElement;
+  configuration: HTMLInputElement;
+  platform: HTMLInputElement;
+  backButton: HTMLButtonElement;
+  depthSelect: HTMLSelectElement;
+  zoom: HTMLInputElement;
+  nodeSpacing: HTMLInputElement;
+  rankSpacing: HTMLInputElement;
+  legend: HTMLElement;
+  imageOptions: {
+    profile: HTMLInputElement;
+    omissions: HTMLInputElement;
+    legend: HTMLInputElement;
+  };
+  filterControls: {
+    tests: HTMLInputElement;
+    external: HTMLInputElement;
+    generated: HTMLInputElement;
+    basis: HTMLSelectElement;
+    kinds: HTMLSelectElement;
+    projectKinds: HTMLSelectElement;
+    relations: HTMLSelectElement;
+  };
   analyzeButton: HTMLButtonElement;
   stopButton: HTMLButtonElement;
   exportButton: HTMLButtonElement;
@@ -71,6 +104,32 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   ]);
 
   const analyzeButton = button('sd-analyze', 'Analyze', 'primary');
+  const profilePicker = document.createElement('details');
+  const profileSummary = document.createElement('summary');
+  profileSummary.textContent = 'Profile';
+  profilePicker.append(profileSummary);
+  const configuration = document.createElement('input');
+  configuration.value = 'Debug';
+  configuration.maxLength = 64;
+  const platform = document.createElement('input');
+  platform.placeholder = 'Default';
+  platform.maxLength = 64;
+  for (const [name, input] of [
+    ['Configuration', configuration],
+    ['Platform', platform]
+  ] as const) {
+    const label = document.createElement('label');
+    label.textContent = name;
+    label.append(input);
+    profilePicker.append(label);
+    input.setAttribute('aria-label', name);
+    input.addEventListener('change', () =>
+      handlers.onProfile({
+        configuration: configuration.value || 'Debug',
+        platform: platform.value || null
+      })
+    );
+  }
   const stopButton = button('sd-stop', 'Stop', 'danger');
   stopButton.disabled = true;
 
@@ -101,7 +160,15 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   const statusText = topBarMeta.querySelector('.sd-status-text') as HTMLElement;
   const breadcrumbs = topBarMeta.querySelector('.sd-breadcrumbs') as HTMLElement;
 
-  topBar.append(targetBlock, modeSelect, analyzeButton, stopButton, overflow, topBarMeta);
+  topBar.append(
+    targetBlock,
+    modeSelect,
+    profilePicker,
+    analyzeButton,
+    stopButton,
+    overflow,
+    topBarMeta
+  );
 
   const body = element('div', 'sd-body');
   const navPane = element('aside', 'sd-nav');
@@ -164,6 +231,163 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   mapHost.append(graphHost, mapContent);
   center.append(mapToolbar, mapSummary, mapHost);
   mapToolbar.append(granularitySelect, viewKindButtons, searchInput);
+  const backButton = button('sd-back', 'Back');
+  backButton.addEventListener('click', handlers.onBack);
+  const depthSelect = select('sd-depth', [
+    ['1', 'Depth 1'],
+    ['2', 'Depth 2'],
+    ['3', 'Depth 3']
+  ]);
+  depthSelect.addEventListener('change', () => handlers.onDepth(Number(depthSelect.value)));
+  const filterPicker = document.createElement('details');
+  const filterSummary = document.createElement('summary');
+  filterSummary.textContent = 'Filters';
+  filterPicker.append(filterSummary);
+  const checkbox = (name: string): HTMLInputElement => {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = true;
+    const label = document.createElement('label');
+    label.append(input, document.createTextNode(name));
+    filterPicker.append(label);
+    return input;
+  };
+  const multiple = (name: string, values: string[]): HTMLSelectElement => {
+    const input = select(
+      name,
+      values.map((value) => [value, value])
+    );
+    input.multiple = true;
+    input.size = 3;
+    const label = document.createElement('label');
+    label.textContent = name;
+    label.append(input);
+    filterPicker.append(label);
+    return input;
+  };
+  const filterControls = {
+    tests: checkbox('Include tests'),
+    external: checkbox('Include external'),
+    generated: checkbox('Include generated'),
+    basis: multiple('Basis', [
+      'projectDeclared',
+      'projectEvaluated',
+      'usingInferred',
+      'symbolResolved'
+    ]),
+    projectKinds: multiple('Project kinds', ['app', 'web', 'library', 'test', 'desktop']),
+    kinds: multiple('Entity kinds', [
+      'app',
+      'web',
+      'library',
+      'test',
+      'desktop',
+      'class',
+      'interface',
+      'struct',
+      'record',
+      'enum',
+      'delegate'
+    ]),
+    relations: multiple('Relations', [
+      'inherits',
+      'implements',
+      'signature',
+      'constraint',
+      'constructs',
+      'calls',
+      'memberAccess',
+      'attribute',
+      'typeUse',
+      'compileTimeName'
+    ])
+  };
+  const values = (input: HTMLSelectElement) =>
+    [...input.selectedOptions].map((option) => option.value);
+  for (const input of Object.values(filterControls))
+    input.addEventListener('change', () =>
+      handlers.onFilters({
+        includeTests: filterControls.tests.checked,
+        includeExternal: filterControls.external.checked,
+        includeGenerated: filterControls.generated.checked,
+        basis: values(filterControls.basis),
+        kinds: values(filterControls.kinds),
+        projectKinds: values(filterControls.projectKinds),
+        relationKinds: values(filterControls.relations) as Filters['relationKinds']
+      })
+    );
+  mapToolbar.append(backButton, depthSelect, filterPicker);
+
+  const graphTools = document.createElement('details');
+  const graphSummary = document.createElement('summary');
+  graphSummary.textContent = 'Graph controls';
+  graphTools.append(graphSummary);
+  const cancelLayout = button('sd-cancel-layout', 'Cancel layout');
+  cancelLayout.addEventListener('click', handlers.onCancelLayout);
+  const retryLayout = button('sd-retry-layout', 'Retry layout');
+  retryLayout.addEventListener('click', handlers.onRetryLayout);
+  graphTools.append(cancelLayout, retryLayout);
+  for (const [label, action] of [
+    ['Zoom in', 'in'],
+    ['Zoom out', 'out'],
+    ['Fit', 'fit']
+  ] as const) {
+    const control = button(`sd-${action}`, label);
+    control.addEventListener('click', () => handlers.onZoom(action));
+    graphTools.append(control);
+  }
+  const range = (name: string, min: number, max: number, value: number) => {
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = String(max);
+    input.value = String(value);
+    input.setAttribute('aria-label', name);
+    const label = document.createElement('label');
+    label.textContent = name;
+    label.append(input);
+    graphTools.append(label);
+    return input;
+  };
+  const zoom = range('Zoom percent', 20, 600, 100);
+  zoom.addEventListener('input', () => handlers.onZoom(Number(zoom.value) / 100));
+  const nodeSpacing = range('Node spacing', 10, 160, 40);
+  const rankSpacing = range('Rank spacing', 20, 240, 80);
+  for (const input of [nodeSpacing, rankSpacing])
+    input.addEventListener('change', () =>
+      handlers.onLayout({
+        nodeSpacing: Number(nodeSpacing.value),
+        rankSpacing: Number(rankSpacing.value)
+      })
+    );
+  const imageOptions = {
+    profile: document.createElement('input'),
+    omissions: document.createElement('input'),
+    legend: document.createElement('input')
+  };
+  for (const [key, labelText] of [
+    ['profile', 'Image: target and profile'],
+    ['omissions', 'Image: scope and omissions'],
+    ['legend', 'Image: legend']
+  ] as const) {
+    const input = imageOptions[key];
+    input.type = 'checkbox';
+    input.checked = true;
+    const label = document.createElement('label');
+    label.append(input, document.createTextNode(labelText));
+    graphTools.append(label);
+    input.addEventListener('change', () =>
+      handlers.onImageOptions({
+        profile: imageOptions.profile.checked,
+        omissions: imageOptions.omissions.checked,
+        legend: imageOptions.legend.checked
+      })
+    );
+  }
+  mapToolbar.append(graphTools);
+  const legend = element('div', 'sd-legend');
+  legend.setAttribute('aria-label', 'Graph legend');
+  center.insertBefore(legend, mapHost);
 
   const inspectorSplitter = element('div', 'sd-splitter sd-splitter-inspector');
   inspectorSplitter.setAttribute('role', 'separator');
@@ -194,7 +418,9 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
 
   analyzeButton.addEventListener('click', () => handlers.onAnalyze());
   stopButton.addEventListener('click', () => handlers.onStop());
-  modeSelect.addEventListener('change', () => undefined);
+  modeSelect.addEventListener('change', () =>
+    handlers.onMode(modeSelect.value as 'quick' | 'semantic')
+  );
   exportButton.addEventListener('click', () => {
     exportMenu.hidden = !exportMenu.hidden;
   });
@@ -207,10 +433,20 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   wireSplitter(inspectorSplitter, 'inspector', handlers);
 
   const elements: ShellElements = {
+    zoom,
+    nodeSpacing,
+    rankSpacing,
+    imageOptions,
+    legend,
     root,
     targetName,
     targetPath,
     modeSelect,
+    configuration,
+    platform,
+    backButton,
+    depthSelect,
+    filterControls,
     analyzeButton,
     stopButton,
     exportButton,

@@ -1,0 +1,309 @@
+{
+  "checkedAt": "2026-09-27T07:15:18.801162+00:00",
+  "decision": "no_go",
+  "sourcePlan": ".local/0.1.0/SharpDeps_v0.1.0_Implementation_Plan.md",
+  "head": "7389c485bf449ca9b1b3fddcd5d1babbf8e60e37",
+  "includesUncommittedReviewChanges": true,
+  "vsixSha256": "afa71e9d1eeb4b3a437ffd747d7908c214847a8633ad9aba912479c28a0ce373",
+  "tasks": [
+    {
+      "id": "SD-001",
+      "acceptanceCriteria": [
+        "現在存在する失敗と、改修で発生した失敗を区別できる。",
+        "既存コマンドID、VSIX内の必要ファイル、対象ファイル拡張子を一覧化している。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "baseline.md、existing-features.md、基準 fixture がある。今回 RC-03 として既存 UI の差を抽出した"
+    },
+    {
+      "id": "SD-002",
+      "acceptanceCriteria": [
+        "同名namespace・同名project・partial・genericのfixtureでID衝突しない。",
+        "未知schema、必須項目欠落、未知message、不正IDを受け入れない。",
+        "C#が出したJSONをTS側validatorで検証する契約テストがある。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "schemas、C#/TS identity、protocol runtime validation、実ホスト JSON の契約テスト。同名 project/file-local/TFM の回帰を含む"
+    },
+    {
+      "id": "SD-003",
+      "acceptanceCriteria": [
+        "指定TFMとProjectReference先TFMの対応を証拠として出力できる。",
+        "Quickしか利用できない環境でSemanticの初期化失敗がQuickへ波及しない。",
+        "パッケージを同一系列・固定版で再現可能にrestoreできる。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "ADR-0001、SemanticLoaderIntegrationTests、TFM/参照先対応と今回の runtime-only probe。独立した SDK なし OS は未実施"
+    },
+    {
+      "id": "SD-004",
+      "acceptanceCriteria": [
+        "Webviewにunsafe-evalや外部CDNを追加せず動く。",
+        "試作が正常なノード/辺IDを返し、外部HTMLを実行しない。",
+        "日本語名・長いgeneric名・循環・双方向の辺を表示できる。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "ADR-0003、sd004 SVG/PNG/スクリーンショット、CSP、実 worker のブラウザ検証"
+    },
+    {
+      "id": "SD-005",
+      "acceptanceCriteria": [
+        "Quickの基準fixtureが意味を変えず通る。",
+        "SDKなし・必要runtimeのみの環境で配布QuickHostを起動できる。",
+        "file-based appを利用者環境でコンパイルする必要がない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "Quick/Core/Contracts/Roslyn/Host の分離、Quick 境界テスト、今回の配布 Quick DLL の runtime-only 実行"
+    },
+    {
+      "id": "SD-006",
+      "acceptanceCriteria": [
+        "maxProjects/maxEdgesを小さくしても、解析済み範囲の循環判定が変化しない。",
+        "推定による循環を意味解析で確定した違反として表示しない。",
+        "従来対応のsln/slnx/各project拡張子で入口が壊れない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "QuickV2MapperTests、基準 fixture、上限と SCC の独立、同名パスの回帰テスト"
+    },
+    {
+      "id": "SD-007",
+      "acceptanceCriteria": [
+        "Compile Removeされたcs、linked file、Directory.Build.propsのDefineConstantsを正しく扱う。",
+        "異なるTFMの辺をunionして偽の循環を生成しない。",
+        "一つの非対応Projectによって全結果が消えない。"
+      ],
+      "assessment": "未達",
+      "evidenceAndRemaining": "Compile items、構成、TFM のロードテストはある。最終結果への評価済み参照の受け渡しが RC-01"
+    },
+    {
+      "id": "SD-008",
+      "acceptanceCriteria": [
+        "partialは一ノードで複数宣言位置になる。",
+        "同名型が異なるProjectに存在しても混ざらない。",
+        "再解析で不必要にIDが変化しない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "SymbolIndexTests/IntegrationTests。partial、同名、generic、file-local、安定 ID、位置検索"
+    },
+    {
+      "id": "SD-009",
+      "acceptanceCriteria": [
+        "内部型のpublicメンバーを外部公開面と誤認しない。",
+        "宣言位置と関係kindがgolden fixtureと一致する。",
+        "暗黙object依存だけでグラフが埋まらない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "DeclarationDependencyCollectorTests。実効公開面、暗黙 object の除外、種別と位置の正解テスト"
+    },
+    {
+      "id": "SD-010",
+      "acceptanceCriteria": [
+        "unused usingを足してもSemantic graphが増えない。",
+        "usingなしの完全修飾参照が正しい辺を作る。",
+        "new式を単なる構文重複で2件に数えない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "OperationDependencyCollectorTests。unused using、完全修飾、new の重複排除、初期化子・型引数・ローカル・pattern"
+    },
+    {
+      "id": "SD-011",
+      "acceptanceCriteria": [
+        "objに出力していないGeneratorのコードも、取得できた場合は参照に含まれる。",
+        "生成失敗時の結果がcompleteとして表示されない。",
+        "生成コードを開いても利用者リポジトリへファイルを作らない。"
+      ],
+      "assessment": "未達",
+      "evidenceAndRemaining": "生成文書保持と read-only の実機経路は成功。mapped location の出力が RC-02"
+    },
+    {
+      "id": "SD-012",
+      "acceptanceCriteria": [
+        "全てのwitness edgeが元グラフに存在する。",
+        "表示上限を変えても解析済みのSCC結果は同じ。",
+        "循環のあるreverse traversalが無限ループしない。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "AnalysisGraphTests、projection 回帰で witness、逆探索、予算を確認。RC-01 の欠落した basis を含む最終グラフは未達"
+    },
+    {
+      "id": "SD-013",
+      "acceptanceCriteria": [
+        "大きなEvidenceでも初回renderに全件を含めない。",
+        "改竄cursor・境界外パス・欠損ファイルで安全なエラーになる。",
+        "UTF-8日本語の途中から切れたページを生成しない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "reportStore/protocol テスト、NDJSON paging、改竄 cursor、UTF-8、世代の登録直前確認、失敗結果の拒否"
+    },
+    {
+      "id": "SD-014",
+      "acceptanceCriteria": [
+        "連続で解析を押しても旧結果が新結果を上書きしない。",
+        "キャンセル後に自分のMSBuild/Analyzer子プロセスが残らない。",
+        "他の利用者のdotnetプロセスを終了させない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "analysisController テスト、sd014-cancellation、VSIX E2E の Stop。世代・所有 PID・正常結果の保持。20 回の性能受入は SD-028 に残す"
+    },
+    {
+      "id": "SD-015",
+      "acceptanceCriteria": [
+        "fixtureだけで全UI状態を再現できる。",
+        "360/900/1440 CSS pxで主要操作が画面外へ消えない。",
+        "データ取得失敗時にもツールバーと停止操作を使える。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "state/serializer テスト、1440/900/360 px の実 browser・worker。表示状態、停止、0 件フィルター表示"
+    },
+    {
+      "id": "SD-016",
+      "acceptanceCriteria": [
+        "画面に表示していない型を検索して選択できる。",
+        "Graph/Table切替で選択や検索が消えない。",
+        "同じ入力ならsortとページ境界が再現する。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "全体検索、Show、sort/page、状態共有はテストあり。ツリーは現在の projection の範囲であり、全階層の遅延取得完了とは扱わない"
+    },
+    {
+      "id": "SD-017",
+      "acceptanceCriteria": [
+        "辺クリックのtarget IDがEvidenceと一致する。",
+        "選択状態の変化でELKが再実行されない。",
+        "日本語・長い型名・双方向辺・循環を判読できる。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "実 Semantic 辺から根拠へ到達、selection/layout の分離。既存操作との差は RC-03、全長ラベルの実機判読は未完"
+    },
+    {
+      "id": "SD-018",
+      "acceptanceCriteria": [
+        "どのSemantic edgeからでも具体的Evidenceへ到達できる。",
+        "辺の箇所数とEvidenceのtotalが一致する。",
+        "詳細を開くために再解析を起動しない。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "生成コードの根拠、ページング、集約元の選択は確認。全 basis・全経路の実機条件は RC-01/UX-02 の不足を含む"
+    },
+    {
+      "id": "SD-019",
+      "acceptanceCriteria": [
+        "カーソルのある型を誤って同名の別Projectの型に結び付けない。",
+        "最新でないline numberへ黙って飛ばない。",
+        "既存コマンドIDを維持する。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "宣言位置索引、同名分離、古い内容の確認、コマンド ID は実装・テストあり。カーソルからの全経路と linked source の実機条件は未完"
+    },
+    {
+      "id": "SD-020",
+      "acceptanceCriteria": [
+        "閉路メンバーのソート順を経路として誤表示しない。",
+        "問題を選択しても該当ノードが上限で消えたままにならない。",
+        "Diagnosticを別analysisIdの古い状態と混在させない。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "witness、scope、Diagnostics 世代のテストあり。予算を超える SCC の全辺から Evidence へ進む実機シナリオは未完"
+    },
+    {
+      "id": "SD-021",
+      "acceptanceCriteria": [
+        "タブを隠して戻しても対象・選択・filter・cameraが復元される。",
+        "再起動時に無断でrestore/generatorを動かさない。",
+        "旧state schemaや狭い画面の幅復元でクラッシュしない。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "serializer、watcher、workspace storage、タブ再表示は確認。VS Code 再起動での一連の受入は未完"
+    },
+    {
+      "id": "SD-022",
+      "acceptanceCriteria": [
+        "SVG/PNGを外部viewerで開ける。外部ネット接続やscriptが不要。",
+        "画像・Mermaid・JSONが同じ選択範囲を表す。",
+        "AIへ送信する通信は発生せず、コピー対象を利用者が確認できる。"
+      ],
+      "assessment": "未達",
+      "evidenceAndRemaining": "現在の範囲の Mermaid/JSON、実 worker の SVG/PNG、コピーを確認。RC-04 の条件・凡例が不足"
+    },
+    {
+      "id": "SD-023",
+      "acceptanceCriteria": [
+        "未信頼workspaceで評価/restore/generator/任意dotnetが起動しない。",
+        "悪意ある型名/パスを表示・exportしてもスクリプトが実行されない。",
+        "正常なworkspace外linked fileと不正な任意ファイルアクセスを区別する。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "security/protocol/store 境界テストと実 Webview CSP。Trust の実機拒否、symlink の実パス境界は未確認"
+    },
+    {
+      "id": "SD-024",
+      "acceptanceCriteria": [
+        "マウスなしで検索→型→辺→根拠→コード移動を完遂できる。",
+        "200%表示や高コントラストでボタン/ラベルが消えない。",
+        "drawerを閉じると元の操作要素へfocusが戻る。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "shortcut/focus とブラウザの狭幅は確認。200% と実 VS Code High Contrast、マウスなしの全経路は未完"
+    },
+    {
+      "id": "SD-025",
+      "acceptanceCriteria": [
+        "正解の分かるfixtureで誤検出/見逃しの期待値が一致する。",
+        "新機能のテストを削除して通過させていない。",
+        "Generator失敗/SDK不足など失敗系も自動テストにある。"
+      ],
+      "assessment": "未達",
+      "evidenceAndRemaining": "103 件、実ホストの集計 golden と回帰テストは成功。FX-21/27 の RC-01/02 を取り逃がしており、全 FX 正解集合の一致とは言えない"
+    },
+    {
+      "id": "SD-026",
+      "acceptanceCriteria": [
+        "onMessageの型注釈だけに頼らずruntime validationをテストしている。",
+        "旧既存テストが残り、変更した期待値に理由がある。",
+        "順不同の非同期応答で画面のanalysisIdが巻き戻らない。"
+      ],
+      "assessment": "確認済み",
+      "evidenceAndRemaining": "221 件、順不同応答、runtime validation、旧テスト維持。期待値変更の理由はレビュー対応記録に記載"
+    },
+    {
+      "id": "SD-027",
+      "acceptanceCriteria": [
+        "第10章のE2E受入シナリオが証拠付きで完了する。",
+        "モック画面だけで「実装完了」としていない。",
+        "実行できないOSケースは未検証と明記される。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "開発版 17/17、インストール版 18/18。UX-01〜12 全体の完了ではない"
+    },
+    {
+      "id": "SD-028",
+      "acceptanceCriteria": [
+        "UIのblock、cancel応答、表示予算について受入目標を満たす。",
+        "性能数値を実測なしに達成済みと書かない。",
+        "目標調整が必要なら理由・実測・代替をADRへ記録する。"
+      ],
+      "assessment": "未達",
+      "evidenceAndRemaining": "旧小規模測定は存在。RC-06 の規模・p95・20 回条件の合格根拠がない"
+    },
+    {
+      "id": "SD-029",
+      "acceptanceCriteria": [
+        "開発元node_modulesや非同梱binへ依存せずVSIX単体で起動する。",
+        "SDKなし環境でもQuickが使える。",
+        "READMEの画像と操作手順が新UIに一致する。"
+      ],
+      "assessment": "部分",
+      "evidenceAndRemaining": "VSIX 内容、hash、導入実機、新 UI 画像、notice を確認。独立 SDK なし OS の UI 検証が残る"
+    },
+    {
+      "id": "SD-030",
+      "acceptanceCriteria": [
+        "必須機能・根拠・安全性・実機操作を満たしている。",
+        "未実施テストをpassと記載していない。",
+        "ブロッカーがあれば0.1.0完了とは宣言しない。"
+      ],
+      "assessment": "判定実施・blocked",
+      "evidenceAndRemaining": "本書、status.json、追加 probe。No-Go のため v0.1.0 完了とは記録しない"
+    }
+  ]
+}

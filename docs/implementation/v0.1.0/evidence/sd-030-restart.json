@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-09-27T07:53:11.778Z",
+  "results": [
+    {
+      "name": "restored real webview tab and state in second process",
+      "ok": true,
+      "detail": {
+        "viewKind": "table",
+        "search": "Core"
+      }
+    },
+    {
+      "name": "restart starts no analysis",
+      "ok": true,
+      "detail": {
+        "before": ["sharpdeps-run-7tdw0q", "sharpdeps-run-dLMtGk"],
+        "after": ["sharpdeps-run-7tdw0q", "sharpdeps-run-dLMtGk"],
+        "status": "noTarget"
+      }
+    }
+  ]
+}

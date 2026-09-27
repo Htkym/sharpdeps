@@ -48,6 +48,10 @@ export interface InspectorOptions {
   onCopyReference: (reference: string) => void;
   /** Opens one evidence record in the editor (SD-019). */
   onOpenEvidence?: (evidenceId: string) => void;
+  onOpenDeclaration?: (entityId: string) => void;
+  onSelectRelation?: (relationId: string) => void;
+  onExplore?: (kind: 'dependencies' | 'dependents', entityId: string) => void;
+  onDrillDown?: (entityId: string) => void;
 }
 
 export function renderInspector(
@@ -87,6 +91,9 @@ function renderEntity(
     ['Project', summary?.projectName ?? '—'],
     ['In cycle', summary?.inCycle ? 'yes' : 'no']
   ];
+  if (summary?.analysisStatus) facts.push(['Analysis', summary.analysisStatus]);
+  for (const limitation of summary?.analysisLimitations ?? [])
+    body.append(message(limitation, 'sd-note'));
   if (summary?.isExternal) {
     facts.push(['External', 'yes（外部アセンブリの型）']);
   }
@@ -102,6 +109,31 @@ function renderEntity(
   facts.push(['Incoming occurrences', `${sum(incoming)} (${incoming.length} relation(s))`]);
 
   body.append(factsList(facts));
+  for (const kind of ['dependencies', 'dependents'] as const) {
+    const explore = button(
+      kind === 'dependencies' ? 'Explore dependencies' : 'Explore dependents',
+      'sd-button'
+    );
+    explore.addEventListener('click', () => options.onExplore?.(kind, entity.id));
+    body.append(explore);
+  }
+  if (summary?.granularity === 'type' && options.mode === 'semantic' && !summary.isExternal) {
+    const open = button('Open declaration', 'sd-button');
+    open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
+    body.append(open);
+  } else if (summary && summary.granularity !== 'type') {
+    const drill = button('Drill down', 'sd-button');
+    drill.addEventListener('click', () => options.onDrillDown?.(entity.id));
+    body.append(drill);
+  }
+  for (const edge of edges) {
+    const inspect = button(
+      `${edge.sourceId === entity.id ? 'Outgoing' : 'Incoming'}: ${edge.kinds.join(', ')} (${edge.evidenceCount})`,
+      'sd-button'
+    );
+    inspect.addEventListener('click', () => options.onSelectRelation?.(edge.id));
+    body.append(inspect);
+  }
 
   if (entity.pending && !entity.dependencies) {
     body.append(message('Loading details…', 'sd-note'));
@@ -153,7 +185,14 @@ function renderEdge(
   body.append(factsList(facts));
 
   if (summary?.aggregated) {
-    body.append(relationList('Aggregated relations', summary.relations, options.onCopyReference));
+    body.append(
+      relationList(
+        'Aggregated relations',
+        summary.relations,
+        options.onCopyReference,
+        options.onSelectRelation
+      )
+    );
   }
 
   const evidence = edge.evidence;
@@ -291,7 +330,8 @@ function evidenceItem(
 function relationList(
   label: string,
   relations: Array<{ id: string; evidenceCount: number; kinds: string[]; basis: string }>,
-  onCopyReference: (reference: string) => void
+  onCopyReference: (reference: string) => void,
+  onSelectRelation?: (relationId: string) => void
 ): HTMLElement {
   const block = document.createElement('section');
   const heading = document.createElement('h3');
@@ -309,6 +349,9 @@ function relationList(
     const copy = button('Copy', 'sd-button sd-button-small');
     copy.addEventListener('click', () => onCopyReference(`${relation.id}`));
     item.append(copy);
+    const inspect = button('Evidence', 'sd-button sd-button-small');
+    inspect.addEventListener('click', () => onSelectRelation?.(relation.id));
+    item.append(inspect);
     list.append(item);
   }
 

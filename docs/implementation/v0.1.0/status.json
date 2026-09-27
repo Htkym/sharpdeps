@@ -2,15 +2,15 @@
   "planVersion": "0.1.0",
   "baselineCommit": "22a2d751ff54c6db26f3032c287e22ef4d9a446d",
   "branch": "feature/v0.1.0",
-  "updatedAt": "2026-09-23",
+  "updatedAt": "2026-09-27",
   "statusValues": ["not_started", "in_progress", "blocked", "done"],
   "milestones": [
     {
       "id": "M0",
       "name": "基準と技術成立性",
       "tasks": ["SD-001", "SD-002", "SD-003", "SD-004", "SD-005"],
-      "status": "in_progress",
-      "notes": "SD-001〜SD-005は完了（基準固定、report v2契約、Semanticロード試作、SVG/ELK/Worker試作、解析器分割）。M0の残条件であるSD-023の起動/CSP境界は、Worker用CSP（worker-src blob: / connect-src）まで実装済みで、Trust guardは未着手。"
+      "status": "blocked",
+      "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     },
     {
       "id": "M1",
@@ -28,25 +28,29 @@
         "SD-017",
         "SD-018"
       ],
-      "status": "not_started"
+      "status": "done",
+      "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     },
     {
       "id": "M2",
       "name": "解析・探索の必須機能を揃える",
       "tasks": ["SD-011", "SD-012", "SD-019", "SD-020", "SD-021", "SD-022"],
-      "status": "not_started"
+      "status": "done",
+      "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     },
     {
       "id": "M3",
       "name": "安全性・使用性・規模",
       "tasks": ["SD-023", "SD-024", "SD-025", "SD-026", "SD-027", "SD-028"],
-      "status": "not_started"
+      "status": "blocked",
+      "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     },
     {
       "id": "M4",
       "name": "リリース候補",
       "tasks": ["SD-029", "SD-030"],
-      "status": "not_started"
+      "status": "blocked",
+      "notes": "修正後の再検証を反映。現在の範囲と未検証は completion.md を参照。"
     }
   ],
   "tasks": [
@@ -83,10 +87,18 @@
       "evidence": [
         "docs/implementation/v0.1.0/baseline.md",
         "docs/implementation/v0.1.0/existing-features.md",
-        "tests/fixtures/quick-baseline/expected/quick-report.json"
+        "tests/fixtures/quick-baseline/expected/quick-report.json",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "実機UIチェックリストは作成済み・未実施（SD-027で実施）。"
+      "notes": "baseline.md、existing-features.md、基準 fixture がある。今回 RC-03 として既存 UI の差を抽出した",
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "baseline.md、existing-features.md、基準 fixture がある。今回 RC-03 として既存 UI の差を抽出した",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-002",
@@ -122,16 +134,29 @@
       "evidence": [
         "docs/adr/0002-report-v2-contract.md",
         "docs/analysis-semantics.md",
-        "schemas/report-v2.schema.json"
+        "schemas/report-v2.schema.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "契約テストのC#実出力への差し替えはSD-006で完了（tests/analyzer/quickV2.test.ts が実出力を検証）。Webviewのv2切り替えはSD-013/SD-015。"
+      "notes": "schemas、C#/TS identity、protocol runtime validation、実ホスト JSON の契約テスト。同名 project/file-local/TFM の回帰を含む",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "schemas、C#/TS identity、protocol runtime validation、実ホスト JSON の契約テスト。同名 project/file-local/TFM の回帰を含む",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-003",
       "title": "SDK/MSBuild/Roslynの実行互換性試作",
       "milestone": "M0",
-      "status": "done",
+      "status": "blocked",
       "owner": "agent",
       "changedFiles": [
         "analyzer/Directory.Build.props",
@@ -160,10 +185,18 @@
       "evidence": [
         "docs/compatibility.md",
         "docs/adr/0001-semantic-loading.md",
-        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json"
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
-      "blockers": [],
-      "notes": "SDKなし環境での初期化失敗経路は未検証（対応表に明記）。推移的ProjectReferenceの扱いはSD-007で決定。"
+      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
+      "notes": "Windows runtime-only UI、Linux runtime-only QuickとSDK-style Semanticは成功。macOS smokeは未実施。",
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "ローカル確認済み・外部検証待ち",
+        "evidenceAndRemaining": "Windows runtime-only UI、Linux runtime-only QuickとSDK-style Semanticは成功。macOS smokeは未実施。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-004",
@@ -202,10 +235,18 @@
         "docs/adr/0003-graph-renderer.md",
         "docs/implementation/v0.1.0/evidence/sd004-graph.svg",
         "docs/implementation/v0.1.0/evidence/sd004-graph.png",
-        "docs/implementation/v0.1.0/evidence/sd004-graph-fit.png"
+        "docs/implementation/v0.1.0/evidence/sd004-graph-fit.png",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "VS Code Webview内での確認はSD-017/SD-027。バッジと長いラベルの重なりは既知の見た目上の課題。"
+      "notes": "ADR-0003、sd004 SVG/PNG/スクリーンショット、CSP、実 worker のブラウザ検証",
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "ADR-0003、sd004 SVG/PNG/スクリーンショット、CSP、実 worker のブラウザ検証",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-005",
@@ -238,10 +279,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-005.md",
-        "tests/fixtures/quick-baseline/expected/quick-report.json"
+        "tests/fixtures/quick-baseline/expected/quick-report.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "SDKなし環境での実機確認はSD-029。.slnxのgroupPath正規化はSD-006。"
+      "notes": "Quick/Core/Contracts/Roslyn/Host の分離、Quick 境界テスト、今回の配布 Quick DLL の runtime-only 実行",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "Quick/Core/Contracts/Roslyn/Host の分離、Quick 境界テスト、今回の配布 Quick DLL の runtime-only 実行",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-006",
@@ -281,10 +335,23 @@
       ],
       "evidence": [
         "tests/fixtures/quick-baseline/expected/quick-v2-structure.json",
-        "docs/implementation/v0.1.0/tasks/SD-006.md"
+        "docs/implementation/v0.1.0/tasks/SD-006.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "v2はUI未接続（SD-013/SD-015）。v1出力は移行期間のため併存。"
+      "notes": "QuickV2MapperTests、基準 fixture、上限と SCC の独立、同名パスの回帰テスト",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "QuickV2MapperTests、基準 fixture、上限と SCC の独立、同名パスの回帰テスト",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-007",
@@ -314,10 +381,23 @@
       "evidence": [
         "docs/adr/0001-semantic-loading.md",
         "docs/compatibility.md",
-        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json"
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "必要になった理由：MSBuildWorkspaceは推移参照を公開せず、TryApplyChangesはプロジェクトファイルを書き換えた。Semanticのv2出力はSD-008以降。"
+      "notes": "評価済みProjectReferenceを最終結果へ保持。ロード失敗対象も残し、個別状態を表示。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "評価済みProjectReferenceを最終結果へ保持。ロード失敗対象も残し、個別状態を表示。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-008",
@@ -348,10 +428,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-008.md",
-        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json"
+        "docs/implementation/v0.1.0/evidence/semantic-probe-baseline.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "v2のtypes[]への出力はSD-012/013。publicSurface判定はSD-009、位置索引の変種選択はSD-019。"
+      "notes": "SymbolIndexTests/IntegrationTests。partial、同名、generic、file-local、安定 ID、位置検索",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "SymbolIndexTests/IntegrationTests。partial、同名、generic、file-local、安定 ID、位置検索",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-009",
@@ -376,9 +469,25 @@
         "親の同一性・自己参照の分類",
         "golden fixture（OrderStoreのimplements根拠の位置とkind）"
       ],
-      "evidence": ["docs/analysis-semantics.md", "docs/implementation/v0.1.0/tasks/SD-009.md"],
+      "evidence": [
+        "docs/analysis-semantics.md",
+        "docs/implementation/v0.1.0/tasks/SD-009.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+      ],
       "blockers": [],
-      "notes": "関係の集計と件数はSD-012、Operation由来の種別はSD-010。"
+      "notes": "DeclarationDependencyCollectorTests。実効公開面、暗黙 object の除外、種別と位置の正解テスト",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "DeclarationDependencyCollectorTests。実効公開面、暗黙 object の除外、種別と位置の正解テスト",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-010",
@@ -404,9 +513,25 @@
         "トップレベル文→合成エントリーポイント、ラムダ/ローカル関数→包含メンバー",
         "golden fixtureのcalls/memberAccess"
       ],
-      "evidence": ["docs/analysis-semantics.md", "docs/implementation/v0.1.0/tasks/SD-010.md"],
+      "evidence": [
+        "docs/analysis-semantics.md",
+        "docs/implementation/v0.1.0/tasks/SD-010.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+      ],
       "blockers": [],
-      "notes": "集計・件数はSD-012、v2出力はSD-013。既定引数値と関数ポインタは未採取として記録。"
+      "notes": "OperationDependencyCollectorTests。unused using、完全修飾、new の重複排除、初期化子・型引数・ローカル・pattern",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "OperationDependencyCollectorTests。unused using、完全修飾、new の重複排除、初期化子・型引数・ローカル・pattern",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-011",
@@ -440,9 +565,24 @@
         "npm test — 18ファイル / 154テスト成功",
         "実測: 生成文書2件を保持、生成由来の根拠を持つ関係4件（objパスはレポートに出ない）"
       ],
-      "evidence": ["docs/implementation/v0.1.0/tasks/SD-011.md"],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-011.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+      ],
       "blockers": [],
-      "notes": "完了：生成文書の取得・区分・内容保持、read-only provider、capabilities/completeness反映。未検証：大規模生成物、SDKなし環境、VS Code実機表示（SD-028/029）。"
+      "notes": "生成文書のread-only経路、ファイル指定あり／なしの#line、物理位置、mapped junction境界を確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "生成文書のread-only経路、ファイル指定あり／なしの#line、物理位置、mapped junction境界を確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-012",
@@ -470,9 +610,25 @@
         "実コレクターからの縦断（相互呼出し→循環→witness→探索）",
         "fixtureの名前空間/プロジェクト集計"
       ],
-      "evidence": ["docs/analysis-semantics.md", "docs/implementation/v0.1.0/tasks/SD-012.md"],
+      "evidence": [
+        "docs/analysis-semantics.md",
+        "docs/implementation/v0.1.0/tasks/SD-012.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+      ],
       "blockers": [],
-      "notes": "Quickのマッパー統合とUI接続はSD-013/SD-016/018。"
+      "notes": "basisを分離した集約と、100ノード・500辺の循環scopeから根拠への実機経路を確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "basisを分離した集約と、100ノード・500辺の循環scopeから根拠への実機経路を確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-013",
@@ -495,9 +651,24 @@
         "bridgeの未知type/不正ID拒否・未実装の明示",
         "QuickHost実出力の登録と根拠ページング"
       ],
-      "evidence": ["docs/implementation/v0.1.0/tasks/SD-013.md"],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-013.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+      ],
       "blockers": [],
-      "notes": "Semantic reporter（SemanticReportWriter）を追加し、実出力がv2契約を満たしてStoreへ登録・ページングできることを検証済み。生成文書の取り込みはSD-011の残り。"
+      "notes": "reportStore/protocol テスト、NDJSON paging、改竄 cursor、UTF-8、世代の登録直前確認、失敗結果の拒否",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "reportStore/protocol テスト、NDJSON paging、改竄 cursor、UTF-8、世代の登録直前確認、失敗結果の拒否",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-014",
@@ -530,10 +701,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/evidence/sd014-cancellation.json",
-        "docs/implementation/v0.1.0/tasks/SD-014.md"
+        "docs/implementation/v0.1.0/tasks/SD-014.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Semanticモードの実行配線はSD-011/013のwriter実装後。UI経由のキャンセル操作確認はSD-027。"
+      "notes": "20回の実Semantic中断で所有PID残留なし、4ディレクトリ以内。UI停止応答も計測。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "20回の実Semantic中断で所有PID残留なし、4ディレクトリ以内。UI停止応答も計測。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-015",
@@ -566,10 +750,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-015.md",
-        "docs/implementation/v0.1.0/evidence/sd015-shell-1440.png"
+        "docs/implementation/v0.1.0/evidence/sd015-shell-1440.png",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "パネル接続とSVGグラフはSD-017、TableのページングはSD-016、狭幅の折り畳み・テーマ確認はSD-024、状態保存はSD-021。"
+      "notes": "state/serializer テスト、1440/900/360 px の実 browser・worker。表示状態、停止、0 件フィルター表示",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "state/serializer テスト、1440/900/360 px の実 browser・worker。表示状態、停止、0 件フィルター表示",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-016",
@@ -598,10 +795,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-016.md",
-        "docs/implementation/v0.1.0/evidence/sd016-tree-search.png"
+        "docs/implementation/v0.1.0/evidence/sd016-tree-search.png",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "射影外の子ノード取得はSD-017で接続。検索debounceと性能はSD-028、フィルターUIの作り込みはSD-024。"
+      "notes": "全階層を親別に遅延取得。表示上限10に対して100型を取得し、全体検索から表示できる。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "全階層を親別に遅延取得。表示上限10に対して100型を取得し、全体検索から表示できる。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-017",
@@ -641,10 +851,23 @@
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-017.md",
         "docs/implementation/v0.1.0/evidence/sd-017-interaction.json",
-        "docs/implementation/v0.1.0/evidence/sd-017-graph.png"
+        "docs/implementation/v0.1.0/evidence/sd-017-graph.png",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "完了：集計射影の接続、SVGグラフ、選択→根拠、camera維持、worker世代管理、パネルのv2切替。未検証：VS Code実機（SD-028）、pinch、エクスポート（SD-022）。"
+      "notes": "既存ズーム・Fit・間隔・凡例を復元。実ELKの上限入力と中断／再試行／表への切替を検証。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "既存ズーム・Fit・間隔・凡例を復元。実ELKの上限入力と中断／再試行／表への切替を検証。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-018",
@@ -677,10 +900,23 @@
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-018.md",
         "docs/implementation/v0.1.0/evidence/sd-018-inspector.json",
-        "docs/implementation/v0.1.0/evidence/sd-018-inspector.png"
+        "docs/implementation/v0.1.0/evidence/sd-018-inspector.png",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "完了：Node/Edge Inspector、根拠一覧（位置・origin・確信度・公開・生成）、ページング、コピー、関連型への移動、不完全性の注記。未検証：集約辺の実画面表示（SD-027）、エディターで開く（SD-019）。"
+      "notes": "プロジェクトごとの完全／部分／失敗と理由を表示。通常・生成文書の根拠を実機で確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "プロジェクトごとの完全／部分／失敗と理由を表示。通常・生成文書の根拠を実機で確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-019",
@@ -720,10 +956,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-019.md",
-        "docs/implementation/v0.1.0/evidence/sd-019-navigation.json"
+        "docs/implementation/v0.1.0/evidence/sd-019-navigation.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "完了：宣言位置の永続化、カーソル→型（名前照合なし）、Quick等の案内、openEvidence/openDeclaration（ハッシュ照合・未保存・生成文書read-only）、reveal。実機操作記録はSD-027で取得。"
+      "notes": "カーソル→依存／被依存→根拠→物理ソース、linked sourceを実機で確認。非表示後のreveal消失を修正。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "カーソル→依存／被依存→根拠→物理ソース、linked sourceを実機で確認。非表示後のreveal消失を修正。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-020",
@@ -755,10 +1004,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-020.md",
-        "docs/implementation/v0.1.0/evidence/sd-020-cycles.json"
+        "docs/implementation/v0.1.0/evidence/sd-020-cycles.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "完了：SCC一覧と実在閉路の分離、辺→根拠、スコープ起点の予算優先、Problemsの解析ID管理・Quick推定明示・Semantic根拠アンカー。未完：推移的被依存のホップ数表示、実機Problems（SD-027）。"
+      "notes": "100ノード・500辺のSCCとwitnessからEvidenceを実機で確認。一時表示のscope外ノードを混入させない。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "100ノード・500辺のSCCとwitnessからEvidenceを実機で確認。一時表示のscope外ノードを混入させない。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-021",
@@ -791,10 +1053,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-021.md",
-        "docs/implementation/v0.1.0/evidence/sd-021-restore.json"
+        "docs/implementation/v0.1.0/evidence/sd-021-restore.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Done: stale detection (unsaved/saved/config), small state in getState/setState and workspace storage, versioned restore with clamps and a restored camera. Restore verified in the browser fixture, so retainContextWhenHidden is false. Remaining: real VS Code checks (SD-027) and auto-refresh (off by design)."
+      "notes": "未保存変更のstale、タブ再表示、通常のVS Code再起動での復元と解析を自動実行しないことを確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "未保存変更のstale、タブ再表示、通常のVS Code再起動での復元と解析を自動実行しないことを確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-022",
@@ -822,10 +1097,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-022.md",
-        "docs/implementation/v0.1.0/evidence/sd-022-exports.json"
+        "docs/implementation/v0.1.0/evidence/sd-022-exports.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Done: Mermaid from the projection, JSON with schemaVersion and conditions, host-built evidence context with a do-not-assert section, SVG/PNG from the webview rendering, and the existing copyMermaid command restored. Not done: legend/profile options, real VS Code save/clipboard checks (SD-027), browser check of the request flow."
+      "notes": "SVG/PNGの対象・実profile・TFM・省略・凡例と注釈選択、Mermaid/JSON/contextの同条件を実装。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "SVG/PNGの対象・実profile・TFM・省略・凡例と注釈選択、Mermaid/JSON/contextの同条件を実装。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-023",
@@ -855,10 +1143,23 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-023.md",
-        "docs/implementation/v0.1.0/evidence/sd-023-security.json"
+        "docs/implementation/v0.1.0/evidence/sd-023-security.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Done: trust guard on analysis start, minimal nonce CSP with object/frame/base/form locked, explicit webview options, bounded search query, path containment that still opens linked files without reading them, and single-line sanitising for names in exports. Remaining: real VS Code trust/CSP checks (SD-027), symlink resolution, malicious-report integration fixture, exhaustive log review."
+      "notes": "実未信頼workspaceで両解析を拒否。実junctionを使ったmapped境界、CSP・メッセージ・cursorを検証。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "実未信頼workspaceで両解析を拒否。実junctionを使ったmapped境界、CSP・メッセージ・cursorを検証。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-024",
@@ -894,10 +1195,23 @@
         "docs/implementation/v0.1.0/evidence/sd024-shell-1440.png",
         "docs/implementation/v0.1.0/evidence/sd024-shell-900.png",
         "docs/implementation/v0.1.0/evidence/sd024-shell-360.png",
-        "docs/implementation/v0.1.0/evidence/sd024-high-contrast.png"
+        "docs/implementation/v0.1.0/evidence/sd024-high-contrast.png",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Done: keyboard map (tested resolver), evidence open button completing the keyboard flow, focus return on drawer close, forced-colors/reduced-motion/480px CSS, and the Escape root cause (the graph cleared its own selection outside the view state, so the sync re-reported it and reopened the inspector). Remaining: real VS Code high contrast/200% checks (SD-027), a direct table-row to evidence path, and label wrapping evidence."
+      "notes": "指定CSS幅、実High Contrast両系統と200%、キーボードの根拠→コード経路を確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "指定CSS幅、実High Contrast両系統と200%、キーボードの根拠→コード経路を確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-025",
@@ -923,10 +1237,23 @@
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-025.md",
         "docs/implementation/v0.1.0/evidence/sd-025-precision.json",
-        "tests/fixtures/semantic-baseline/expected/semantic-summary.json"
+        "tests/fixtures/semantic-baseline/expected/semantic-summary.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Done: normalised precision golden with per-variant counts, explicit TFM and Quick-vs-Semantic assertions, and a real bug found by the golden (13 types referenced a variant with no project entry because the writer merged multi-TFM projects; fixed by per-variant entries with TFM-suffixed logical ids). Remaining: missing-SDK failure path (SD-028), cycle precision on real cycles, full node/edge golden."
+      "notes": "C#正解テストと実ホストgoldenに加え、評価済み参照・mapped・同名・TFM・混在失敗の回帰を確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "C#正解テストと実ホストgoldenに加え、評価済み参照・mapped・同名・TFM・混在失敗の回帰を確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-026",
@@ -950,16 +1277,29 @@
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-026.md",
-        "docs/implementation/v0.1.0/evidence/sd-026-suite.json"
+        "docs/implementation/v0.1.0/evidence/sd-026-suite.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Done: worker lifecycle tests with an injected fake (which found and fixed a concurrent double-worker leak), host-direction contract rules for reveal/viewState (missing until now), and the boundary coverage recorded per area. Remaining: an automatic guard against deleted tests, webview-side validateHostMessage, and the SD-027 end-to-end out-of-order check."
+      "notes": "TS 228件、protocol、親別tree cursor、順不同応答、mapped実パス境界を確認。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "TS 228件、protocol、親別tree cursor、順不同応答、mapped実パス境界を確認。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-027",
       "title": "Webview・Extension実機E2E",
       "milestone": "M3",
-      "status": "done",
+      "status": "blocked",
       "owner": "agent",
       "changedFiles": [
         "scripts/e2e.js",
@@ -970,15 +1310,28 @@
         "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
       ],
       "tests": [
-        "npm run test:e2e — 7/7 checks passed on VS Code 1.139.1 (extension host, commands, trust, workspace, analysis registration, current analysis, Problems collection)",
-        "npm run compile / lint / format:check — pass"
+        "Windows VS Code 1.139.1: 開発版 E2E 17/17、インストール版 E2E 18/18",
+        "Playwright: 1440/900/360 px、SVG/PNG、profile、table 3/3"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-027.md",
-        "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
+        "docs/implementation/v0.1.0/evidence/sd-027-e2e.json",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
-      "blockers": [],
-      "notes": "Done on a real VS Code install: 7/7 checks pass. Two causes were found for the earlier 5/7: the suite asserted before the controller registered the result, and a diagnostics patch that assigned to the read-only vscode.OutputChannel.appendLine prevented activation (it is now captured with a wrapper object). The runner uses a dedicated profile, skips onboarding, watches the process tree, and copies the dotnet-runtime dependency from the user profile when the marketplace install is unavailable. Remaining: untrusted-workspace behaviour and the manual window checklist (SD-019/021/023/024); CI wiring in SD-029."
+      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
+      "notes": "Windows開発版・配布版と追加実機ケースは成功。macOS smokeとリモートCIは未実施。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "ローカル確認済み・外部検証待ち",
+        "evidenceAndRemaining": "Windows開発版・配布版と追加実機ケースは成功。macOS smokeとリモートCIは未実施。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-028",
@@ -1003,16 +1356,29 @@
       "evidence": [
         "docs/performance.md",
         "docs/implementation/v0.1.0/evidence/sd-028-performance.json",
-        "docs/implementation/v0.1.0/tasks/SD-028.md"
+        "docs/implementation/v0.1.0/tasks/SD-028.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
       "blockers": [],
-      "notes": "Measured with a fixed 400-file fixture and the real baseline solution, and published in docs/performance.md with the environment. The verification found a real cleanup bug: the controller deleted the run directory that the store reads evidence from on demand, which would break evidence paging and exports; it now keeps the newest two and prunes the rest, pinned by tests. Not measured: Quick peak memory (process is too short for the sampler), cancel response and UI blocking (structural/unit only), and a several-thousand-file real solution."
+      "notes": "Medium 30 projects/3000 files/102535 evidence、p95、実ELK、20回の中断・保存領域を計測し予算内。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "確認済み",
+        "evidenceAndRemaining": "Medium 30 projects/3000 files/102535 evidence、p95、実ELK、20回の中断・保存領域を計測し予算内。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-029",
       "title": "ビルド・VSIX・ドキュメント整備",
       "milestone": "M4",
-      "status": "done",
+      "status": "blocked",
       "owner": null,
       "changedFiles": [
         "package.json",
@@ -1027,28 +1393,84 @@
         "docs/implementation/v0.1.0/evidence/sd-029-vsix.json"
       ],
       "tests": [
-        "npm run check:vsix — 46 entries, all 14 required files present, no forbidden paths",
-        "npm run package — pass; npm run compile / lint / format:check / npm test — pass",
-        "npm run test:e2e (development mode) — 7/7 on VS Code 1.139.1"
+        "npm run check:vsix: 実 ZIP 内の Quick/Semantic/BuildHost/ELK license を検査",
+        "SHARPDEPTS_E2E_MODE=vsix npm run test:e2e: 18/18"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-029.md",
         "docs/implementation/v0.1.0/evidence/sd-029-vsix.json",
-        "THIRD-PARTY-NOTICES.md"
+        "THIRD-PARTY-NOTICES.md",
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
       ],
-      "blockers": [],
-      "notes": "Version 0.1.0, a scripted VSIX content check (required files present, semantic host and development material excluded), third-party notices, README/CHANGELOG for the new UI, and CI steps for the analyzer build, the VSIX check, and an optional end-to-end run. Remaining: installing the VSIX into a clean profile and re-running the suite (the CLI install did not finish here), new-UI screenshots, and the EPL-2.0 full text."
+      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
+      "notes": "VSIX内容とhash、Windows導入、Linux Quick/Semanticを確認。macOS smokeは未実施。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "ローカル確認済み・外部検証待ち",
+        "evidenceAndRemaining": "VSIX内容とhash、Windows導入、Linux Quick/Semanticを確認。macOS smokeは未実施。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     },
     {
       "id": "SD-030",
       "title": "リリース候補の最終判定",
       "milestone": "M4",
-      "status": "not_started",
+      "status": "blocked",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/status.json",
+        "docs/implementation/v0.1.0/tasks/SD-030.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-probes.json",
+        "docs/implementation/v0.1.0/evidence/sd-030-acceptance-audit.json"
+      ],
+      "tests": [
+        "配布 Quick DLL: runtime-only dotnet 配置で SDK 検出が失敗しても前後 2 回成功",
+        "Semantic: loader references=1 / report v2 relations=0 を再現（RC-01）",
+        "#line 120: mappedLocation=null を再現（RC-02）",
+        "全 30 タスクの成果物と受入条件を照合"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+        "docs/implementation/v0.1.0/completion.md",
+        "docs/implementation/v0.1.0/evidence/sd-030-remediation.json"
+      ],
+      "blockers": ["macOS Quick/Semantic smoke未実施。リモートCI未実施。"],
+      "notes": "RC-01〜06のコード修正とローカル検証を完了。macOS・リモートCI未実施のため公開判定は保留。",
+      "reviewRemediation": {
+        "date": "2026-09-27",
+        "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md"
+      },
+      "acceptanceAudit": {
+        "date": "2026-09-27",
+        "assessment": "ローカル確認済み・外部検証待ち",
+        "evidenceAndRemaining": "RC-01〜06のコード修正とローカル検証を完了。macOS・リモートCI未実施のため公開判定は保留。",
+        "record": "docs/implementation/v0.1.0/completion.md"
+      }
     }
-  ]
+  ],
+  "reviewRemediation": {
+    "date": "2026-09-27",
+    "status": "done",
+    "record": "docs/implementation/v0.1.0/review-remediation-2026-09-27.md",
+    "releaseReady": false
+  },
+  "releaseCandidate": {
+    "decision": "no_go",
+    "checkedAt": "2026-09-27T08:27:28.848Z",
+    "version": "0.1.0",
+    "assessmentPerformed": true,
+    "acceptanceComplete": false,
+    "completionReport": "docs/implementation/v0.1.0/completion.md",
+    "vsixSha256": "22793c37daec272eca6fbacd2ea7c4ca401a86853752a8c3f299c3597890457b",
+    "blockers": ["macOS Quick/Semantic smoke未実施", "最新変更に対するリモートCI未実施"],
+    "published": false,
+    "resolvedCodeFindings": ["RC-01", "RC-02", "RC-03", "RC-04", "RC-05", "RC-06"]
+  }
 }

@@ -114,6 +114,7 @@ export class CycleDiagnostics {
     }
 
     for (const [file, diagnostics] of byFile) {
+      if (this.analysisId !== analysisId) return;
       this.collection.set(vscode.Uri.file(file), diagnostics);
     }
   }

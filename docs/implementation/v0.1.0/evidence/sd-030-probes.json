@@ -1,0 +1,98 @@
+{
+  "checkedAt": "2026-09-27T07:11:05.055212+00:00",
+  "platform": "Windows x64",
+  "runtime": "Microsoft.NETCore.App 10.0.8",
+  "isolation": "Private dotnet root contains host/fxr and shared runtime, no sdk directory; host OS still has an SDK. This does not assert a clean OS without SDK.",
+  "commands": [
+    {
+      "name": "runtime-sdks",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "runtime-version",
+      "exitCode": 2147516571,
+      "stdout": "",
+      "stderr": "The command could not be loaded, possibly because:\n  * You intended to execute a .NET application:\n      The application '--version' does not exist or is not a managed .dll or .exe.\n  * You intended to execute a .NET SDK command:\n      No .NET SDKs were found.\n\nDownload a .NET SDK:\nhttps://aka.ms/dotnet/download\n\nLearn about SDK resolution:\nhttps://aka.ms/dotnet/sdk-not-found\n"
+    },
+    {
+      "name": "quick-before",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "sdk-preflight-fails",
+      "exitCode": 2147516571,
+      "stdout": "",
+      "stderr": "The command could not be loaded, possibly because:\n  * You intended to execute a .NET application:\n      The application '--version' does not exist or is not a managed .dll or .exe.\n  * You intended to execute a .NET SDK command:\n      No .NET SDKs were found.\n\nDownload a .NET SDK:\nhttps://aka.ms/dotnet/download\n\nLearn about SDK resolution:\nhttps://aka.ms/dotnet/sdk-not-found\n"
+    },
+    {
+      "name": "quick-after",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "restore-fixture",
+      "exitCode": 0,
+      "stdout": "  復元対象のプロジェクトを決定しています...\n  D:\\gitroot\\sharpdeps\\.local\\sd-030\\fixtures\\B\\B.csproj を復元しました (61 ミリ秒)。\n  D:\\gitroot\\sharpdeps\\.local\\sd-030\\fixtures\\A\\A.csproj を復元しました (63 ミリ秒)。\n",
+      "stderr": ""
+    },
+    {
+      "name": "semantic-reference",
+      "exitCode": 0,
+      "stdout": "sharpdeps:progress {\"stage\":\"discover\",\"payload\":{\"target\":\"D:\\\\gitroot\\\\sharpdeps\\\\.local\\\\sd-030\\\\fixtures\\\\Acceptance.slnx\",\"configuration\":\"Debug\",\"platform\":null}}\nsharpdeps:progress {\"stage\":\"write\",\"payload\":{\"variants\":2,\"relations\":0,\"types\":2,\"references\":1,\"unresolved\":0,\"diagnostics\":0,\"compilations\":2,\"generatedDocuments\":0,\"generatedContentRetained\":0,\"elapsedMs\":3008}}\n",
+      "stderr": ""
+    }
+  ],
+  "quickProjects": 2,
+  "quickRelations": 1,
+  "semanticProjects": 2,
+  "semanticRelations": [],
+  "loaderReferenceCount": 1,
+  "completeness": "completeWithinScope",
+  "vsixSha256": "afa71e9d1eeb4b3a437ffd747d7908c214847a8633ad9aba912479c28a0ce373",
+  "mappedLocationProbe": {
+    "exitCode": 0,
+    "source": "namespace Example;\npublic class Foo {}\npublic class Consumer {\n#line 120 \"Pages/Source.razor\"\n public Foo Value;\n#line default\n}\n",
+    "expectedMappedPath": "Pages/Source.razor",
+    "expectedMappedLineZeroBased": 119,
+    "evidence": {
+      "id": "ev_b3543abd2332220e",
+      "relationId": "rel_b9bf26624128836a",
+      "sourceEntityId": "ty_72fc729f38c9c831",
+      "targetEntityId": "ty_6e9ac1cf44908c40",
+      "sourceTypeId": "ty_72fc729f38c9c831",
+      "sourceMemberId": "mb_f2133051986428e0",
+      "targetTypeId": "ty_6e9ac1cf44908c40",
+      "targetMemberId": null,
+      "kind": "signature",
+      "origin": "userSource",
+      "documentId": "doc_fab2571ebd7262ed",
+      "physicalSpan": {
+        "start": 106,
+        "length": 3,
+        "startLine": 4,
+        "startCharacter": 8,
+        "endLine": 4,
+        "endCharacter": 11
+      },
+      "mappedLocation": null,
+      "sourceContentHash": "2dfdc3ac7a90e6730cc9675f9273117085721a2e637568b08f80bb846806db03",
+      "confidence": "resolved",
+      "publicSurface": true,
+      "snippet": null
+    }
+  },
+  "referenceFixture": {
+    "Acceptance.slnx": "<Solution><Project Path=\"A/A.csproj\"/><Project Path=\"B/B.csproj\"/></Solution>",
+    "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include=\"../B/B.csproj\"/></ItemGroup></Project>",
+    "A/A.cs": "namespace A; public class First {}\n",
+    "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>",
+    "B/B.cs": "namespace B; public class Second {}\n"
+  },
+  "expectedEvaluatedRelations": 1,
+  "actualEvaluatedRelations": 0
+}

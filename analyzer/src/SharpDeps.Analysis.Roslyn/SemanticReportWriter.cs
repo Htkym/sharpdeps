@@ -1,7 +1,7 @@
 // Semantic report writer (SD-011 / SD-013): builds the v2 snapshot from a semantic
 // load result.
 //
-// Relations are emitted at type granularity only. Coarser views (namespace, project)
+// Symbol relations are emitted at type granularity. Coarser views (namespace, project)
 // are derived host-side from the same relations using each type's namespace and
 // project variant, so an edge always has exactly one set of evidence records and no
 // evidence file duplicates them per granularity.
@@ -48,32 +48,14 @@ public static class SemanticReportWriter
         var variants = new List<ProjectVariant>();
         var projects = new List<AnalysisProject>();
 
-        // A multi-targeted project keeps one entry per TFM: the logical id gains the
-        // target framework so ids stay unique, and each type/namespace keeps the variant
-        // it belongs to. Single-TFM projects keep their plain path-based id (SD-025).
-        var loadedVariants = report.Variants.Where(variant => variant.LoadState == "loaded").ToArray();
-        var multiTargeted = loadedVariants
-            .GroupBy(
-                variant => Identity.NormalizeRelativePath(
-                    Path.GetRelativePath(rootDirectory, variant.ProjectPath)),
-                StringComparer.Ordinal)
-            .Where(
-                group => group
-                    .Select(entry => entry.TargetFramework ?? "(not specified)")
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Count() > 1)
-            .Select(group => group.Key)
-            .ToHashSet(StringComparer.Ordinal);
-
+        var loadedVariants = report.Variants.ToArray();
         foreach (var variant in loadedVariants)
         {
             var relativePath = Identity.NormalizeRelativePath(
                 Path.GetRelativePath(rootDirectory, variant.ProjectPath));
             var logicalId = Identity.ProjectLogicalId(
                 rootId,
-                multiTargeted.Contains(relativePath)
-                    ? $"{relativePath}#{variant.TargetFramework ?? "(not specified)"}"
-                    : relativePath);
+                relativePath);
             var variantId = Identity.ProjectVariantId(
                 logicalId,
                 variant.TargetFramework ?? "(not specified)",
@@ -101,7 +83,7 @@ public static class SemanticReportWriter
             var relativePath = Identity.NormalizeRelativePath(
                 Path.GetRelativePath(rootDirectory, variant.ProjectPath));
             projects.Add(new AnalysisProject(
-                logicalIdByVariantKey[variant.VariantKey],
+                Identity.ProjectLogicalId(rootId, relativePath + "#" + (variant.TargetFramework ?? "(not specified)")),
                 variantIdByVariantKey[variant.VariantKey],
                 variant.ProjectName,
                 relativePath,
@@ -111,8 +93,8 @@ public static class SemanticReportWriter
                 configuration,
                 platform,
                 [],
-                "loaded",
-                []));
+                variant.LoadState,
+                ProjectLimitations(variant)));
         }
 
         var profileHash = Identity.ProfileHash(
@@ -148,9 +130,7 @@ public static class SemanticReportWriter
 
             // Deterministic declaration key: the documentation id when available,
             // otherwise the full name with its arity.
-            var key = !string.IsNullOrWhiteSpace(type.DocumentationId)
-                ? $"doc:{type.DocumentationId!.Trim()}"
-                : $"sig:{type.FullName}`{type.Arity}";
+            var key = type.SymbolKey;
             var id = Identity.TypeId(variantId, key);
             entityIds[type.Id] = id;
             types.Add(new AnalysisType(
@@ -167,7 +147,9 @@ public static class SemanticReportWriter
                 type.IsPartial,
                 Math.Max(1, type.Declarations.Count),
                 index.Members.Count(member => member.TypeId == type.Id),
-                type.IsExternal));
+                type.IsExternal,
+                type.Declarations.Count > 0 && type.Declarations.All(declaration =>
+                    index.Documents.Any(document => document.Id == declaration.DocumentId && document.Origin == "generatedSource"))));
         }
 
         // External types become nodes too, grouped under one synthetic external project
@@ -267,31 +249,72 @@ public static class SemanticReportWriter
             }
         }
 
-        var graph = AnalysisGraphBuilder.Build(
-            evidence.Select(entry => entry.ToGraphEvidence()).ToArray(),
-            GraphGranularity.Type);
-        var cycles = GraphCycles.Find(graph)
-            .Select(cycle => new CycleGroup(
-                Identity.CycleGroupId("type", cycle.Basis, cycle.MemberIds.Select(id => Translate(id, entityIds)).Where(id => id is not null).Cast<string>()),
-                "type",
-                cycle.Basis,
-                cycle.MemberIds.Select(id => Translate(id, entityIds)).Where(id => id is not null).Cast<string>().ToArray(),
-                cycle.WitnessEdges
-                    .Select(edge => relations.FirstOrDefault(relation =>
-                        relation.SourceEntityId == Translate(edge.SourceEntityId, entityIds) &&
-                        relation.TargetEntityId == Translate(edge.TargetEntityId, entityIds))?.Id)
-                    .Where(id => id is not null)
-                    .Cast<string>()
-                    .ToArray(),
-                new CycleWitness(
-                    cycle.WitnessEdges
-                        .Select(edge => Translate(edge.SourceEntityId, entityIds))
-                        .Where(id => id is not null)
-                        .Cast<string>()
-                        .ToArray(),
-                    []),
-                false))
-            .ToArray();
+        var sourceDocuments = index.Documents.ToDictionary(document => document.Id);
+        var projectsByVariant = projects.ToDictionary(project => project.VariantId);
+        foreach (var reference in report.References)
+        {
+            if (reference.TargetVariantKey is null
+                || !variantIdByVariantKey.TryGetValue(reference.SourceVariantKey, out var sourceVariant)
+                || !variantIdByVariantKey.TryGetValue(reference.TargetVariantKey, out var targetVariant)) continue;
+            var source = projectsByVariant[sourceVariant];
+            var target = projectsByVariant[targetVariant];
+            var relationId = Identity.RelationId("projectEvaluated", source.Id, target.Id, profileHash);
+            if (relations.Any(relation => relation.Id == relationId)) continue;
+            var bytes = File.ReadAllBytes(Path.GetFullPath(Path.Combine(rootDirectory, source.RelativePath)));
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            var documentId = Identity.DocumentId(rootId, source.RelativePath, "userSource");
+            sourceDocuments[documentId] = new SourceDocument(documentId, source.RelativePath, "userSource", hash, bytes.LongLength, null);
+            // An evaluated reference can originate in an imported target or expression.
+            // Keep its evaluated input and profile without inventing a declaration span.
+            relations.Add(new AnalysisRelation(relationId, source.Id, target.Id, "projectEvaluated",
+                ["projectEvaluated"], 1, 0, 1, 0, 0, "resolved", null));
+            evidenceLines.Add(new EvidenceRecord(Identity.EvidenceId(relationId, "projectEvaluated", documentId, "evaluated"), relationId,
+                source.Id, target.Id, null, null, null, null, "projectEvaluated", "userSource", documentId,
+                null, null, hash, "resolved", false, null));
+        }
+
+        var typeById = types.ToDictionary(type => type.Id, StringComparer.Ordinal);
+        var projectByVariant = projects.ToDictionary(project => project.VariantId, project => project.Id);
+        var graphEvidence = evidence.Select(entry => entry.ToGraphEvidence() with
+        {
+            SourceEntityId = Translate(entry.Evidence.SourceEntityId, entityIds)!,
+            TargetEntityId = Translate(entry.Evidence.TargetEntityId, entityIds)!
+        }).Concat(evidenceLines.Where(entry => entry.Kind == "projectEvaluated").Select(entry => new GraphEvidence(
+            "projectEvaluated", entry.SourceEntityId, entry.TargetEntityId, entry.Kind, null, entry.DocumentId,
+            false, false, "resolved", null, null, entry.SourceEntityId, entry.TargetEntityId, false))).ToArray();
+        var cycles = new List<CycleGroup>();
+        foreach (var granularity in Enum.GetValues<GraphGranularity>())
+        {
+            var scope = granularity.ToString().ToLowerInvariant();
+            string? ParentOf(string id) => granularity switch
+            {
+                GraphGranularity.Type => id,
+                GraphGranularity.Namespace => typeById.GetValueOrDefault(id)?.NamespaceId,
+                _ => typeById.TryGetValue(id, out var type)
+                    ? projectByVariant.GetValueOrDefault(type.ProjectVariantId)
+                    : projects.Any(project => project.Id == id) ? id : null
+            };
+            var graph = AnalysisGraphBuilder.Build(graphEvidence.Where(entry =>
+                granularity == GraphGranularity.Project || entry.Basis != "projectEvaluated").ToArray(), granularity, ParentOf);
+            foreach (var cycle in GraphCycles.Find(graph))
+            {
+                var members = cycle.MemberIds.ToHashSet(StringComparer.Ordinal);
+                var internalRelations = relations.Where(relation =>
+                    relation.Basis == cycle.Basis && members.Contains(ParentOf(relation.SourceEntityId) ?? string.Empty)
+                    && members.Contains(ParentOf(relation.TargetEntityId) ?? string.Empty)
+                    && ParentOf(relation.SourceEntityId) != ParentOf(relation.TargetEntityId)).ToArray();
+                var witnessIds = cycle.WitnessEdges.Select(edge => internalRelations
+                    .Where(relation => ParentOf(relation.SourceEntityId) == edge.SourceEntityId
+                        && ParentOf(relation.TargetEntityId) == edge.TargetEntityId)
+                    .OrderByDescending(relation => relation.EvidenceCount)
+                    .ThenBy(relation => relation.Id, StringComparer.Ordinal).First().Id).ToArray();
+                cycles.Add(new CycleGroup(
+                    Identity.CycleGroupId(scope, cycle.Basis, cycle.MemberIds), scope, cycle.Basis,
+                    cycle.MemberIds, internalRelations.Select(relation => relation.Id).ToArray(),
+                    new CycleWitness(cycle.WitnessEdges.Select(edge => edge.SourceEntityId).ToArray(), witnessIds),
+                    false));
+            }
+        }
 
         var (evidenceNdjson, evidenceIndex) = WriteEvidence(evidenceLines);
         var (declarationsNdjson, declarationIndex) = WriteDeclarations(
@@ -305,7 +328,10 @@ public static class SemanticReportWriter
         var complete = failed == 0
             && operationStats.UnresolvedOperations == 0
             && !limitations.Any(limitation => limitation.Code
-                is "semantic.compilationErrors"
+                is "semantic.loadFailed"
+                or "semantic.workspaceDiagnostics"
+                or "semantic.nonCSharpProjects"
+                or "semantic.compilationErrors"
                 or "semantic.referencesUnresolved"
                 or "semantic.generatedDocumentsUnavailable"
                 or "semantic.generatedDocumentContentUnavailable");
@@ -330,7 +356,8 @@ public static class SemanticReportWriter
                 GeneratedDocuments: load.GeneratedDocuments.Count > 0,
                 CycleWitness: true,
                 Search: true),
-            Completeness: complete ? "completeWithinScope" : "partial",
+            Completeness: limitations.Any(l => l.Code == "semantic.loadFailed") ? "failed"
+                : complete ? "completeWithinScope" : "partial",
             Coverage: new AnalysisCoverage(
                 Discovered: Math.Max(report.Coverage.Discovered, loaded + failed),
                 Loaded: loaded,
@@ -355,10 +382,22 @@ public static class SemanticReportWriter
                 .ToArray(),
             EvidenceIndex: evidenceIndex,
             DeclarationIndex: declarationIndex,
-            SourceManifest: index.Documents,
+            SourceManifest: sourceDocuments.Values.OrderBy(document => document.RelativePath, StringComparer.Ordinal).ToArray(),
             Limitations: limitations);
 
         return new Result(snapshot, evidenceNdjson, declarationsNdjson);
+    }
+
+    private static IReadOnlyList<Limitation> ProjectLimitations(ProjectVariantInfo variant)
+    {
+        var result = new List<Limitation>();
+        if (variant.FailureReason is not null)
+            result.Add(new Limitation("semantic.projectLoadFailed", variant.FailureReason));
+        if (variant.ErrorDiagnosticCount > 0)
+            result.Add(new Limitation("semantic.compilationErrors", $"{variant.ErrorDiagnosticCount} compilation error(s). References may be incomplete.", Count: variant.ErrorDiagnosticCount));
+        if (variant.GeneratedDocumentError is not null)
+            result.Add(new Limitation("semantic.generatedDocumentsUnavailable", variant.GeneratedDocumentError));
+        return result;
     }
 
     /// <summary>

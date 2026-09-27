@@ -49,6 +49,7 @@ export class LayoutClient {
   private currentRequestId: number | undefined;
   /** Shared so two concurrent layouts cannot create (and leak) two workers. */
   private workerPromise: Promise<LayoutWorkerLike> | undefined;
+  private generation = 0;
 
   constructor(options: LayoutClientOptions) {
     this.options = options;
@@ -63,7 +64,10 @@ export class LayoutClient {
     projection: GraphProjection,
     options: LayoutRequestOptions = {}
   ): Promise<LayoutResult> {
+    const generation = this.generation;
     const worker = await this.ensureWorker();
+    if (generation !== this.generation) throw new LayoutCancelledError();
+    this.rejectPending(new LayoutCancelledError());
     const requestId = this.nextRequestId++;
 
     // A newer request supersedes the previous one: its response is dropped.
@@ -93,11 +97,13 @@ export class LayoutClient {
 
   /** Terminates the worker and rejects anything still pending. */
   cancel(): void {
+    this.generation++;
     this.rejectPending(new LayoutCancelledError());
     this.terminateWorker();
   }
 
   dispose(): void {
+    this.generation++;
     this.rejectPending(new LayoutCancelledError());
     this.terminateWorker();
     if (this.scriptUrl) {
@@ -116,15 +122,18 @@ export class LayoutClient {
   }
 
   private async startWorker(): Promise<LayoutWorkerLike> {
+    const generation = this.generation;
     if (!this.scriptUrl) {
       const response = await fetch(this.options.workerUrl);
       if (!response.ok) {
         throw new Error(`Layout worker could not be loaded (${response.status}).`);
       }
       const source = await response.text();
+      if (generation !== this.generation) throw new LayoutCancelledError();
       this.scriptUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
     }
 
+    if (generation !== this.generation) throw new LayoutCancelledError();
     const worker = this.options.createWorker
       ? this.options.createWorker(this.scriptUrl)
       : (new Worker(this.scriptUrl) as unknown as LayoutWorkerLike);

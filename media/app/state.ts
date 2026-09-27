@@ -12,6 +12,8 @@ import type {
   ProjectionCycleGroup,
   Scope
 } from '../../src/view/protocolV2';
+import type { Capabilities, ProfileRequest } from '../../src/view/protocolV2';
+import { matchesEntity } from '../../src/analyzer/graphProjection';
 import {
   DEFAULT_SORT,
   toggleSort,
@@ -39,12 +41,23 @@ export interface HistoryEntry {
   scope: Scope;
   granularity: Granularity;
   selectionId?: string;
+  camera?: ViewState['camera'];
+  search?: string;
+  filters?: Filters;
 }
 
 export interface ViewState {
   /** Target shown in the top bar. */
   target: { name: string; relativePath: string } | null;
   mode: 'quick' | 'semantic';
+  resultMode?: 'quick' | 'semantic';
+  profile: ProfileRequest;
+  resultProfile?: ProfileRequest;
+  layout: { nodeSpacing: number; rankSpacing: number };
+  imageOptions: { profile: boolean; omissions: boolean; legend: boolean };
+  variantOptions: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
+  capabilities: Capabilities;
+  runningAnalysisId?: string;
   granularity: Granularity;
   viewKind: ViewKind;
   scope: Scope;
@@ -67,7 +80,12 @@ export interface ViewState {
   projectionTruncated: boolean;
   /** SCC groups and their verified cycles, from the current projection. */
   cycles: ProjectionCycleGroup[];
-  details: { entityId: string; dependencies: EntitySummary[]; dependents: EntitySummary[] } | null;
+  details: {
+    entityId: string;
+    entity?: EntitySummary;
+    dependencies: EntitySummary[];
+    dependents: EntitySummary[];
+  } | null;
   evidence: {
     relationId: string;
     total: number;
@@ -88,6 +106,7 @@ export interface ViewState {
   tablePage: number;
   /** Full-index search results, kept separately from the display projection. */
   searchResults: { query: string; items: EntitySummary[]; total: number; pending: boolean };
+  tree: Record<string, { items: EntitySummary[]; total: number; nextCursor?: string }>;
   /** Entities the user chose to show even though filters exclude them. */
   temporaryDisplayIds: string[];
 }
@@ -97,7 +116,18 @@ export const HISTORY_LIMIT = 20;
 export const INITIAL_STATE: ViewState = {
   target: null,
   mode: 'quick',
-  granularity: 'type',
+  profile: { configuration: 'Debug' },
+  layout: { nodeSpacing: 40, rankSpacing: 80 },
+  imageOptions: { profile: true, omissions: true, legend: true },
+  variantOptions: [],
+  capabilities: {
+    typeGraph: false,
+    evidence: false,
+    generatedDocuments: false,
+    cycleWitness: false,
+    search: true
+  },
+  granularity: 'project',
   viewKind: 'graph',
   scope: { kind: 'root', id: null, depth: null },
   search: '',
@@ -118,12 +148,18 @@ export const INITIAL_STATE: ViewState = {
   tableSort: DEFAULT_SORT,
   tablePage: 0,
   searchResults: { query: '', items: [], total: 0, pending: false },
+  tree: {},
   temporaryDisplayIds: []
 };
 
 export type ViewAction =
   | { type: 'targetSelected'; name: string; relativePath: string }
   | { type: 'analyzeStarted'; analysisId: string; mode: 'quick' | 'semantic' }
+  | { type: 'modeChanged'; mode: 'quick' | 'semantic' }
+  | { type: 'profileChanged'; profile: ProfileRequest }
+  | { type: 'layoutChanged'; layout: ViewState['layout'] }
+  | { type: 'imageOptionsChanged'; options: ViewState['imageOptions'] }
+  | { type: 'capabilitiesReceived'; capabilities: Capabilities }
   | {
       type: 'analysisProgress';
       stage: AnalysisStage;
@@ -137,6 +173,10 @@ export type ViewAction =
       completeness: 'completeWithinScope' | 'partial' | 'failed';
       coverage: ViewState['coverage'];
       limitations?: Array<{ code: string; message: string }>;
+      mode?: 'quick' | 'semantic';
+      profile?: ProfileRequest;
+      variantOptions?: ViewState['variantOptions'];
+      capabilities?: Capabilities;
     }
   | { type: 'analysisFailed'; analysisId?: string; message: string; cancelled?: boolean }
   | { type: 'analysisStale'; message: string }
@@ -144,6 +184,7 @@ export type ViewAction =
   | {
       type: 'detailsReceived';
       entityId: string;
+      entity?: EntitySummary;
       dependencies: EntitySummary[];
       dependents: EntitySummary[];
     }
@@ -166,9 +207,18 @@ export type ViewAction =
     }
   | { type: 'granularityChanged'; granularity: Granularity }
   | { type: 'viewKindChanged'; viewKind: ViewKind }
-  | { type: 'scopeChanged'; scope: Scope }
+  | { type: 'scopeChanged'; scope: Scope; granularity?: Granularity }
   | { type: 'searchChanged'; search: string }
   | { type: 'searchStarted'; query: string }
+  | { type: 'treeRequested'; parentId: string; granularity: Granularity; cursor?: string }
+  | {
+      type: 'treeReceived';
+      parentId: string;
+      items: EntitySummary[];
+      total: number;
+      nextCursor?: string;
+      append?: boolean;
+    }
   | { type: 'searchResultsReceived'; query: string; items: EntitySummary[]; total: number }
   | { type: 'searchCleared' }
   | { type: 'tableSortChanged'; key: SortState['key'] }
@@ -208,9 +258,55 @@ function mergeEvidence(
 
 export function viewReducer(state: ViewState, action: ViewAction): ViewState {
   switch (action.type) {
+    case 'treeRequested':
+      return state;
+    case 'treeReceived':
+      return {
+        ...state,
+        tree: {
+          ...state.tree,
+          [action.parentId]: {
+            items: action.append
+              ? [...(state.tree[action.parentId]?.items ?? []), ...action.items]
+              : action.items,
+            total: action.total,
+            nextCursor: action.nextCursor
+          }
+        }
+      };
+    case 'layoutChanged':
+      return { ...state, layout: action.layout };
+    case 'imageOptionsChanged':
+      return { ...state, imageOptions: action.options };
+    case 'modeChanged':
+      return { ...state, mode: action.mode };
+    case 'profileChanged':
+      return {
+        ...state,
+        profile: action.profile,
+        status: state.analysisId ? 'stale' : state.status
+      };
+    case 'capabilitiesReceived':
+      return { ...state, capabilities: action.capabilities };
     case 'targetSelected':
       return {
         ...state,
+        ...(state.target && state.target.relativePath !== action.relativePath
+          ? {
+              scope: INITIAL_STATE.scope,
+              selection: {},
+              projection: null,
+              details: null,
+              evidence: null,
+              history: [],
+              temporaryDisplayIds: [],
+              camera: null,
+              profile: {
+                configuration: state.profile.configuration,
+                platform: state.profile.platform
+              }
+            }
+          : {}),
         target: { name: action.name, relativePath: action.relativePath },
         status: 'ready',
         statusMessage: 'Ready to analyze.',
@@ -221,7 +317,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return {
         ...state,
         mode: action.mode,
-        analysisId: action.analysisId,
+        runningAnalysisId: action.analysisId,
         status: 'analyzing',
         statusMessage: 'Analyzing…',
         progress: undefined,
@@ -247,6 +343,22 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return {
         ...state,
         analysisId: action.analysisId,
+        tree: action.analysisId === state.analysisId ? state.tree : {},
+        runningAnalysisId: undefined,
+        mode: action.mode ?? state.mode,
+        resultMode: action.mode ?? state.mode,
+        resultProfile: {
+          ...action.profile,
+          projectVariants: action.variantOptions?.map((variant) => ({
+            projectLogicalId: variant.projectLogicalId,
+            targetFramework: variant.targetFramework
+          }))
+        },
+        profile: { ...state.profile, ...action.profile },
+        variantOptions: action.variantOptions ?? state.variantOptions,
+        capabilities: action.capabilities ?? state.capabilities,
+        granularity:
+          action.mode === 'quick' && state.granularity === 'type' ? 'project' : state.granularity,
         status: action.completeness === 'completeWithinScope' ? 'complete' : action.completeness,
         statusMessage: completionMessage(action),
         coverage: action.coverage,
@@ -262,7 +374,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         statusMessage: action.cancelled ? 'Analysis stopped.' : action.message,
         error: action.cancelled ? undefined : { code: 'analysis.failed', message: action.message },
         progress: undefined,
-        analysisId: action.analysisId ?? state.analysisId
+        runningAnalysisId: undefined
       };
 
     case 'analysisStale':
@@ -274,8 +386,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         projection: action.projection,
         projectionTruncated: action.projection.truncated,
         cycles: action.projection.cycleGroups ?? [],
-        details: null,
-        evidence: null
+        details: state.details,
+        evidence: state.evidence
       };
 
     case 'detailsReceived':
@@ -283,6 +395,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         ...state,
         details: {
           entityId: action.entityId,
+          entity: action.entity,
           dependencies: action.dependencies,
           dependents: action.dependents
         },
@@ -349,6 +462,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return {
         ...state,
         scope: action.scope,
+        granularity: action.granularity ?? state.granularity,
         selection: {},
         projection: null,
         details: null,
@@ -377,6 +491,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       };
 
     case 'searchResultsReceived':
+      if (action.query !== state.search) return state;
       return {
         ...state,
         searchResults: {
@@ -411,7 +526,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return state.temporaryDisplayIds.length === 0 ? state : { ...state, temporaryDisplayIds: [] };
 
     case 'filtersChanged':
-      return { ...state, filters: action.filters };
+      return { ...state, filters: action.filters, tablePage: 0 };
 
     case 'entitySelected':
       // Selecting something opens the details pane right away; the content arrives with
@@ -456,20 +571,34 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
 }
 
 function pushHistory(state: ViewState, entry: HistoryEntry): HistoryEntry[] {
-  return [...state.history, entry].slice(-HISTORY_LIMIT);
+  void entry;
+  return [
+    ...state.history,
+    {
+      scope: state.scope,
+      granularity: state.granularity,
+      selectionId: state.selection.entityId,
+      camera: state.camera,
+      search: state.search,
+      filters: state.filters
+    }
+  ].slice(-HISTORY_LIMIT);
 }
 
 function back(state: ViewState): ViewState {
-  const previous = state.history.at(-2);
+  const previous = state.history.at(-1);
   if (!previous) {
     return state;
   }
 
   return {
     ...state,
-    history: state.history.slice(0, -2),
+    history: state.history.slice(0, -1),
     scope: previous.scope,
     granularity: previous.granularity,
+    camera: previous.camera ?? null,
+    search: previous.search ?? '',
+    filters: previous.filters ?? {},
     selection: previous.selectionId ? { entityId: previous.selectionId } : {},
     projection: null,
     details: null,
@@ -580,39 +709,14 @@ export function selectVisibleData(state: ViewState): VisibleData {
     };
   }
 
-  const needle = state.search.trim().toLowerCase();
   const filters = state.filters;
-  // Entities the user explicitly chose to show are kept even when they are outside
-  // the current filters; the table marks those rows.
   const temporary = new Set(state.temporaryDisplayIds);
-  const nodes = projection.nodes.filter((node) => {
-    if (temporary.has(node.id)) {
-      return true;
-    }
-
-    if (needle.length > 0 && !node.name.toLowerCase().includes(needle)) {
-      return false;
-    }
-
-    if (
-      filters.kinds &&
-      filters.kinds.length > 0 &&
-      node.kind &&
-      !filters.kinds.includes(node.kind)
-    ) {
-      return false;
-    }
-
-    if (filters.includeExternal === false && node.isExternal) {
-      return false;
-    }
-
-    if (filters.includeGenerated === false && node.isGenerated) {
-      return false;
-    }
-
-    return true;
-  });
+  const nodes = projection.nodes.filter(
+    (node) =>
+      state.scope.kind === 'cycle' ||
+      temporary.has(node.id) ||
+      matchesEntity(node, filters, state.search)
+  );
 
   const nodeIds = new Set(nodes.map((node) => node.id));
   const edges = projection.edges.filter((edge) => {
@@ -620,6 +724,8 @@ export function selectVisibleData(state: ViewState): VisibleData {
     if (!nodeIds.has(edge.sourceId) || !nodeIds.has(edge.targetId)) {
       return false;
     }
+    if (state.scope.kind === 'cycle') return true;
+    if (filters.basis?.length && !filters.basis.includes(edge.basis)) return false;
 
     if (filters.relationKinds && filters.relationKinds.length > 0) {
       return filters.relationKinds.some((kind) => edge.kinds.includes(kind));
@@ -633,7 +739,9 @@ export function selectVisibleData(state: ViewState): VisibleData {
     edges,
     matchedNodeCount: nodes.length,
     filterCount: countFilters(filters),
-    isFilteredEmpty: nodes.length === 0 && projection.nodes.length > 0,
+    isFilteredEmpty:
+      nodes.length === 0 &&
+      (projection.nodes.length > 0 || state.search.trim().length > 0 || countFilters(filters) > 0),
     totalNodeCount: projection.totalNodeCount,
     totalEdgeCount: projection.totalEdgeCount
   };
@@ -658,7 +766,8 @@ export function selectStatusFooter(state: ViewState): string {
   const visible = selectVisibleData(state);
   const parts = [`Showing ${visible.nodes.length}/${visible.totalNodeCount} node(s)`];
   parts.push(`${visible.edges.length}/${visible.totalEdgeCount} relation(s)`);
-  parts.push(state.mode === 'quick' ? 'Quick' : 'Semantic');
+  parts.push((state.resultMode ?? state.mode) === 'quick' ? 'Quick' : 'Semantic');
+  parts.push(state.profile.configuration ?? 'Debug');
   if (state.status === 'stale') {
     parts.push('stale result');
   } else if (state.status === 'partial') {
@@ -737,7 +846,7 @@ export function countFilters(filters: Filters): number {
       if (value.length > 0) {
         count++;
       }
-    } else if (typeof value === 'boolean') {
+    } else if (value === false) {
       count++;
     }
   }

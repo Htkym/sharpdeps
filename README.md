@@ -3,11 +3,11 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Htkym/sharpdeps/ci.yml?branch=main&label=CI)](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml)
 [![VS Marketplace](https://badgen.net/vs-marketplace/v/htkym.sharpdeps)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
 
-SharpDeps visualizes the dependencies in a .NET solution as an interactive graph, at both **project** and **namespace** granularity, and flags **circular dependencies**.
+SharpDeps visualizes the dependencies in a .NET solution as an interactive graph, at **project**, **namespace**, and **type** granularity, and flags **circular dependencies**.
 
-The graph opens as a normal editor tab (a webview). Mermaid is bundled into the extension, so rendering works offline with no CDN access.
+The graph opens as a normal editor tab. SVG rendering and ELK layout run locally in the webview, without a CDN.
 
-![SharpDeps showing the project-level dependency graph for a .NET solution](images/overview.png)
+![Semantic dependency map and reference evidence in VS Code](images/workbench-semantic.png)
 
 ## What's new in 0.1.0
 
@@ -22,36 +22,19 @@ diagram. The workflow is **select a dependency → check its evidence → jump t
 - **Exports**: Mermaid, JSON, SVG, and PNG of the current selection, plus **Copy for agent** which copies an evidence-backed context (target, conditions, evidence, cycles, limits, and an explicit "do not assert" list). Nothing is sent anywhere.
 - **State restore**: the panel comes back with the target, selection, filters, and camera after hiding the tab or reloading the window, without starting an analysis.
 - **Keyboard**: `/` search, `g`/`t` graph/table, `Enter` select, `Esc` close the inspector, `+`/`-`/`0` zoom.
+- **Graph controls**: zoom buttons and slider, Fit, node/rank spacing, layout cancellation and retry, and a project-kind legend. SVG/PNG can include the actual profile, TFMs, scope, omissions, and legend.
 - Measurements for the analyzer live in [docs/performance.md](docs/performance.md); the semantic model is described in [docs/analysis-semantics.md](docs/analysis-semantics.md).
 
-The screenshots below show the earlier UI; the commands and settings are unchanged unless
-noted here.
+## Analysis modes
 
-## Features
+- **Quick** reads declared project references and infers namespace dependencies from `using` directives. It needs a .NET 10 runtime; it does not evaluate MSBuild projects or require the SDK.
+- **Semantic** evaluates C# projects with MSBuild and resolves references with Roslyn. Select Semantic and choose Analyze to use it. It requires an installed .NET SDK compatible with the target and its `global.json`; SharpDeps does not acquire an SDK or restore packages automatically.
+- Both modes keep declared, inferred, and resolved relations distinct. Display limits affect the graph, not discovery, search, or cycle detection.
+- Analysis requires a trusted workspace. A failed or cancelled run preserves the previous successful result and its evidence.
 
-- Interactive Mermaid dependency graph for a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`), shown in an editor tab.
-- Toggle between **project-level** and **namespace-level** views instantly.
-- Nodes are **color-coded by project kind** (web, library, test, desktop, app), with a legend that lists the kinds present in the current graph.
-- Zoom and pan the graph: on-screen controls (including a **zoom slider**), Ctrl/⌘ + wheel, trackpad pinch, and drag to pan. The graph fits the available window when it opens and re-fits on resize.
-- Tune the layout with **node-spacing** and **rank-spacing** sliders, and resize the graph and cycle panes with a draggable splitter.
-- **Hide test projects** with a single toggle: the graph re-lays out without them so the remaining dependencies are easier to read.
-- Circular dependencies are highlighted in red on the graph.
-- Cycles are also reported in the **Problems** panel:
-  - project cycles anchor to the participating `.csproj` files,
-  - namespace cycles anchor to a representative source file for each namespace.
-- Export the current graph: **copy Mermaid source**, **save as SVG**, **save as PNG**.
-- Copy a compact analysis summary and handoff instructions for an AI coding agent from the toolbar.
-- Run from the Explorer context menu on a `.sln`, `.slnx`, or supported project file, or from the Command Palette. Right-clicking a project file generates a project-scoped graph for that project and everything it transitively references via `ProjectReference`, with no `.sln`/`.slnx` required.
+Use **Profile** for Configuration and Platform. After a Semantic analysis, the **Analysis** tab offers per-project target framework choices. Automatic keeps evaluated variants separate; a manual choice that conflicts with an evaluated project reference reports an error.
 
-## Screenshots
-
-Namespace-level view — switch granularity with the **Projects / Namespaces** toggle to group dependencies by namespace:
-
-![Namespace-level dependency graph grouped into namespace clusters](images/namespace-graph.png)
-
-Circular dependencies are highlighted in red on the graph and listed in the sidebar; selecting one focuses the participating nodes:
-
-![A circular dependency highlighted in red between two namespaces](images/cycles.png)
+Use **Filters** for project/type kinds, relation basis, relation kinds, tests, external types, and generated types. Select an entity to explore dependencies or dependents at depth 1–3. Double-click a project or namespace to drill down, and use Back to restore the preceding scope.
 
 ## Install
 
@@ -62,9 +45,9 @@ The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-d
 
 ## Requirements
 
-SharpDeps runs a small precompiled analyzer that needs the **.NET runtime** (not the full SDK).
+Quick requires the **.NET 10 runtime**. Semantic additionally requires an installed **.NET SDK** and restored project dependencies.
 
-Resolution order for `dotnet`:
+Quick resolves `dotnet` in this order:
 
 1. The `sharpdeps.dotnetPath` setting, if set.
 2. The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) (`dotnet.findPath`). This extension is declared as a dependency and is installed automatically.
@@ -72,6 +55,8 @@ Resolution order for `dotnet`:
 4. A private runtime acquired on demand via the .NET Install Tool, using VS Code's standard download/progress UI (no administrator rights required).
 
 If none of these succeed, SharpDeps shows a notification with a **Download .NET** link and lets you point at a `dotnet` executable via settings.
+
+Semantic uses `sharpdeps.dotnetPath` or `dotnet` on `PATH` and checks SDK resolution in the target directory. It does not fall back to runtime acquisition.
 
 ## Usage
 
@@ -89,7 +74,10 @@ While the map is open, these palette commands are available:
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `sharpdeps.maxProjects` | `60` | Maximum number of projects in the project-level graph (`--max-projects`). |
+| `sharpdeps.maxProjects` | `60` | Project display limit; analysis still covers the full scope. |
+| `sharpdeps.maxVisibleTypes` | `100` | Type display limit. Search can add entities outside the limit. |
+| `sharpdeps.analysisMode` | `quick` | Initial analysis mode. |
+| `sharpdeps.analysisTimeoutSeconds` | `180` | Time limit for an analysis. |
 | `sharpdeps.maxEdges` | `200` | Maximum number of dependency edges in the graph (`--max-edges`). |
 | `sharpdeps.dotnetPath` | `""` | Absolute path to a `dotnet` executable. When empty, SharpDeps resolves one automatically. |
 
@@ -101,16 +89,16 @@ flowchart LR
   resolve --> rt["Resolve dotnet (findPath / acquire)"]
   rt --> run["Run analyzer DLL via dotnet"]
   run --> json["Parse JSON report"]
-  json --> view["Webview viewer (Mermaid bundled)"]
+  json --> view["SVG workbench / ELK worker"]
   json --> diag["Cycle diagnostics (Problems)"]
   view -->|copy / export| ext["Extension host (clipboard / save)"]
 ```
 
-The analyzer parses the selected solution or project scope with Roslyn (no MSBuild/SDK dependency) and emits a JSON report. The extension renders it in the webview and publishes any cycles to the Problems panel.
+The selected analyzer writes a validated JSON report and indexed evidence. The extension derives graph and table projections from that result, serves evidence on demand, and publishes cycles to the Problems panel.
 
 ## Building from source
 
-Prerequisites: Node.js, and the .NET SDK (only to precompile the analyzer).
+Prerequisites: Node.js 20 or later and .NET SDK 10.
 
 ```bash
 npm install

@@ -2,6 +2,8 @@
 .vscode-test/**
 .local/**
 .playwright-mcp/**
+.playwright-cli/**
+playwright.config.cjs
 docs/**
 tests/**
 schemas/**
@@ -19,7 +21,6 @@ analyzer/Directory.Build.props
 analyzer/Directory.Packages.props
 analyzer/*.slnx
 analyzer/bin/**/*.pdb
-analyzer/bin/semantic/**
 media/graph/prototype.js
 media/graph/prototype.js.map
 .gitignore

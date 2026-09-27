@@ -38,15 +38,18 @@ export interface GraphViewOptions {
 
 export interface GraphView {
   readonly element: HTMLElement;
-  update(projection: Projection, scopeLabel: string): void;
+  update(projection: Projection, scopeLabel: string): Promise<void>;
+  setSpacing(options: { nodeSpacing: number; rankSpacing: number }): void;
+  cancelLayout(): void;
+  retryLayout(): void;
   setSelection(nodeIds: readonly string[], edgeIds: readonly string[]): void;
   /** Restores a persisted camera instead of fitting the next projection (SD-021). */
   applyCamera(camera: { zoom: number; scrollLeft: number; scrollTop: number }): void;
   cameraState(): { zoom: number; scrollLeft: number; scrollTop: number };
   fit(): void;
   zoomBy(factor: number): void;
-  exportSvg(): string | undefined;
-  exportPng(): Promise<string | undefined>;
+  exportSvg(metadata?: string[]): string | undefined;
+  exportPng(metadata?: string[]): Promise<string | undefined>;
   dispose(): void;
 }
 
@@ -79,6 +82,9 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   let currentKey = '';
   let layout: LayoutResult | undefined;
   let generation = 0;
+  let spacing = { nodeSpacing: 40, rankSpacing: 80 };
+  let fitOnResize = true;
+  let pendingLayout: Promise<void> = Promise.resolve();
   let pendingCamera: { zoom: number; scrollLeft: number; scrollTop: number } | undefined;
 
   const report = (current: {
@@ -111,19 +117,22 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   });
 
   async function apply(projection_: GraphProjection): Promise<void> {
-    const key = projectionKey(projection_);
+    const key = projectionKey(projection_) + JSON.stringify(spacing);
     projection = projection_;
     if (key === currentKey) {
+      await pendingLayout;
       // Same graph: a redraw keeps the camera and never asks the worker again.
       renderSelection();
       return;
     }
 
     currentKey = key;
+    layoutClient.cancel();
+    layout = undefined;
     const request = ++generation;
     let result: LayoutResult;
     try {
-      result = await layoutClient.layout(projection_);
+      result = await layoutClient.layout(projection_, spacing);
     } catch (error) {
       if (error instanceof LayoutCancelledError || request !== generation) {
         return;
@@ -153,57 +162,95 @@ export function createGraphView(options: GraphViewOptions): GraphView {
       camera.setContentSize(result.width, result.height);
       camera.fit();
     }
+    options.onCameraChanged?.(camera.state);
   }
 
   camera.wireWheel();
   camera.wireDrag();
 
   const reportCamera = (): void => {
+    fitOnResize = false;
     options.onCameraChanged?.(camera.state);
   };
   viewport.addEventListener('pointerup', reportCamera);
   viewport.addEventListener('wheel', reportCamera, { passive: true });
+  const resizeObserver = new ResizeObserver(() => {
+    if (layout && fitOnResize) camera.fit();
+  });
+  resizeObserver.observe(viewport);
 
   return {
     element,
+    cancelLayout: () => {
+      generation++;
+      layoutClient.cancel();
+      layout = undefined;
+      options.onError?.('Layout cancelled. Retry layout or use the table.');
+    },
+    retryLayout: () => {
+      currentKey = '';
+      options.onError?.(undefined);
+    },
+    setSpacing: (next) => {
+      spacing = next;
+    },
     update: (nextProjection, scopeLabel) => {
-      void apply(toGraphProjection(nextProjection, scopeLabel));
+      pendingLayout = apply(toGraphProjection(nextProjection, scopeLabel));
+      return pendingLayout;
     },
     setSelection: (nodeIds, edgeIds) => {
       selection.set(nodeIds, edgeIds);
     },
     applyCamera: (camera_) => {
-      pendingCamera = camera_;
+      fitOnResize = false;
+      if (layout) camera.applyState(camera_);
+      else pendingCamera = camera_;
     },
     cameraState: () => camera.state,
-    fit: () => camera.fit(),
-    zoomBy: (factor) => camera.zoomBy(factor),
-    exportSvg: () => {
+    fit: () => {
+      fitOnResize = true;
+      camera.fit();
+      options.onCameraChanged?.(camera.state);
+    },
+    zoomBy: (factor) => {
+      fitOnResize = false;
+      camera.zoomBy(factor);
+      options.onCameraChanged?.(camera.state);
+    },
+    exportSvg: (metadata) => {
       if (!layout) {
         return undefined;
       }
 
       return serializeSvg(content, {
         width: layout.width,
+        metadata,
         height: layout.height,
         styles: `${readThemeStyles(element)} ${GRAPH_EXPORT_STYLES}`,
         caption: projection ? `SharpDeps dependency graph — ${projection.scopeLabel}` : 'SharpDeps'
       });
     },
-    exportPng: async () => {
+    exportPng: async (metadata) => {
       if (!layout) {
         return undefined;
       }
 
       const svgText = serializeSvg(content, {
+        metadata,
         width: layout.width,
         height: layout.height,
         styles: `${readThemeStyles(element)} ${GRAPH_EXPORT_STYLES}`,
         caption: projection ? `SharpDeps dependency graph — ${projection.scopeLabel}` : 'SharpDeps'
       });
-      return svgToPngDataUrl(svgText, layout.width, layout.height);
+      const exported = new DOMParser().parseFromString(svgText, 'image/svg+xml').documentElement;
+      return svgToPngDataUrl(
+        svgText,
+        Number(exported.getAttribute('width')),
+        Number(exported.getAttribute('height'))
+      );
     },
     dispose: () => {
+      resizeObserver.disconnect();
       unwire();
       layoutClient.cancel();
       layoutClient.dispose();

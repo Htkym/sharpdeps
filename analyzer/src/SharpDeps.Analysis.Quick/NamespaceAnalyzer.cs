@@ -158,7 +158,7 @@ public static class NamespaceAnalyzer
 
                 if (collector is not null)
                 {
-                    CollectIndexData(collector, project.Name, file, bytes, root, fileNamespaces);
+                    CollectIndexData(collector, Core.Paths.ProjectPaths.NormalizePathKey(project.FullPath), file, bytes, root, fileNamespaces);
                 }
             }
         }

@@ -12,14 +12,26 @@ export interface SvgExportOptions {
   styles: string;
   /** Optional caption shown in the exported image only. */
   caption?: string;
+  metadata?: string[];
 }
 
 export function serializeSvg(content: SVGGElement, options: SvgExportOptions): string {
+  const width = Math.max(options.width, options.metadata?.length ? 640 : 0);
+  const characters = Math.max(30, Math.floor((width - 32) / 8));
+  const notes = (options.metadata ?? []).flatMap((line) => {
+    const chars = Array.from(line);
+    const result: string[] = [];
+    for (let offset = 0; offset < chars.length; offset += characters)
+      result.push(chars.slice(offset, offset + characters).join(''));
+    return result;
+  });
+  const headerHeight = notes.length ? notes.length * 20 + 24 : 0;
+  const height = options.height + headerHeight;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  svg.setAttribute('width', String(Math.ceil(options.width)));
-  svg.setAttribute('height', String(Math.ceil(options.height)));
-  svg.setAttribute('viewBox', `0 0 ${Math.ceil(options.width)} ${Math.ceil(options.height)}`);
+  svg.setAttribute('width', String(Math.ceil(width)));
+  svg.setAttribute('height', String(Math.ceil(height)));
+  svg.setAttribute('viewBox', `0 0 ${Math.ceil(width)} ${Math.ceil(height)}`);
   svg.setAttribute('role', 'img');
   if (options.caption) {
     svg.setAttribute('aria-label', options.caption);
@@ -28,10 +40,26 @@ export function serializeSvg(content: SVGGElement, options: SvgExportOptions): s
   const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
   style.textContent = options.styles;
   svg.append(style);
+  const background = document.createElementNS(svg.namespaceURI, 'rect');
+  background.setAttribute('width', '100%');
+  background.setAttribute('height', '100%');
+  background.setAttribute('fill', 'var(--vscode-editor-background, #1f1f1f)');
+  svg.append(background);
+  notes.forEach((line, index) => {
+    const text = document.createElementNS(svg.namespaceURI, 'text');
+    text.setAttribute('x', '16');
+    text.setAttribute('y', String(24 + index * 20));
+    text.setAttribute('fill', 'var(--vscode-editor-foreground, #e6e6e6)');
+    text.setAttribute('font-family', 'sans-serif');
+    text.setAttribute('font-size', '13');
+    text.textContent = line;
+    svg.append(text);
+  });
 
   const clone = content.cloneNode(true) as SVGGElement;
   // The exported image is static: focus and camera transforms do not apply.
   clone.removeAttribute('transform');
+  if (headerHeight) clone.setAttribute('transform', `translate(0 ${headerHeight})`);
   svg.append(clone);
 
   stripInteractiveAttributes(svg);
@@ -87,6 +115,10 @@ export function readThemeStyles(host: Element): string {
     '--vscode-focusBorder',
     '--vscode-charts-red',
     '--vscode-charts-blue',
+    '--vscode-charts-purple',
+    '--vscode-charts-green',
+    '--vscode-charts-orange',
+    '--vscode-charts-yellow',
     '--vscode-descriptionForeground',
     '--vscode-editor-font-family',
     '--vscode-font-size'
@@ -107,7 +139,7 @@ export function readThemeStyles(host: Element): string {
  * readable even outside VS Code.
  */
 export const GRAPH_EXPORT_STYLES = `
-  .node rect { fill: var(--vscode-editor-background, #1f1f1f); stroke: var(--vscode-panel-border, #6b6b6b); }
+  .node rect { fill: var(--vscode-editor-background, #1f1f1f); stroke: var(--sd-kind-color, var(--vscode-panel-border, #6b6b6b)); }
   .node text { fill: var(--vscode-editor-foreground, #e6e6e6); font-family: var(--vscode-editor-font-family, sans-serif); font-size: 12px; }
   .node-sublabel, .node-badge { fill: var(--vscode-descriptionForeground, #a0a0a0); font-size: 10px; }
   .node.in-cycle rect { stroke: var(--vscode-charts-red, #e5484d); stroke-width: 2; }

@@ -60,7 +60,7 @@
 
 .node rect {
   fill: var(--vscode-editor-background, #1f1f1f);
-  stroke: var(--vscode-panel-border, #6b6b6b);
+  stroke: var(--sd-kind-color, var(--vscode-panel-border, #6b6b6b));
   stroke-width: 1;
 }
 

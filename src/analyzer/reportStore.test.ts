@@ -116,6 +116,31 @@ function snapshotWithEntities(names: string[]): AnalysisSnapshot {
 }
 
 describe('ReportStore registration', () => {
+  it('checks the publication guard after loading and preserves the registered result and target', async () => {
+    const first = writeAnalysis(snapshotWithEntities([]), []);
+    const store = new ReportStore();
+    await store.register({
+      directory: first.directory,
+      reportFileName: 'report-v2.json',
+      targetPath: '/first/Example.sln'
+    });
+    const next = writeAnalysis(
+      { ...snapshotWithEntities([]), analysisId: 'an_ffffffffffffffff' },
+      []
+    );
+    let current = true;
+    const registration = store.register({
+      directory: next.directory,
+      reportFileName: 'report-v2.json',
+      targetPath: '/next/Example.sln',
+      isCurrent: () => current
+    });
+    current = false;
+    await expect(registration).rejects.toThrow('superseded');
+    expect(store.currentAnalysisId).toBe(first.snapshot.analysisId);
+    expect(store.getTargetPath(first.snapshot.analysisId)).toBe('/first/Example.sln');
+  });
+
   it('registers a valid analysis and serves it as the current one', async () => {
     const snapshot = snapshotWithEntities(['Core', 'Util']);
     const records = snapshot.relations.map((relation, index) =>
@@ -148,6 +173,20 @@ describe('ReportStore registration', () => {
     return expect(store.register({ directory, reportFileName: 'report-v2.json' })).rejects.toThrow(
       ReportStoreError
     );
+  });
+
+  it('keeps the successful result when a process returns a failed report with exit code zero', async () => {
+    const first = writeAnalysis(snapshotWithEntities([]), []);
+    const failed = writeAnalysis(
+      { ...snapshotWithEntities([]), analysisId: 'an_ffffffffffffffff', completeness: 'failed' },
+      []
+    );
+    const store = new ReportStore();
+    await store.register({ directory: first.directory, reportFileName: 'report-v2.json' });
+    await expect(
+      store.register({ directory: failed.directory, reportFileName: 'report-v2.json' })
+    ).rejects.toThrow('analysis failed');
+    expect(store.currentAnalysisId).toBe(first.snapshot.analysisId);
   });
 
   it('rejects an evidence index whose count does not match the file', async () => {
@@ -238,6 +277,28 @@ describe('ReportStore paging and cursors', () => {
     });
     expect(third.items.map((item) => item.name)).toEqual(['Gamma']);
     expect(third.nextCursor).toBeUndefined();
+  });
+
+  it('pages hierarchy independently of the current projection and binds cursors to the parent', async () => {
+    const snapshot = snapshotWithEntities(['Alpha', 'Beta', 'Gamma']);
+    const { directory } = writeAnalysis(snapshot, []);
+    const store = new ReportStore();
+    await store.register({ directory, reportFileName: 'report-v2.json' });
+    const parent = store.search(snapshot.analysisId, '', { granularity: 'project' }).items[0].id;
+    const page = store.search(snapshot.analysisId, '', {
+      granularity: 'namespace',
+      parentId: parent,
+      limit: 1
+    });
+    expect(page.total).toBe(3);
+    expect(page.items).toHaveLength(1);
+    expect(() =>
+      store.search(snapshot.analysisId, '', {
+        granularity: 'namespace',
+        parentId: 'prj_ffffffffffffffff',
+        cursor: page.nextCursor
+      })
+    ).toThrow();
   });
 
   it('rejects tampered, misused, or foreign cursors', async () => {

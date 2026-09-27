@@ -136,7 +136,7 @@ public sealed class SolutionDiscoveryTests : IDisposable
 
         Assert.Equal(2, parsed.Projects.Count);
         Assert.Contains(warnings, warning => warning.Contains("was not found", StringComparison.Ordinal));
-        Assert.Contains(warnings, warning => warning.Contains("limited to the first 2 project", StringComparison.Ordinal));
+        Assert.Contains(warnings, warning => warning.Contains("safety limit of 2 project", StringComparison.Ordinal));
     }
 
     [Fact]

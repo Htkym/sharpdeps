@@ -6,6 +6,7 @@
 // explicit rendering, so none of them looks like "no dependencies".
 
 import { buildShell, type NavTab, type ShellElements } from '../components/shell';
+import { projectKindColor } from '../graph/projectionAdapter';
 import { renderEntityTable } from '../components/entityTable';
 import { createGraphView, type GraphView } from '../components/graphView';
 import {
@@ -15,7 +16,11 @@ import {
 } from '../components/inspector';
 import { resolveShortcut } from './shortcuts';
 import type { SortState } from './query';
-import { buildNavigationTree, renderNavigationTree } from '../components/navigationPane';
+import {
+  buildNavigationTree,
+  renderNavigationTree,
+  type NavigationTreeNode
+} from '../components/navigationPane';
 import {
   INITIAL_STATE,
   selectBreadcrumbs,
@@ -32,6 +37,7 @@ export interface ViewerApp {
   dispatch(action: ViewAction): void;
   getState(): ViewState;
   elements: ShellElements;
+  export(format: 'mermaid' | 'svg' | 'png' | 'json', copy?: boolean): Promise<void>;
 }
 
 export interface ViewerAppOptions {
@@ -40,11 +46,12 @@ export interface ViewerAppOptions {
   /** Called after each render so the host can mirror derived values (pane widths). */
   onStateChanged?: (state: ViewState) => void;
   /** Export of the current selection (SD-022). Image formats carry the rendered data. */
-  onExport?: (format: 'mermaid' | 'svg' | 'png' | 'json', data?: string) => void;
+  onExport?: (format: 'mermaid' | 'svg' | 'png' | 'json', data?: string, copy?: boolean) => void;
   /** Copy of the evidence-backed context (SD-022). Nothing is sent anywhere. */
   onCopyContext?: () => void;
   /** Opens one evidence record in the editor (SD-019/SD-024). */
   onOpenEvidence?: (evidenceId: string) => void;
+  onOpenDeclaration?: (entityId: string) => void;
   /**
    * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
    * table stays available and the graph shows why it is missing.
@@ -63,6 +70,28 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   let inspectorWasOpen = false;
 
   const elements = buildShell(root, {
+    onCancelLayout: () => graphRuntime.view?.cancelLayout(),
+    onRetryLayout: () => graphRuntime.view?.retryLayout(),
+    onZoom: (zoom) => {
+      const view = graphView();
+      if (!view) return;
+      if (zoom === 'fit') view.fit();
+      else
+        view.zoomBy(
+          zoom === 'in' ? 1.2 : zoom === 'out' ? 1 / 1.2 : zoom / view.cameraState().zoom
+        );
+    },
+    onLayout: (layout) => dispatch({ type: 'layoutChanged', layout }),
+    onImageOptions: (options) => dispatch({ type: 'imageOptionsChanged', options }),
+    onMode: (mode) => dispatch({ type: 'modeChanged', mode }),
+    onProfile: (profile) =>
+      dispatch({ type: 'profileChanged', profile: { ...state.profile, ...profile } }),
+    onFilters: (filters) => dispatch({ type: 'filtersChanged', filters }),
+    onBack: () => {
+      dispatch({ type: 'historyBack' });
+      if (state.camera) graphRuntime.view?.applyCamera(state.camera);
+    },
+    onDepth: (depth) => dispatch({ type: 'scopeChanged', scope: { ...state.scope, depth } }),
     onAnalyze: () =>
       options.onHostAction?.({ type: 'analyzeStarted', analysisId: '', mode: state.mode }),
     onStop: () =>
@@ -79,19 +108,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       // `searchResultsReceived` (SD-013 bridge).
       options.onHostAction?.({ type: 'searchStarted', query: search });
     },
-    onExport: (format) => {
-      if (format !== 'svg' && format !== 'png') {
-        options.onExport?.(format);
-        return;
-      }
-
-      // The graph renders the same selection; its data goes to the host for saving.
-      const view = graphRuntime.view;
-      void (async () => {
-        const data = format === 'svg' ? view?.exportSvg() : await view?.exportPng();
-        options.onExport?.(format, data);
-      })();
-    },
+    onExport: (format) => void exportCurrent(format),
     onCopyContext: () => options.onCopyContext?.(),
     onNavTab: (tab) => {
       activeTab = tab;
@@ -113,7 +130,11 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   elements.navPaneBody.addEventListener('sd-show-temporary', (event) => {
     const detail = (event as CustomEvent<{ entityId: string }>).detail;
     if (detail?.entityId) {
+      const entity = state.searchResults.items.find((item) => item.id === detail.entityId);
+      if (entity && entity.granularity !== state.granularity)
+        dispatch({ type: 'granularityChanged', granularity: entity.granularity });
       dispatch({ type: 'temporaryDisplayAdded', entityId: detail.entityId });
+      dispatch({ type: 'entitySelected', entityId: detail.entityId });
     }
   });
 
@@ -138,8 +159,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   elements.mapHost.addEventListener('sd-activate', (event) => {
     const detail = (event as CustomEvent<{ entityId: string }>).detail;
     if (detail?.entityId) {
-      dispatch({ type: 'entitySelected', entityId: detail.entityId });
-      dispatch({ type: 'inspectorToggled' });
+      drillDown(detail.entityId);
     }
   });
 
@@ -147,6 +167,52 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     dispatch({ type: 'searchChanged', search: '' });
     dispatch({ type: 'filtersChanged', filters: {} });
   });
+  elements.mapHost.addEventListener('sd-select', (event) => {
+    const entityId = (event as CustomEvent<{ entityId: string }>).detail?.entityId;
+    if (entityId) dispatch({ type: 'entitySelected', entityId });
+  });
+
+  function drillDown(entityId: string): void {
+    const entity =
+      state.projection?.nodes.find((node) => node.id === entityId) ??
+      state.searchResults.items.find((node) => node.id === entityId) ??
+      (state.details?.entityId === entityId ? state.details.entity : undefined);
+    if (!entity) return;
+    dispatch({
+      type: 'revealRequested',
+      entityId,
+      granularity: entity.granularity === 'project' ? 'namespace' : 'type',
+      scope: {
+        kind: entity.granularity === 'type' ? 'dependencies' : entity.granularity,
+        id: entityId,
+        depth: 1
+      }
+    });
+  }
+
+  async function exportCurrent(
+    format: 'mermaid' | 'svg' | 'png' | 'json',
+    copy?: boolean
+  ): Promise<void> {
+    try {
+      if (format === 'svg' || format === 'png') {
+        const view = graphView();
+        if (!view || !state.projection) throw new Error('No graph is available to export.');
+        const visible = selectVisibleData(state);
+        view.setSpacing(state.layout);
+        await view.update(
+          { ...state.projection, nodes: visible.nodes, edges: visible.edges },
+          scopeLabel(state)
+        );
+        const notes = imageMetadata(state);
+        const data = format === 'svg' ? view.exportSvg(notes) : await view.exportPng(notes);
+        if (!data) throw new Error('The layout is not ready. Try again after the graph appears.');
+        options.onExport?.(format, data);
+      } else options.onExport?.(format, undefined, copy);
+    } catch (error) {
+      dispatch({ type: 'errorRaised', code: 'export.failed', message: String(error) });
+    }
+  }
 
   function dispatch(action: ViewAction): void {
     const next = viewReducer(state, action);
@@ -220,7 +286,9 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     renderNavigation(elements, state, activeTab, {
       expanded: expandedTreeNodes,
       rerender: render,
-      dispatch
+      dispatch,
+      requestTree: (parentId, granularity, cursor) =>
+        options.onHostAction?.({ type: 'treeRequested', parentId, granularity, cursor })
     });
     renderCenter(elements, state, graphView, () => graphRuntime.error);
     renderDetails();
@@ -249,7 +317,10 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
 
     let edge: InspectorEdgeOptions | undefined;
     if (selectedEdgeId) {
-      const relation = projection?.edges.find((entry) => entry.id === selectedEdgeId);
+      const relation = projection?.edges.find(
+        (entry) =>
+          entry.id === selectedEdgeId || entry.underlyingRelationIds?.includes(selectedEdgeId)
+      );
       const nameOf = (id: string | undefined): string =>
         projection?.nodes.find((node) => node.id === id)?.name ?? id ?? '?';
       edge = {
@@ -266,7 +337,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       const details = state.details?.entityId === selectedEntityId ? state.details : undefined;
       entity = {
         id: selectedEntityId,
-        summary: projection?.nodes.find((node) => node.id === selectedEntityId),
+        summary: details?.entity ?? projection?.nodes.find((node) => node.id === selectedEntityId),
         dependencies: details?.dependencies,
         dependents: details?.dependents,
         edges: projection?.edges.filter(
@@ -280,11 +351,16 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       edge,
       entity,
       limitations: state.limitations,
-      mode: state.mode,
+      mode: state.resultMode ?? state.mode,
       onSelectEntity: (entityId) => dispatch({ type: 'entitySelected', entityId }),
       onLoadMoreEvidence: () => dispatch({ type: 'evidencePageRequested' }),
       onCopyReference: (reference) => void copyReference(reference),
-      onOpenEvidence: (evidenceId) => options.onOpenEvidence?.(evidenceId)
+      onOpenEvidence: (evidenceId) => options.onOpenEvidence?.(evidenceId),
+      onOpenDeclaration: (entityId) => options.onOpenDeclaration?.(entityId),
+      onSelectRelation: (relationId) => dispatch({ type: 'relationSelected', relationId }),
+      onExplore: (kind, entityId) =>
+        dispatch({ type: 'revealRequested', entityId, scope: { kind, id: entityId, depth: 1 } }),
+      onDrillDown: drillDown
     });
   }
 
@@ -301,7 +377,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     }
   }
 
-  const app: ViewerApp = { dispatch, getState: () => state, elements };
+  const app: ViewerApp = { dispatch, getState: () => state, elements, export: exportCurrent };
   render();
   return app;
 
@@ -331,8 +407,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       onActivate: (selection) => {
         const entityId = selection.nodeIds[0];
         if (entityId) {
-          dispatch({ type: 'entitySelected', entityId });
-          dispatch({ type: 'inspectorToggled' });
+          drillDown(entityId);
         }
       },
       onError: (message) => {
@@ -353,10 +428,59 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
 }
 
 function renderTopBar(elements: ShellElements, state: ViewState): void {
+  elements.zoom.value = String(Math.round((state.camera?.zoom ?? 1) * 100));
+  elements.nodeSpacing.value = String(state.layout.nodeSpacing);
+  elements.rankSpacing.value = String(state.layout.rankSpacing);
+  for (const key of ['profile', 'omissions', 'legend'] as const)
+    elements.imageOptions[key].checked = state.imageOptions[key];
+  elements.legend.replaceChildren();
+  const kinds = [
+    ...new Set(
+      selectVisibleData(state)
+        .nodes.map(
+          (node) => node.projectKind ?? (node.granularity === 'project' ? node.kind : undefined)
+        )
+        .filter((kind): kind is string => !!kind)
+    )
+  ].sort();
+  for (const kind of kinds) {
+    const item = document.createElement('span');
+    item.textContent = kind;
+    item.style.borderLeft = `4px solid ${projectKindColor(kind)}`;
+    elements.legend.append(item);
+  }
+  const meaning = document.createElement('span');
+  meaning.textContent = 'Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external';
+  elements.legend.append(meaning);
   elements.targetName.textContent = state.target?.name ?? 'No target';
   elements.targetPath.textContent = state.target?.relativePath ?? '';
   elements.modeSelect.value = state.mode;
   elements.modeSelect.disabled = state.status === 'analyzing';
+  elements.configuration.value = state.profile.configuration ?? 'Debug';
+  elements.platform.value = state.profile.platform ?? '';
+  elements.configuration.disabled = elements.platform.disabled = state.status === 'analyzing';
+  elements.backButton.disabled = state.history.length === 0;
+  elements.depthSelect.value = String(state.scope.depth ?? 1);
+  elements.depthSelect.disabled =
+    state.scope.kind !== 'dependencies' && state.scope.kind !== 'dependents';
+  const typeOption =
+    elements.granularitySelect.querySelector<HTMLOptionElement>('option[value="type"]');
+  if (typeOption) {
+    typeOption.disabled = !state.capabilities.typeGraph;
+    typeOption.title = state.capabilities.typeGraph ? '' : 'Type analysis requires Semantic';
+  }
+  const controls = elements.filterControls;
+  controls.tests.checked = state.filters.includeTests !== false;
+  controls.external.checked = state.filters.includeExternal !== false;
+  controls.generated.checked = state.filters.includeGenerated !== false;
+  for (const [input, selected] of [
+    [controls.basis, state.filters.basis],
+    [controls.kinds, state.filters.kinds],
+    [controls.projectKinds, state.filters.projectKinds],
+    [controls.relations, state.filters.relationKinds]
+  ] as const)
+    for (const option of input.options)
+      option.selected = selected?.includes(option.value as never) === true;
 
   const analyzing = state.status === 'analyzing';
   elements.analyzeButton.disabled = analyzing;
@@ -387,6 +511,11 @@ function renderError(elements: ShellElements, state: ViewState): void {
 }
 
 interface StructureContext {
+  requestTree: (
+    parentId: string,
+    granularity: 'project' | 'namespace' | 'type',
+    cursor?: string
+  ) => void;
   expanded: Set<string>;
   rerender: () => void;
   dispatch: (action: ViewAction) => void;
@@ -412,7 +541,7 @@ function renderNavigation(
   } else if (activeTab === 'cycles') {
     renderCyclesTab(elements, state, context.dispatch);
   } else {
-    renderAnalysisTab(elements, state);
+    renderAnalysisTab(elements, state, context.dispatch);
   }
 }
 
@@ -424,7 +553,27 @@ function renderStructureTab(
   renderSearchResults(elements, state);
 
   const visible = selectVisibleData(state);
-  const tree = buildNavigationTree(visible.nodes);
+  const entityById = new Map(
+    Object.values(state.tree)
+      .flatMap((page) => page.items)
+      .map((entity) => [entity.id, entity])
+  );
+  const branch = (
+    entity: import('../../src/view/protocolV2').EntitySummary
+  ): NavigationTreeNode => ({
+    id: entity.id,
+    label: entity.name,
+    granularity: entity.granularity,
+    kind: entity.kind,
+    inCycle: entity.inCycle,
+    isExternal: entity.isExternal,
+    canExpand: entity.granularity !== 'type',
+    moreCursor: state.tree[entity.id]?.nextCursor,
+    children: (state.tree[entity.id]?.items ?? []).map(branch)
+  });
+  const tree = state.tree.root
+    ? state.tree.root.items.map(branch)
+    : buildNavigationTree(visible.nodes);
   const container = document.createElement('div');
   elements.navPaneBody.append(container);
   renderNavigationTree(container, {
@@ -440,11 +589,29 @@ function renderStructureTab(
         context.expanded.delete(entityId);
       } else {
         context.expanded.add(entityId);
+        const entity = entityById.get(entityId);
+        if (entity && !state.tree[entityId])
+          context.requestTree(entityId, entity.granularity === 'project' ? 'namespace' : 'type');
       }
 
       context.rerender();
-    }
+    },
+    onLoadMore: (entityId, cursor) =>
+      context.requestTree(
+        entityId,
+        entityById.get(entityId)?.granularity === 'project' ? 'namespace' : 'type',
+        cursor
+      )
   });
+  if (state.tree.root?.nextCursor) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.textContent = 'Load more projects';
+    more.addEventListener('click', () =>
+      context.requestTree('root', 'project', state.tree.root.nextCursor)
+    );
+    container.append(more);
+  }
 }
 
 /** Search hits from the whole index, including entities the view does not show. */
@@ -562,6 +729,8 @@ function renderCyclesTab(
     focus.addEventListener('click', () =>
       dispatch({
         type: 'scopeChanged',
+        granularity:
+          group.scope === 'project' || group.scope === 'namespace' ? group.scope : 'type',
         scope: { kind: 'cycle', id: group.id, depth: null }
       })
     );
@@ -619,7 +788,11 @@ function renderCyclesTab(
   elements.navPaneBody.append(list);
 }
 
-function renderAnalysisTab(elements: ShellElements, state: ViewState): void {
+function renderAnalysisTab(
+  elements: ShellElements,
+  state: ViewState,
+  dispatch: (action: ViewAction) => void
+): void {
   const rows: Array<[string, string]> = [
     ['Status', state.status],
     [
@@ -652,6 +825,52 @@ function renderAnalysisTab(elements: ShellElements, state: ViewState): void {
   }
 
   elements.navPaneBody.append(list);
+  if (state.variantOptions.length) {
+    elements.navPaneBody.append(
+      message(
+        'Target frameworks: Automatic keeps evaluated reference variants separate. A change requires Analyze.',
+        'sd-note'
+      )
+    );
+    const projects = new Map<string, ViewState['variantOptions']>();
+    for (const variant of state.variantOptions)
+      projects.set(variant.projectLogicalId, [
+        ...(projects.get(variant.projectLogicalId) ?? []),
+        variant
+      ]);
+    for (const [projectLogicalId, variants] of projects) {
+      const label = document.createElement('label');
+      label.textContent = variants[0].projectPath;
+      const picker = document.createElement('select');
+      picker.setAttribute('aria-label', `Target framework: ${variants[0].projectPath}`);
+      for (const tfm of ['', ...new Set(variants.map((variant) => variant.targetFramework))]) {
+        const option = document.createElement('option');
+        option.value = tfm;
+        option.textContent = tfm || 'Automatic';
+        picker.append(option);
+      }
+      picker.value =
+        state.profile.projectVariants?.find(
+          (variant) => variant.projectLogicalId === projectLogicalId
+        )?.targetFramework ?? '';
+      picker.addEventListener('change', () =>
+        dispatch({
+          type: 'profileChanged',
+          profile: {
+            ...state.profile,
+            projectVariants: [
+              ...(state.profile.projectVariants ?? []).filter(
+                (variant) => variant.projectLogicalId !== projectLogicalId
+              ),
+              ...(picker.value ? [{ projectLogicalId, targetFramework: picker.value }] : [])
+            ]
+          }
+        })
+      );
+      label.append(picker);
+      elements.navPaneBody.append(label);
+    }
+  }
 
   if (state.limitations.length > 0) {
     const heading = document.createElement('h3');
@@ -760,7 +979,8 @@ function renderCenter(
   let graphShown = false;
   if (state.viewKind === 'graph') {
     const view = graphView();
-    if (view) {
+    if (view && !graphError()) {
+      view.setSpacing(state.layout);
       graphShown = true;
       elements.graphHost.hidden = false;
       elements.mapContent.hidden = true;
@@ -792,9 +1012,48 @@ function renderCenter(
   // The table is rendered even while the graph is shown, so switching views never
   // depends on the graph having succeeded.
   renderEntityTable(elements.mapContent, tableOptions);
+  if (state.viewKind === 'graph' && !graphShown) {
+    elements.mapContent.prepend(
+      message(
+        `The interactive graph is unavailable (${graphError() ?? 'the layout worker is unavailable'}). The table below shows the same analysis.`,
+        'sd-note'
+      )
+    );
+  }
 }
 
 /** Human-readable scope label for the graph header/exports. */
+export function imageMetadata(state: ViewState): string[] {
+  const notes: string[] = [];
+  const visible = selectVisibleData(state);
+  if (state.imageOptions.profile) {
+    const profile = state.resultProfile ?? state.profile;
+    notes.push(
+      `SharpDeps: ${state.target?.relativePath ?? 'Unknown target'} · ${state.resultMode ?? state.mode} · ${state.status}`
+    );
+    notes.push(`Profile: ${profile.configuration ?? 'Debug'} / ${profile.platform ?? 'Default'}`);
+    for (const variant of state.variantOptions)
+      notes.push(`TFM: ${variant.projectPath} — ${variant.targetFramework}`);
+  }
+  if (state.imageOptions.omissions) {
+    notes.push(`Scope: ${scopeLabel(state)} · Search: ${state.search || '(none)'}`);
+    notes.push(
+      `Shown ${visible.nodes.length}/${visible.totalNodeCount} nodes; ${visible.edges.length}/${visible.totalEdgeCount} relations; truncated: ${state.projectionTruncated}`
+    );
+    notes.push(`Filters: ${JSON.stringify(state.filters)}`);
+    for (const limitation of state.limitations) notes.push(`Limitation: ${limitation.message}`);
+  }
+  if (state.imageOptions.legend) {
+    notes.push(
+      'Legend: dashed = inferred; solid = declared/evaluated/resolved (see relation kind); red / ⟳ = cycle; G = generated; ext = external'
+    );
+    notes.push(
+      `Project kinds: ${[...new Set(visible.nodes.map((node) => node.projectKind ?? node.kind).filter(Boolean))].sort().join(', ') || '(none)'}`
+    );
+  }
+  return notes;
+}
+
 function scopeLabel(state: ViewState): string {
   const scope = state.scope;
   if (!scope || scope.kind === 'root') {

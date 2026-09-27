@@ -1,242 +1,230 @@
-// Performance and cleanup measurement (SD-028).
-//
-// Generates a fixed synthetic fixture, runs the Quick and Semantic hosts against it, and
-// records wall time, peak working set, output sizes, and what is left behind. Nothing
-// here changes the product: it reports what was measured, with the machine and versions.
-
-const { spawn, spawnSync } = require('node:child_process');
+// Fixed Medium fixture and raw measurements for the v0.1 acceptance budgets.
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-
-const repoRoot = path.resolve(__dirname, '..');
-const perfRoot = path.join(repoRoot, '.local', 'perf');
-const fixtureRoot = path.join(perfRoot, 'big');
-const runsRoot = path.join(perfRoot, 'runs');
-const reportPath = path.join(
-  repoRoot,
-  'docs',
-  'implementation',
-  'v0.1.0',
-  'evidence',
-  'sd-028-performance.json'
-);
-
-const PROJECT_COUNT = 40;
-const TYPES_PER_PROJECT = 10;
-
-function generateFixture() {
-  fs.rmSync(fixtureRoot, { recursive: true, force: true });
-  fs.mkdirSync(fixtureRoot, { recursive: true });
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const { performance } = require('node:perf_hooks');
+const { createHash } = require('node:crypto');
+const repo = path.resolve(__dirname, '..');
+const root = path.join(repo, '.local', 'perf-v010');
+const fixture = path.join(root, 'medium');
+const host = path.join(repo, 'analyzer/bin/semantic/sharpdeps-semantic-host.dll');
+const evidencePath = path.join(repo, 'docs/implementation/v0.1.0/evidence/sd-028-acceptance.json');
+const projects = 30,
+  filesPerProject = 100;
+fs.mkdirSync(fixture, { recursive: true });
+const projectName = (p) => `P${String(p).padStart(2, '0')}`;
+for (let p = 0; p < projects; p++) {
+  const name = projectName(p),
+    dir = path.join(fixture, name);
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
-    path.join(fixtureRoot, 'Big.csproj'),
-    '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <Nullable>enable</Nullable>\n  </PropertyGroup>\n</Project>\n',
-    'utf8'
+    path.join(dir, `${name}.csproj`),
+    `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableNETAnalyzers>false</EnableNETAnalyzers></PropertyGroup>${p ? `<ItemGroup><ProjectReference Include="../${projectName(p - 1)}/${projectName(p - 1)}.csproj" /></ItemGroup>` : ''}</Project>`
   );
-
-  for (let project = 0; project < PROJECT_COUNT; project++) {
-    const namespace = `Big.P${project}`;
-    for (let type = 0; type < TYPES_PER_PROJECT; type++) {
-      const references = [];
-      // A deterministic fan: every type uses two types from the previous namespace and
-      // one from its own, so edges and SCCs are exercised.
-      const previous = Math.max(0, project - 1);
-      references.push(`Big.P${previous}.T${(type + 1) % TYPES_PER_PROJECT}`);
-      references.push(`Big.P${previous}.T${(type + 3) % TYPES_PER_PROJECT}`);
-      if (type > 0) {
-        references.push(`${namespace}.T${type - 1}`);
-      }
-
-      const body = references
-        .map(
-          (reference, index) => `        public ${reference} F${index} { get; set; } = default!;`
-        )
-        .join('\n');
-      fs.writeFileSync(
-        path.join(fixtureRoot, `${namespace.replace('.', '_')}_T${type}.cs`),
-        `namespace ${namespace};\n\npublic sealed class T${type}\n{\n${body}\n}\n`,
-        'utf8'
-      );
-    }
+  for (let t = 0; t < filesPerProject; t++) {
+    const lines = [`namespace ${name};`, `public class C${t} {`];
+    for (let n = 1; n <= 24; n++)
+      lines.push(`public ${projectName(Math.max(0, p - 1))}.C${(t + n) % 100} F${n};`);
+    for (let n = 1; n <= 3; n++)
+      lines.push(`public C${(t + n * 7) % 100} M${n}(C${(t + n * 7) % 100} value) => value;`);
+    if (p === 0 && t === 0) for (let n = 0; n < 100; n++) lines.push(`public C1 Repeated${n};`);
+    lines.push(
+      `public System.Collections.Generic.List<C${(t + 37) % 100}> Items;`,
+      `public object Make() => new C${(t + 53) % 100}();`,
+      '}'
+    );
+    fs.writeFileSync(path.join(dir, `C${t}.cs`), lines.join('\n'));
   }
-
-  return fs.readdirSync(fixtureRoot).filter((name) => name.endsWith('.cs')).length;
 }
-
-function measure(command, args, label) {
-  return new Promise((resolve) => {
-    const started = process.hrtime.bigint();
-    const child = spawn(command, args, { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
-    let peakWorkingSet = 0;
-    const sampler = setInterval(() => {
-      try {
-        const output = spawnSync(
-          'powershell',
-          [
-            '-NoProfile',
-            '-Command',
-            `(Get-Process -Id ${child.pid} -ErrorAction SilentlyContinue).PeakWorkingSet64`
-          ],
-          { encoding: 'utf8' }
-        );
-        const value = Number.parseInt(output.stdout.trim(), 10);
-        if (Number.isFinite(value)) {
-          peakWorkingSet = Math.max(peakWorkingSet, value);
-        }
-      } catch {
-        // Sampling is best effort.
-      }
-    }, 250);
-
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on('exit', (code) => {
-      clearInterval(sampler);
-      resolve({
-        label,
-        exitCode: code,
-        wallMs: Number(process.hrtime.bigint() - started) / 1e6,
-        peakWorkingSetBytes: peakWorkingSet,
-        stdoutTail: stdout.slice(-400),
-        stderrTail: stderr.slice(-400)
-      });
-    });
-  });
-}
-
-function directorySize(directory) {
-  if (!fs.existsSync(directory)) {
-    return 0;
-  }
-
-  return fs.readdirSync(directory, { withFileTypes: true }).reduce((total, entry) => {
-    const full = path.join(directory, entry.name);
-    return total + (entry.isDirectory() ? directorySize(full) : fs.statSync(full).size);
-  }, 0);
-}
-
-function listProcesses(name) {
-  try {
-    const output = spawnSync(
-      'powershell',
+const solution = path.join(fixture, 'Medium.slnx');
+fs.writeFileSync(
+  solution,
+  `<Solution>${Array.from({ length: projects }, (_, p) => `<Project Path="${projectName(p)}/${projectName(p)}.csproj"/>`).join('')}</Solution>`
+);
+const manifest = {
+  projects,
+  csharpFiles: projects * filesPerProject,
+  writtenReferencesPerFile: 34,
+  extraRepeatedReferences: 100,
+  expectedTypesAtLeast: 3000,
+  structure:
+    'Project chain; 24 cross-project fields, 3 local signature methods, generic List and constructor per file. Intra-project SCCs and external types included.'
+};
+fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2));
+const restore = spawnSync('dotnet', ['restore', solution], { encoding: 'utf8', timeout: 180000 });
+fs.writeFileSync(path.join(root, 'restore.log'), restore.stdout + restore.stderr);
+if (restore.status !== 0) throw new Error('Fixture restore failed.');
+const report = {
+  checkedAt: new Date().toISOString(),
+  hostSha256: createHash('sha256').update(fs.readFileSync(host)).digest('hex'),
+  assemblySha256: Object.fromEntries(
+    [
+      'SharpDeps.Analysis.Roslyn.dll',
+      'SharpDeps.Analysis.Core.dll',
+      'SharpDeps.Analysis.Contracts.dll'
+    ].map((name) => [
+      name,
+      createHash('sha256')
+        .update(fs.readFileSync(path.join(path.dirname(host), name)))
+        .digest('hex')
+    ])
+  ),
+  environment: {
+    platform: process.platform,
+    arch: process.arch,
+    cpu: os.cpus()[0].model,
+    logicalProcessors: os.cpus().length,
+    memoryBytes: os.totalmem(),
+    sdk: spawnSync('dotnet', ['--version'], { encoding: 'utf8' }).stdout.trim(),
+    power: spawnSync('powercfg', ['/getactivescheme'], { encoding: 'utf8' }).stdout.trim()
+  },
+  fixture: manifest,
+  methodology:
+    'Three new analyzer processes, first-load then file-cache-warm runs. No compilation cache. Restore excluded. Monotonic wall clock includes sampling overhead; memory samples include discovered owned children. Cold OS caches are not asserted.',
+  runs: [],
+  store: {}
+};
+const save = () => fs.writeFileSync(evidencePath, JSON.stringify(report, null, 2) + '\n');
+(async () => {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const output = path.join(root, `run-${attempt}`, 'report.json');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const spec = path.join(root, `run-${attempt}.json`);
+    fs.writeFileSync(
+      spec,
+      JSON.stringify({
+        command: 'dotnet',
+        arguments: [
+          host,
+          '--solution',
+          solution,
+          '--output',
+          output,
+          '--configuration',
+          'Release',
+          '--timeout',
+          '240'
+        ],
+        cwd: repo,
+        output
+      })
+    );
+    const run = spawnSync(
+      'pwsh',
       [
         '-NoProfile',
-        '-Command',
-        `@(Get-Process -Name ${name} -ErrorAction SilentlyContinue).Count`
+        '-File',
+        path.join(repo, 'scripts/measure-analyzer.ps1'),
+        '-Specification',
+        spec
       ],
-      { encoding: 'utf8' }
+      { encoding: 'utf8', timeout: 300000, windowsHide: true }
     );
-    return Number.parseInt(output.stdout.trim(), 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-async function main() {
-  const fileCount = generateFixture();
-  fs.rmSync(runsRoot, { recursive: true, force: true });
-  fs.mkdirSync(runsRoot, { recursive: true });
-
-  const quickHost = path.join(repoRoot, 'analyzer', 'bin', 'quick', 'code-map.dll');
-  const semanticHost = path.join(
-    repoRoot,
-    'analyzer',
-    'bin',
-    'semantic',
-    'sharpdeps-semantic-host.dll'
-  );
-  const dotnetBefore = listProcesses('dotnet');
-
-  const quickRuns = [];
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const outputDirectory = fs.mkdtempSync(path.join(runsRoot, 'sharpdeps-run-'));
-    quickRuns.push(
-      await measure(
-        'dotnet',
-        [
-          quickHost,
-          '--solution',
-          path.join(fixtureRoot, 'Big.csproj'),
-          '--output',
-          path.join(outputDirectory, 'report.json')
-        ],
-        `quick-${attempt + 1}`
-      )
-    );
-    quickRuns[quickRuns.length - 1].outputBytes = directorySize(outputDirectory);
-    quickRuns[quickRuns.length - 1].outputDirectory = path.relative(repoRoot, outputDirectory);
-  }
-
-  const semanticOutput = fs.mkdtempSync(path.join(runsRoot, 'sharpdeps-semantic-'));
-  const semanticRun = await measure(
-    'dotnet',
-    [
-      semanticHost,
-      '--solution',
-      path.join('tests', 'fixtures', 'semantic-baseline', 'SemanticBaseline.sln'),
-      '--output',
-      path.join(semanticOutput, 'probe.json'),
-      '--configuration',
-      'Debug'
-    ],
-    'semantic-baseline'
-  );
-  semanticRun.outputBytes = directorySize(semanticOutput);
-
-  const sorted = [...quickRuns].map((run) => run.wallMs).sort((left, right) => left - right);
-  const summary = {
-    task: 'SD-028',
-    checkedAt: new Date().toISOString(),
-    environment: {
-      platform: `${process.platform} ${process.arch}`,
-      cpus: os.cpus().length,
-      totalMemoryBytes: os.totalmem()
-    },
-    fixture: {
-      path: path.relative(repoRoot, fixtureRoot),
-      files: fileCount,
-      note: `${PROJECT_COUNT} namespaces x ${TYPES_PER_PROJECT} types with a deterministic fan`
-    },
-    quick: {
-      runs: quickRuns,
-      medianWallMs: sorted[Math.floor(sorted.length / 2)],
-      minWallMs: sorted[0],
-      maxWallMs: sorted[sorted.length - 1],
-      peakWorkingSetBytes: Math.max(...quickRuns.map((run) => run.peakWorkingSetBytes))
-    },
-    semantic: semanticRun,
-    cleanup: {
-      runDirectoriesCreated: 4,
-      runDirectoriesAfter: fs.existsSync(runsRoot) && fs.readdirSync(runsRoot).length,
-      dotnetProcessesBefore: dotnetBefore,
-      dotnetProcessesAfter: listProcesses('dotnet'),
-      workspaceLeftovers: fs.existsSync(path.join(fixtureRoot, 'obj'))
-        ? 'obj/ was created by the semantic build'
-        : 'none in the fixture'
+    if (!fs.existsSync(output + '.measurement.json')) {
+      report.runs.push({ attempt, exitCode: run.status, error: run.stderr });
+      save();
+      throw new Error('Measurement failed.');
     }
-  };
-
-  // The runner cleans its own measurement directories once their sizes are recorded; the
-  // controller's retention policy is covered by analysisController.test.ts.
-  const measurementDirectories = fs.readdirSync(runsRoot);
-  for (const entry of measurementDirectories) {
-    fs.rmSync(path.join(runsRoot, entry), { recursive: true, force: true });
+    const measured = JSON.parse(
+      fs.readFileSync(output + '.measurement.json', 'utf8').replace(/^\uFEFF/, '')
+    );
+    const snapshot = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(output), 'report-v2.json'), 'utf8')
+    );
+    const correctness = {
+      projects: snapshot.projects.filter((p) => p.targetFramework !== 'external').length,
+      types: snapshot.types.filter((t) => !t.isExternal).length,
+      relations: snapshot.relations.length,
+      evidence: snapshot.evidenceIndex.relations.reduce((n, r) => n + r.count, 0),
+      completeness: snapshot.completeness
+    };
+    report.runs.push({
+      attempt,
+      ...measured,
+      correctness,
+      raw: path.relative(repo, output + '.measurement.json'),
+      timeBudgetPass: measured.wallMs <= 120000,
+      memoryBudgetPass: measured.sampledTreePeakBytes <= 2 * 1024 ** 3
+    });
+    save();
+    if (
+      measured.exitCode !== 0 ||
+      correctness.projects !== 30 ||
+      correctness.types !== 3000 ||
+      correctness.evidence < 90000 ||
+      correctness.completeness !== 'completeWithinScope'
+    )
+      throw new Error('Medium correctness check failed.');
+    console.log(
+      `Medium ${attempt + 1}: ${Math.round(measured.wallMs)} ms, ${Math.round(measured.sampledTreePeakBytes / 1024 ** 2)} MiB, ${correctness.evidence} evidence`
+    );
   }
-  summary.cleanup.measurementDirectoriesRemoved = measurementDirectories.length;
-  summary.cleanup.runDirectoriesAfter = fs.readdirSync(runsRoot).length;
-
-  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-  fs.writeFileSync(reportPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
-  console.log(JSON.stringify(summary, null, 1));
-}
-
-main().catch((error) => {
+  require('esbuild').buildSync({
+    stdin: {
+      contents: "export { ReportStore } from './src/analyzer/reportStore';",
+      resolveDir: repo
+    },
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    outfile: path.join(root, 'store.cjs')
+  });
+  const { ReportStore } = require(path.join(root, 'store.cjs'));
+  const store = new ReportStore();
+  const snapshot = await store.register({
+    directory: path.join(root, 'run-2'),
+    reportFileName: 'report-v2.json'
+  });
+  const summarize = (values) => ({
+    samplesMs: values,
+    p95Ms: [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1]
+  });
+  for (const [name, fn, budget] of [
+    ['search', () => store.search(snapshot.analysisId, 'C50', { limit: 100 }), 250],
+    ['details', () => store.getEntityDetails(snapshot.analysisId, snapshot.types[1500].id), 100],
+    [
+      'projection',
+      () =>
+        store.getProjection(snapshot.analysisId, {
+          granularity: 'type',
+          scope: { kind: 'dependencies', id: snapshot.types[1500].id, depth: 1 },
+          maxNodes: 100,
+          maxEdges: 200
+        }),
+      2000
+    ],
+    [
+      'evidencePage',
+      () =>
+        store.getEvidencePage(
+          snapshot.analysisId,
+          snapshot.evidenceIndex.relations.find((entry) => entry.count >= 100).relationId,
+          { limit: 100 }
+        ),
+      300
+    ]
+  ]) {
+    await fn();
+    const values = [];
+    for (let n = 0; n < 25; n++) {
+      const start = performance.now();
+      const result = await fn();
+      values.push(performance.now() - start);
+      if (name === 'evidencePage' && result.items.length !== 100)
+        throw new Error('Evidence page must contain 100 records.');
+    }
+    report.store[name] = {
+      ...summarize(values),
+      budgetMs: budget,
+      hostRssBytes: process.memoryUsage().rss
+    };
+    save();
+  }
+  console.log(JSON.stringify(report.store, null, 2));
+})().catch((error) => {
+  report.error = String(error);
+  save();
   console.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 });

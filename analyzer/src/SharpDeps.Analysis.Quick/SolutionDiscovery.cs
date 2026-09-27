@@ -61,7 +61,7 @@ public static class SolutionDiscovery
 
                 var typeGuid = projectMatch.Groups["typeGuid"].Value;
                 var name = projectMatch.Groups["name"].Value;
-                var relativePath = projectMatch.Groups["path"].Value.Replace('/', Path.DirectorySeparatorChar);
+                var relativePath = ProjectPaths.NativeSeparators(projectMatch.Groups["path"].Value);
                 var projectGuid = projectMatch.Groups["projectGuid"].Value;
 
                 rawEntries[projectGuid] = new RawSolutionEntry(projectGuid, name, relativePath, typeGuid);
@@ -111,7 +111,7 @@ public static class SolutionDiscovery
                         return null;
                     }
 
-                    var resolvedProjectPath = projectPath!;
+                    var resolvedProjectPath = ProjectPaths.NativeSeparators(projectPath!);
                     var fullPath = Path.GetFullPath(Path.Combine(solutionDirectoryPath, resolvedProjectPath));
                     var groupPath = BuildSlnxGroupPath(element, solutionDirectoryPath, resolvedProjectPath);
                     return new SolutionProjectEntry(
@@ -219,7 +219,7 @@ public static class SolutionDiscovery
 
             if (traversalCapped)
             {
-                warnings.Add($"Project-scoped traversal was limited to the first {traversalLimit} project(s). Increase --max-projects to include more.");
+                warnings.Add($"Project-scoped traversal reached the safety limit of {traversalLimit} project(s). Analyze a smaller project scope to inspect the remaining projects.");
             }
 
             return new ParsedSolution(
@@ -262,7 +262,7 @@ public static class SolutionDiscovery
                 return "(solution root)";
             }
 
-            var normalizedDirectory = directoryPath.Replace('/', Path.DirectorySeparatorChar);
+            var normalizedDirectory = ProjectPaths.NativeSeparators(directoryPath);
             return Path.GetRelativePath(solutionDirectoryPath, Path.GetFullPath(Path.Combine(solutionDirectoryPath, normalizedDirectory)));
         }
 
@@ -288,7 +288,7 @@ public static class SolutionDiscovery
                 return "(solution root)";
             }
 
-            var normalizedDirectory = directoryPath.Replace('/', Path.DirectorySeparatorChar);
+            var normalizedDirectory = ProjectPaths.NativeSeparators(directoryPath);
             return Path.GetRelativePath(solutionDirectoryPath, Path.GetFullPath(Path.Combine(solutionDirectoryPath, normalizedDirectory)));
         }
 

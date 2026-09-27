@@ -29,6 +29,19 @@ if (root) {
   const requestContext = new Map<string, RequestContext>();
   const requested = { projection: '', details: '', evidence: '', evidencePage: '' };
   let persistTimer: number | undefined;
+  let lastPersisted = '';
+
+  function sendRequest(message: Record<string, unknown>, context: RequestContext = {}): void {
+    const type = context.type ?? String(message.type);
+    for (const [id, existing] of requestContext)
+      if (existing.type === type) requestContext.delete(id);
+    requestContext.set(String(message.requestId), {
+      ...context,
+      type,
+      analysisId: String(message.analysisId)
+    });
+    host.post(message);
+  }
 
   const app = createViewerApp(root, {
     workerUrl: root.dataset.workerUri,
@@ -38,15 +51,37 @@ if (root) {
       persistSoon(state);
     },
     onHostAction: (action) => {
+      if (action.type === 'treeRequested') {
+        sendRequest(
+          {
+            type: 'searchEntities',
+            requestId: nextRequestId(),
+            analysisId: app.getState().analysisId,
+            query: '',
+            granularity: action.granularity,
+            parentId: action.parentId === 'root' ? undefined : action.parentId,
+            cursor: action.cursor,
+            limit: 100
+          },
+          {
+            type: `tree:${action.parentId}`,
+            treeParentId: action.parentId,
+            appendTree: !!action.cursor
+          }
+        );
+        return;
+      }
       if (action.type === 'searchStarted') {
         const requestId = nextRequestId();
-        requestContext.set(requestId, { query: action.query });
-        host.post({
-          type: 'searchEntities',
-          requestId,
-          analysisId: app.getState().analysisId ?? '',
-          query: action.query
-        });
+        sendRequest(
+          {
+            type: 'searchEntities',
+            requestId,
+            analysisId: app.getState().analysisId ?? '',
+            query: action.query
+          },
+          { query: action.query }
+        );
         return;
       }
 
@@ -55,7 +90,7 @@ if (root) {
         host.post(message);
       }
     },
-    onExport: (format, data) => {
+    onExport: (format, data, copy) => {
       const state = app.getState();
       if (!state.analysisId) {
         return;
@@ -66,7 +101,12 @@ if (root) {
         requestId: nextRequestId(),
         analysisId: state.analysisId,
         format,
+        copy,
         scope: state.scope,
+        granularity: state.granularity,
+        filters: state.filters,
+        search: state.search,
+        includeIds: state.temporaryDisplayIds,
         data
       });
     },
@@ -80,8 +120,17 @@ if (root) {
         type: 'copyContext',
         requestId: nextRequestId(),
         analysisId: state.analysisId,
-        scope: state.scope
+        scope: state.scope,
+        granularity: state.granularity,
+        filters: state.filters,
+        search: state.search,
+        includeIds: state.temporaryDisplayIds
       });
+    },
+    onOpenDeclaration: (entityId) => {
+      const analysisId = app.getState().analysisId;
+      if (analysisId)
+        host.post({ type: 'openDeclaration', requestId: nextRequestId(), analysisId, entityId });
     },
     onOpenEvidence: (evidenceId) => {
       const state = app.getState();
@@ -99,9 +148,28 @@ if (root) {
   });
 
   host.subscribe((message) => {
-    for (const action of toViewActions(message, requestContext)) {
+    const payload = message as {
+      type?: string;
+      requestId?: string;
+      format?: 'mermaid' | 'svg' | 'png' | 'json';
+      copy?: boolean;
+    };
+    if (payload?.type === 'requestExport' && payload.format) {
+      void app.export(payload.format, payload.copy);
+      return;
+    }
+    if (payload?.type === 'error' && payload.requestId && !requestContext.has(payload.requestId))
+      return;
+    if (
+      payload &&
+      ['projection', 'details', 'evidencePage', 'searchResults'].includes(payload.type ?? '') &&
+      (!payload.requestId || !requestContext.has(payload.requestId))
+    )
+      return;
+    for (const action of toViewActions(message, requestContext, app.getState())) {
       app.dispatch(action);
     }
+    if (payload?.requestId) requestContext.delete(payload.requestId);
   });
 
   window.sharpdepsApp = app;
@@ -126,6 +194,9 @@ if (root) {
     persistTimer = window.setTimeout(() => {
       persistTimer = undefined;
       const snapshot = serializeViewState(state, state.camera ?? undefined);
+      const serialized = JSON.stringify(snapshot);
+      if (serialized === lastPersisted) return;
+      lastPersisted = serialized;
       host.setState(snapshot);
       host.post({ type: 'persistViewState', viewState: snapshot });
     }, 300);
@@ -136,29 +207,53 @@ if (root) {
     if (!analysisId) {
       return;
     }
+    const treeKey = `tree:${analysisId}`;
+    if (
+      !state.tree.root &&
+      ![...requestContext.values()].some((context) => context.type === treeKey)
+    ) {
+      sendRequest(
+        {
+          type: 'searchEntities',
+          requestId: nextRequestId(),
+          analysisId,
+          query: '',
+          granularity: 'project',
+          limit: 100
+        },
+        { type: treeKey, treeParentId: 'root' }
+      );
+    }
 
     const projectionKey = [
       analysisId,
       state.granularity,
       state.scope.kind,
       state.scope.id ?? '',
-      state.scope.depth ?? 1
+      state.scope.depth ?? 1,
+      JSON.stringify(state.filters),
+      state.search,
+      state.temporaryDisplayIds.join(',')
     ].join('|');
     if (requested.projection !== projectionKey) {
       requested.projection = projectionKey;
-      host.post({
+      sendRequest({
         type: 'getProjection',
         requestId: nextRequestId(),
         analysisId,
         scope: state.scope,
-        granularity: state.granularity
+        granularity: state.granularity,
+        filters: state.filters,
+        search: state.search,
+        includeIds: state.temporaryDisplayIds
       });
     }
 
     const entityId = state.selection.entityId ?? '';
+    if (!entityId) requested.details = '';
     if (entityId && requested.details !== `${analysisId}|${entityId}`) {
       requested.details = `${analysisId}|${entityId}`;
-      host.post({
+      sendRequest({
         type: 'getEntityDetails',
         requestId: nextRequestId(),
         analysisId,
@@ -167,10 +262,14 @@ if (root) {
     }
 
     const relationId = state.selection.relationId ?? '';
+    if (!relationId) {
+      requested.evidence = '';
+      requested.evidencePage = '';
+    }
     if (relationId && requested.evidence !== `${analysisId}|${relationId}`) {
       requested.evidence = `${analysisId}|${relationId}`;
       requested.evidencePage = '';
-      host.post({
+      sendRequest({
         type: 'getEvidencePage',
         requestId: nextRequestId(),
         analysisId,
@@ -186,14 +285,16 @@ if (root) {
       if (requested.evidencePage !== pageKey) {
         requested.evidencePage = pageKey;
         const requestId = nextRequestId();
-        requestContext.set(requestId, { appendEvidence: true });
-        host.post({
-          type: 'getEvidencePage',
-          requestId,
-          analysisId,
-          relationId,
-          cursor
-        });
+        sendRequest(
+          {
+            type: 'getEvidencePage',
+            requestId,
+            analysisId,
+            relationId,
+            cursor
+          },
+          { appendEvidence: true }
+        );
       }
     }
   }
@@ -205,13 +306,14 @@ function toHostMessage(action: ViewAction, state: ViewState): Record<string, unk
       return {
         type: 'analyze',
         requestId: nextRequestId(),
-        mode: action.mode
+        mode: action.mode,
+        profile: state.profile
       };
     case 'analysisFailed':
       return {
         type: 'cancelAnalysis',
         requestId: nextRequestId(),
-        analysisId: state.analysisId ?? ''
+        analysisId: state.runningAnalysisId ?? state.analysisId ?? ''
       };
     default:
       return undefined;

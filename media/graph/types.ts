@@ -11,6 +11,7 @@ export interface GraphNodeInput {
   label: string;
   sublabel?: string;
   kind: NodeKind;
+  projectKind?: string;
   inCycle: boolean;
   isExternal?: boolean;
   isGenerated?: boolean;

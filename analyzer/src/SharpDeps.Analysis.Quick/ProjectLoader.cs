@@ -77,7 +77,7 @@ public static class ProjectLoader
                     return null;
                 }
 
-                var fullReferencePath = Path.GetFullPath(Path.Combine(projectDirectoryPath, includePath));
+                var fullReferencePath = Path.GetFullPath(Path.Combine(projectDirectoryPath, ProjectPaths.NativeSeparators(includePath)));
                 return new ProjectReferenceInfo(
                     includePath,
                     fullReferencePath,
@@ -116,14 +116,14 @@ public static class ProjectLoader
                 continue;
             }
 
-            var fullReferencePath = Path.GetFullPath(Path.Combine(projectDirectoryPath, includePath));
+            var fullReferencePath = Path.GetFullPath(Path.Combine(projectDirectoryPath, ProjectPaths.NativeSeparators(includePath)));
             var span = element is IXmlLineInfo lineInfo && lineInfo.HasLineInfo()
                 ? XmlLineSpan(projectText, lineInfo.LineNumber, lineInfo.LinePosition)
                 : (QuickSpan?)null;
 
             collector.AddProjectReference(
                 new QuickProjectReference(
-                    project.Name,
+                    ProjectPaths.NormalizePathKey(project.FullPath),
                     fullReferencePath,
                     includePath,
                     ProjectXml.HasCondition(element),

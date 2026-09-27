@@ -1,8 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
+import { randomBytes } from 'node:crypto';
+import type { ProfileRequest } from './view/protocolV2';
 import * as vscode from 'vscode';
 import { resolveAnalysisTarget } from './solution/resolveTarget';
-import { ensureDotnet, DotnetNotAvailableError } from './runtime/ensureDotnet';
+import {
+  ensureDotnet,
+  ensureSemanticDotnet,
+  DotnetNotAvailableError
+} from './runtime/ensureDotnet';
 import { AnalyzerError, locateAnalyzer } from './analyzer/runAnalyzer';
 import { AnalysisController, type AnalysisStage } from './analyzer/analysisController';
 import { ReportStore, ReportStoreError } from './analyzer/reportStore';
@@ -51,7 +58,17 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   } as unknown as vscode.OutputChannel;
   const diagnostics = new CycleDiagnostics(output);
   const store = new ReportStore();
-  const bridge = createReportBridge(store, { maxProjectionNodes: 300, maxProjectionEdges: 1000 });
+  const projectionLimits = (granularity: 'project' | 'namespace' | 'type') => {
+    const config = vscode.workspace.getConfiguration('sharpdeps');
+    return {
+      maxNodes: config.get<number>(
+        granularity === 'type' ? 'maxVisibleTypes' : 'maxProjects',
+        granularity === 'type' ? 100 : 60
+      ),
+      maxEdges: config.get<number>('maxEdges', 200)
+    };
+  };
+  const bridge = createReportBridge(store, { projectionLimits });
   context.subscriptions.push(output, diagnostics);
 
   // Generated code is opened read-only from the analysis result (SD-011): the provider
@@ -63,26 +80,31 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     )
   );
 
-  const workRoot = path.join(
-    context.globalStorageUri?.fsPath ?? context.extensionUri.fsPath,
-    'runs'
-  );
+  let workRoot = path.join(context.globalStorageUri?.fsPath ?? context.extensionUri.fsPath, 'runs');
   try {
     fs.mkdirSync(workRoot, { recursive: true });
   } catch {
-    // Falling back to the temp directory is handled by the controller.
+    workRoot = os.tmpdir();
   }
 
-  let launcher: { dotnetPath: string; analyzerPath: string } | undefined;
-
+  const targets = new Map<string, string>();
+  let requestGeneration = 0;
+  let activeAnalysisId: string | undefined;
+  let inputVersion = 0;
+  const storedTarget = context.workspaceState.get<string>('sharpdeps.lastTarget');
+  let lastTarget: vscode.Uri | undefined = storedTarget ? vscode.Uri.file(storedTarget) : undefined;
+  let lastMode: 'quick' | 'semantic' | undefined;
+  let lastProfile: ProfileRequest = { configuration: 'Debug' };
+  const VIEW_STATE_KEY = 'sharpdeps.viewState';
   const controller = new AnalysisController({
     workRoot,
     onLog: (line, source) => output.appendLine(`[${source}] ${line}`),
+    onProgress: (event) => {
+      if (event.analysisId === activeAnalysisId) CodeMapPanel.currentPanel?.notifyProgress(event);
+    },
     processFactory: (request, workDirectory) => {
-      if (!launcher) {
-        throw new AnalyzerError('The analyzer has not been resolved yet.');
-      }
-
+      const launcher = request.executable;
+      if (!launcher) throw new AnalyzerError('The analyzer has not been resolved yet.');
       return {
         command: launcher.dotnetPath,
         args: [
@@ -91,40 +113,48 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
           request.targetPath,
           '--output',
           path.join(workDirectory, 'report.json'),
-          '--max-projects',
-          String(request.maxProjects ?? 60),
-          '--max-edges',
-          String(request.maxEdges ?? 200),
           '--analysis-id',
-          request.analysisId ?? '',
-          '--watch-stdin'
+          request.analysisId!,
+          '--watch-stdin',
+          ...(request.mode === 'semantic'
+            ? [
+                '--configuration',
+                request.configuration ?? 'Debug',
+                ...(request.platform ? ['--platform', request.platform] : []),
+                ...(request.projectVariants?.length
+                  ? ['--project-variants', JSON.stringify(request.projectVariants)]
+                  : [])
+              ]
+            : [
+                '--max-projects',
+                String(request.maxProjects ?? 60),
+                '--max-edges',
+                String(request.maxEdges ?? 200)
+              ])
         ],
-        cwd: path.dirname(launcher.analyzerPath)
+        cwd: path.dirname(request.targetPath)
       };
     },
-    onCompleted: async (outcome) => {
-      if (!outcome.reportPath) {
-        return;
-      }
-
-      try {
-        await store.register({
-          directory: path.dirname(outcome.reportPath),
-          reportFileName: path.basename(outcome.reportPath)
-        });
-      } catch (error) {
-        // A result that fails validation must not be shown as if it were complete.
-        const message = error instanceof ReportStoreError ? error.message : String(error);
-        output.appendLine(`The analysis result was rejected: ${message}`);
-      }
+    onCompleted: async (outcome, isCurrent) => {
+      if (!outcome.reportPath) throw new AnalyzerError('The analyzer did not write a result.');
+      await store.register({
+        directory: path.dirname(outcome.reportPath),
+        reportFileName: path.basename(outcome.reportPath),
+        targetPath: targets.get(outcome.analysisId),
+        isCurrent
+      });
     }
   });
-  context.subscriptions.push({ dispose: () => void controller.dispose() });
-
-  let lastTarget: vscode.Uri | undefined;
-
-  const rootDirectory = (): string | undefined =>
-    lastTarget ? path.dirname(lastTarget.fsPath) : undefined;
+  context.subscriptions.push({
+    dispose: () => {
+      requestGeneration++;
+      void controller.dispose();
+    }
+  });
+  const rootDirectory = (analysisId = store.currentAnalysisId): string | undefined => {
+    const target = analysisId ? store.getTargetPath(analysisId) : undefined;
+    return target ? path.dirname(target) : undefined;
+  };
 
   /**
    * An untrusted workspace must not run the analyzer: it evaluates MSBuild and project
@@ -147,77 +177,131 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     return false;
   }
 
+  function cancelAnalysis(): void {
+    requestGeneration++;
+    controller.cancel('user');
+    if (activeAnalysisId)
+      CodeMapPanel.currentPanel?.notifyFailure(activeAnalysisId, 'Analysis stopped.', true);
+    activeAnalysisId = undefined;
+  }
+
   function panelHost(): Parameters<typeof CodeMapPanel.show>[1] {
     return {
       store,
       bridge,
       output,
       rootDirectory,
-      targetName: () => (lastTarget ? path.basename(lastTarget.fsPath) : ''),
+      projectionLimits,
+      targetName: () =>
+        store.currentAnalysisId
+          ? path.basename(store.getTargetPath(store.currentAnalysisId) ?? '')
+          : '',
       saveViewState: (state) => void context.workspaceState.update(VIEW_STATE_KEY, state),
       loadViewState: () => context.workspaceState.get<Record<string, unknown>>(VIEW_STATE_KEY),
-      onAnalyze: (mode) => void runAndShow(lastTarget, mode),
-      onCancel: () => controller.cancel('user')
+      onAnalyze: (mode, profile) => void runAndShow(lastTarget, mode, profile),
+      onCancel: cancelAnalysis,
+      onDispose: cancelAnalysis
     };
   }
-
-  const VIEW_STATE_KEY = 'sharpdeps.viewState';
-
-  /**
-   * Marks the registered result as stale when an analysed file changes (SD-021).
-   * Auto-refresh stays off by default: the user decides when to analyze again.
-   */
-  function watchForStaleness(): void {
-    const relativePathOf = (document: vscode.TextDocument): string | undefined => {
-      const analysisId = store.currentAnalysisId;
-      const root = rootDirectory();
-      if (!analysisId || !root || document.uri.scheme !== 'file') {
-        return undefined;
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(CodeMapPanel.viewType, {
+      async deserializeWebviewPanel(panel, state) {
+        if (state && typeof state === 'object')
+          await context.workspaceState.update(VIEW_STATE_KEY, state);
+        CodeMapPanel.restore(panel, context.extensionUri, panelHost());
       }
+    })
+  );
 
-      const relative = path.relative(root, document.uri.fsPath).replace(/\\/g, '/');
-      return store.documentIdForPath(analysisId, relative) ? relative : undefined;
-    };
-
-    const markStale = (reason: 'unsavedChange' | 'savedChange', relative: string): void => {
-      const analysisId = store.currentAnalysisId;
-      if (!analysisId) {
-        return;
-      }
-
-      output.appendLine(`Result ${analysisId} is stale (${reason}): ${relative}`);
-      CodeMapPanel.currentPanel?.notifyStale(analysisId, reason, [relative]);
-    };
-
-    context.subscriptions.push(
-      vscode.workspace.onDidChangeTextDocument((event) => {
-        if (!event.document.isDirty) {
-          return;
-        }
-
-        const relative = relativePathOf(event.document);
-        if (relative) {
-          markStale('unsavedChange', relative);
-        }
-      }),
-      vscode.workspace.onDidSaveTextDocument((document) => {
-        const relative = relativePathOf(document);
-        if (relative) {
-          markStale('savedChange', relative);
-        }
-      }),
-      vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration('sharpdeps')) {
-          const analysisId = store.currentAnalysisId;
-          if (analysisId) {
-            CodeMapPanel.currentPanel?.notifyStale(analysisId, 'profileChange');
-          }
-        }
-      })
+  const targetWatchers: vscode.Disposable[] = [];
+  const affectsInput = (file: string, analysisId: string): boolean => {
+    const root = rootDirectory(analysisId);
+    if (!root || /[\\/](bin|obj|node_modules|\.git)[\\/]/.test(file)) return false;
+    const relative = path.relative(root, file).replace(/\\/g, '/');
+    return (
+      !!store.documentIdForPath(analysisId, relative) ||
+      (!relative.startsWith('../') &&
+        /\.(cs|csproj|fsproj|vbproj|vcxproj|sln|slnx|props|targets)$/.test(file)) ||
+      [
+        'global.json',
+        'Directory.Build.props',
+        'Directory.Build.targets',
+        'Directory.Packages.props',
+        'NuGet.Config'
+      ].includes(path.basename(file))
     );
+  };
+  const changed = (uri: vscode.Uri, reason: 'savedChange' | 'unsavedChange') => {
+    if (uri.scheme !== 'file') return;
+    if (/[\\/](bin|obj|node_modules|\.git)[\\/]/.test(uri.fsPath)) return;
+    inputVersion++;
+    for (const id of store.analysisIds) {
+      if (affectsInput(uri.fsPath, id)) {
+        store.markStale(id);
+        CodeMapPanel.currentPanel?.notifyStale(id, reason);
+      }
+    }
+  };
+  function watchResult(analysisId: string): void {
+    targetWatchers.splice(0).forEach((watcher) => watcher.dispose());
+    const root = rootDirectory(analysisId)!;
+    const directories = new Set([root]);
+    for (const doc of store.getReport(analysisId).sourceManifest) {
+      if (doc.origin === 'userSource' && doc.relativePath.startsWith('..'))
+        directories.add(path.dirname(path.resolve(root, doc.relativePath)));
+    }
+    for (const directory of directories) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(
+          directory,
+          '**/*.{cs,csproj,fsproj,vbproj,vcxproj,sln,slnx,props,targets,json,config}'
+        )
+      );
+      targetWatchers.push(
+        watcher,
+        watcher.onDidCreate((uri) => changed(uri, 'savedChange')),
+        watcher.onDidChange((uri) => changed(uri, 'savedChange')),
+        watcher.onDidDelete((uri) => changed(uri, 'savedChange'))
+      );
+    }
+    // MSBuild and SDK selection also read configuration above the workspace root.
+    for (let ancestor = path.dirname(root); ; ancestor = path.dirname(ancestor)) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(
+          ancestor,
+          '{global.json,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,NuGet.Config}'
+        )
+      );
+      targetWatchers.push(
+        watcher,
+        watcher.onDidCreate((uri) => changed(uri, 'savedChange')),
+        watcher.onDidChange((uri) => changed(uri, 'savedChange')),
+        watcher.onDidDelete((uri) => changed(uri, 'savedChange'))
+      );
+      if (path.dirname(ancestor) === ancestor) break;
+    }
   }
-
-  watchForStaleness();
+  const configurationWatcher = vscode.workspace.createFileSystemWatcher(
+    '**/{global.json,Directory.Build.*,Directory.Packages.props,NuGet.Config}'
+  );
+  context.subscriptions.push(
+    configurationWatcher,
+    configurationWatcher.onDidChange((uri) => changed(uri, 'savedChange')),
+    configurationWatcher.onDidCreate((uri) => changed(uri, 'savedChange')),
+    configurationWatcher.onDidDelete((uri) => changed(uri, 'savedChange')),
+    { dispose: () => targetWatchers.splice(0).forEach((watcher) => watcher.dispose()) },
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.isDirty) changed(event.document.uri, 'unsavedChange');
+    }),
+    vscode.workspace.onDidSaveTextDocument((document) => changed(document.uri, 'savedChange')),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('sharpdeps'))
+        for (const id of store.analysisIds) {
+          store.markStale(id);
+          CodeMapPanel.currentPanel?.notifyStale(id, 'profileChange');
+        }
+    })
+  );
 
   async function showTypeFromEditor(kind: 'dependencies' | 'dependents'): Promise<void> {
     const resolution = await resolveTypeAtCursor(store, rootDirectory(), output);
@@ -228,17 +312,21 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         '解析する'
       );
       if (choice === '解析する') {
-        await runAndShow(lastTarget);
+        await runAndShow(lastTarget, 'semantic');
       }
       return;
     }
 
     const panel = CodeMapPanel.show(context.extensionUri, panelHost());
-    panel.revealEntity(resolution.value.typeId, {
-      kind,
-      id: resolution.value.typeId,
-      depth: 1
-    });
+    panel.revealEntity(
+      resolution.value.typeId,
+      {
+        kind,
+        id: resolution.value.typeId,
+        depth: 1
+      },
+      'type'
+    );
     output.appendLine(
       `Revealing ${kind} of ${resolution.value.typeId} in ${
         resolution.value.projectName ?? 'the current analysis'
@@ -248,22 +336,26 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
 
   async function runAndShow(
     requestedTarget?: vscode.Uri,
-    requestedMode?: 'quick' | 'semantic'
+    requestedMode?: 'quick' | 'semantic',
+    profile: ProfileRequest = lastProfile
   ): Promise<void> {
+    if (!requireTrustedWorkspace()) return;
+    const ticket = ++requestGeneration;
+    controller.cancel('superseded');
     const target = await resolveAnalysisTarget(requestedTarget);
-    if (!target) {
-      return;
-    }
-    lastTarget = target;
-    // A new run replaces the Problems entries: findings from a previous analysis are
-    // never left behind while this one is running or after it fails.
+    if (!target || ticket !== requestGeneration || !requireTrustedWorkspace()) return;
+    const config = vscode.workspace.getConfiguration('sharpdeps');
+    const mode = requestedMode ?? config.get<'quick' | 'semantic'>('analysisMode', 'quick');
+    const analysisId = `an_${randomBytes(8).toString('hex')}`;
+    const versionAtStart = inputVersion;
+    activeAnalysisId = analysisId;
+    targets.set(analysisId, target.fsPath);
+    const panel = CodeMapPanel.show(context.extensionUri, panelHost());
+    panel.notifyStarted(analysisId, mode, {
+      name: path.basename(target.fsPath),
+      relativePath: vscode.workspace.asRelativePath(target)
+    });
     diagnostics.clear();
-
-    const trusted = requireTrustedWorkspace();
-    if (!trusted) {
-      return;
-    }
-
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -271,84 +363,81 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         cancellable: true
       },
       async (progress, token) => {
+        const cancellation = token.onCancellationRequested(cancelAnalysis);
         try {
-          const dotnet = await ensureDotnet(context);
-          const analyzer = locateAnalyzer(context);
-          const config = vscode.workspace.getConfiguration('sharpdeps');
-          const mode = requestedMode ?? config.get<'quick' | 'semantic'>('analysisMode', 'quick');
-          if (mode === 'semantic') {
-            // Semantic analysis is wired in SD-007/SD-015; Quick stays the default and
-            // the mode is never silently substituted.
-            void vscode.window.showWarningMessage(
-              'SharpDeps: Semantic analysis is not available in this build; using Quick is an explicit choice.'
-            );
+          const dotnet =
+            mode === 'semantic'
+              ? await ensureSemanticDotnet(path.dirname(target.fsPath))
+              : await ensureDotnet(context);
+          const analyzer = locateAnalyzer(context, mode);
+          if (
+            ticket !== requestGeneration ||
+            token.isCancellationRequested ||
+            !requireTrustedWorkspace()
+          )
             return;
-          }
-
-          launcher = { dotnetPath: dotnet.dotnetPath, analyzerPath: analyzer.path };
-          const cancellation = token.onCancellationRequested(() => controller.cancel('user'));
-
           progress.report({ message: STAGE_LABELS.discover });
           const outcome = await controller.start({
             targetPath: target.fsPath,
             mode,
+            analysisId,
+            configuration: profile.configuration ?? 'Debug',
+            platform: profile.platform ?? undefined,
+            projectVariants: profile.projectVariants,
+            executable: { dotnetPath: dotnet.dotnetPath, analyzerPath: analyzer.path },
             maxProjects: config.get<number>('maxProjects', 60),
             maxEdges: config.get<number>('maxEdges', 200),
             timeoutMs: config.get<number>('analysisTimeoutSeconds', 180) * 1000
           });
-          cancellation.dispose();
-
+          if (ticket !== requestGeneration) return;
           if (outcome.status !== 'completed' || !outcome.reportPath) {
-            if (outcome.error) {
-              output.appendLine(outcome.error);
-              if (outcome.detail) {
-                output.appendLine(outcome.detail);
-              }
-            }
-
-            if (outcome.status === 'failed') {
-              void vscode.window
-                .showErrorMessage(
-                  `SharpDeps: ${outcome.error ?? 'The analysis failed.'}`,
-                  'Show Output'
-                )
-                .then((choice) => {
-                  if (choice === 'Show Output') {
-                    output.show();
-                  }
-                });
-            }
-
+            panel.notifyFailure(
+              analysisId,
+              outcome.error ?? 'The analysis did not complete.',
+              outcome.status === 'cancelled'
+            );
+            if (outcome.status !== 'cancelled')
+              reportError(new AnalyzerError(outcome.error ?? 'The analysis failed.'), output);
             return;
           }
-
-          // The v1 report still feeds the cycle diagnostics; the panel itself renders
-          // the v2 shell from the result store.
-          const v1Path = path.join(path.dirname(outcome.reportPath), 'report.json');
-          const report = JSON.parse(await fs.promises.readFile(v1Path, 'utf8')) as CodeMapReport;
-
-          const panel = CodeMapPanel.show(context.extensionUri, panelHost());
-
-          const analysisId = store.currentAnalysisId;
-          if (analysisId) {
-            panel.notifyAnalysis(analysisId);
-            if (store.getReport(analysisId).mode === 'semantic') {
-              // Semantic cycles are anchored at a real evidence position.
-              void diagnostics.updateFromStore(store, analysisId, rootDirectory());
-            } else {
-              diagnostics.update(report, analysisId, 'quick');
-            }
-            const stored = store.getReport(analysisId);
-            progress.report({
-              message: `Analyzed ${stored.coverage.analyzed} project(s) · ${stored.relations.length} relation(s)`
-            });
-            output.appendLine(
-              `Analysis ${analysisId} completed: ${stored.completeness}, ` +
-                `${stored.relations.length} relation(s), ${stored.namespaces.length} namespace(s).`
-            );
+          lastTarget = target;
+          lastMode = mode;
+          lastProfile = profile;
+          void context.workspaceState.update('sharpdeps.lastTarget', target.fsPath);
+          const stored = store.getReport(analysisId);
+          if (
+            versionAtStart !== inputVersion ||
+            vscode.workspace.textDocuments.some(
+              (doc) => doc.isDirty && affectsInput(doc.uri.fsPath, analysisId)
+            )
+          )
+            store.markStale(analysisId);
+          panel.notifyAnalysis(analysisId);
+          watchResult(analysisId);
+          if (mode === 'semantic')
+            await diagnostics.updateFromStore(store, analysisId, rootDirectory(analysisId));
+          else {
+            const report = JSON.parse(
+              await fs.promises.readFile(
+                path.join(path.dirname(outcome.reportPath), 'report.json'),
+                'utf8'
+              )
+            ) as CodeMapReport;
+            if (ticket === requestGeneration) diagnostics.update(report, analysisId, 'quick');
           }
-        } catch (err) {
-          reportError(err, output);
+          progress.report({ message: `Analyzed ${stored.coverage.analyzed} project(s)` });
+          output.appendLine(
+            `Analysis ${analysisId}: ${stored.completeness}, ${stored.relations.length} relation(s).`
+          );
+        } catch (error) {
+          if (ticket === requestGeneration) {
+            panel.notifyFailure(analysisId, error instanceof Error ? error.message : String(error));
+            reportError(error, output);
+          }
+        } finally {
+          cancellation.dispose();
+          targets.delete(analysisId);
+          if (activeAnalysisId === analysisId) activeAnalysisId = undefined;
         }
       }
     );
@@ -358,7 +447,9 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     vscode.commands.registerCommand('sharpdeps.showDependencyMap', (uri?: vscode.Uri) =>
       runAndShow(uri)
     ),
-    vscode.commands.registerCommand('sharpdeps.refresh', () => runAndShow(lastTarget)),
+    vscode.commands.registerCommand('sharpdeps.refresh', () =>
+      runAndShow(lastTarget, lastMode, lastProfile)
+    ),
     vscode.commands.registerCommand('sharpdeps.showTypeDependencies', () =>
       showTypeFromEditor('dependencies')
     ),
@@ -369,19 +460,11 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
       'sharpdeps.copyMermaid',
       () => void CodeMapPanel.currentPanel?.copyMermaid()
     ),
-    vscode.commands.registerCommand(
-      'sharpdeps.exportSvg',
-      () =>
-        void vscode.window.showInformationMessage(
-          'SharpDeps: use Export ▾ in the map panel to save the current selection as SVG.'
-        )
+    vscode.commands.registerCommand('sharpdeps.exportSvg', () =>
+      CodeMapPanel.currentPanel?.requestExport('svg')
     ),
-    vscode.commands.registerCommand(
-      'sharpdeps.exportPng',
-      () =>
-        void vscode.window.showInformationMessage(
-          'SharpDeps: PNG export from the map arrives with SD-022.'
-        )
+    vscode.commands.registerCommand('sharpdeps.exportPng', () =>
+      CodeMapPanel.currentPanel?.requestExport('png')
     )
   );
 
@@ -405,6 +488,8 @@ export function extensionTestApi(
   return {
     getAnalysisIds: () => store.analysisIds,
     getCurrentAnalysisId: () => store.currentAnalysisId,
+    getCurrentReport: () =>
+      store.currentAnalysisId ? store.getReport(store.currentAnalysisId) : undefined,
     getViewState: () => context.workspaceState.get<Record<string, unknown>>('sharpdeps.viewState'),
     /** Last lines of the SharpDeps output channel, for end-to-end failure reports. */
     getOutputTail: () => [...outputTail]

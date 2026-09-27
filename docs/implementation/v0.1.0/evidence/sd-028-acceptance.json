@@ -1,0 +1,329 @@
+{
+  "checkedAt": "2026-09-27T08:15:59.372Z",
+  "hostSha256": "4945a186b04de776614e4c699845d8b3dabb77adf346976e336b0d9e49122553",
+  "environment": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra 7 258V",
+    "logicalProcessors": 8,
+    "memoryBytes": 33957662720,
+    "sdk": "10.0.300",
+    "power": "電源設定の GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (高パフォーマンス)"
+  },
+  "fixture": {
+    "projects": 30,
+    "csharpFiles": 3000,
+    "writtenReferencesPerFile": 34,
+    "extraRepeatedReferences": 100,
+    "expectedTypesAtLeast": 3000,
+    "structure": "Project chain; 24 cross-project fields, 3 local signature methods, generic List and constructor per file. Intra-project SCCs and external types included."
+  },
+  "methodology": "Three new analyzer processes, first-load then file-cache-warm runs. No compilation cache. Restore excluded. Monotonic wall clock includes sampling overhead; memory samples include discovered owned children. Cold OS caches are not asserted.",
+  "runs": [
+    {
+      "attempt": 0,
+      "wallMs": 19116.7051,
+      "remainingOwnedPids": [],
+      "samples": [
+        {
+          "elapsedMs": 349.0593,
+          "workingSetBytes": 66248704
+        },
+        {
+          "elapsedMs": 1116.9229,
+          "workingSetBytes": 165302272
+        },
+        {
+          "elapsedMs": 2111.7556,
+          "workingSetBytes": 214183936
+        },
+        {
+          "elapsedMs": 3371.6344,
+          "workingSetBytes": 251482112
+        },
+        {
+          "elapsedMs": 4623.4518,
+          "workingSetBytes": 123072512
+        },
+        {
+          "elapsedMs": 5931.0495,
+          "workingSetBytes": 175525888
+        },
+        {
+          "elapsedMs": 7398.8087,
+          "workingSetBytes": 187572224
+        },
+        {
+          "elapsedMs": 8820.8364,
+          "workingSetBytes": 223195136
+        },
+        {
+          "elapsedMs": 10168.5514,
+          "workingSetBytes": 291930112
+        },
+        {
+          "elapsedMs": 11484.5505,
+          "workingSetBytes": 327503872
+        },
+        {
+          "elapsedMs": 12727.6641,
+          "workingSetBytes": 363655168
+        },
+        {
+          "elapsedMs": 13956.6589,
+          "workingSetBytes": 390557696
+        },
+        {
+          "elapsedMs": 15175.4534,
+          "workingSetBytes": 390623232
+        },
+        {
+          "elapsedMs": 16417.1674,
+          "workingSetBytes": 436166656
+        },
+        {
+          "elapsedMs": 17674.4901,
+          "workingSetBytes": 661319680
+        },
+        {
+          "elapsedMs": 18909.853,
+          "workingSetBytes": 0
+        }
+      ],
+      "ownedPids": [34016, 35764, 9364, 46728],
+      "sampleIntervalMs": 200,
+      "mainPeakBytes": null,
+      "sampledTreePeakBytes": 661319680,
+      "exitCode": 0,
+      "correctness": {
+        "projects": 30,
+        "types": 3000,
+        "relations": 93135,
+        "evidence": 102535,
+        "completeness": "completeWithinScope"
+      },
+      "raw": ".local\\perf-v010\\run-0\\report.json.measurement.json",
+      "timeBudgetPass": true,
+      "memoryBudgetPass": true
+    },
+    {
+      "attempt": 1,
+      "samples": [
+        {
+          "workingSetBytes": 68485120,
+          "elapsedMs": 317.561
+        },
+        {
+          "workingSetBytes": 166248448,
+          "elapsedMs": 1064.2303
+        },
+        {
+          "workingSetBytes": 214269952,
+          "elapsedMs": 2079.6022
+        },
+        {
+          "workingSetBytes": 247836672,
+          "elapsedMs": 3340.9707
+        },
+        {
+          "workingSetBytes": 108412928,
+          "elapsedMs": 4600.7201
+        },
+        {
+          "workingSetBytes": 174923776,
+          "elapsedMs": 5851.6455
+        },
+        {
+          "workingSetBytes": 253837312,
+          "elapsedMs": 7159.4071
+        },
+        {
+          "workingSetBytes": 316579840,
+          "elapsedMs": 8410.0536
+        },
+        {
+          "workingSetBytes": 330723328,
+          "elapsedMs": 9651.9641
+        },
+        {
+          "workingSetBytes": 386506752,
+          "elapsedMs": 10907.7886
+        },
+        {
+          "workingSetBytes": 386707456,
+          "elapsedMs": 12185.3896
+        },
+        {
+          "workingSetBytes": 427937792,
+          "elapsedMs": 13416.9692
+        },
+        {
+          "workingSetBytes": 536743936,
+          "elapsedMs": 14679.5749
+        },
+        {
+          "workingSetBytes": 1039298560,
+          "elapsedMs": 15971.6928
+        }
+      ],
+      "exitCode": 0,
+      "wallMs": 16182.0457,
+      "remainingOwnedPids": [],
+      "sampledTreePeakBytes": 1039298560,
+      "ownedPids": [2148, 20340, 40932, 46336],
+      "mainPeakBytes": null,
+      "sampleIntervalMs": 200,
+      "correctness": {
+        "projects": 30,
+        "types": 3000,
+        "relations": 93135,
+        "evidence": 102535,
+        "completeness": "completeWithinScope"
+      },
+      "raw": ".local\\perf-v010\\run-1\\report.json.measurement.json",
+      "timeBudgetPass": true,
+      "memoryBudgetPass": true
+    },
+    {
+      "attempt": 2,
+      "mainPeakBytes": null,
+      "remainingOwnedPids": [],
+      "wallMs": 16165.9312,
+      "exitCode": 0,
+      "samples": [
+        {
+          "elapsedMs": 317.8268,
+          "workingSetBytes": 68243456
+        },
+        {
+          "elapsedMs": 1061.4686,
+          "workingSetBytes": 168251392
+        },
+        {
+          "elapsedMs": 2082.2008,
+          "workingSetBytes": 214810624
+        },
+        {
+          "elapsedMs": 3352.2663,
+          "workingSetBytes": 252116992
+        },
+        {
+          "elapsedMs": 4625.5886,
+          "workingSetBytes": 120934400
+        },
+        {
+          "elapsedMs": 5898.9149,
+          "workingSetBytes": 192327680
+        },
+        {
+          "elapsedMs": 7204.1012,
+          "workingSetBytes": 266706944
+        },
+        {
+          "elapsedMs": 8453.8234,
+          "workingSetBytes": 318210048
+        },
+        {
+          "elapsedMs": 9687.7035,
+          "workingSetBytes": 337121280
+        },
+        {
+          "elapsedMs": 10943.7905,
+          "workingSetBytes": 388313088
+        },
+        {
+          "elapsedMs": 12222.1678,
+          "workingSetBytes": 389857280
+        },
+        {
+          "elapsedMs": 13471.5001,
+          "workingSetBytes": 425746432
+        },
+        {
+          "elapsedMs": 14727.7871,
+          "workingSetBytes": 557277184
+        },
+        {
+          "elapsedMs": 15955.8758,
+          "workingSetBytes": 0
+        }
+      ],
+      "sampleIntervalMs": 200,
+      "ownedPids": [25192, 43128, 27280, 38484],
+      "sampledTreePeakBytes": 557277184,
+      "correctness": {
+        "projects": 30,
+        "types": 3000,
+        "relations": 93135,
+        "evidence": 102535,
+        "completeness": "completeWithinScope"
+      },
+      "raw": ".local\\perf-v010\\run-2\\report.json.measurement.json",
+      "timeBudgetPass": true,
+      "memoryBudgetPass": true
+    }
+  ],
+  "store": {
+    "search": {
+      "samplesMs": [
+        0.31489999999757856, 0.11759999999776483, 0.11260000000038417, 0.1559999999954016,
+        0.32630000000062864, 0.13220000000001164, 0.11549999999988358, 0.11639999999897555,
+        0.15069999999832362, 0.1025999999983469, 0.10680000000138534, 0.09179999999469146,
+        0.0849000000016531, 0.0849000000016531, 0.09640000000217697, 0.09109999999782303,
+        0.12880000000586733, 0.11160000000381842, 0.10869999999704305, 0.09829999999783468,
+        0.10859999999956926, 0.09730000000126893, 0.09900000000197906, 0.09369999999762513,
+        0.09509999999863794
+      ],
+      "p95Ms": 0.31489999999757856,
+      "budgetMs": 250,
+      "hostRssBytes": 482816000
+    },
+    "details": {
+      "samplesMs": [
+        0.024699999994481914, 0.016999999999825377, 0.016199999998207204, 0.018000000003667083,
+        0.015300000006391201, 0.013699999995878898, 0.01329999999870779, 0.2121999999944819,
+        0.07450000000244472, 0.013200000001234002, 0.009799999999813735, 0.010199999996984843,
+        0.026100000002770685, 0.021000000000640284, 0.014699999999720603, 0.014900000001944136,
+        0.020300000003771856, 0.01479999999719439, 0.008000000001629815, 0.0072000000000116415,
+        0.006900000000314321, 0.007100000002537854, 0.006699999998090789, 0.01239999999961583,
+        0.007100000002537854
+      ],
+      "p95Ms": 0.07450000000244472,
+      "budgetMs": 100,
+      "hostRssBytes": 482828288
+    },
+    "projection": {
+      "samplesMs": [
+        176.35680000000139, 160.70100000000093, 171.8460999999952, 167.64890000000014,
+        164.06430000000546, 170.4215999999942, 161.9077000000034, 176.40260000000126,
+        171.70739999999932, 166.4849000000031, 158.24219999999332, 215.41380000000208,
+        167.5734999999986, 156.31270000000222, 152.3969999999972, 157.68039999999746,
+        148.4024999999965, 156.0573000000004, 147.5077999999994, 168.20730000000185,
+        166.11899999999878, 209.75690000000031, 164.52820000000065, 153.76870000000054,
+        148.23129999999946
+      ],
+      "p95Ms": 209.75690000000031,
+      "budgetMs": 2000,
+      "hostRssBytes": 981053440
+    },
+    "evidencePage": {
+      "samplesMs": [
+        0.7398000000030152, 0.5272000000040862, 0.4850000000005821, 0.7919000000038068,
+        0.6244000000006054, 0.5729999999966822, 0.4548999999969965, 0.4775000000008731,
+        0.44100000000617, 0.4607999999934691, 0.49689999999827705, 0.45019999999931315,
+        0.47699999999895226, 0.38549999999668216, 0.38990000000194414, 0.3949999999967986,
+        0.3996999999944819, 0.4665000000022701, 0.5201000000015483, 0.40029999999387655,
+        0.3864999999932479, 0.39240000000427244, 0.3908999999985099, 0.38419999999314314,
+        0.3823000000047614
+      ],
+      "p95Ms": 0.7398000000030152,
+      "budgetMs": 300,
+      "hostRssBytes": 982941696
+    }
+  },
+  "assemblySha256": {
+    "SharpDeps.Analysis.Roslyn.dll": "9a8dd8bfd1827beccb6bd48dc2f474a6f9a41ffea189439c74d12db22900d701",
+    "SharpDeps.Analysis.Contracts.dll": "8619c3d5d70eb96c381ddb0736b014d48e2dd48164ce0db67ebcbb2aad1b04d8",
+    "SharpDeps.Analysis.Core.dll": "3fb9fe29428e62ef74113b4d36ac3cba5457786e5535f2e82e5b9a1517381fa4"
+  }
+}

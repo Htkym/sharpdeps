@@ -67,13 +67,6 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
   head.append(headRow);
   table.append(head);
 
-  const outgoing = new Map<string, number>();
-  const incoming = new Map<string, number>();
-  for (const row of options.rows) {
-    outgoing.set(row.entity.id, 0);
-    incoming.set(row.entity.id, 0);
-  }
-
   const body = document.createElement('tbody');
   for (const row of options.rows) {
     const entity = row.entity;
@@ -95,8 +88,8 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
       entity.name,
       entity.kind ?? '—',
       entity.projectName ?? '—',
-      String(outgoing.get(entity.id) ?? 0),
-      String(incoming.get(entity.id) ?? 0),
+      String(entity.dependencyCount ?? 0),
+      String(entity.dependentCount ?? 0),
       entity.inCycle ? 'yes' : 'no'
     ];
 

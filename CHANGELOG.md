@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-27
+## [0.1.0] - Unreleased
 
 ### Added
 
@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `SharpDeps: Show Type Dependencies (cursor)` and `Show Type Dependents (cursor)`, resolved through declaration positions rather than names.
 - Cycles tab that separates the member set from the verified cycle path, with each path edge linked to its evidence.
 - Exports of the current selection as Mermaid, JSON, SVG, and PNG, plus an evidence-backed context copy for coding agents with an explicit "do not assert" section.
+- Evaluated project references are retained separately from resolved code usage. Physical and `#line` locations remain distinct and can be selected when opening evidence.
+- Lazy project/namespace/type navigation covers the full result, including nodes outside the display budget. Graph controls include zoom, spacing, Fit, cancellation, retry, and export annotations.
+- Medium-sized results no longer exceed the default report limit. Projection counts use linear adjacency indexing, and large cyclic graphs avoid the ELK network-simplex stack overflow.
+- Quick accepts Windows-style solution and project-reference separators on Linux.
 - View state persistence (target, selection, filters, scope, panes, table page, camera) with a versioned serializer and clamped values.
 - Explicit states for stale results: unsaved edits, saves, and configuration changes mark the registered result as stale.
 - Security boundaries: nonce-based CSP with locked objects/frames/base/forms, a trust guard before analysis, bounded search queries, path containment for opening files, and single-line sanitising for names in exports.
@@ -27,9 +31,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - The panel renders the new UI; the previous Mermaid viewer remains in the extension only for the cycle diagnostics.
-- Run directories are kept for the two newest analyses so evidence paging and exports keep working, instead of being deleted after each run.
+- Run directories retain the two latest successful results, recent attempts, and running analyses, so repeated failures do not remove evidence from the displayed result.
 
 ### Fixed
+
+- Connected the Semantic host, configuration/platform and per-project TFM selection, cancellation, progress, persistent state, and current-view exports throughout the installed extension.
+- Fixed same-name project and file-local type identity, platform-specific TFMs, initializer and generic type evidence, namespace/project cycles, and cycle witnesses.
+- Preserved the last successful result across failed or superseded analyses, guarded asynchronous registration and responses, and applied display budgets independently of discovery.
+- Added required browser and installed-VSIX checks to CI and inspect the generated ZIP rather than the proposed file list.
 
 - Multi-targeted projects now publish one project entry per target framework, so the second TFM's types no longer reference a project that does not exist.
 - Concurrent graph layouts no longer create (and leak) a second layout worker.

@@ -92,7 +92,10 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
     expect(domainVariants.length).toBe(2);
     expect(new Set(domainVariants.map((variant) => variant.targetFramework)).size).toBe(2);
     // Quick and Semantic are intentionally different: this report is resolved only.
-    expect(summary.basis).toEqual({ symbolResolved: summary.totals.relations });
+    expect(summary.basis).toEqual({
+      symbolResolved: summary.totals.relations - 3,
+      projectEvaluated: 3
+    });
     expect(summary.confidence).toEqual({ resolved: summary.totals.relations });
   }, 120000);
 
@@ -110,9 +113,11 @@ describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
       expect(snapshot.capabilities.cycleWitness).toBe(true);
       expect(snapshot.types.length).toBeGreaterThan(0);
       expect(snapshot.relations.length).toBeGreaterThan(0);
-      expect(snapshot.relations.every((relation) => relation.basis === 'symbolResolved')).toBe(
-        true
-      );
+      expect(
+        snapshot.relations.every(
+          (relation) => relation.basis === 'symbolResolved' || relation.basis === 'projectEvaluated'
+        )
+      ).toBe(true);
       expect(snapshot.relations.every((relation) => relation.confidence === 'resolved')).toBe(true);
 
       expect(evidence.length).toBeGreaterThan(0);

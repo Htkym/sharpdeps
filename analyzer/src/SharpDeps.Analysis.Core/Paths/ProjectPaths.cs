@@ -3,6 +3,8 @@
 /// <summary>Path keys and project-file checks shared by the Quick analyzer.</summary>
 public static class ProjectPaths
 {
+    public static string NativeSeparators(string path)
+        => path.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
     public static readonly HashSet<string> SupportedProjectExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".csproj",

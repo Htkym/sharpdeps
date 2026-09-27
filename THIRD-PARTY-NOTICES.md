@@ -10,9 +10,7 @@ short on purpose: everything else is a development dependency and is not package
 - How it ships: bundled into `media/workers/elkLayout.worker.js`, which the webview runs
   in a worker to lay out the graph.
 - Source: https://github.com/kieler/elkjs
-- The EPL-2.0 requires that the licence text is available; the package's own `LICENSE.md`
-  travels with the npm package, and the bundled worker keeps its copyright header where
-  the bundler preserves it.
+- Full licence text: [resources/ELK-LICENSE.md](resources/ELK-LICENSE.md).
 
 ## mermaid (diagram rendering for the v1 viewer)
 
@@ -23,7 +21,12 @@ short on purpose: everything else is a development dependency and is not package
 
 ## .NET runtime and Roslyn
 
-The analyzer assemblies in `analyzer/bin/` are SharpDeps' own code. They are executed by
-the .NET runtime and use Microsoft Roslyn/MSBuild assemblies that the .NET SDK provides;
-no runtime or Roslyn binary is redistributed in the VSIX. The Semantic analyzer therefore
-requires an installed .NET SDK, while Quick analysis does not.
+The VSIX includes Roslyn compiler and workspace libraries, MSBuildLocator, the Roslyn
+MSBuild build host, Microsoft.Extensions and System.Composition libraries,
+Microsoft.VisualStudio.SolutionPersistence, and Humanizer alongside the SharpDeps
+assemblies. These are dependencies of the published analyzer hosts. The .NET runtime
+and the SDK's MSBuild implementation are not bundled; Semantic locates the installed SDK.
+
+These components use the MIT licence. Their upstream package metadata and source links
+are available in the analyzer's NuGet assets and dependency manifests. Quick and Semantic
+run in separate processes and use their respective published Roslyn versions.

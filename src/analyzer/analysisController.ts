@@ -27,6 +27,8 @@ export interface AnalysisRequest {
   mode: 'quick' | 'semantic';
   configuration?: string;
   platform?: string;
+  projectVariants?: { projectLogicalId: string; targetFramework: string }[];
+  executable?: { dotnetPath: string; analyzerPath: string };
   maxProjects?: number;
   maxEdges?: number;
   timeoutMs?: number;
@@ -82,7 +84,7 @@ export interface AnalysisControllerOptions {
   onProgress?: (event: AnalysisProgressEvent) => void;
   onLog?: (line: string, source: 'stdout' | 'stderr') => void;
   /** Called only for the current generation, before the work directory is removed. */
-  onCompleted?: (outcome: AnalysisOutcome) => Promise<void> | void;
+  onCompleted?: (outcome: AnalysisOutcome, isCurrent: () => boolean) => Promise<void> | void;
   now?: () => number;
   spawnImpl?: typeof spawn;
   killTreeImpl?: (pid: number) => Promise<void>;
@@ -113,6 +115,8 @@ export class AnalysisController {
   private currentGeneration = 0;
   private activeRun: ActiveRun | undefined;
   private disposed = false;
+  private readonly successfulDirectories: string[] = [];
+  private readonly runningDirectories = new Set<string>();
 
   constructor(options: AnalysisControllerOptions) {
     this.options = options;
@@ -166,12 +170,18 @@ export class AnalysisController {
       });
     const workRoot = this.options.workRoot ?? os.tmpdir();
     const workDirectory = await fs.promises.mkdtemp(path.join(workRoot, 'sharpdeps-run-'));
-    const spec = this.options.processFactory(request, workDirectory);
+    if (this.disposed || this.currentGeneration !== generation) {
+      await removeDirectory(workDirectory);
+      return { requestId, analysisId, status: 'cancelled', durationMs: 0, workDirectory };
+    }
+    this.runningDirectories.add(workDirectory);
+    const spec = this.options.processFactory({ ...request, analysisId }, workDirectory);
     const startedAt = this.now();
 
     const child = (this.options.spawnImpl ?? spawn)(spec.command, spec.args, {
       cwd: spec.cwd ?? workDirectory,
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
       // POSIX: make the child a group leader so its whole tree can be signalled.
       detached: process.platform !== 'win32'
     });
@@ -195,7 +205,9 @@ export class AnalysisController {
 
     const timeoutMs = request.timeoutMs ?? this.options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (timeoutMs > 0) {
-      run.timeoutTimer = setTimeout(() => this.cancel('timeout'), timeoutMs);
+      run.timeoutTimer = setTimeout(() => {
+        if (this.activeRun === run) this.cancel('timeout');
+      }, timeoutMs);
       run.timeoutTimer.unref?.();
     }
 
@@ -206,16 +218,31 @@ export class AnalysisController {
       clearTimeout(run.timeoutTimer);
     }
 
-    const outcome = this.buildOutcome(run, exit, workDirectory, request);
-    const isCurrent = this.currentGeneration === run.generation;
-    if (this.activeRun === run) {
-      this.activeRun = undefined;
+    const outcome = this.buildOutcome(run, exit, workDirectory);
+    const isCurrent = () =>
+      !this.disposed && !run.cancelReason && this.currentGeneration === run.generation;
+    if (outcome.status === 'completed' && isCurrent()) {
+      try {
+        await this.options.onCompleted?.(outcome, isCurrent);
+        if (isCurrent()) {
+          this.successfulDirectories.push(workDirectory);
+          this.successfulDirectories.splice(
+            0,
+            Math.max(0, this.successfulDirectories.length - (this.options.keepRunDirectories ?? 2))
+          );
+        }
+      } catch (error) {
+        outcome.status = 'failed';
+        outcome.error = error instanceof Error ? error.message : String(error);
+        outcome.reportPath = undefined;
+      }
     }
-
-    if (outcome.status === 'completed' && isCurrent && this.options.onCompleted) {
-      await this.options.onCompleted(outcome);
+    if (!isCurrent()) {
+      outcome.status = run.cancelReason === 'timeout' ? 'timeout' : 'cancelled';
+      outcome.reportPath = undefined;
     }
-
+    if (this.activeRun === run) this.activeRun = undefined;
+    this.runningDirectories.delete(workDirectory);
     await this.pruneRunDirectories();
     return outcome;
   }
@@ -242,7 +269,12 @@ export class AnalysisController {
       );
       withTimes.sort((left, right) => right.mtime - left.mtime);
       for (const entry of withTimes.slice(keep)) {
-        await removeDirectory(entry.full);
+        if (
+          !this.successfulDirectories.includes(entry.full) &&
+          !this.runningDirectories.has(entry.full)
+        ) {
+          await removeDirectory(entry.full);
+        }
       }
     } catch {
       // Pruning is best effort: a missing work root is not an analysis failure.
@@ -384,14 +416,10 @@ export class AnalysisController {
   private buildOutcome(
     run: ActiveRun,
     exit: { code: number | null; signal: NodeJS.Signals | null },
-    workDirectory: string,
-    request: AnalysisRequest
+    workDirectory: string
   ): AnalysisOutcome {
     const durationMs = this.now() - run.startedAt;
-    const reportPath = path.join(
-      workDirectory,
-      request.mode === 'quick' ? 'report-v2.json' : 'report.json'
-    );
+    const reportPath = path.join(workDirectory, 'report-v2.json');
     const base: AnalysisOutcome = {
       requestId: run.requestId,
       analysisId: run.analysisId,

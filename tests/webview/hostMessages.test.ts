@@ -12,6 +12,38 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('retains per-project completeness and limits through the host message boundary', () => {
+    const actions = toViewActions(
+      {
+        type: 'searchResults',
+        analysisId,
+        requestId: 'req_0000000000000001',
+        total: 1,
+        items: [
+          {
+            id: 'prj_1111111111111111',
+            name: 'Broken',
+            granularity: 'project',
+            analysisStatus: 'partial',
+            analysisLimitations: ['Compiler error', 42]
+          }
+        ]
+      },
+      queries
+    );
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          items: expect.arrayContaining([
+            expect.objectContaining({
+              analysisStatus: 'partial',
+              analysisLimitations: ['Compiler error']
+            })
+          ])
+        })
+      ])
+    );
+  });
   it('maps analysis progress and completion', () => {
     expect(
       toViewActions(

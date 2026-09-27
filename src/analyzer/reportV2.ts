@@ -122,6 +122,7 @@ export interface AnalysisType {
   declarationCount: number;
   memberCount?: number;
   isExternal?: boolean;
+  isGenerated?: boolean;
 }
 
 export interface AnalysisRelation {

@@ -39,7 +39,7 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
 | `.slnx` のロード | 成功（同一構成、5プロジェクト・4参照） | 統合テスト `LoadsSlnxAndSingleProjectTargets` |
 | 単一 `.csproj` のロード | 成功（参照先もソースとしてロード） | 同上 |
 | multi-TFM（`netstandard2.0;net10.0`） | 2バリアントとして別々にロード | 統合テスト |
-| TFMの識別 | MSBuildが渡すプリプロセッサシンボルから導出（`NET10_0` 等）。名前の `(net10.0)` 接尾辞は照合用 | `SemanticLoader.TryGetTargetFramework` |
+| TFMの識別 | 評価済み出力パスとプロジェクト名のTFMを優先し、プリプロセッサシンボルを代替に使う。`net10.0-windows` の接尾辞も保持する | `SemanticLoader.TryGetTargetFramework` |
 | 異なるTFMのProjectReference | `net8.0 → netstandard2.0` を `compatible` として解決、`net10.0 → net10.0` は `exact` | 統合テスト `ResolvesReferenceToTheCompatibleVariant` |
 | 条件付き `ProjectReference` | `Debug` では辺なし、`Release` では辺あり | 統合テスト `EvaluatesConditionalProjectReferencesPerConfiguration` |
 | `Compile Include`（linked file） | 評価済み入力に含まれる（`shared/Shared.cs`） | 統合テスト `UsesTheEvaluatedCompileItems` |
@@ -60,19 +60,19 @@ Roslyn 4.14.0（Quickのfile-based app）と 5.9.0（Semantic）は系列が異�
 
 | 項目 | 状態 |
 |---|---|
-| SDKが無い環境でのSemantic初期化失敗 | **未検証**。`DOTNET_ROOT` を空に向けても SDK 探索は成功したため、この方法では再現できなかった。ランタイムのみの環境（SD-029のVSIX検証や別VM）で確認する |
+| SDKが無い環境でのSemantic初期化失敗 | Windows の runtime-only dotnet を明示した実 VS Code で、Quick→Semantic の SDK 不足案内→Quick 再実行を確認。`sd-030-runtime.json` |
 | Quickの初期化失敗がSemanticへ波及しないこと | プロセス分離の設計で担保するが、実機の失敗注入は未実施（SD-014） |
 | 旧式.NET Framework（`packages.config`・非SDKスタイル） | **未検証**。対応表へ追加しない |
 | VB / F# / C++ の意味解析 | 対象外。Quickの既存表示のみ |
-| Linux / macOS | 未実施 |
+| Linux / macOS | Linux の runtime-only コンテナでは Quick の 6 projects / 7 namespaces / 15 relations が Windows と一致。macOS は未実施。詳細は SD-030 の completion.md |
 | マルチTFMで `TargetFrameworks` に同一TFMが重複する場合 | 未実施 |
 | NuGet自動restore | 実装しない（初期値OFF）。assets不足は診断のみ |
 
 ## 実測で判明した制約
 
 1. **Roslynの `Project` にTFMプロパティが無い。** `Project.TargetFramework` は5.9.0に存在しない。
-   TFMはMSBuildが渡すプリプロセッサシンボル（`NET10_0` / `NETSTANDARD2_0`）から導出し、
-   出力パスのTFMセグメントを代替とする。どちらも得られない場合は「未解決」として記録し、
+   TFMは評価済み出力パスとプロジェクト名から取得し、
+   プリプロセッサシンボルを代替とする。どちらも得られない場合は「未解決」として記録し、
    名前だけで結合しない。
 2. **推移的な `ProjectReference` はワークスペースに現れない。** `Infrastructure.Tests → Infrastructure → Domain`
    の構成で、`Infrastructure.Tests` の `ProjectReferences` に `Domain` は含まれない

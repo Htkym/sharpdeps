@@ -1,0 +1,166 @@
+{
+  "checkedAt": "2026-09-27T07:44:38.130Z",
+  "methodology": "Two completed Quick runs, then 20 real Semantic launches stopped after one second. Descendant PID snapshot before Stop; process query after termination includes its overhead. Dedicated run directory.",
+  "runs": [
+    {
+      "attempt": 0,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 613.0999000000002,
+      "ownedPids": [45328, 29908, 34704, 3320],
+      "remainingOwnedPids": [],
+      "directories": 3
+    },
+    {
+      "attempt": 1,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 719.1641999999993,
+      "ownedPids": [8652, 6576, 33752, 46924],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 2,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 586.7498000000005,
+      "ownedPids": [24460, 33028, 31964, 29228],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 3,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 701.4295000000002,
+      "ownedPids": [26208, 37564, 1868, 8568],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 4,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 925.3047000000006,
+      "ownedPids": [25108, 36840, 16148, 20376],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 5,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 1051.6427999999978,
+      "ownedPids": [43204, 14608, 32884, 27280],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 6,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 628.3778999999995,
+      "ownedPids": [45612, 32448, 46276, 21912],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 7,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 660.8511999999973,
+      "ownedPids": [20772, 45380, 31928, 42272],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 8,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 609.4317999999985,
+      "ownedPids": [25100, 44324, 32024, 26672],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 9,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 596.046699999999,
+      "ownedPids": [31688, 22556, 24908, 11600],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 10,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 600.5722999999998,
+      "ownedPids": [4240, 36732, 13848, 46520],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 11,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 597.1362999999983,
+      "ownedPids": [21108, 3408, 37304, 14432],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 12,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 594.4320000000007,
+      "ownedPids": [37412, 30992, 18056, 35660],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 13,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 623.8957000000009,
+      "ownedPids": [44292, 36756, 36784, 31032],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 14,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 657.254700000005,
+      "ownedPids": [32760, 24380, 28880, 31608],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 15,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 600.2500999999975,
+      "ownedPids": [31796, 28916, 33524, 11596],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 16,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 768.3549999999959,
+      "ownedPids": [41944, 12212, 6576, 35984],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 17,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 617.2878999999957,
+      "ownedPids": [43424, 5844, 26924, 1596],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 18,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 623.042300000001,
+      "ownedPids": [40492, 18164, 1160, 35888],
+      "remainingOwnedPids": [],
+      "directories": 4
+    },
+    {
+      "attempt": 19,
+      "status": "cancelled",
+      "stopThroughInspectionMs": 635.9395000000004,
+      "ownedPids": [776, 33660, 17696, 15912],
+      "remainingOwnedPids": [],
+      "directories": 4
+    }
+  ]
+}

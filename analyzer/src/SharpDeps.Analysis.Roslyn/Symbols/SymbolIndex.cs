@@ -49,7 +49,8 @@ public sealed record IndexedType(
     bool IsGeneric,
     int Arity,
     IReadOnlyList<SymbolDeclarationLocation> Declarations,
-    string? AssemblyIdentity);
+    string? AssemblyIdentity,
+    string SymbolKey);
 
 public sealed record IndexedMember(
     string Id,
@@ -116,6 +117,7 @@ public static class SymbolIndexBuilder
         var members = new List<IndexedMember>();
         var typeCountByNamespace = new Dictionary<string, int>(StringComparer.Ordinal);
         var representativeByNamespace = new Dictionary<string, string>(StringComparer.Ordinal);
+        var namespaceNames = new Dictionary<string, string>(StringComparer.Ordinal);
         var hasTopLevelStatements = false;
 
         foreach (var input in inputs)
@@ -165,12 +167,14 @@ public static class SymbolIndexBuilder
                     IsGeneric: typeSymbol.Arity > 0,
                     Arity: typeSymbol.Arity,
                     Declarations: declarations,
-                    AssemblyIdentity: typeSymbol.ContainingAssembly?.Identity.ToString());
+                    AssemblyIdentity: typeSymbol.ContainingAssembly?.Identity.ToString(),
+                    SymbolKey: TypeKeyOf(typeSymbol));
 
                 types.Add(type);
 
                 if (namespaceId is not null)
                 {
+                    namespaceNames[namespaceId] = namespaceName;
                     typeCountByNamespace[namespaceId] = typeCountByNamespace.GetValueOrDefault(namespaceId) + 1;
                     representativeByNamespace.TryAdd(namespaceId, declarations.FirstOrDefault()?.DocumentId ?? string.Empty);
                 }
@@ -216,7 +220,7 @@ public static class SymbolIndexBuilder
             // the model can actually contain.
             foreach (var namespaceName in types
                          .Where(type => type.ProjectVariantId == input.VariantId)
-                         .Select(FullNamespaceOf)
+                         .Select(type => type.NamespaceId is not null ? namespaceNames[type.NamespaceId] : string.Empty)
                          .Where(name => name.Length > 0)
                          .Distinct(StringComparer.Ordinal))
             {
@@ -255,12 +259,23 @@ public static class SymbolIndexBuilder
 
     /// <summary>Stable declaration key: documentation id first, structural key second.</summary>
     public static string TypeKeyOf(INamedTypeSymbol type)
-        => Identity.TypeKey(
+    {
+        var key = Identity.TypeKey(
             type.GetDocumentationCommentId(),
             NamespaceOf(type),
             ContainingTypeNames(type),
             type.Name,
             type.Arity);
+        for (var owner = type; owner is not null; owner = owner.ContainingType)
+        {
+            if (owner.IsFileLocal)
+            {
+                var file = owner.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath;
+                return key + "|file:" + Identity.NormalizeRelativePath(file ?? owner.MetadataName);
+            }
+        }
+        return key;
+    }
 
     private static IReadOnlyList<string> ContainingTypeNames(INamedTypeSymbol type)
     {
@@ -365,12 +380,6 @@ public static class SymbolIndexBuilder
     {
         var name = type.ContainingNamespace?.ToDisplayString() ?? string.Empty;
         return name == "<global namespace>" ? string.Empty : name;
-    }
-
-    private static string FullNamespaceOf(IndexedType type)
-    {
-        var separator = type.FullName.LastIndexOf('.');
-        return separator <= 0 ? string.Empty : type.FullName[..separator];
     }
 
     private static string FullNameOf(INamedTypeSymbol type)

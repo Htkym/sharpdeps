@@ -229,6 +229,91 @@ describe('AnalysisController', () => {
     expect(outcome.detail).toContain('boom');
   });
 
+  it('preserves the last successful result through repeated failures', async () => {
+    const { workRoot, scriptPath } = createEnvironment();
+    const controller = createController(scriptPath, workRoot);
+    const success = await controller.start({ targetPath: 'Good.sln', mode: 'quick' });
+    for (let index = 0; index < 3; index++) {
+      await controller.start({ targetPath: 'Bad.sln', mode: 'quick', behaviour: 'fail' } as never);
+    }
+    expect(fs.existsSync(success.reportPath!)).toBe(true);
+  });
+
+  it('guards an asynchronous publication and returns cancelled when superseded', async () => {
+    const { workRoot, scriptPath } = createEnvironment();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registering = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const published: string[] = [];
+    const controller = new AnalysisController({
+      workRoot,
+      processFactory: (_request, directory) => ({
+        command: process.execPath,
+        args: [scriptPath, '--output', path.join(directory, 'report.json')]
+      }),
+      onCompleted: async (outcome, isCurrent) => {
+        if (outcome.analysisId.endsWith('1')) {
+          entered();
+          await gate;
+        }
+        if (isCurrent()) published.push(outcome.analysisId);
+      }
+    });
+    controllers.push(controller);
+    const first = controller.start({
+      targetPath: 'Old.sln',
+      mode: 'quick',
+      analysisId: 'an_0000000000000001'
+    });
+    await registering;
+    const next = await controller.start({
+      targetPath: 'New.sln',
+      mode: 'quick',
+      analysisId: 'an_0000000000000002'
+    });
+    release();
+    expect((await first).status).toBe('cancelled');
+    expect(next.status).toBe('completed');
+    expect(published).toEqual(['an_0000000000000002']);
+  });
+
+  it('does not publish when the user cancels during asynchronous registration', async () => {
+    const { workRoot, scriptPath } = createEnvironment();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registering = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let published = false;
+    const controller = new AnalysisController({
+      workRoot,
+      processFactory: (_request, directory) => ({
+        command: process.execPath,
+        args: [scriptPath, '--output', path.join(directory, 'report.json')]
+      }),
+      onCompleted: async (_outcome, isCurrent) => {
+        entered();
+        await gate;
+        published = isCurrent();
+      }
+    });
+    controllers.push(controller);
+    const run = controller.start({ targetPath: 'Example.sln', mode: 'quick' });
+    await registering;
+    controller.cancel('user');
+    release();
+    expect((await run).status).toBe('cancelled');
+    expect(published).toBe(false);
+  });
+
   it('never lets a superseded run publish its result', async () => {
     const { workRoot, scriptPath } = createEnvironment();
     const outcomes: AnalysisOutcome[] = [];

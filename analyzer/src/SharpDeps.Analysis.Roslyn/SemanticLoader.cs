@@ -10,7 +10,10 @@ public sealed record SemanticLoadOptions(
     string TargetPath,
     string Configuration = "Debug",
     string? Platform = null,
-    int TimeoutSeconds = 180);
+    int TimeoutSeconds = 180,
+    IReadOnlyList<ProjectVariantSelection>? ProjectVariants = null);
+
+public sealed record ProjectVariantSelection(string ProjectLogicalId, string TargetFramework);
 
 /// <summary>
 /// Result of a semantic load: the probe report, the per-variant compilations the
@@ -120,6 +123,29 @@ public static class SemanticLoader
                 new Dictionary<string, Compilation>(),
                 new Dictionary<string, IReadOnlyDictionary<string, string>>(),
                 []);
+        }
+
+        if (options.ProjectVariants is { Count: > 0 })
+        {
+            var root = Path.GetDirectoryName(targetPath)!;
+            var rootId = Identity.WorkspaceRootId(root);
+            var requested = options.ProjectVariants.ToDictionary(item => item.ProjectLogicalId, item => item.TargetFramework);
+            string LogicalId(Project project) => Identity.ProjectLogicalId(rootId, Path.GetRelativePath(root, project.FilePath!));
+            var csharp = solution.Projects.Where(project => project.Language == LanguageNames.CSharp && project.FilePath is not null).ToArray();
+            foreach (var request in requested)
+            {
+                if (!csharp.Any(project => LogicalId(project) == request.Key && TryGetTargetFramework(project) == request.Value))
+                    throw new InvalidOperationException($"The requested project/TFM is not available: {request.Key} / {request.Value}.");
+            }
+            var selected = csharp.Where(project => !requested.TryGetValue(LogicalId(project), out var tfm)
+                || TryGetTargetFramework(project) == tfm).Select(project => project.Id).ToHashSet();
+            foreach (var project in csharp.Where(project => selected.Contains(project.Id)))
+            {
+                if (project.ProjectReferences.Any(reference => !selected.Contains(reference.ProjectId)
+                    && csharp.Any(candidate => candidate.Id == reference.ProjectId)))
+                    throw new InvalidOperationException($"The selected TFMs conflict with evaluated ProjectReferences in '{project.Name}'. Choose compatible TFMs or Automatic.");
+            }
+            foreach (var project in csharp.Where(project => !selected.Contains(project.Id))) solution = solution.RemoveProject(project.Id);
         }
 
         var addedReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -325,6 +351,9 @@ public static class SemanticLoader
         {
             if (loadedPaths.Contains(path))
             {
+                for (var i = 0; i < variants.Count; i++)
+                    if (string.Equals(Path.GetFullPath(variants[i].ProjectPath), path, StringComparison.OrdinalIgnoreCase))
+                        variants[i] = variants[i] with { LoadState = "failed", FailureReason = message };
                 continue;
             }
 
@@ -613,6 +642,7 @@ public static class SemanticLoader
 
         foreach (var diagnostic in diagnostics)
         {
+            if (diagnostic.Kind != "Failure") continue;
             foreach (Match match in pattern.Matches(diagnostic.Message))
             {
                 if (!failures.ContainsKey(match.Value))
@@ -725,6 +755,17 @@ public static class SemanticLoader
     /// </summary>
     private static string? TryGetTargetFramework(Project project)
     {
+        // Keep platform and platform-version suffixes; NET10_0 alone cannot
+        // distinguish net10.0 from net10.0-windows.
+        var outputFramework = TargetFrameworkFromPath(project.OutputFilePath);
+        if (outputFramework is not null)
+        {
+            return outputFramework;
+        }
+        if (TryReadNameSuffix(project.Name, out var namedFramework))
+        {
+            return namedFramework;
+        }
         var symbols = (project.ParseOptions as Microsoft.CodeAnalysis.CSharp.CSharpParseOptions)
             ?.PreprocessorSymbolNames;
         if (symbols is not null)
@@ -782,7 +823,7 @@ public static class SemanticLoader
         var value = projectName[(open + 1)..^1];
         if (!Regex.IsMatch(
                 value,
-                "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)$",
+                "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)(?:-[a-zA-Z0-9.]+)?$",
                 RegexOptions.CultureInvariant))
         {
             return false;
@@ -805,7 +846,7 @@ public static class SemanticLoader
             var segment = segments[index];
             if (Regex.IsMatch(
                     segment,
-                    "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)$",
+                    "^(net\\d+\\.\\d+|netstandard\\d+\\.\\d+|netcoreapp\\d+\\.\\d+)(?:-[a-zA-Z0-9.]+)?$",
                     RegexOptions.CultureInvariant))
             {
                 return segment;

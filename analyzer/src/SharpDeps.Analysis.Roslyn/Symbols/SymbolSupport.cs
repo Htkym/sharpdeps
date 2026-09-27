@@ -58,6 +58,23 @@ public sealed class SourceDocumentRegistry
         return document;
     }
 
+    /// <summary>Retains #line coordinates without replacing physical evidence positions.</summary>
+    public MappedLocation? MappedLocationFor(Microsoft.CodeAnalysis.SyntaxNode syntax)
+    {
+        var mapped = syntax.SyntaxTree.GetMappedLineSpan(syntax.Span);
+        var physical = syntax.SyntaxTree.GetLineSpan(syntax.Span);
+        if (!mapped.IsValid || (!mapped.HasMappedPath && mapped.StartLinePosition == physical.StartLinePosition)) return null;
+        var directory = Path.GetDirectoryName(Path.GetFullPath(syntax.SyntaxTree.FilePath)) ?? _rootDirectory;
+        string fullPath;
+        try { fullPath = Path.GetFullPath(mapped.Path, directory); }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+        return new MappedLocation(Identity.NormalizeRelativePath(Path.GetRelativePath(_rootDirectory, fullPath)),
+            mapped.StartLinePosition.Line, mapped.StartLinePosition.Character);
+    }
+
     /// <summary>
     /// Registers a source-generated document (SD-011). The relative path is virtual:
     /// the workspace's obj path never reaches the report, and the generated content is

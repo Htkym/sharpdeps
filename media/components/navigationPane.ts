@@ -15,6 +15,8 @@ export interface NavigationTreeNode {
   inCycle?: boolean;
   isExternal?: boolean;
   children: NavigationTreeNode[];
+  canExpand?: boolean;
+  moreCursor?: string;
 }
 
 export interface NavigationPaneOptions {
@@ -22,6 +24,7 @@ export interface NavigationPaneOptions {
   selectedId?: string;
   onSelect: (entityId: string) => void;
   onToggle: (entityId: string) => void;
+  onLoadMore?: (entityId: string, cursor: string) => void;
   expanded: ReadonlySet<string>;
 }
 
@@ -37,10 +40,10 @@ export function buildNavigationTree(entities: readonly EntitySummary[]): Navigat
       continue;
     }
 
-    const projectKey = entity.projectName ?? '(unknown project)';
+    const projectKey = entity.projectId ?? entity.projectName ?? '(unknown project)';
     const project = projects.get(projectKey) ?? {
-      id: `project:${projectKey}`,
-      label: projectKey,
+      id: entity.projectId ?? `project:${projectKey}`,
+      label: entity.projectName ?? projectKey,
       granularity: 'project' as const,
       children: []
     };
@@ -53,15 +56,16 @@ export function buildNavigationTree(entities: readonly EntitySummary[]): Navigat
       continue;
     }
 
-    const namespaceName = namespaceOf(entity.name);
-    const namespace = namespaces.get(namespaceName) ?? {
-      id: `namespace:${projectKey}:${namespaceName}`,
+    const namespaceName = entity.namespaceName ?? namespaceOf(entity.fullName ?? entity.name);
+    const namespaceKey = `${projectKey}|${entity.namespaceId ?? namespaceName}`;
+    const namespace = namespaces.get(namespaceKey) ?? {
+      id: entity.namespaceId ?? `namespace:${projectKey}:${namespaceName}`,
       label: namespaceName,
       granularity: 'namespace' as const,
       children: []
     };
-    if (!namespaces.has(namespaceName)) {
-      namespaces.set(namespaceName, namespace);
+    if (!namespaces.has(namespaceKey)) {
+      namespaces.set(namespaceKey, namespace);
       project.children.push(namespace);
     }
 
@@ -135,7 +139,7 @@ function renderLevel(
     const row = document.createElement('div');
     row.className = 'sd-tree-row';
 
-    const expandable = node.children.length > 0;
+    const expandable = node.canExpand || node.children.length > 0;
     if (expandable) {
       const toggle = document.createElement('button');
       toggle.type = 'button';
@@ -160,7 +164,10 @@ function renderLevel(
     label.textContent = node.label;
     label.dataset.entityId = node.id;
     label.classList.toggle('sd-node-selected', node.id === options.selectedId);
-    label.addEventListener('click', () => options.onSelect(node.id));
+    label.addEventListener('click', () => {
+      if (/^(prj|ns|ty)_[0-9a-f]{16}$/.test(node.id)) options.onSelect(node.id);
+      else if (expandable) options.onToggle(node.id);
+    });
     row.append(label);
 
     if (node.inCycle) {
@@ -182,6 +189,13 @@ function renderLevel(
     // Children are only built when the node is expanded.
     if (expandable && options.expanded.has(node.id)) {
       item.append(renderLevel(node.children, options, depth + 1));
+      if (node.moreCursor) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.textContent = 'Load more';
+        more.addEventListener('click', () => options.onLoadMore?.(node.id, node.moreCursor!));
+        item.append(more);
+      }
     }
 
     list.append(item);

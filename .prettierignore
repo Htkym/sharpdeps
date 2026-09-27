@@ -22,3 +22,4 @@ package-lock.json
 *.md
 .local
 .playwright-mcp
+.playwright-cli

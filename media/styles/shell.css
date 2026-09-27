@@ -607,3 +607,55 @@ body {
   outline: 2px solid var(--vscode-focusBorder, #4daafc);
   outline-offset: 1px;
 }
+
+/* Native disclosure controls keep profile and filters reachable at narrow widths. */
+.sd-topbar details,
+.sd-map-toolbar details {
+  position: relative;
+}
+.sd-shell summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-panel-border, #555);
+}
+.sd-shell details[open] {
+  padding: 4px;
+  border: 1px solid var(--vscode-panel-border, #555);
+}
+.sd-shell details label,
+.sd-nav-body > label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.sd-shell details input:not([type='checkbox']),
+.sd-shell details select {
+  max-width: min(240px, 75vw);
+}
+.sd-shell input,
+.sd-shell select {
+  color: var(--vscode-input-foreground, #eee);
+  background: var(--vscode-input-background, #333);
+  border: 1px solid var(--vscode-input-border, #777);
+}
+.sd-shell details[open] {
+  max-height: 35vh;
+  overflow: auto;
+}
+/* Author display rules must not override the native hidden attribute. */
+.sd-shell [hidden] {
+  display: none !important;
+}
+
+.sd-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.sd-legend span {
+  padding-left: 5px;
+}

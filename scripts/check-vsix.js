@@ -10,18 +10,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..');
-const vsce = path.join(
-  repoRoot,
-  'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'vsce.cmd' : 'vsce'
-);
+const vsce = require.resolve('@vscode/vsce/vsce');
 
 function runVsce(args) {
-  const result = spawnSync(vsce, args, {
+  const result = spawnSync(process.execPath, [vsce, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
-    shell: process.platform === 'win32'
+    windowsHide: true
   });
   if (result.status !== 0) {
     console.error(result.stdout);
@@ -41,9 +36,13 @@ const REQUIRED = [
   'analyzer/bin/quick/code-map.dll',
   'analyzer/bin/quick/code-map.runtimeconfig.json',
   'analyzer/bin/quick/SharpDeps.Analysis.Quick.dll',
+  'analyzer/bin/semantic/sharpdeps-semantic-host.dll',
+  'analyzer/bin/semantic/sharpdeps-semantic-host.runtimeconfig.json',
+  'analyzer/bin/semantic/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
+  'resources/ELK-LICENSE.md',
   'package.json',
-  'README.md',
-  'CHANGELOG.md',
+  'readme.md',
+  'changelog.md',
   'THIRD-PARTY-NOTICES.md'
 ];
 
@@ -56,42 +55,42 @@ const FORBIDDEN = [
   'node_modules/',
   'analyzer/src/',
   'analyzer/tests/',
-  // The extension does not run the semantic host in this version: it must not ship.
-  'analyzer/bin/semantic/',
   'media/viewer.js.map'
 ];
 
-function main() {
+async function main() {
   const packed = runVsce(['package', '--out', 'sharpdeps-check.vsix']);
   void packed;
   const vsixPath = path.join(repoRoot, 'sharpdeps-check.vsix');
-  const entries = runVsce(['ls'])
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(
-      (line) =>
-        line.endsWith('.js') ||
-        line.endsWith('.json') ||
-        line.endsWith('.md') ||
-        line.endsWith('.css') ||
-        line.endsWith('.dll') ||
-        line.endsWith('.png') ||
-        line.endsWith('.svg')
-    )
-    .map((line) => line.replace(/\\/g, '/'));
-
-  const haystack = `${entries.join('\n')}\n`;
-  const missing = REQUIRED.filter((entry) => !haystack.includes(entry));
-  const leaked = FORBIDDEN.filter(
-    (entry) => haystack.includes(`\n${entry}`) || haystack.startsWith(entry)
+  // Inspect the ZIP actually produced, including files with no recognised extension.
+  const entries = await new Promise((resolve, reject) => {
+    require('yauzl').open(vsixPath, { lazyEntries: true }, (error, zip) => {
+      if (error) return reject(error);
+      const names = [];
+      zip.on('error', reject);
+      zip.on('entry', (entry) => {
+        names.push(entry.fileName.replace(/^extension\//, ''));
+        zip.readEntry();
+      });
+      zip.on('end', () => resolve(names));
+      zip.readEntry();
+    });
+  });
+  const missing = REQUIRED.filter((entry) => !entries.includes(entry));
+  const leaked = FORBIDDEN.filter((entry) =>
+    entries.some((name) => (entry.endsWith('/') ? name.startsWith(entry) : name === entry))
   );
 
   const report = {
     checkedAt: new Date().toISOString(),
     vsix: path.basename(vsixPath),
     bytes: fs.statSync(vsixPath).size,
+    sha256: require('node:crypto')
+      .createHash('sha256')
+      .update(fs.readFileSync(vsixPath))
+      .digest('hex'),
     packagedEntries: entries.length,
-    required: REQUIRED.map((entry) => ({ entry, present: haystack.includes(entry) })),
+    required: REQUIRED.map((entry) => ({ entry, present: entries.includes(entry) })),
     forbidden: FORBIDDEN.map((entry) => ({ entry, present: leaked.includes(entry) })),
     ok: missing.length === 0 && leaked.length === 0
   };
@@ -118,4 +117,7 @@ function main() {
   }
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -89,3 +89,9 @@ DOM構造に依存する。v0.1.0では「依存を選択→根拠を確認→�
   SD-017/SD-024でラベル領域とバッジ領域を分離する。
 - 本番UIへの接続（投影の生成、Inspector連携、状態保存）はSD-015/SD-017で行う。
   それまで試作は `tests/webview/fixtures/graph-prototype.html` からのみ動く。
+
+## SD-030 の再検証
+
+300 ノード・1,000 辺の循環グラフで `NETWORK_SIMPLEX` の内部再帰がスタック上限に達したため、ノード配置を `BRANDES_KOEPF` に変更した。辺やノードは間引かない。同じ固定入力で 100/200 と 300/1,000 の実 worker、SVG 出力、選択応答を各 3 回／25 回測定した。生の値は `evidence/sd-028-browser.json` に保存している。
+
+新しい layout は古い worker を中断する。中断・失敗時は同じ結果の表を表示し、Graph controls から再試行できる。選択だけの変更では再 layout しない。

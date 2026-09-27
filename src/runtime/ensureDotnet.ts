@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
+import { promisify } from 'node:util';
 import * as fs from 'fs';
 
 /** Runtime version that matches the analyzer's target framework (net10.0). */
@@ -21,6 +22,32 @@ export class DotnetNotAvailableError extends Error {
 
 interface AcquireResult {
   dotnetPath?: string;
+}
+
+/** Semantic needs an installed SDK, selected from the target's global.json context. */
+export async function ensureSemanticDotnet(targetDirectory: string): Promise<DotnetResolution> {
+  const configured = vscode.workspace
+    .getConfiguration('sharpdeps')
+    .get<string>('dotnetPath', '')
+    .trim();
+  const candidate = configured || (await dotnetOnPath());
+  if (candidate) {
+    try {
+      const { stdout } = await promisify(execFile)(candidate, ['--version'], {
+        cwd: targetDirectory,
+        timeout: 15000,
+        windowsHide: true,
+        maxBuffer: 64 * 1024
+      });
+      if (/^\d+\.\d+\.\d+/.test(stdout.trim()))
+        return { dotnetPath: candidate, source: configured ? 'config' : 'path' };
+    } catch {
+      /* Report SDK/global.json failure without replacing Semantic with Quick. */
+    }
+  }
+  throw new DotnetNotAvailableError(
+    'Semantic requires an installed .NET SDK compatible with the target global.json. Check dotnet --version in the target directory. Quick remains available without an SDK.'
+  );
 }
 
 /**

@@ -58,6 +58,17 @@ public sealed class SymbolIndexTests : IDisposable
     }
 
     [Fact]
+    public void DistinguishesFileLocalTypesAndUsesTheDeclaredNamespaceOfNestedTypes()
+    {
+        var index = BuildFromSource(
+            ("One.cs", "namespace Sample; file class Same { } public class Outer { public class Inner { } }"),
+            ("Two.cs", "namespace Sample; file class Same { }"));
+        Assert.Equal(2, index.Types.Where(type => type.Name == "Same").Select(type => type.Id).Distinct().Count());
+        Assert.Equal("Sample", Assert.Single(index.Namespaces).Name);
+        Assert.Equal(4, index.Namespaces[0].TypeCount);
+    }
+
+    [Fact]
     public void MergesPartialDeclarationsIntoOneTypeWithSeveralLocations()
     {
         var index = BuildFromSource(

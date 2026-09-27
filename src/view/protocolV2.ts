@@ -62,6 +62,17 @@ export interface EntitySummary {
   inCycle?: boolean;
   isExternal?: boolean;
   isGenerated?: boolean;
+  fullName?: string;
+  projectId?: string;
+  projectPath?: string;
+  projectKind?: string;
+  namespaceId?: string;
+  namespaceName?: string;
+  targetFramework?: string;
+  analysisStatus?: 'complete' | 'partial' | 'failed' | 'skipped';
+  analysisLimitations?: string[];
+  dependencyCount?: number;
+  dependentCount?: number;
 }
 
 export interface ProjectionEdge {
@@ -145,12 +156,15 @@ export type WebviewToHostMessage =
       scope: Scope;
       granularity: Granularity;
       filters?: Filters;
+      search?: string;
+      includeIds?: string[];
     }
   | {
       type: 'searchEntities';
       requestId: string;
       analysisId: string;
       query: string;
+      parentId?: string;
       granularity?: Granularity;
       filters?: Filters;
       limit?: number;
@@ -180,15 +194,24 @@ export type WebviewToHostMessage =
       analysisId: string;
       scope: Scope;
       includeSnippets?: boolean;
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
     }
   | {
       type: 'export';
       requestId: string;
       analysisId: string;
       format: ExportFormat;
+      copy?: boolean;
       scope: Scope;
       /** Rendered SVG text or PNG data URL, when the webview produced it (SD-022). */
       data?: string;
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
     }
   | { type: 'persistViewState'; viewState: Record<string, unknown> };
 
@@ -202,12 +225,23 @@ export type HostToWebviewMessage =
     }
   | ({ type: 'analysisProgress' } & AnalysisProgress)
   | {
+      type: 'analysisStarted';
+      analysisId: string;
+      mode: 'quick' | 'semantic';
+      target: { name: string; relativePath: string };
+    }
+  | { type: 'requestExport'; format: ExportFormat; copy?: boolean }
+  | {
       type: 'analysisComplete';
       analysisId: string;
       completeness: 'completeWithinScope' | 'partial' | 'failed';
       coverage: Coverage;
       mode?: 'quick' | 'semantic';
       limitations?: unknown[];
+      capabilities?: Capabilities;
+      target?: { name: string; relativePath: string };
+      profile?: ProfileRequest;
+      variantOptions?: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
     }
   | {
       type: 'analysisFailed';
@@ -302,6 +336,7 @@ type FieldKind =
   | 'string'
   | 'object'
   | 'array'
+  | 'entityIds'
   | 'boolean'
   | 'positiveInteger'
   | 'granularity'
@@ -347,11 +382,12 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
       scope: 'scope',
       granularity: 'granularity'
     },
-    optional: { filters: 'filters' }
+    optional: { filters: 'filters', search: 'string', includeIds: 'entityIds' }
   },
   searchEntities: {
     required: { requestId: 'requestId', analysisId: 'analysisId', query: 'string' },
     optional: {
+      parentId: 'entityId',
       granularity: 'granularity',
       filters: 'filters',
       limit: 'positiveInteger',
@@ -380,7 +416,13 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   },
   copyContext: {
     required: { requestId: 'requestId', analysisId: 'analysisId', scope: 'scope' },
-    optional: { includeSnippets: 'boolean' }
+    optional: {
+      includeSnippets: 'boolean',
+      granularity: 'granularity',
+      filters: 'filters',
+      search: 'string',
+      includeIds: 'entityIds'
+    }
   },
   export: {
     required: {
@@ -389,12 +431,24 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
       format: 'exportFormat',
       scope: 'scope'
     },
-    optional: {}
+    optional: {
+      data: 'string',
+      copy: 'boolean',
+      granularity: 'granularity',
+      filters: 'filters',
+      search: 'string',
+      includeIds: 'entityIds'
+    }
   },
   persistViewState: { required: { viewState: 'viewState' }, optional: {} }
 };
 
 const HOST_RULES: Record<string, MessageRule> = {
+  analysisStarted: {
+    required: { analysisId: 'analysisId', mode: 'mode', target: 'object' },
+    optional: {}
+  },
+  requestExport: { required: { format: 'exportFormat' }, optional: { copy: 'boolean' } },
   capabilities: {
     required: { protocolVersion: 'positiveInteger', capabilities: 'object' },
     optional: { analysisId: 'analysisId' }
@@ -419,7 +473,14 @@ const HOST_RULES: Record<string, MessageRule> = {
   },
   analysisComplete: {
     required: { analysisId: 'analysisId', completeness: 'string', coverage: 'object' },
-    optional: { mode: 'mode', limitations: 'array' }
+    optional: {
+      mode: 'mode',
+      limitations: 'array',
+      capabilities: 'object',
+      target: 'object',
+      profile: 'profile',
+      variantOptions: 'array'
+    }
   },
   analysisFailed: {
     required: { analysisId: 'analysisId', message: 'string' },
@@ -488,6 +549,16 @@ export function validateWebviewMessage(
       errors: [`$.query: longer than ${MAX_QUERY_LENGTH} characters`]
     };
   }
+  if (
+    'search' in result.value &&
+    typeof result.value.search === 'string' &&
+    result.value.search.length > MAX_QUERY_LENGTH
+  )
+    return {
+      ok: false,
+      code: 'invalidMessage',
+      errors: [`$.search: longer than ${MAX_QUERY_LENGTH} characters`]
+    };
 
   return result;
 }
@@ -568,6 +639,12 @@ function checkField(
       return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
     case 'array':
       return Array.isArray(value) ? true : fail('expected an array');
+    case 'entityIds':
+      return Array.isArray(value) &&
+        value.length <= 1000 &&
+        value.every((id) => typeof id === 'string' && PATTERNS.entityId.test(id))
+        ? true
+        : fail('expected at most 1000 entity ids');
     case 'mode':
       return MODES.includes(value as (typeof MODES)[number])
         ? true
@@ -581,6 +658,7 @@ function checkField(
         ? true
         : fail(`expected one of ${EXPORT_FORMATS.join(', ')}`);
     case 'scope': {
+      if (typeof value !== 'object' || Array.isArray(value)) return fail('expected a scope object');
       const scope = value as Record<string, unknown>;
       if (
         typeof scope.kind !== 'string' ||
@@ -591,7 +669,7 @@ function checkField(
       if (
         scope.id !== undefined &&
         scope.id !== null &&
-        !PATTERNS.entityId.test(String(scope.id))
+        !(scope.kind === 'cycle' ? PATTERNS.cycleGroupId : PATTERNS.entityId).test(String(scope.id))
       ) {
         return fail('scope.id must be an entity id');
       }
@@ -603,10 +681,50 @@ function checkField(
       }
       return true;
     }
-    case 'filters':
-      return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
-    case 'profile':
-      return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
+    case 'filters': {
+      if (typeof value !== 'object' || Array.isArray(value)) return fail('expected an object');
+      const filters = value as Record<string, unknown>;
+      for (const key of ['includeGenerated', 'includeExternal', 'includeTests'])
+        if (filters[key] !== undefined && typeof filters[key] !== 'boolean')
+          return fail(`${key} must be a boolean`);
+      for (const key of ['kinds', 'projectKinds', 'relationKinds', 'basis']) {
+        const items = filters[key];
+        if (
+          items !== undefined &&
+          (!Array.isArray(items) ||
+            items.length > 100 ||
+            items.some((item) => typeof item !== 'string' || item.length > 100))
+        )
+          return fail(`${key} must be an array of at most 100 short strings`);
+      }
+      return true;
+    }
+    case 'profile': {
+      if (typeof value !== 'object' || Array.isArray(value)) return fail('expected an object');
+      const profile = value as Record<string, unknown>;
+      for (const key of ['configuration', 'platform'])
+        if (
+          profile[key] != null &&
+          (typeof profile[key] !== 'string' || (profile[key] as string).length > 64)
+        )
+          return fail(`${key} must be a short string`);
+      const variants = profile.projectVariants;
+      if (
+        variants !== undefined &&
+        (!Array.isArray(variants) ||
+          variants.length > 10000 ||
+          variants.some(
+            (variant) =>
+              !variant ||
+              typeof variant !== 'object' ||
+              !/^prj_[0-9a-f]{16}$/.test(variant.projectLogicalId) ||
+              typeof variant.targetFramework !== 'string' ||
+              !/^[a-zA-Z0-9.+_-]{1,100}$/.test(variant.targetFramework)
+          ))
+      )
+        return fail('projectVariants must contain valid project ids and target frameworks');
+      return true;
+    }
     case 'viewState':
       return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
     default:

@@ -31,7 +31,8 @@ import {
   validateEvidenceRecord,
   validateSnapshot
 } from './reportV2Validation';
-import { buildProjection, type ProjectionRequest } from './graphProjection';
+import { buildProjection, entitiesOf, type ProjectionRequest } from './graphProjection';
+import type { EntitySummary } from '../view/protocolV2';
 
 export const DEFAULT_PAGE_SIZE = 100;
 export const MAX_PAGE_SIZE = 500;
@@ -46,7 +47,8 @@ export interface ReportStoreLimits {
 }
 
 const DEFAULT_LIMITS: ReportStoreLimits = {
-  maxReportBytes: 32 * 1024 * 1024,
+  // The fixed Medium fixture produces a 59 MB snapshot (ADR-0004).
+  maxReportBytes: 128 * 1024 * 1024,
   maxEvidenceBytes: 512 * 1024 * 1024,
   maxRegisteredAnalyses: 2,
   maxGeneratedDocumentBytes: 4 * 1024 * 1024,
@@ -70,7 +72,7 @@ export class ReportStoreError extends Error {
   }
 }
 
-export interface EntityRecord {
+export interface EntityRecord extends EntitySummary {
   id: string;
   granularity: Granularity;
   name: string;
@@ -170,6 +172,8 @@ interface RegisteredAnalysis {
   relationById: Map<string, AnalysisRelation>;
   relationsByEntity: Map<string, AnalysisRelation[]>;
   cycleMembers: Set<string>;
+  targetPath?: string;
+  stale: boolean;
 }
 
 interface CursorState {
@@ -183,6 +187,9 @@ export interface RegisterOptions {
   /** Directory that contains the report and evidence files. */
   directory: string;
   reportFileName: string;
+  /** Checked after asynchronous IO, immediately before publishing the result. */
+  isCurrent?: () => boolean;
+  targetPath?: string;
 }
 
 export class ReportStore {
@@ -233,6 +240,12 @@ export class ReportStore {
     }
 
     const report = validation.value;
+    if (report.completeness === 'failed') {
+      throw new ReportStoreError(
+        `The analysis failed: ${report.limitations.map((item) => item.message).join('; ') || 'No usable result was produced.'}`,
+        'invalidReport'
+      );
+    }
     const index = report.evidenceIndex;
     if (index === null) {
       throw new ReportStoreError('The report has no evidence index.', 'invalidReport');
@@ -271,6 +284,7 @@ export class ReportStore {
     }
 
     const analysis = this.buildAnalysis(report, evidencePath, evidenceBytes, relationOffsets);
+    analysis.targetPath = options.targetPath;
 
     // Declarations are optional (Quick has none). When present, the file must satisfy
     // the same path and count rules as the evidence file.
@@ -308,6 +322,12 @@ export class ReportStore {
       analysis.declarationsBytes = declarationsBytes;
     }
 
+    if (options.isCurrent && !options.isCurrent()) {
+      throw new ReportStoreError(
+        'The analysis was superseded before registration.',
+        'staleAnalysis'
+      );
+    }
     this.evictIfNeeded();
     this.analyses.set(report.analysisId, analysis);
     return report;
@@ -325,18 +345,23 @@ export class ReportStore {
   search(
     analysisId: string,
     query: string,
-    options: { limit?: number; cursor?: string; granularity?: Granularity } = {}
+    options: { limit?: number; cursor?: string; granularity?: Granularity; parentId?: string } = {}
   ): SearchPage {
     const analysis = this.requireAnalysis(analysisId);
     const limit = boundLimit(options.limit);
+    const key = JSON.stringify([query, options.granularity, options.parentId]);
     const start = options.cursor
-      ? this.resolveCursor(options.cursor, analysisId, 'search', query).offset
+      ? this.resolveCursor(options.cursor, analysisId, 'search', key).offset
       : 0;
 
     const needle = query.trim().toLowerCase();
     const matches = analysis.entities.filter(
       (entity) =>
         (options.granularity === undefined || entity.granularity === options.granularity) &&
+        (!options.parentId ||
+          (entity.granularity === 'namespace'
+            ? entity.projectId === options.parentId
+            : entity.namespaceId === options.parentId)) &&
         (needle.length === 0 ||
           entity.name.toLowerCase().includes(needle) ||
           entity.fullName.toLowerCase().includes(needle))
@@ -357,7 +382,7 @@ export class ReportStore {
       items,
       nextCursor:
         nextOffset < ordered.length
-          ? this.issueCursor({ analysisId, kind: 'search', key: query, offset: nextOffset })
+          ? this.issueCursor({ analysisId, kind: 'search', key, offset: nextOffset })
           : undefined
     };
   }
@@ -369,6 +394,38 @@ export class ReportStore {
       return undefined;
     }
 
+    const directRelations = analysis.relationsByEntity.get(entityId) ?? [];
+    const mixedGranularity = directRelations.some(
+      (relation) =>
+        analysis.entityById.get(relation.sourceEntityId)?.granularity !==
+        analysis.entityById.get(relation.targetEntityId)?.granularity
+    );
+    if (entity.granularity !== 'type' && !mixedGranularity) {
+      const projection = this.getProjection(analysisId, {
+        granularity: entity.granularity,
+        maxNodes: Number.MAX_SAFE_INTEGER,
+        maxEdges: Number.MAX_SAFE_INTEGER
+      });
+      const edges = projection.edges.filter(
+        (edge) => edge.sourceId === entityId || edge.targetId === entityId
+      );
+      return {
+        entity: projection.nodes.find((node) => node.id === entityId) ?? entity,
+        dependencies: uniqueById(
+          edges
+            .filter((edge) => edge.sourceId === entityId)
+            .map((edge) => analysis.entityById.get(edge.targetId)!)
+        ),
+        dependents: uniqueById(
+          edges
+            .filter((edge) => edge.targetId === entityId)
+            .map((edge) => analysis.entityById.get(edge.sourceId)!)
+        ),
+        relations: edges.flatMap((edge) =>
+          edge.underlyingRelationIds.map((id) => analysis.relationById.get(id)!)
+        )
+      };
+    }
     const relations = analysis.relationsByEntity.get(entityId) ?? [];
     const dependencies = relations
       .filter((relation) => relation.sourceEntityId === entityId)
@@ -390,6 +447,16 @@ export class ReportStore {
   /** The validated snapshot, for callers that need the whole model. */
   getReport(analysisId: string): AnalysisSnapshot {
     return this.requireAnalysis(analysisId).report;
+  }
+
+  getTargetPath(analysisId: string): string | undefined {
+    return this.requireAnalysis(analysisId).targetPath;
+  }
+  markStale(analysisId: string): void {
+    this.requireAnalysis(analysisId).stale = true;
+  }
+  isStale(analysisId: string): boolean {
+    return this.requireAnalysis(analysisId).stale;
   }
 
   getRelation(analysisId: string, relationId: string): AnalysisRelation | undefined {
@@ -493,7 +560,7 @@ export class ReportStore {
 
     try {
       const validation = validateEvidenceRecord(JSON.parse(line));
-      return validation.ok ? validation.value : undefined;
+      return validation.ok && validation.value.id === evidenceId ? validation.value : undefined;
     } catch {
       return undefined;
     }
@@ -506,25 +573,26 @@ export class ReportStore {
     }
 
     const byId = new Map<string, { relationId: string; lineIndex: number }>();
-    analysis.evidenceById = byId;
-    for (const [relationId, offset] of analysis.relationOffsets) {
-      const records = await readEvidenceLines(
-        analysis.evidencePath,
-        offset.startByte,
-        0,
-        offset.count
-      );
-      records.lines.forEach((line, index) => {
-        try {
-          const parsed = JSON.parse(line) as { id?: unknown };
-          if (typeof parsed.id === 'string') {
-            byId.set(parsed.id, { relationId, lineIndex: index });
-          }
-        } catch {
-          // A malformed record cannot be opened; the page reader reports it if read.
+    const records = await readEvidenceLines(
+      analysis.evidencePath,
+      0,
+      0,
+      [...analysis.relationOffsets.values()].reduce((sum, entry) => sum + entry.count, 0)
+    );
+    const positions = new Map<string, number>();
+    for (const line of records.lines) {
+      try {
+        const parsed = JSON.parse(line) as { id?: unknown; relationId?: unknown };
+        if (typeof parsed.id === 'string' && typeof parsed.relationId === 'string') {
+          const lineIndex = positions.get(parsed.relationId) ?? 0;
+          byId.set(parsed.id, { relationId: parsed.relationId, lineIndex });
+          positions.set(parsed.relationId, lineIndex + 1);
         }
-      });
+      } catch {
+        // Malformed records are rejected by the evidence page reader.
+      }
     }
+    analysis.evidenceById = byId;
   }
 
   /** Loads the declarations file once and indexes it by type and by document. */
@@ -535,8 +603,6 @@ export class ReportStore {
 
     const byType = new Map<string, DeclarationRecord[]>();
     const byDocument = new Map<string, DeclarationRecord[]>();
-    analysis.declarationsByType = byType;
-    analysis.declarationsByDocument = byDocument;
     if (!analysis.declarationsPath) {
       return;
     }
@@ -588,6 +654,8 @@ export class ReportStore {
     for (const list of byType.values()) {
       list.sort((left, right) => left.declarationIndex - right.declarationIndex);
     }
+    analysis.declarationsByType = byType;
+    analysis.declarationsByDocument = byDocument;
   }
 
   /**
@@ -597,27 +665,14 @@ export class ReportStore {
    * id is the representative relation, so an edge selection can always be paged for
    * evidence. Totals describe the whole scope, never the display budget.
    */
-  getProjection(
-    analysisId: string,
-    options: {
-      scope?: { kind: string; id?: string | null; depth?: number | null };
-      granularity?: Granularity;
-      maxNodes?: number;
-      maxEdges?: number;
-    } = {}
-  ): ProjectionView {
+  getProjection(analysisId: string, options: ProjectionRequest = {}): ProjectionView {
     const analysis = this.requireAnalysis(analysisId);
-    const projection = buildProjection(analysis.report, {
-      scope: options.scope as ProjectionRequest['scope'],
-      granularity: options.granularity,
-      maxNodes: options.maxNodes,
-      maxEdges: options.maxEdges
-    });
+    const projection = buildProjection(analysis.report, options);
 
     // Nodes come back as summaries from the snapshot; the store serves its own records
     // so the caller sees the same full names and cycle flags as everywhere else.
     const nodes = projection.nodes
-      .map((node) => analysis.entityById.get(node.id))
+      .map((node) => ({ ...analysis.entityById.get(node.id)!, ...node }))
       .filter((node): node is EntityRecord => node !== undefined);
 
     return {
@@ -827,6 +882,11 @@ export class ReportStore {
     ];
 
     const entityById = new Map(entities.map((entity) => [entity.id, entity]));
+    for (const node of ['project', 'namespace', 'type'].flatMap((granularity) =>
+      entitiesOf(report, granularity as Granularity)
+    )) {
+      Object.assign(entityById.get(node.id)!, node);
+    }
     const relationById = new Map(report.relations.map((relation) => [relation.id, relation]));
     const relationsByEntity = new Map<string, AnalysisRelation[]>();
     for (const relation of report.relations) {
@@ -854,7 +914,8 @@ export class ReportStore {
       entityById,
       relationById,
       relationsByEntity,
-      cycleMembers
+      cycleMembers,
+      stale: false
     };
   }
 

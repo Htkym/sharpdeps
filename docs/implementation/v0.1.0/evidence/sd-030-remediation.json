@@ -1,0 +1,37 @@
+{
+  "checkedAt": "2026-09-27T08:27:28.849Z",
+  "scope": "SD-030 RC-01 through RC-06 remediation",
+  "codeFixes": "complete",
+  "releaseDecision": "no_go_pending_external_verification",
+  "checks": {
+    "typescriptTests": 228,
+    "csharpTests": 103,
+    "browserTests": 6,
+    "compile": "pass",
+    "lint": "pass",
+    "format": "pass",
+    "diffCheck": "pass"
+  },
+  "vsix": {
+    "file": "sharpdeps-check.vsix",
+    "bytes": 16889539,
+    "sha256": "22793c37daec272eca6fbacd2ea7c4ca401a86853752a8c3f299c3597890457b",
+    "packagedEntries": 163
+  },
+  "performance": "evidence/sd-028-acceptance.json",
+  "evidence": [
+    "sd-027-e2e.json",
+    "sd-027-e2e-vsix.json",
+    "sd-030-trust.json",
+    "sd-030-runtime.json",
+    "sd-030-experience.json",
+    "sd-030-exploration.json",
+    "sd-030-incomplete.json",
+    "sd-030-restart.json",
+    "sd-030-linux-runtime.json",
+    "sd-030-linux-semantic.json",
+    "sd-028-browser.json",
+    "sd-028-lifecycle.json"
+  ],
+  "unverified": ["macOS Quick/Semantic smoke未実施", "最新変更に対するリモートCI未実施"]
+}

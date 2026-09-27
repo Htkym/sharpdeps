@@ -5,6 +5,8 @@ import prettier from 'eslint-config-prettier';
 export default tseslint.config(
   {
     ignores: [
+      '.local/**',
+      '.playwright-cli/**',
       'out/**',
       'media/viewer.js',
       'media/viewer.js.map',

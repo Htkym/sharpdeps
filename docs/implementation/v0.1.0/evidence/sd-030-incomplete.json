@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-09-27T08:15:29.894Z",
+  "vscodeVersion": "1.139.1",
+  "scenario": "incomplete",
+  "results": [
+    {
+      "name": "real Quick UI has a result",
+      "ok": true
+    },
+    {
+      "name": "Good is shown as complete",
+      "ok": true
+    },
+    {
+      "name": "Broken is shown as partial",
+      "ok": true
+    },
+    {
+      "name": "Unavailable is shown as failed",
+      "ok": true
+    },
+    {
+      "name": "mixed SDK and generator failure never claims no dependencies or complete analysis",
+      "ok": true
+    }
+  ]
+}

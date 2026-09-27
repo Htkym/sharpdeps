@@ -106,6 +106,25 @@ public sealed class OperationDependencyCollectorTests : IDisposable
     }
 
     [Fact]
+    public void CollectsInitializersGenericArgumentsLocalsAndPatterns()
+    {
+        var collected = Collect(("References.cs", """
+            namespace Sample;
+            public class Foo { }
+            public class G<T> { }
+            public class Service
+            {
+                object field = new Foo();
+                object Property { get; } = new Foo();
+                void Run() { var g = new G<Foo>(); Foo local = null; if (local is Foo f) { } }
+            }
+            """));
+        var foo = collected.Type("Foo");
+        Assert.Equal(2, collected.To(foo, "constructs").Count());
+        Assert.Equal(3, collected.To(foo, "typeUse").Count());
+    }
+
+    [Fact]
     public void UnusedUsingDoesNotAddEdges()
     {
         const string body = """
@@ -197,7 +216,8 @@ public sealed class OperationDependencyCollectorTests : IDisposable
         // One `new Order()` and one target-typed `new()`: two constructs, no extra
         // typeUse evidence for the same syntax.
         Assert.Equal(2, creation.Length);
-        Assert.Empty(collected.To(order, "typeUse"));
+        // The explicitly written local type is a separate reference from new().
+        Assert.Equal("Order".Length, Assert.Single(collected.To(order, "typeUse")).Evidence.PhysicalSpan!.Length);
         Assert.All(creation, entry => Assert.Matches("^ev_[0-9a-f]{16}$", entry.Evidence.Id));
     }
 

@@ -36,19 +36,19 @@ public sealed record QuickSpan(
 public sealed record QuickUsing(string NamespaceName, QuickSpan Span);
 
 public sealed record QuickNamespaceDeclaration(
-    string ProjectName,
+    string ProjectPath,
     string DocumentId,
     string NamespaceName,
     QuickSpan Span);
 
 public sealed record QuickFileUsage(
-    string ProjectName,
+    string ProjectPath,
     string DocumentId,
     IReadOnlyList<string> DeclaredNamespaces,
     IReadOnlyList<QuickUsing> Usings);
 
 public sealed record QuickProjectReference(
-    string SourceProjectName,
+    string SourceProjectPath,
     string TargetFullPath,
     string IncludePath,
     bool IsConditional,
@@ -57,7 +57,7 @@ public sealed record QuickProjectReference(
 
 /// <summary>A project-level `global using` directive, which applies to every file of the project.</summary>
 public sealed record QuickGlobalUsing(
-    string ProjectName,
+    string ProjectPath,
     string NamespaceName,
     string DocumentId,
     QuickSpan Span);

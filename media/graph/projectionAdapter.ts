@@ -25,10 +25,22 @@ function toNode(node: EntitySummary): GraphNodeInput {
     label: node.name,
     sublabel: sublabelOf(node),
     kind: kindOf(node),
+    projectKind: node.projectKind ?? (node.granularity === 'project' ? node.kind : undefined),
     inCycle: node.inCycle === true,
     isExternal: node.isExternal === true,
     isGenerated: node.isGenerated === true
   };
+}
+
+export function projectKindColor(kind: string): string {
+  const colors: Record<string, string> = {
+    web: 'var(--vscode-charts-blue, #3794ff)',
+    library: 'var(--vscode-charts-purple, #b180d7)',
+    test: 'var(--vscode-charts-green, #89d185)',
+    desktop: 'var(--vscode-charts-orange, #d18616)',
+    app: 'var(--vscode-charts-yellow, #cca700)'
+  };
+  return colors[kind] ?? 'var(--vscode-panel-border, #6b6b6b)';
 }
 
 function kindOf(node: EntitySummary): NodeKind {

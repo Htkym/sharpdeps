@@ -84,7 +84,7 @@ public sealed class OperationDependencyCollector
                     var owner = model.GetEnclosingSymbol(root.SpanStart);
                     bodies++;
 
-                    foreach (var node in operation.Descendants())
+                    foreach (var node in new[] { operation }.Concat(operation.Descendants()))
                     {
                         CollectOperation(
                             model,
@@ -95,6 +95,30 @@ public sealed class OperationDependencyCollector
                             ref unresolved,
                             ref dynamic,
                             ref candidateOnly);
+                    }
+
+                    // These written types have no dedicated operation (for example a
+                    // generic method's type arguments or a local declaration's type).
+                    foreach (var syntax in root.DescendantNodesAndSelf())
+                    {
+                        IEnumerable<TypeSyntax> writtenTypes = syntax switch
+                        {
+                            TypeArgumentListSyntax arguments => arguments.Arguments,
+                            VariableDeclarationSyntax local when local.Parent is not FieldDeclarationSyntax
+                                and not EventFieldDeclarationSyntax && !local.Type.IsVar => [local.Type],
+                            DeclarationPatternSyntax pattern => [pattern.Type],
+                            TypePatternSyntax pattern => [pattern.Type],
+                            RecursivePatternSyntax { Type: not null } pattern => [pattern.Type],
+                            _ => []
+                        };
+                        foreach (var written in writtenTypes)
+                        {
+                            var type = model.GetTypeInfo(written, cancellationToken).Type;
+                            if (type is not null)
+                            {
+                                AddEvidence(input, owner, type, written, "typeUse", results);
+                            }
+                        }
                     }
                 }
             }
@@ -160,6 +184,10 @@ public sealed class OperationDependencyCollector
                     yield return declarator.Initializer.Value;
                     break;
 
+                case PropertyDeclarationSyntax { Initializer.Value: not null } property:
+                    yield return property.Initializer.Value;
+                    break;
+
                 case GlobalStatementSyntax global:
                     // The statement is the operation root; the global statement node
                     // itself has no operation.
@@ -192,7 +220,7 @@ public sealed class OperationDependencyCollector
                     return;
                 }
 
-                AddEvidence(input, owner, creation.Type, creation.Syntax, "constructs", results);
+                AddEvidence(input, owner, creation.Type, creation.Syntax, "constructs", results, creation.Constructor);
                 return;
 
             case IInvocationOperation invocation:
@@ -467,7 +495,7 @@ public sealed class OperationDependencyCollector
                 document.Origin,
                 document.Id,
                 physicalSpan,
-                null,
+                _documents.MappedLocationFor(syntax),
                 contentHash,
                 "resolved",
                 PublicSurface.IsExternallyVisible(owner),
@@ -488,6 +516,7 @@ public sealed class OperationDependencyCollector
     {
         var containingType = owner switch
         {
+            INamedTypeSymbol type => type,
             IMethodSymbol { AssociatedSymbol: not null } accessor => accessor.AssociatedSymbol!.ContainingType,
             _ => owner?.ContainingType
         };

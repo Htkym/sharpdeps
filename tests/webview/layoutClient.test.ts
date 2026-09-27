@@ -129,9 +129,35 @@ async function waitForWorkers(workers: FakeWorker[], count: number): Promise<voi
 }
 
 describe('LayoutClient lifecycle', () => {
+  it('does not recreate a worker or Blob URL when disposed during script fetch', async () => {
+    const previousFetch = globalThis.fetch;
+    let complete!: (value: unknown) => void;
+    vi.stubGlobal(
+      'fetch',
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        })
+    );
+    const createUrl = vi.spyOn(URL, 'createObjectURL');
+    try {
+      const { client, workers } = setup();
+      const pending = client.layout(projection());
+      const rejected = expect(pending).rejects.toBeInstanceOf(LayoutCancelledError);
+      client.dispose();
+      complete({ ok: true, text: async () => '' });
+      await rejected;
+      expect(workers).toHaveLength(0);
+      expect(createUrl).not.toHaveBeenCalled();
+    } finally {
+      createUrl.mockRestore();
+      vi.stubGlobal('fetch', previousFetch);
+    }
+  });
   it('drops the response of a superseded request (generation rollback)', async () => {
     const { client, workers } = setup();
     const first = client.layout(projection());
+    const superseded = expect(first).rejects.toBeInstanceOf(LayoutCancelledError);
     const second = client.layout(projection());
     await waitForWorkers(workers, 1);
 
@@ -148,10 +174,9 @@ describe('LayoutClient lifecycle', () => {
       'ty_1111111111111111',
       'ty_2222222222222222'
     ]);
-    // The superseded promise stays pending (its response is dropped), so it must not
-    // resolve with a stale layout: a cancel releases it.
+    // Superseding releases the old promise immediately; it never retains a stale job.
     client.cancel();
-    await expect(first).rejects.toBeInstanceOf(LayoutCancelledError);
+    await superseded;
   });
 
   it('rejects pending work, terminates the worker, and recreates it after a cancel', async () => {

@@ -8,24 +8,90 @@ import type { AnalysisStage } from './state';
 import type { EntitySummary, ProjectionCycleGroup, Scope } from '../../src/view/protocolV2';
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
+import type { ViewState } from './state';
 import { restoreViewState } from './serializer';
 
 export interface RequestContext {
+  treeParentId?: string;
+  appendTree?: boolean;
   /** The search query a request carried, so the answer can be matched to it. */
   query?: string;
   /** True when the request asked for the next evidence page. */
   appendEvidence?: boolean;
+  analysisId?: string;
+  type?: string;
 }
 
 export function toViewActions(
   message: unknown,
-  requestContext: ReadonlyMap<string, RequestContext>
+  requestContext: ReadonlyMap<string, RequestContext>,
+  currentState?: ViewState
 ): ViewAction[] {
   if (!isRecord(message) || typeof message.type !== 'string') {
     return [];
   }
+  if (currentState) {
+    if (
+      ['projection', 'details', 'evidencePage', 'searchResults', 'stale', 'reveal'].includes(
+        message.type
+      ) &&
+      message.analysisId !== currentState.analysisId
+    )
+      return [];
+    if (
+      ['analysisComplete', 'analysisFailed', 'analysisProgress'].includes(message.type) &&
+      currentState.runningAnalysisId &&
+      message.analysisId !== currentState.runningAnalysisId
+    )
+      return [];
+    if (
+      message.type === 'details' &&
+      isRecord(message.entity) &&
+      message.entity.id !== currentState.selection.entityId
+    )
+      return [];
+    if (message.type === 'evidencePage' && message.relationId !== currentState.selection.relationId)
+      return [];
+  }
 
   switch (message.type) {
+    case 'analysisStarted':
+      return typeof message.analysisId === 'string'
+        ? [
+            ...(!currentState?.analysisId &&
+            isRecord(message.target) &&
+            typeof message.target.name === 'string' &&
+            typeof message.target.relativePath === 'string'
+              ? [
+                  {
+                    type: 'targetSelected' as const,
+                    name: message.target.name,
+                    relativePath: message.target.relativePath
+                  }
+                ]
+              : []),
+            {
+              type: 'analyzeStarted',
+              analysisId: message.analysisId,
+              mode: message.mode === 'semantic' ? 'semantic' : 'quick'
+            }
+          ]
+        : [];
+    case 'capabilities':
+      return isRecord(message.capabilities)
+        ? [
+            {
+              type: 'capabilitiesReceived',
+              capabilities: {
+                typeGraph: message.capabilities.typeGraph === true,
+                evidence: message.capabilities.evidence === true,
+                generatedDocuments: message.capabilities.generatedDocuments === true,
+                cycleWitness: message.capabilities.cycleWitness === true,
+                search: message.capabilities.search === true
+              }
+            }
+          ]
+        : [];
     case 'analysisProgress':
       return [
         {
@@ -44,6 +110,17 @@ export function toViewActions(
 
       const completeness = message.completeness;
       return [
+        ...(isRecord(message.target) &&
+        typeof message.target.name === 'string' &&
+        typeof message.target.relativePath === 'string'
+          ? [
+              {
+                type: 'targetSelected' as const,
+                name: message.target.name,
+                relativePath: message.target.relativePath
+              }
+            ]
+          : []),
         {
           type: 'analysisComplete',
           analysisId: message.analysisId,
@@ -52,7 +129,26 @@ export function toViewActions(
               ? completeness
               : 'completeWithinScope',
           coverage: readCoverage(message.coverage),
-          limitations: readLimitations(message.limitations)
+          limitations: readLimitations(message.limitations),
+          mode:
+            message.mode === 'semantic'
+              ? 'semantic'
+              : message.mode === 'quick'
+                ? 'quick'
+                : undefined,
+          profile: isRecord(message.profile) ? message.profile : undefined,
+          capabilities: isRecord(message.capabilities)
+            ? (message.capabilities as unknown as ViewState['capabilities'])
+            : undefined,
+          variantOptions: Array.isArray(message.variantOptions)
+            ? message.variantOptions.filter(
+                (item) =>
+                  isRecord(item) &&
+                  typeof item.projectLogicalId === 'string' &&
+                  typeof item.targetFramework === 'string' &&
+                  typeof item.projectPath === 'string'
+              )
+            : undefined
         }
       ];
     }
@@ -93,6 +189,7 @@ export function toViewActions(
           {
             type: 'detailsReceived',
             entityId,
+            entity: readEntities([message.entity])[0],
             dependencies: readEntities(message.dependencies),
             dependents: readEntities(message.dependents)
           }
@@ -103,6 +200,7 @@ export function toViewActions(
         {
           type: 'detailsReceived',
           entityId: message.entityId,
+          entity: readEntities([message.entity])[0],
           dependencies: readEntities(message.dependencies),
           dependents: readEntities(message.dependents)
         }
@@ -129,6 +227,19 @@ export function toViewActions(
     }
 
     case 'searchResults': {
+      const context =
+        typeof message.requestId === 'string' ? requestContext.get(message.requestId) : undefined;
+      if (context?.treeParentId)
+        return [
+          {
+            type: 'treeReceived',
+            parentId: context.treeParentId,
+            items: readEntities(message.items),
+            total: numberOrUndefined(message.total) ?? 0,
+            nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : undefined,
+            append: context.appendTree
+          }
+        ];
       const query =
         typeof message.requestId === 'string'
           ? (requestContext.get(message.requestId)?.query ?? '')
@@ -357,6 +468,24 @@ function readEntities(value: unknown): EntitySummary[] {
     .filter(isRecord)
     .filter((entity) => typeof entity.id === 'string' && typeof entity.name === 'string')
     .map((entity) => ({
+      fullName: typeof entity.fullName === 'string' ? entity.fullName : undefined,
+      projectId: typeof entity.projectId === 'string' ? entity.projectId : undefined,
+      projectPath: typeof entity.projectPath === 'string' ? entity.projectPath : undefined,
+      projectKind: typeof entity.projectKind === 'string' ? entity.projectKind : undefined,
+      namespaceId: typeof entity.namespaceId === 'string' ? entity.namespaceId : undefined,
+      namespaceName: typeof entity.namespaceName === 'string' ? entity.namespaceName : undefined,
+      targetFramework:
+        typeof entity.targetFramework === 'string' ? entity.targetFramework : undefined,
+      analysisStatus: ['complete', 'partial', 'failed', 'skipped'].includes(
+        String(entity.analysisStatus)
+      )
+        ? (entity.analysisStatus as EntitySummary['analysisStatus'])
+        : undefined,
+      analysisLimitations: Array.isArray(entity.analysisLimitations)
+        ? entity.analysisLimitations.filter((item): item is string => typeof item === 'string')
+        : [],
+      dependencyCount: numberOrUndefined(entity.dependencyCount),
+      dependentCount: numberOrUndefined(entity.dependentCount),
       id: entity.id as string,
       name: entity.name as string,
       granularity:

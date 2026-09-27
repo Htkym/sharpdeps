@@ -54,7 +54,7 @@ public static class QuickAnalyzer
             }
             else
             {
-                parsedSolution = await SolutionDiscovery.ParseProjectClosureAsync(resolvedSolutionPath, maxProjects, warnings);
+                parsedSolution = await SolutionDiscovery.ParseProjectClosureAsync(resolvedSolutionPath, 10000, warnings);
                 notes.Add("The selected project file was parsed by following ProjectReference edges without a .sln or .slnx file.");
             }
 
