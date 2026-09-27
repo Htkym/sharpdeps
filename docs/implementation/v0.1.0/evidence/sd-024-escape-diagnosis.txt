@@ -1,0 +1,21 @@
+// This is the diagnosis note for the Escape path in SD-024; it lives with the task memo.
+
+Findings (2026-09-27):
+
+- The app-level keydown handler DOES run for a real Escape: after the upgrade to a
+  bubble-phase probe, `event.defaultPrevented` is true, which only the handler's
+  `closeInspector` branch sets.
+- The inspector nevertheless stays open, and `window.sharpdepsApp.getState().inspectorOpen`
+  still reports true afterwards.
+- A synthetic `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`
+  does close it, so the reducer, the render path, and the focus return all work.
+- With the idempotent `inspectorClosed` action the behaviour is unchanged, so the toggle
+  semantics were not the cause.
+
+Conclusion: the handler's closure and `window.sharpdepsApp` disagree about the state,
+which points at two state holders (a duplicated listener or a second app instance) rather
+than at the close logic. The next step is to log both reads inside the handler (the
+closure's `state.inspectorOpen` and the app's `getState()`) to find the duplicate.
+
+What is verified and unchanged: the Close button, the graph click path, keyboard
+selection, `/` and g/t shortcuts, and the synthetic Escape path all behave as intended.

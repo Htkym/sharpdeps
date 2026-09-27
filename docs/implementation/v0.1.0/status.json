@@ -880,14 +880,21 @@
         "npm test (webview) — 10 files / 64 tests pass (4 shortcut tests)",
         "npm run compile / lint / format:check / build — pass",
         "browser: \"/\" focuses search, t/g switch views, Enter on an edge reaches evidence and openEvidence, Escape closes the inspector",
-        "browser: no horizontal overflow at 1440/900/360 px, toolbar wraps at 360 px"
+        "browser: no horizontal overflow at 1440/900/360 px, toolbar wraps at 360 px",
+        "browser: forced-colors gives CanvasText borders and reduced motion gives 0s transitions",
+        "browser: screenshots at 1440/900/360 and high contrast"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-024.md",
-        "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json"
+        "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json",
+        "docs/implementation/v0.1.0/evidence/sd-024-escape-diagnosis.txt",
+        "docs/implementation/v0.1.0/evidence/sd-024-shell-1440.png",
+        "docs/implementation/v0.1.0/evidence/sd-024-shell-900.png",
+        "docs/implementation/v0.1.0/evidence/sd-024-shell-360.png",
+        "docs/implementation/v0.1.0/evidence/sd-024-high-contrast.png"
       ],
       "blockers": [],
-      "notes": "Implemented: keyboard map with a tested resolver, evidence open button completing the keyboard flow, focus return on drawer close, forced-colors/reduced-motion/480px CSS. Remaining: real high-contrast and 200% zoom checks, real-key focus-return re-check, table-row to evidence path, per-width screenshots."
+      "notes": "Implemented: keyboard map, evidence open button, focus return, forced-colors/reduced-motion/480px CSS. Verified: keyboard flow, widths without overflow, high contrast borders, reduced motion, synthetic Escape. Blocked on a diagnosis: a real-key Escape runs the handler (defaultPrevented true) but the state stays open while a synthetic window keydown closes it, which points at two state holders; documented in evidence/sd-024-escape-diagnosis.txt."
     },
     {
       "id": "SD-025",

@@ -181,6 +181,7 @@ export type ViewAction =
   | { type: 'relationSelected'; relationId: string }
   | { type: 'selectionCleared' }
   | { type: 'inspectorToggled' }
+  | { type: 'inspectorClosed' }
   | { type: 'paneResized'; pane: 'navigation' | 'inspector'; width: number }
   | { type: 'historyBack' }
   | { type: 'errorRaised'; code: string; message: string }
@@ -425,6 +426,11 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
 
     case 'inspectorToggled':
       return { ...state, inspectorOpen: !state.inspectorOpen };
+
+    case 'inspectorClosed':
+      // Idempotent close: Escape may be seen by more than one handler, and a toggle
+      // would reopen the pane if it ran twice.
+      return state.inspectorOpen ? { ...state, inspectorOpen: false } : state;
 
     case 'cameraChanged':
       return { ...state, camera: action.camera };

@@ -196,7 +196,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
         return;
       case 'closeInspector':
         event.preventDefault();
-        dispatch({ type: 'inspectorToggled' });
+        dispatch({ type: 'inspectorClosed' });
         return;
       case 'zoom': {
         const view = graphRuntime.view;
