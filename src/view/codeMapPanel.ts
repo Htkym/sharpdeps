@@ -48,9 +48,9 @@ export class CodeMapPanel {
 
     const panel = vscode.window.createWebviewPanel(CodeMapPanel.viewType, 'SharpDeps', column, {
       enableScripts: true,
-      // Kept true until the hide/show restore is verified end to end (SD-021): a wrong
-      // restore would lose the view, so the change waits for that verification.
-      retainContextWhenHidden: true,
+      // Restore is verified (serializer + persistence + browser fixture), so the webview
+      // is recreated when it is hidden instead of being kept alive (SD-021).
+      retainContextWhenHidden: false,
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
     });
 

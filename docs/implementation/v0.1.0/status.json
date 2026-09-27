@@ -764,7 +764,7 @@
       "id": "SD-021",
       "title": "古い結果の検知と画面状態の復元",
       "milestone": "M2",
-      "status": "in_progress",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
         "media/app/serializer.ts",
@@ -786,11 +786,15 @@
         "npm test（webview） — 7ファイル / 48テスト成功（+5）",
         "npm run compile / lint / format:check — 成功",
         "シリアライザ: 往復・版不一致の無視・幅クランプ・壊れた値の修復",
-        "プロトコル: viewState→stateRestored、解析を起動しない"
+        "プロトコル: viewState→stateRestored、解析を起動しない",
+        "browser fixture: restore from a persisted state (target, selection, pane width, camera), zero analyze requests, retainContextWhenHidden set to false"
       ],
-      "evidence": ["docs/implementation/v0.1.0/tasks/SD-021.md"],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-021.md",
+        "docs/implementation/v0.1.0/evidence/sd-021-restore.json"
+      ],
       "blockers": [],
-      "notes": "実装完了：Stale検知（未保存/保存/構成）、状態保存（getState/setState+workspaceState）、版付き復元、クランプ、カメラ復元の配線。未完：リロード/タブ復帰の実検証（fixtureでタイムアウト）とその後のretainContextWhenHidden=false、実機（SD-027）、自動更新（既定OFFのため未実装）。"
+      "notes": "Done: stale detection (unsaved/saved/config), small state in getState/setState and workspace storage, versioned restore with clamps and a restored camera. Restore verified in the browser fixture, so retainContextWhenHidden is false. Remaining: real VS Code checks (SD-027) and auto-refresh (off by design)."
     },
     {
       "id": "SD-022",

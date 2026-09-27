@@ -144,7 +144,9 @@ export function createGraphView(options: GraphViewOptions): GraphView {
     renderSelection();
     if (pendingCamera) {
       // A restored camera wins over fitting: hiding and returning to the tab must not
-      // reset the zoom the user had set.
+      // reset the zoom the user had set. The content size is still applied first so the
+      // SVG has a real size for the restored zoom.
+      camera.setContentSize(result.width, result.height);
       camera.applyState(pendingCamera);
       pendingCamera = undefined;
     } else {

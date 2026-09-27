@@ -1,0 +1,34 @@
+{
+  "task": "SD-021",
+  "checkedAt": "2026-09-27",
+  "browser": {
+    "page": "tests/webview/fixtures/shell-fixture.html",
+    "method": "A persisted state is seeded (as workspace storage would), the page is reloaded, and the analysis result arrives afterwards, as it does after a restart.",
+    "restored": {
+      "targetName": "Sample.sln",
+      "selectedNode": "ty_0000000000000001",
+      "navigationWidth": "300px",
+      "viewBox": "0 0 414 140 (zoomed, not the fitted 0 0 800 140)"
+    },
+    "notStarted": {
+      "analyzeRequests": 0,
+      "projectionRequests": 1,
+      "note": "The view requests the projection for the restored scope once the result exists; nothing starts an analysis."
+    },
+    "persistence": "The webview wrote a 302-byte versioned state to setState/localStorage containing target, selection, filters, scope, panes, table page, and camera."
+  },
+  "unitTests": {
+    "serializer": "Round trip with camera; a different schema version is ignored; pane widths clamp to 140-480/200-720; a local scope without an id becomes root; a malformed camera, filters, and table page are dropped.",
+    "protocol": "viewState maps to stateRestored, carries the camera, and never produces an analyze action."
+  },
+  "conclusions": {
+    "hideAndReturn": "restore is verified for the whole acceptance list (target, selection, filter state, camera) in the browser fixture.",
+    "noSilentRun": "No analysis state is persisted, so a restore cannot start Semantic or the generator; the fixture shows zero analyze requests.",
+    "crashSafety": "Old schema versions and narrow widths are handled by the version guard and clamps (unit-tested).",
+    "retainContextWhenHidden": "Now false: the restore covers the recreated webview."
+  },
+  "notVerifiedHere": [
+    "Real VS Code hide/show, window reload, and workspace-storage round trips (SD-027).",
+    "Auto-refresh is not implemented (default OFF by design); debounce and request coalescing remain for a later change."
+  ]
+}
