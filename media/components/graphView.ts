@@ -16,7 +16,7 @@ import {
 import { LayoutCancelledError, LayoutClient } from '../graph/layoutClient';
 import { projectionKey, toGraphProjection } from '../graph/projectionAdapter';
 import { createSelectionController, wireGraphInteraction } from '../graph/selection';
-import { createLayers, renderGraph } from '../graph/svgRenderer';
+import { createLayers, renderGraph, type RenderResult } from '../graph/svgRenderer';
 import type { GraphProjection, LayoutResult } from '../graph/types';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -81,6 +81,9 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   let projection: GraphProjection | undefined;
   let currentKey = '';
   let layout: LayoutResult | undefined;
+  let rendered: RenderResult | undefined;
+  let renderedKey = '';
+  let renderedSelection = selection.get();
   let generation = 0;
   let spacing = { nodeSpacing: 40, rankSpacing: 80 };
   let fitOnResize = true;
@@ -95,15 +98,38 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   };
 
   const renderSelection = (): void => {
-    if (!projection || !layout) {
+    if (!rendered || !layout) return;
+    const current = selection.get();
+    const update = (
+      elements: Map<string, SVGGElement>,
+      previous: ReadonlySet<string>,
+      next: ReadonlySet<string>
+    ): void => {
+      for (const id of new Set([...previous, ...next])) {
+        if (previous.has(id) === next.has(id)) continue;
+        const element = elements.get(id);
+        element?.classList.toggle('selected', next.has(id));
+        element?.setAttribute('aria-selected', String(next.has(id)));
+      }
+    };
+    update(rendered.nodeElements, renderedSelection.nodeIds, current.nodeIds);
+    update(rendered.edgeElements, renderedSelection.edgeIds, current.edgeIds);
+    renderedSelection = current;
+  };
+
+  const renderLayout = (): void => {
+    if (!projection || !layout) return;
+    const key = JSON.stringify(projection);
+    if (key === renderedKey) {
+      renderSelection();
       return;
     }
-
-    const current = selection.get();
-    renderGraph(targets, projection, layout, {
-      selectedNodeIds: current.nodeIds,
-      selectedEdgeIds: current.edgeIds
+    renderedSelection = selection.get();
+    rendered = renderGraph(targets, projection, layout, {
+      selectedNodeIds: renderedSelection.nodeIds,
+      selectedEdgeIds: renderedSelection.edgeIds
     });
+    renderedKey = key;
   };
 
   selection.onChange((current) => {
@@ -122,7 +148,7 @@ export function createGraphView(options: GraphViewOptions): GraphView {
     if (key === currentKey) {
       await pendingLayout;
       // Same graph: a redraw keeps the camera and never asks the worker again.
-      renderSelection();
+      renderLayout();
       return;
     }
 
@@ -149,8 +175,9 @@ export function createGraphView(options: GraphViewOptions): GraphView {
     }
 
     layout = result;
+    renderedKey = '';
     options.onError?.(undefined);
-    renderSelection();
+    renderLayout();
     if (pendingCamera) {
       // A restored camera wins over fitting: hiding and returning to the tab must not
       // reset the zoom the user had set. The content size is still applied first so the

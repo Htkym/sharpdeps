@@ -60,6 +60,10 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
           samplesMs.push(performance.now() - start);
         }
         clearInterval(timer);
+        const graph = document.querySelector('.graph-content');
+        const mutations = [];
+        const observer = new MutationObserver((records) => mutations.push(...records));
+        observer.observe(graph, { attributes: true, childList: true, subtree: true });
         const selection = [];
         for (let n = 0; n < 25; n++) {
           const start = performance.now();
@@ -67,6 +71,7 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
           await new Promise(requestAnimationFrame);
           selection.push(performance.now() - start);
         }
+        observer.disconnect();
         return {
           nodes,
           edges,
@@ -75,6 +80,15 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
           responsiveTicks: ticks,
           selectionSamplesMs: selection,
           selectionP95Ms: [...selection].sort((a, b) => a - b)[23],
+          selectionOnlyMutations: mutations.every(
+            (record) =>
+              record.type === 'attributes' &&
+              ['class', 'aria-selected'].includes(record.attributeName)
+          ),
+          selectedIds: Array.from(graph.querySelectorAll('g.node.selected'), (node) => [
+            node.dataset.id,
+            node.getAttribute('aria-selected')
+          ]),
           renderedNodes: document.querySelectorAll('g.node').length
         };
       },
@@ -97,6 +111,8 @@ test('fixed graphs: real ELK, UI selection and cancellation', async ({ page }) =
     expect(result.renderedNodes).toBe(nodes);
     expect(Math.max(...result.samplesMs)).toBeLessThanOrEqual(budgetMs);
     expect(result.responsiveTicks).toBeGreaterThan(0);
+    expect(result.selectionOnlyMutations).toBe(true);
+    expect(result.selectedIds).toEqual([['ty_0000000000000018', 'true']]);
     expect(result.selectionP95Ms).toBeLessThanOrEqual(100);
   }
 });

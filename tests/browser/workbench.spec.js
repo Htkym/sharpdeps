@@ -91,6 +91,23 @@ for (const [width, theme] of [
       (await messages()).find((message) => message.type === 'export' && message.format === 'png')
         .data
     ).toMatch(/^data:image\/png;base64,/);
+    await page.evaluate(() => {
+      const app = window.sharpdepsApp;
+      app.dispatch({ type: 'entitySelected', entityId: 'ty_0000000000000001' });
+      app.dispatch({ type: 'relationSelected', relationId: 'rel_0000000000000001' });
+    });
+    await expect(page.locator('g.node.selected')).toHaveCount(0);
+    await expect(page.locator('g.edge.selected')).toHaveAttribute('aria-selected', 'true');
+    // Metadata can change without changing graph IDs or requiring a new layout.
+    await page.evaluate(async () => {
+      const app = window.sharpdepsApp;
+      const projection = structuredClone(app.getState().projection);
+      projection.edges[0].evidenceCount = 7;
+      app.dispatch({ type: 'projectionReceived', projection });
+      await app.export('svg');
+    });
+    await expect(page.locator('g.edge')).toHaveAttribute('aria-label', /根拠 7 件/);
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
     await page.getByText('Graph controls', { exact: true }).click();
     await page.getByRole('button', { name: 'Zoom in', exact: true }).press('Enter');
     await page.getByLabel('Node spacing', { exact: true }).fill('60');

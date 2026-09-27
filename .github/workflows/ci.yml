@@ -88,6 +88,7 @@ jobs:
           name: linux-verification
           path: |
             docs/implementation/v0.1.0/evidence/sd-027-e2e*.json
+            docs/implementation/v0.1.0/evidence/sd-028-browser.json
             docs/implementation/v0.1.0/evidence/sd-029-vsix.json
             .local/browser-results/
 
