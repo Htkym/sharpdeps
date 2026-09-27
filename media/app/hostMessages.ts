@@ -8,6 +8,7 @@ import type { AnalysisStage } from './state';
 import type { EntitySummary, ProjectionCycleGroup, Scope } from '../../src/view/protocolV2';
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
+import { restoreViewState } from './serializer';
 
 export interface RequestContext {
   /** The search query a request carried, so the answer can be matched to it. */
@@ -165,6 +166,15 @@ export function toViewActions(
           granularity: readGranularity(message.granularity)
         }
       ];
+    }
+
+    case 'viewState': {
+      // The host keeps the last small state in workspace storage. Restoring it never
+      // starts an analysis: the state has no analysis status.
+      const restored = restoreViewState(message.state);
+      return Object.keys(restored.state).length > 0
+        ? [{ type: 'stateRestored', state: restored.state }]
+        : [];
     }
 
     default:

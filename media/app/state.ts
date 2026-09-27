@@ -76,6 +76,8 @@ export interface ViewState {
     /** True while the next page is on its way. */
     pending: boolean;
   } | null;
+  /** Restored camera of the graph view; null until the view reports one. */
+  camera: { zoom: number; scrollLeft: number; scrollTop: number } | null;
   limitations: Array<{ code: string; message: string }>;
   error?: { code: string; message: string };
   paneWidths: { navigation: number; inspector: number };
@@ -111,6 +113,7 @@ export const INITIAL_STATE: ViewState = {
   limitations: [],
   paneWidths: { navigation: 220, inspector: 320 },
   inspectorOpen: false,
+  camera: null,
   history: [],
   tableSort: DEFAULT_SORT,
   tablePage: 0,
@@ -174,6 +177,7 @@ export type ViewAction =
   | { type: 'temporaryDisplayCleared' }
   | { type: 'filtersChanged'; filters: Filters }
   | { type: 'entitySelected'; entityId: string }
+  | { type: 'cameraChanged'; camera: { zoom: number; scrollLeft: number; scrollTop: number } }
   | { type: 'relationSelected'; relationId: string }
   | { type: 'selectionCleared' }
   | { type: 'inspectorToggled' }
@@ -421,6 +425,9 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
 
     case 'inspectorToggled':
       return { ...state, inspectorOpen: !state.inspectorOpen };
+
+    case 'cameraChanged':
+      return { ...state, camera: action.camera };
 
     case 'paneResized':
       return {

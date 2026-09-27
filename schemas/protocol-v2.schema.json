@@ -192,6 +192,17 @@
     },
     {
       "type": "object",
+      "required": ["type", "state"],
+      "properties": {
+        "type": { "const": "viewState" },
+        "state": {
+          "type": "object",
+          "description": "Small persisted view state (SD-021): target, selection, filters, scope, panes, camera. Restoring it never starts an analysis."
+        }
+      }
+    },
+    {
+      "type": "object",
       "required": ["type", "analysisId", "entityId"],
       "properties": {
         "type": { "const": "reveal" },

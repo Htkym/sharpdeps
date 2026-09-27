@@ -20,6 +20,10 @@ export interface CodeMapPanelHost {
   output: vscode.OutputChannel;
   /** Directory the analysed paths are relative to, for opening locations. */
   rootDirectory: () => string | undefined;
+  /** Persists the small view state (SD-021). Never starts an analysis. */
+  saveViewState: (state: Record<string, unknown>) => void;
+  /** Reads the last small view state, if any (SD-021). */
+  loadViewState: () => Record<string, unknown> | undefined;
   /** Starts an analysis for the current target in the requested mode. */
   onAnalyze: (mode: 'quick' | 'semantic') => void;
   /** Stops the running analysis. */
@@ -44,6 +48,8 @@ export class CodeMapPanel {
 
     const panel = vscode.window.createWebviewPanel(CodeMapPanel.viewType, 'SharpDeps', column, {
       enableScripts: true,
+      // Kept true until the hide/show restore is verified end to end (SD-021): a wrong
+      // restore would lose the view, so the change waits for that verification.
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
     });
@@ -177,6 +183,23 @@ export class CodeMapPanel {
               message: error instanceof Error ? error.message : String(error)
             })
         );
+    }
+  }
+
+  /** Notifies the webview that the registered result is out of date (SD-021). */
+  notifyStale(
+    analysisId: string,
+    reason: 'unsavedChange' | 'savedChange' | 'profileChange' | 'unknown',
+    relativePaths?: string[]
+  ): void {
+    this.post({ type: 'stale', analysisId, reason, relativePaths });
+  }
+
+  /** Restores the last small state when the webview asks (SD-021). */
+  private postViewState(): void {
+    const state = this.host.loadViewState();
+    if (state) {
+      this.post({ type: 'viewState', state });
     }
   }
 

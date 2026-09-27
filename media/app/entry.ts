@@ -8,9 +8,14 @@
 import { PROTOCOL_VERSION } from '../../src/view/protocolV2';
 import { createViewerApp, type ViewerApp } from './app';
 import { toViewActions, type RequestContext } from './hostMessages';
+import { serializeViewState } from './serializer';
 import type { ViewAction, ViewState } from './state';
 
-declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
+declare function acquireVsCodeApi(): {
+  postMessage(message: unknown): void;
+  getState(): unknown;
+  setState(state: unknown): void;
+};
 
 declare global {
   interface Window {
@@ -23,12 +28,14 @@ if (root) {
   const host = createWebviewLink(root);
   const requestContext = new Map<string, RequestContext>();
   const requested = { projection: '', details: '', evidence: '', evidencePage: '' };
+  let persistTimer: number | undefined;
 
   const app = createViewerApp(root, {
     workerUrl: root.dataset.workerUri,
     onStateChanged: (state) => {
       applyPaneWidths(state);
       requestForState(state);
+      persistSoon(state);
     },
     onHostAction: (action) => {
       if (action.type === 'searchStarted') {
@@ -57,9 +64,31 @@ if (root) {
   });
 
   window.sharpdepsApp = app;
+  // Restore before the handshake: a webview that hid and came back keeps its small state,
+  // and the host's `viewState` message covers a window reload. Neither starts an analysis.
+  const stored = host.getState();
+  if (stored !== undefined && stored !== null) {
+    for (const action of toViewActions({ type: 'viewState', state: stored }, requestContext)) {
+      app.dispatch(action);
+    }
+  }
+
   // The handshake asks the host for the protocol version, capabilities, and whether an
   // analysis result is already registered.
   host.post({ type: 'ready', protocolVersion: PROTOCOL_VERSION, webviewVersion: '1' });
+
+  function persistSoon(state: ViewState): void {
+    if (persistTimer !== undefined) {
+      window.clearTimeout(persistTimer);
+    }
+
+    persistTimer = window.setTimeout(() => {
+      persistTimer = undefined;
+      const snapshot = serializeViewState(state, state.camera ?? undefined);
+      host.setState(snapshot);
+      host.post({ type: 'persistViewState', viewState: snapshot });
+    }, 300);
+  }
 
   function requestForState(state: ViewState): void {
     const analysisId = state.analysisId;
@@ -161,6 +190,8 @@ function nextRequestId(): string {
 function createWebviewLink(root_: HTMLElement): {
   post(message: unknown): void;
   subscribe(listener: (message: unknown) => void): void;
+  getState(): unknown;
+  setState(state: unknown): void;
 } {
   const api = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
   return {
@@ -177,6 +208,30 @@ function createWebviewLink(root_: HTMLElement): {
     },
     subscribe(listener) {
       window.addEventListener('message', (event) => listener(event.data));
+    },
+    getState() {
+      if (api) {
+        return api.getState();
+      }
+
+      try {
+        const stored = window.localStorage.getItem('sharpdeps.fixture.viewState');
+        return stored ? JSON.parse(stored) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    setState(state) {
+      if (api) {
+        api.setState(state);
+        return;
+      }
+
+      try {
+        window.localStorage.setItem('sharpdeps.fixture.viewState', JSON.stringify(state));
+      } catch {
+        // A fixture without storage simply does not persist.
+      }
     }
   };
 }

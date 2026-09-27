@@ -32,6 +32,22 @@ export class Camera {
     return this.zoomValue;
   }
 
+  applyState(state: Partial<CameraState>): void {
+    if (typeof state.zoom === 'number' && Number.isFinite(state.zoom)) {
+      this.setZoom(state.zoom);
+    }
+
+    if (typeof state.scrollLeft === 'number') {
+      this.viewport.scrollLeft = state.scrollLeft;
+    }
+
+    if (typeof state.scrollTop === 'number') {
+      this.viewport.scrollTop = state.scrollTop;
+    }
+
+    this.onChange?.(this.state);
+  }
+
   get state(): CameraState {
     return {
       zoom: this.zoomValue,

@@ -32,12 +32,17 @@ export interface GraphViewOptions {
   onActivate?: (selection: GraphSelectionIds) => void;
   /** Layout/render failures; the caller keeps the analysis result visible. */
   onError?: (message: string | undefined) => void;
+  /** Fired after pan/zoom so the caller can persist the camera (SD-021). */
+  onCameraChanged?: (camera: { zoom: number; scrollLeft: number; scrollTop: number }) => void;
 }
 
 export interface GraphView {
   readonly element: HTMLElement;
   update(projection: Projection, scopeLabel: string): void;
   setSelection(nodeIds: readonly string[], edgeIds: readonly string[]): void;
+  /** Restores a persisted camera instead of fitting the next projection (SD-021). */
+  applyCamera(camera: { zoom: number; scrollLeft: number; scrollTop: number }): void;
+  cameraState(): { zoom: number; scrollLeft: number; scrollTop: number };
   fit(): void;
   zoomBy(factor: number): void;
   exportSvg(): string | undefined;
@@ -74,6 +79,7 @@ export function createGraphView(options: GraphViewOptions): GraphView {
   let currentKey = '';
   let layout: LayoutResult | undefined;
   let generation = 0;
+  let pendingCamera: { zoom: number; scrollLeft: number; scrollTop: number } | undefined;
 
   const report = (current: {
     nodeIds: ReadonlySet<string>;
@@ -136,12 +142,25 @@ export function createGraphView(options: GraphViewOptions): GraphView {
     layout = result;
     options.onError?.(undefined);
     renderSelection();
-    camera.setContentSize(result.width, result.height);
-    camera.fit();
+    if (pendingCamera) {
+      // A restored camera wins over fitting: hiding and returning to the tab must not
+      // reset the zoom the user had set.
+      camera.applyState(pendingCamera);
+      pendingCamera = undefined;
+    } else {
+      camera.setContentSize(result.width, result.height);
+      camera.fit();
+    }
   }
 
   camera.wireWheel();
   camera.wireDrag();
+
+  const reportCamera = (): void => {
+    options.onCameraChanged?.(camera.state);
+  };
+  viewport.addEventListener('pointerup', reportCamera);
+  viewport.addEventListener('wheel', reportCamera, { passive: true });
 
   return {
     element,
@@ -151,6 +170,10 @@ export function createGraphView(options: GraphViewOptions): GraphView {
     setSelection: (nodeIds, edgeIds) => {
       selection.set(nodeIds, edgeIds);
     },
+    applyCamera: (camera_) => {
+      pendingCamera = camera_;
+    },
+    cameraState: () => camera.state,
     fit: () => camera.fit(),
     zoomBy: (factor) => camera.zoomBy(factor),
     exportSvg: () => {

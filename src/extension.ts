@@ -108,10 +108,70 @@ export function activate(context: vscode.ExtensionContext): void {
       bridge,
       output,
       rootDirectory,
+      saveViewState: (state) => void context.workspaceState.update(VIEW_STATE_KEY, state),
+      loadViewState: () => context.workspaceState.get<Record<string, unknown>>(VIEW_STATE_KEY),
       onAnalyze: (mode) => void runAndShow(lastTarget, mode),
       onCancel: () => controller.cancel('user')
     };
   }
+
+  const VIEW_STATE_KEY = 'sharpdeps.viewState';
+
+  /**
+   * Marks the registered result as stale when an analysed file changes (SD-021).
+   * Auto-refresh stays off by default: the user decides when to analyze again.
+   */
+  function watchForStaleness(): void {
+    const relativePathOf = (document: vscode.TextDocument): string | undefined => {
+      const analysisId = store.currentAnalysisId;
+      const root = rootDirectory();
+      if (!analysisId || !root || document.uri.scheme !== 'file') {
+        return undefined;
+      }
+
+      const relative = path.relative(root, document.uri.fsPath).replace(/\\/g, '/');
+      return store.documentIdForPath(analysisId, relative) ? relative : undefined;
+    };
+
+    const markStale = (reason: 'unsavedChange' | 'savedChange', relative: string): void => {
+      const analysisId = store.currentAnalysisId;
+      if (!analysisId) {
+        return;
+      }
+
+      output.appendLine(`Result ${analysisId} is stale (${reason}): ${relative}`);
+      CodeMapPanel.currentPanel?.notifyStale(analysisId, reason, [relative]);
+    };
+
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        if (!event.document.isDirty) {
+          return;
+        }
+
+        const relative = relativePathOf(event.document);
+        if (relative) {
+          markStale('unsavedChange', relative);
+        }
+      }),
+      vscode.workspace.onDidSaveTextDocument((document) => {
+        const relative = relativePathOf(document);
+        if (relative) {
+          markStale('savedChange', relative);
+        }
+      }),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('sharpdeps')) {
+          const analysisId = store.currentAnalysisId;
+          if (analysisId) {
+            CodeMapPanel.currentPanel?.notifyStale(analysisId, 'profileChange');
+          }
+        }
+      })
+    );
+  }
+
+  watchForStaleness();
 
   async function showTypeFromEditor(kind: 'dependencies' | 'dependents'): Promise<void> {
     const resolution = await resolveTypeAtCursor(store, rootDirectory(), output);

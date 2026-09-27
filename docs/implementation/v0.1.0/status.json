@@ -764,12 +764,33 @@
       "id": "SD-021",
       "title": "古い結果の検知と画面状態の復元",
       "milestone": "M2",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "in_progress",
+      "owner": "agent",
+      "changedFiles": [
+        "media/app/serializer.ts",
+        "media/app/entry.ts",
+        "media/app/state.ts",
+        "media/app/hostMessages.ts",
+        "media/components/graphView.ts",
+        "media/graph/camera.ts",
+        "media/app/app.ts",
+        "src/view/protocolV2.ts",
+        "schemas/protocol-v2.schema.json",
+        "src/view/codeMapPanel.ts",
+        "src/extension.ts",
+        "tests/webview/serializer.test.ts",
+        "tests/webview/hostMessages.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-021.md"
+      ],
+      "tests": [
+        "npm test（webview） — 7ファイル / 48テスト成功（+5）",
+        "npm run compile / lint / format:check — 成功",
+        "シリアライザ: 往復・版不一致の無視・幅クランプ・壊れた値の修復",
+        "プロトコル: viewState→stateRestored、解析を起動しない"
+      ],
+      "evidence": ["docs/implementation/v0.1.0/tasks/SD-021.md"],
+      "blockers": [],
+      "notes": "実装完了：Stale検知（未保存/保存/構成）、状態保存（getState/setState+workspaceState）、版付き復元、クランプ、カメラ復元の配線。未完：リロード/タブ復帰の実検証（fixtureでタイムアウト）とその後のretainContextWhenHidden=false、実機（SD-027）、自動更新（既定OFFのため未実装）。"
     },
     {
       "id": "SD-022",

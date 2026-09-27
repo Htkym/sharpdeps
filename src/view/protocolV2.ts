@@ -218,6 +218,11 @@ export type HostToWebviewMessage =
       granularity?: Granularity;
     }
   | {
+      /** Restored small view state from workspace storage (SD-021). */
+      type: 'viewState';
+      state: Record<string, unknown>;
+    }
+  | {
       type: 'searchResults';
       requestId: string;
       analysisId: string;

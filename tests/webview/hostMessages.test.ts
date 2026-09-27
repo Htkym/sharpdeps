@@ -270,6 +270,37 @@ describe('toViewActions', () => {
     });
   });
 
+  it('restores a persisted view state without starting an analysis', () => {
+    const actions = toViewActions(
+      {
+        type: 'viewState',
+        state: {
+          version: 1,
+          targetName: 'Sample.sln',
+          targetRelativePath: 'src/Sample.sln',
+          selection: { entityId: 'ty_1111111111111111' },
+          paneWidths: { navigation: 260, inspector: 400 },
+          camera: { zoom: 1.4, scrollLeft: 0, scrollTop: 0 }
+        }
+      },
+      queries
+    );
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      type: 'stateRestored',
+      state: {
+        target: { name: 'Sample.sln', relativePath: 'src/Sample.sln' },
+        selection: { entityId: 'ty_1111111111111111' },
+        camera: { zoom: 1.4, scrollLeft: 0, scrollTop: 0 }
+      }
+    });
+    // Nothing in a restored state can ask for an analysis or a projection.
+    expect(actions[0]).not.toMatchObject({ type: 'analyzeStarted' });
+
+    expect(toViewActions({ type: 'viewState', state: { version: 99 } }, queries)).toEqual([]);
+  });
+
   it('reads the aggregated relation breakdown defensively', () => {
     const actions = toViewActions(
       {

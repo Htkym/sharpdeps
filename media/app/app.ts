@@ -248,9 +248,16 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       onError: (message) => {
         graphRuntime.error = message;
         render();
-      }
+      },
+      onCameraChanged: (camera) => dispatch({ type: 'cameraChanged', camera })
     });
     elements.graphHost.append(graphRuntime.view.element);
+    // A camera from the persisted state is applied to the first projection instead of
+    // fitting, so a restored view keeps the zoom and position.
+    if (state.camera) {
+      graphRuntime.view.applyCamera(state.camera);
+    }
+
     return graphRuntime.view;
   }
 }
