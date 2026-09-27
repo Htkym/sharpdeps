@@ -6,6 +6,7 @@
 // compared in tests and refreshed with SHARPDEPTS_UPDATE_BASELINE=1.
 
 import * as fs from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import * as path from 'node:path';
 import type { AnalysisSnapshot } from '../../src/analyzer/reportV2';
 
@@ -133,14 +134,14 @@ export function compareWithGolden(
   update: boolean
 ): { matches: boolean; expected?: SemanticSummary } {
   const serialized = `${JSON.stringify(summary, null, 2)}\n`;
-  if (update || !fs.existsSync(goldenPath)) {
+  if (update) {
     fs.mkdirSync(path.dirname(goldenPath), { recursive: true });
     fs.writeFileSync(goldenPath, serialized, 'utf8');
     return { matches: true };
   }
 
   const expected = JSON.parse(fs.readFileSync(goldenPath, 'utf8')) as SemanticSummary;
-  return { matches: serialized === `${JSON.stringify(expected, null, 2)}\n`, expected };
+  return { matches: isDeepStrictEqual(summary, expected), expected };
 }
 
 /** Short diff of the first differing keys, for an actionable failure message. */

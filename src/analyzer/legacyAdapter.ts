@@ -63,14 +63,15 @@ export interface LegacyAdaptation {
 
 export function adaptLegacyReport(options: LegacyAdapterOptions): LegacyAdaptation {
   const { report } = options;
+  const paths = /^[a-z]:[\\/]|^\\\\/i.test(report.solutionPath ?? '') ? path.win32 : path.posix;
   const createdAt = options.createdAt ?? new Date().toISOString();
-  const solutionDirectory = path.dirname(report.solutionPath ?? '');
+  const solutionDirectory = paths.dirname(report.solutionPath ?? '');
   const rootId = workspaceRootId(solutionDirectory);
 
   const target: TargetDescriptor = {
     kind: targetKind(report.solutionPath ?? ''),
     rootId,
-    relativePath: toRelative(solutionDirectory, report.solutionPath ?? '')
+    relativePath: toRelative(solutionDirectory, report.solutionPath ?? '', paths)
   };
 
   const projects = report.projects ?? [];
@@ -85,7 +86,10 @@ export function adaptLegacyReport(options: LegacyAdapterOptions): LegacyAdaptati
       project.name,
       projectVariantId(logicalId, project.targetFramework || '(not specified)', 'Debug', null)
     );
-    projectDirectories.set(project.name, path.dirname(path.join(solutionDirectory, relativePath)));
+    projectDirectories.set(
+      project.name,
+      paths.dirname(paths.join(solutionDirectory, relativePath))
+    );
   }
 
   const profile = profileHash({
@@ -98,10 +102,9 @@ export function adaptLegacyReport(options: LegacyAdapterOptions): LegacyAdaptati
 
   const documents = new Map<string, SourceDocument>();
   const documentFor = (absoluteOrRelative: string): SourceDocument => {
-    const absolute = path.isAbsolute(absoluteOrRelative)
-      ? absoluteOrRelative
-      : path.join(solutionDirectory, absoluteOrRelative);
-    const relativePath = toRelative(solutionDirectory, absolute);
+    const file = normalize(absoluteOrRelative);
+    const absolute = paths.isAbsolute(file) ? file : paths.join(solutionDirectory, file);
+    const relativePath = toRelative(solutionDirectory, absolute, paths);
     const id = documentId(rootId, relativePath, 'userSource');
     const existing = documents.get(id);
     if (existing) {
@@ -125,10 +128,10 @@ export function adaptLegacyReport(options: LegacyAdapterOptions): LegacyAdaptati
     if (!file) {
       return undefined;
     }
-    const normalizedFile = path.normalize(file);
+    const normalizedFile = paths.normalize(normalize(file));
     let bestMatch: { name: string; length: number } | undefined;
     for (const [name, directory] of projectDirectories) {
-      const prefix = directory.endsWith(path.sep) ? directory : directory + path.sep;
+      const prefix = directory.endsWith(paths.sep) ? directory : directory + paths.sep;
       if (
         normalizedFile.startsWith(prefix) &&
         (!bestMatch || directory.length > bestMatch.length)
@@ -473,8 +476,8 @@ function targetKind(solutionPath: string): 'solution' | 'slnx' | 'project' {
   return 'project';
 }
 
-function toRelative(rootDirectory: string, target: string): string {
-  return normalize(path.isAbsolute(target) ? path.relative(rootDirectory, target) : target);
+function toRelative(rootDirectory: string, target: string, paths: typeof path.posix): string {
+  return normalize(paths.isAbsolute(target) ? paths.relative(rootDirectory, target) : target);
 }
 
 function normalize(value: string): string {

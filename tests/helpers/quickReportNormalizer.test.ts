@@ -55,6 +55,15 @@ function makeReport(overrides: Partial<CodeMapReport> = {}): CodeMapReport {
 }
 
 describe('normalizeQuickReport', () => {
+  it('normalizes platform-specific lookup-key case without changing document path case', () => {
+    const report = makeReport();
+    report.diagramProjects[0].lookupKey = `${root}/src/App/App.csproj`;
+    const normalized = normalizeQuickReport(report, root);
+    expect(normalized.diagramProjects[0].lookupKey).toBe(
+      `${FIXTURE_ROOT_PLACEHOLDER}/src/app/app.csproj`
+    );
+    expect(normalized.projects[0].relativePath).toBe('src/App/App.csproj');
+  });
   it('replaces the fixture root and normalizes separators', () => {
     const normalized = normalizeQuickReport(makeReport(), root);
 

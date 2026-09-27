@@ -214,6 +214,7 @@ export class AnalysisController {
     this.wireStreams(run, workDirectory);
 
     const exit = await this.waitForExit(run);
+    await run.terminatePromise;
     if (run.timeoutTimer) {
       clearTimeout(run.timeoutTimer);
     }
@@ -313,7 +314,7 @@ export class AnalysisController {
 
     if (process.platform !== 'win32') {
       try {
-        run.child.kill('SIGTERM');
+        if (run.child.pid !== undefined) process.kill(-run.child.pid, 'SIGTERM');
       } catch {
         // Already exited.
       }
@@ -321,7 +322,7 @@ export class AnalysisController {
 
     // 2. Grace period.
     const exited = await waitForExit(run.child, this.options.gracePeriodMs ?? DEFAULT_GRACE_MS);
-    if (exited) {
+    if (exited && process.platform === 'win32') {
       return;
     }
 
@@ -497,12 +498,8 @@ async function killOwnedProcessTree(pid: number): Promise<void> {
   // The child was spawned detached, so it leads its own process group.
   try {
     process.kill(-pid, 'SIGKILL');
-  } catch {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // Already gone.
-    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
 }
 

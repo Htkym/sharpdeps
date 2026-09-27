@@ -46,9 +46,12 @@ switch (behaviour) {
   case 'slow':
     setInterval(() => {}, 1000);
     break;
-  case 'tree': {
-    const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-    process.stdout.write('grandchild:' + grandchild.pid + '\\n');
+  case 'tree':
+  case 'tree-term-resistant': {
+    const code = (behaviour === 'tree-term-resistant' ? "process.on('SIGTERM', () => {});" : '')
+      + "process.stdout.write('ready'); setInterval(() => {}, 1000);";
+    const grandchild = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'ignore'] });
+    grandchild.stdout.once('data', () => process.stdout.write('grandchild:' + grandchild.pid + '\\n'));
     setInterval(() => {}, 1000);
     break;
   }
@@ -341,29 +344,32 @@ describe('AnalysisController', () => {
     expect(outcomes.map((entry) => entry.analysisId)).toEqual(['an_0000000000000003']);
   });
 
-  it('terminates the whole owned process tree on cancel', async () => {
-    const { workRoot, scriptPath } = createEnvironment();
-    const logs: string[] = [];
-    const controller = createController(scriptPath, workRoot, { logs });
+  it.each(['tree', 'tree-term-resistant'])(
+    'terminates the whole owned process tree on cancel (%s)',
+    async (behaviour) => {
+      const { workRoot, scriptPath } = createEnvironment();
+      const logs: string[] = [];
+      const controller = createController(scriptPath, workRoot, { logs });
 
-    const run = controller.start({
-      targetPath: 'Tree.sln',
-      mode: 'quick',
-      behaviour: 'tree'
-    } as never);
+      const run = controller.start({
+        targetPath: 'Tree.sln',
+        mode: 'quick',
+        behaviour
+      } as never);
 
-    expect(await waitFor(() => logs.some((line) => line.startsWith('grandchild:')))).toBe(true);
-    const grandchildPid = Number(
-      logs.find((line) => line.startsWith('grandchild:'))?.split(':')[1] ?? Number.NaN
-    );
-    expect(isAlive(grandchildPid)).toBe(true);
+      expect(await waitFor(() => logs.some((line) => line.startsWith('grandchild:')))).toBe(true);
+      const grandchildPid = Number(
+        logs.find((line) => line.startsWith('grandchild:'))?.split(':')[1] ?? Number.NaN
+      );
+      expect(isAlive(grandchildPid)).toBe(true);
 
-    controller.cancel('user');
-    const outcome = await run;
+      controller.cancel('user');
+      const outcome = await run;
 
-    expect(['cancelled', 'timeout']).toContain(outcome.status);
-    expect(await waitFor(() => !isAlive(grandchildPid))).toBe(true);
-  });
+      expect(['cancelled', 'timeout']).toContain(outcome.status);
+      expect(await waitFor(() => !isAlive(grandchildPid))).toBe(true);
+    }
+  );
 
   it('leaves unrelated processes alone', async () => {
     const { workRoot, scriptPath } = createEnvironment();

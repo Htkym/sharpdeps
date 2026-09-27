@@ -637,7 +637,7 @@ public static class SemanticLoader
     {
         var failures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var pattern = new Regex(
-            "[A-Za-z]:\\\\[^\"']+?\\.(?:csproj|vbproj|fsproj|vcxproj)",
+            "(?:[A-Za-z]:[\\\\/]|/)[^\\r\\n\"']+?\\.(?:csproj|vbproj|fsproj|vcxproj)",
             RegexOptions.CultureInvariant);
 
         foreach (var diagnostic in diagnostics)

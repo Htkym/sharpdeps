@@ -20,7 +20,12 @@ export function normalizeQuickReport(report: CodeMapReport, fixtureRoot: string)
 
 function normalizeValue(value: unknown, root: string, key: string | undefined): unknown {
   if (typeof value === 'string') {
-    return normalizeString(value, root, key === 'mermaid');
+    const normalized = normalizeString(value, root, key === 'mermaid');
+    // Project lookup keys fold case on Windows; path spelling is asserted separately.
+    return ['lookupKey', 'sourceKey', 'targetKey'].includes(key ?? '') &&
+      normalized.startsWith(FIXTURE_ROOT_PLACEHOLDER)
+      ? FIXTURE_ROOT_PLACEHOLDER + normalized.slice(FIXTURE_ROOT_PLACEHOLDER.length).toLowerCase()
+      : normalized;
   }
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeValue(entry, root, undefined));
