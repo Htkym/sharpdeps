@@ -74,6 +74,11 @@ export interface AnalysisControllerOptions {
   gracePeriodMs?: number;
   defaultTimeoutMs?: number;
   maxLogLines?: number;
+  /**
+   * How many run directories to keep under the work root. The store reads evidence from
+   * them lazily, so the newest ones must outlive the analysis result (SD-028).
+   */
+  keepRunDirectories?: number;
   onProgress?: (event: AnalysisProgressEvent) => void;
   onLog?: (line: string, source: 'stdout' | 'stderr') => void;
   /** Called only for the current generation, before the work directory is removed. */
@@ -211,8 +216,37 @@ export class AnalysisController {
       await this.options.onCompleted(outcome);
     }
 
-    await removeDirectory(workDirectory);
+    await this.pruneRunDirectories();
     return outcome;
+  }
+
+  /**
+   * Keeps the newest run directories and removes older ones. The current result's
+   * evidence lives in the newest directory and is read on demand, so it is never the one
+   * removed here.
+   */
+  private async pruneRunDirectories(): Promise<void> {
+    const workRoot = this.options.workRoot ?? os.tmpdir();
+    const keep = Math.max(1, this.options.keepRunDirectories ?? 2);
+    try {
+      const entries = await fs.promises.readdir(workRoot, { withFileTypes: true });
+      const runs = entries.filter(
+        (entry) => entry.isDirectory() && entry.name.startsWith('sharpdeps-run-')
+      );
+      const withTimes = await Promise.all(
+        runs.map(async (entry) => {
+          const full = path.join(workRoot, entry.name);
+          const stats = await fs.promises.stat(full).catch(() => undefined);
+          return { full, mtime: stats?.mtimeMs ?? 0 };
+        })
+      );
+      withTimes.sort((left, right) => right.mtime - left.mtime);
+      for (const entry of withTimes.slice(keep)) {
+        await removeDirectory(entry.full);
+      }
+    } catch {
+      // Pruning is best effort: a missing work root is not an analysis failure.
+    }
   }
 
   /**

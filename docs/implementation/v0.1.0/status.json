@@ -984,12 +984,29 @@
       "id": "SD-028",
       "title": "性能・大規模データ・後始末の検証",
       "milestone": "M3",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "scripts/perf.js",
+        "package.json",
+        "src/analyzer/analysisController.ts",
+        "src/analyzer/analysisController.test.ts",
+        "docs/performance.md",
+        "docs/implementation/v0.1.0/tasks/SD-028.md",
+        "docs/implementation/v0.1.0/evidence/sd-028-performance.json"
+      ],
+      "tests": [
+        "npm run perf — Quick 400 files: median 559 ms (523-578), report 135 KB; Semantic baseline: 5.4 s, peak 170 MiB, output 116 KB; dotnet processes 8 -> 8; no measurement directories left",
+        "npx vitest run src/analyzer/analysisController.test.ts — 9 tests pass (retention and pruning)",
+        "npm run compile / lint / format:check — pass"
+      ],
+      "evidence": [
+        "docs/performance.md",
+        "docs/implementation/v0.1.0/evidence/sd-028-performance.json",
+        "docs/implementation/v0.1.0/tasks/SD-028.md"
+      ],
+      "blockers": [],
+      "notes": "Measured with a fixed 400-file fixture and the real baseline solution, and published in docs/performance.md with the environment. The verification found a real cleanup bug: the controller deleted the run directory that the store reads evidence from on demand, which would break evidence paging and exports; it now keeps the newest two and prunes the rest, pinned by tests. Not measured: Quick peak memory (process is too short for the sampler), cancel response and UI blocking (structural/unit only), and a several-thousand-file real solution."
     },
     {
       "id": "SD-029",

@@ -1,0 +1,69 @@
+{
+  "task": "SD-028",
+  "checkedAt": "2026-09-27T05:30:55.385Z",
+  "environment": {
+    "platform": "win32 x64",
+    "cpus": 8,
+    "totalMemoryBytes": 33957662720
+  },
+  "fixture": {
+    "path": ".local\\perf\\big",
+    "files": 400,
+    "note": "40 namespaces x 10 types with a deterministic fan"
+  },
+  "quick": {
+    "runs": [
+      {
+        "label": "quick-1",
+        "exitCode": 0,
+        "wallMs": 559.0615,
+        "peakWorkingSetBytes": 0,
+        "stdoutTail": "",
+        "stderrTail": "",
+        "outputBytes": 135062,
+        "outputDirectory": ".local\\perf\\runs\\sharpdeps-run-1QLces"
+      },
+      {
+        "label": "quick-2",
+        "exitCode": 0,
+        "wallMs": 577.8071,
+        "peakWorkingSetBytes": 0,
+        "stdoutTail": "",
+        "stderrTail": "",
+        "outputBytes": 135062,
+        "outputDirectory": ".local\\perf\\runs\\sharpdeps-run-6ZHHFG"
+      },
+      {
+        "label": "quick-3",
+        "exitCode": 0,
+        "wallMs": 522.8094,
+        "peakWorkingSetBytes": 0,
+        "stdoutTail": "",
+        "stderrTail": "",
+        "outputBytes": 135062,
+        "outputDirectory": ".local\\perf\\runs\\sharpdeps-run-vuTz6j"
+      }
+    ],
+    "medianWallMs": 559.0615,
+    "minWallMs": 522.8094,
+    "maxWallMs": 577.8071,
+    "peakWorkingSetBytes": 0
+  },
+  "semantic": {
+    "label": "semantic-baseline",
+    "exitCode": 0,
+    "wallMs": 5393.8134,
+    "peakWorkingSetBytes": 178565120,
+    "stdoutTail": "sharpdeps:progress {\"stage\":\"discover\",\"payload\":{\"target\":\"tests\\\\fixtures\\\\semantic-baseline\\\\SemanticBaseline.sln\",\"configuration\":\"Debug\",\"platform\":null}}\r\nsharpdeps:progress {\"stage\":\"write\",\"payload\":{\"variants\":6,\"relations\":45,\"types\":44,\"references\":3,\"unresolved\":0,\"diagnostics\":0,\"compilations\":6,\"generatedDocuments\":2,\"generatedContentRetained\":2,\"elapsedMs\":5215}}\r\n",
+    "stderrTail": "",
+    "outputBytes": 118582
+  },
+  "cleanup": {
+    "runDirectoriesCreated": 4,
+    "runDirectoriesAfter": 0,
+    "dotnetProcessesBefore": 8,
+    "dotnetProcessesAfter": 8,
+    "workspaceLeftovers": "none in the fixture",
+    "measurementDirectoriesRemoved": 4
+  }
+}

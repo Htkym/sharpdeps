@@ -158,7 +158,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<bool
 }
 
 describe('AnalysisController', () => {
-  it('completes a run, reports progress, and removes the work directory', async () => {
+  it('completes a run, reports progress, and keeps the newest work directory', async () => {
     const { workRoot, scriptPath } = createEnvironment();
     const stages: string[] = [];
     const outcomes: AnalysisOutcome[] = [];
@@ -179,7 +179,40 @@ describe('AnalysisController', () => {
     expect(stages).toEqual(['load', 'write']);
     expect(outcomes.map((entry) => entry.analysisId)).toEqual(['an_0000000000000001']);
     expect(controller.isRunning).toBe(false);
-    expect(fs.existsSync(outcome.workDirectory)).toBe(false);
+    // The store reads evidence from the run directory on demand, so the newest one is
+    // kept (SD-028); older runs are pruned instead.
+    expect(fs.existsSync(outcome.workDirectory)).toBe(true);
+  });
+
+  it('prunes older run directories and keeps the newest two', async () => {
+    const { workRoot, scriptPath } = createEnvironment();
+    const controller = createController(scriptPath, workRoot);
+
+    const first = await controller.start({
+      targetPath: 'Solution.sln',
+      mode: 'quick',
+      analysisId: 'an_0000000000000001'
+    });
+    const second = await controller.start({
+      targetPath: 'Solution.sln',
+      mode: 'quick',
+      analysisId: 'an_0000000000000002'
+    });
+    const third = await controller.start({
+      targetPath: 'Solution.sln',
+      mode: 'quick',
+      analysisId: 'an_0000000000000003'
+    });
+
+    const runs = fs
+      .readdirSync(workRoot)
+      .filter((name) => name.startsWith('sharpdeps-run-'))
+      .sort();
+    expect(runs).toHaveLength(2);
+    // The newest result's directory and report survive, so evidence paging keeps working.
+    expect(fs.existsSync(path.join(third.workDirectory, 'report-v2.json'))).toBe(true);
+    expect(runs).not.toContain(path.basename(first.workDirectory));
+    void second;
   });
 
   it('reports a failed run with its exit code and log tail', async () => {
