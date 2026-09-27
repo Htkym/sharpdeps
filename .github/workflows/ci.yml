@@ -41,8 +41,10 @@ jobs:
       - name: Build the analyzer hosts
         run: npm run build:analyzer
 
-      - name: Restore semantic fixture
-        run: dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+      - name: Prepare semantic fixture
+        run: |
+          dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
 
       - name: C# tests
         run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release
@@ -109,8 +111,10 @@ jobs:
       - run: npm ci
       - name: Publish Quick and Semantic hosts
         run: npm run build:analyzer
-      - name: Restore semantic fixture
-        run: dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+      - name: Prepare semantic fixture
+        run: |
+          dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
       - name: C# tests
         run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet
       - name: Quick and Semantic golden and contract tests

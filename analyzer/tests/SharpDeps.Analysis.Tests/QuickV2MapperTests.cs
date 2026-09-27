@@ -213,7 +213,7 @@ public sealed class QuickV2MapperTests : IDisposable
 
     private static void Write(string root, string relativePath, string content)
     {
-        var fullPath = Path.Combine(root, relativePath);
+        var fullPath = Path.Combine(root, relativePath.Replace('\\', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, content.Replace("\\n", "\n", StringComparison.Ordinal));
     }

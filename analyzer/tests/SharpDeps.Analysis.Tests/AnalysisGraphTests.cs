@@ -308,7 +308,10 @@ public sealed class AnalysisGraphTests : IDisposable
 
         // Infrastructure implements/uses Domain types, so the namespaces are connected.
         var orderStore = index.Types.First(type => type.Name == "OrderStore");
-        var domainOrder = index.Types.First(type => type.Name == "Order" && type.FullName == "Domain.Order");
+        var domainVariant = load.Report.Variants.Single(variant =>
+            variant.ProjectName.StartsWith("Domain", StringComparison.Ordinal) && variant.TargetFramework == "net10.0");
+        var domainOrder = index.Types.Single(type => type.FullName == "Domain.Order"
+            && type.ProjectVariantId == domainVariant.VariantKey);
         var infrastructureNamespace = namespaceByType[orderStore.Id];
         var domainNamespace = namespaceByType[domainOrder.Id];
 

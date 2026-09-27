@@ -504,7 +504,10 @@ public sealed class OperationDependencyCollectorTests : IDisposable
 
         var orderStore = index.Types.First(type => type.Name == "OrderStore");
         var sharedLog = index.Types.First(type => type.Name == "SharedLog");
-        var domainOrder = index.Types.First(type => type.Name == "Order" && type.FullName == "Domain.Order");
+        var domainVariant = load.Report.Variants.Single(variant =>
+            variant.ProjectName.StartsWith("Domain", StringComparison.Ordinal) && variant.TargetFramework == "net10.0");
+        var domainOrder = index.Types.Single(type => type.FullName == "Domain.Order"
+            && type.ProjectVariantId == domainVariant.VariantKey);
 
         // OrderStore.Save calls SharedLog.Write and reads Order.Id.
         Assert.Contains(result.Evidence, entry =>
