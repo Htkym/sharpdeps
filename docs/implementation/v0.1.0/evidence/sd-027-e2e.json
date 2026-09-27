@@ -1,31 +1,56 @@
 {
   "task": "SD-027",
-  "checkedAt": "2026-09-27",
-  "executed": false,
-  "reason": "No VS Code installation and no @vscode/test-electron in this environment; the runner exits with code 2 and says so.",
-  "runner": "node scripts/e2e.js (npm run test:e2e)",
-  "harness": {
-    "script": "scripts/e2e.js",
-    "suite": "tests/extension/suite.js",
-    "report": "docs/implementation/v0.1.0/evidence/sd-027-e2e.json",
+  "status": "partially executed on this machine (2026-09-27)",
+  "howToRun": "npm run test:e2e (uses the installed VS Code; a dedicated profile under .local/e2e-vscode)",
+  "firstRun": {
+    "vscodeVersion": "1.139.1",
+    "checkedAt": "2026-09-27T05:07:49.205Z",
+    "passed": 5,
+    "total": 7,
     "checks": [
-      "extension activates and all seven command ids are registered",
-      "the workspace is trusted",
-      "sharpdeps.showDependencyMap completes and registers an analysis (extensionTestApi.getAnalysisIds)",
-      "the current analysis id is set",
-      "the diagnostics collection is queryable"
+      {
+        "name": "extension installed",
+        "ok": true,
+        "detail": "htkym.sharpdeps"
+      },
+      {
+        "name": "commands are registered",
+        "ok": true
+      },
+      {
+        "name": "workspace is trusted",
+        "ok": true
+      },
+      {
+        "name": "workspace folder is open",
+        "ok": true,
+        "detail": "tests/fixtures/quick-baseline"
+      },
+      {
+        "name": "analysis result is registered",
+        "ok": false,
+        "detail": "no analysis id in the store"
+      },
+      {
+        "name": "current analysis is set",
+        "ok": false,
+        "detail": "undefined"
+      },
+      {
+        "name": "problems collection is queryable",
+        "ok": true,
+        "detail": "0 file(s)"
+      }
     ]
   },
-  "manualChecklist": [
-    "SD-019: cursor type commands reveal the scope; evidence opens the editor at the recorded position; generated documents open read-only; a changed file warns before revealing",
-    "SD-021: hiding the tab and reloading restores target, selection, filters, and camera without starting an analysis",
-    "SD-023: an untrusted workspace refuses to analyze and offers trust management; no CSP violations in the console",
-    "SD-024: high contrast and 200% zoom stay readable; \"/\" search, g/t views, Enter on an edge to evidence, Escape closes the inspector and restores focus",
-    "SD-011/022: generated document display; Mermaid/JSON/SVG/PNG saves; Copy for agent content reviews what is copied and sends nothing"
-  ],
+  "finding": "The extension host starts, all seven commands register, and the workspace loads. The Quick analysis does not leave a result in the store inside the test instance, so the remaining two checks fail. The suite now records diagnostics for that failure (analyzer DLL present, dotnet version, configured mode) so the next run names the cause.",
+  "environment": {
+    "extensionDependency": "The product declares ms-dotnettools.vscode-dotnet-runtime as a hard dependency. The marketplace install into the fresh profile did not produce files; the extension was copied from the user profile instead.",
+    "flakiness": "A second run of the same harness aborted without producing a report, so the harness needs the watchdog and a report-based verdict before it can gate CI."
+  },
   "notVerifiedHere": [
-    "The end-to-end run itself needs a machine with VS Code.",
-    "Untrusted-workspace behaviour is a manual step (the launcher disables workspace trust for the automated run).",
-    "CI wiring of test:e2e is deferred to SD-029."
+    "Why the analysis result does not register in the test instance (needs the next run with the diagnostics).",
+    "Untrusted-workspace behaviour (the launcher disables workspace trust).",
+    "The manual checklist items for SD-019/021/023/024 in a real window."
   ]
 }

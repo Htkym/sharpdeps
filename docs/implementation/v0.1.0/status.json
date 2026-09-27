@@ -971,14 +971,15 @@
       ],
       "tests": [
         "node scripts/e2e.js — exits 2 with a clear reason in this environment (no VS Code, no @vscode/test-electron)",
-        "npm run compile / lint / format:check — pass"
+        "npm run compile / lint / format:check — pass",
+        "VS Code 1.139.1 end-to-end run: 5/7 checks passed; the extension host, command registration, trust, workspace, and the Problems collection pass, while the analysis does not register a result in the test instance"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-027.md",
         "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
       ],
       "blockers": [],
-      "notes": "Harness ready (runner + in-VS-Code suite + a read-only test API), with the manual checklist that consolidates the real-machine items from SD-019/021/023/024. Not executed here: this environment has no VS Code and no @vscode/test-electron, and the runner reports that with exit code 2 instead of a false pass."
+      "notes": "Harness runs on this machine now: a dedicated --user-data-dir profile, the runtime extension copied from the user profile, and a fresh-profile onboarding fix (skip-welcome/release-notes/telemetry/updates). 5/7 checks pass; the analysis result is not registered inside the test instance and the suite now records diagnostics (analyzer DLL, dotnet, mode) for the next run. A second run aborted without a report, so the watchdog and report-based verdict were added before CI gating."
     },
     {
       "id": "SD-028",
