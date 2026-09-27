@@ -864,12 +864,30 @@
       "id": "SD-024",
       "title": "キーボード・テーマ・狭幅の完成",
       "milestone": "M3",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "in_progress",
+      "owner": "agent",
+      "changedFiles": [
+        "media/app/shortcuts.ts",
+        "media/app/app.ts",
+        "media/components/inspector.ts",
+        "media/app/entry.ts",
+        "media/styles/shell.css",
+        "tests/webview/shortcuts.test.ts",
+        "docs/implementation/v0.1.0/tasks/SD-024.md",
+        "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json"
+      ],
+      "tests": [
+        "npm test (webview) — 10 files / 64 tests pass (4 shortcut tests)",
+        "npm run compile / lint / format:check / build — pass",
+        "browser: \"/\" focuses search, t/g switch views, Enter on an edge reaches evidence and openEvidence, Escape closes the inspector",
+        "browser: no horizontal overflow at 1440/900/360 px, toolbar wraps at 360 px"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-024.md",
+        "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json"
+      ],
+      "blockers": [],
+      "notes": "Implemented: keyboard map with a tested resolver, evidence open button completing the keyboard flow, focus return on drawer close, forced-colors/reduced-motion/480px CSS. Remaining: real high-contrast and 200% zoom checks, real-key focus-return re-check, table-row to evidence path, per-width screenshots."
     },
     {
       "id": "SD-025",

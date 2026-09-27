@@ -1,0 +1,39 @@
+{
+  "task": "SD-024",
+  "checkedAt": "2026-09-27",
+  "keyboardFlow": {
+    "searchFocus": "\"/\" moves focus to the search field",
+    "viewSwitch": "\"t\" shows the table, \"g\" returns to the graph",
+    "edgeToEvidence": "Enter on a focused edge selects it, the inspector shows the evidence, and the \"エディターで開く\" button posts openEvidence with ev_0000000000000001",
+    "escape": "A keydown for Escape on window closes the inspector (state false, pane class without open)",
+    "hostCombinations": "Ctrl/Cmd/Alt combinations are ignored so VS Code keeps them"
+  },
+  "layout": [
+    {
+      "width": 1440,
+      "horizontalOverflow": false,
+      "toolbarWrapped": false
+    },
+    {
+      "width": 900,
+      "horizontalOverflow": false,
+      "toolbarWrapped": false
+    },
+    {
+      "width": 360,
+      "horizontalOverflow": false,
+      "toolbarWrapped": true
+    }
+  ],
+  "theme": {
+    "forcedColors": "CanvasText borders and Highlight outlines for active/selected states",
+    "reducedMotion": "transitions and animations disabled",
+    "colorIndependence": "inferred/generated/cycle use text badges and ARIA descriptions"
+  },
+  "notVerifiedHere": [
+    "Real high-contrast and 200% zoom rendering (SD-027).",
+    "Focus return after closing the drawer with a real key event (the scripted real-key run did not confirm it; the synthetic window keydown closes the inspector).",
+    "Moving from a table row directly to the evidence list (a relation must be selected).",
+    "Screenshots at each width."
+  ]
+}

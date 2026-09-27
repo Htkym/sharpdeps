@@ -82,6 +82,19 @@ if (root) {
         analysisId: state.analysisId,
         scope: state.scope
       });
+    },
+    onOpenEvidence: (evidenceId) => {
+      const state = app.getState();
+      if (!state.analysisId) {
+        return;
+      }
+
+      host.post({
+        type: 'openEvidence',
+        requestId: nextRequestId(),
+        analysisId: state.analysisId,
+        evidenceId
+      });
     }
   });
 

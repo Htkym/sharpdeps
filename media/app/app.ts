@@ -13,6 +13,7 @@ import {
   type InspectorEdgeOptions,
   type InspectorEntityOptions
 } from '../components/inspector';
+import { resolveShortcut } from './shortcuts';
 import type { SortState } from './query';
 import { buildNavigationTree, renderNavigationTree } from '../components/navigationPane';
 import {
@@ -42,6 +43,8 @@ export interface ViewerAppOptions {
   onExport?: (format: 'mermaid' | 'svg' | 'png' | 'json', data?: string) => void;
   /** Copy of the evidence-backed context (SD-022). Nothing is sent anywhere. */
   onCopyContext?: () => void;
+  /** Opens one evidence record in the editor (SD-019/SD-024). */
+  onOpenEvidence?: (evidenceId: string) => void;
   /**
    * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
    * table stays available and the graph shows why it is missing.
@@ -55,6 +58,9 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   /** Tree expansion is a transient UI detail; it is not part of the persisted state. */
   const expandedTreeNodes = new Set<string>();
   const graphRuntime: { view?: GraphView; error?: string } = {};
+  /** Focus returns here when the inspector drawer closes (SD-024). */
+  let inspectorReturnFocus: HTMLElement | undefined;
+  let inspectorWasOpen = false;
 
   const elements = buildShell(root, {
     onAnalyze: () =>
@@ -152,6 +158,62 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     render();
   }
 
+  /**
+   * Keyboard path through the whole flow (SD-024): search, view switch, selection,
+   * inspector close, and graph zoom, all without a mouse.
+   */
+  window.addEventListener('keydown', (event) => {
+    const target = event.target as HTMLElement | null;
+    const typing =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target?.isContentEditable === true;
+
+    const action = resolveShortcut(event, {
+      typing,
+      inspectorOpen: state.inspectorOpen,
+      // The event target may be window/document for programmatic keys: only an Element
+      // can be inside the graph.
+      graphFocused: target instanceof Element && target.closest('.sd-graph-host') !== null
+    });
+    if (!action) {
+      return;
+    }
+
+    switch (action.type) {
+      case 'focusSearch':
+        event.preventDefault();
+        elements.searchInput.focus();
+        elements.searchInput.select();
+        return;
+      case 'viewKind':
+        event.preventDefault();
+        dispatch({ type: 'viewKindChanged', viewKind: action.viewKind });
+        return;
+      case 'clearSelection':
+        dispatch({ type: 'selectionCleared' });
+        return;
+      case 'closeInspector':
+        event.preventDefault();
+        dispatch({ type: 'inspectorToggled' });
+        return;
+      case 'zoom': {
+        const view = graphRuntime.view;
+        if (!view) {
+          return;
+        }
+
+        event.preventDefault();
+        if (action.direction === 'fit') {
+          view.fit();
+        } else {
+          view.zoomBy(action.direction === 'in' ? 1.2 : 1 / 1.2);
+        }
+      }
+    }
+  });
+
   function render(): void {
     renderTopBar(elements, state);
     renderError(elements, state);
@@ -167,6 +229,17 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   }
 
   function renderDetails(): void {
+    // Opening remembers the trigger; closing gives the focus back to it, so a keyboard
+    // user never lands at the top of the page (SD-024).
+    if (state.inspectorOpen && !inspectorWasOpen) {
+      inspectorReturnFocus =
+        document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    } else if (!state.inspectorOpen && inspectorWasOpen) {
+      inspectorReturnFocus?.focus();
+      inspectorReturnFocus = undefined;
+    }
+
+    inspectorWasOpen = state.inspectorOpen;
     elements.inspectorPane.classList.toggle('open', state.inspectorOpen);
     elements.inspectorToggle.setAttribute('aria-expanded', state.inspectorOpen ? 'true' : 'false');
 
@@ -210,7 +283,8 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       mode: state.mode,
       onSelectEntity: (entityId) => dispatch({ type: 'entitySelected', entityId }),
       onLoadMoreEvidence: () => dispatch({ type: 'evidencePageRequested' }),
-      onCopyReference: (reference) => void copyReference(reference)
+      onCopyReference: (reference) => void copyReference(reference),
+      onOpenEvidence: (evidenceId) => options.onOpenEvidence?.(evidenceId)
     });
   }
 

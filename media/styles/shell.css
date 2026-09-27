@@ -553,3 +553,57 @@ body {
 .sd-cycle-path li {
   margin: 2px 0;
 }
+
+/* Accessibility (SD-024): motion, high contrast, and 200% zoom (narrow) behaviour. */
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-shell *,
+  .sd-shell *::before,
+  .sd-shell *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* High contrast: never rely on the accent colour alone for state. */
+@media (forced-colors: active) {
+  .sd-button,
+  .sd-node-item,
+  .sd-select,
+  .sd-search,
+  .sd-evidence-item,
+  .sd-cycle-item {
+    border: 1px solid CanvasText;
+  }
+
+  .sd-button.active,
+  .sd-button-toggle.active,
+  .sd-table tr.selected,
+  .sd-evidence-item[data-generated='true'] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+@media (max-width: 480px) {
+  .sd-topbar {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .sd-map-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .sd-inspector.open {
+    width: min(320px, 92vw);
+  }
+}
+
+.sd-evidence-item button:focus-visible,
+.sd-cycle-item button:focus-visible,
+.sd-cycle-path button:focus-visible,
+.sd-relation-list button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #4daafc);
+  outline-offset: 1px;
+}

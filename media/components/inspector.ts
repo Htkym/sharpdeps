@@ -46,6 +46,8 @@ export interface InspectorOptions {
   onSelectEntity: (entityId: string) => void;
   onLoadMoreEvidence: () => void;
   onCopyReference: (reference: string) => void;
+  /** Opens one evidence record in the editor (SD-019). */
+  onOpenEvidence?: (evidenceId: string) => void;
 }
 
 export function renderInspector(
@@ -182,7 +184,9 @@ function renderEdge(
     const list = document.createElement('ul');
     list.className = 'sd-evidence-list';
     for (const record of evidence.items) {
-      list.append(evidenceItem(toEvidenceView(record), options.onCopyReference));
+      list.append(
+        evidenceItem(toEvidenceView(record), options.onCopyReference, options.onOpenEvidence)
+      );
     }
 
     body.append(list);
@@ -218,7 +222,8 @@ function renderEdge(
 
 function evidenceItem(
   evidence: ReturnType<typeof toEvidenceView>,
-  onCopyReference: (reference: string) => void
+  onCopyReference: (reference: string) => void,
+  onOpenEvidence: ((evidenceId: string) => void) | undefined
 ): HTMLElement {
   const item = document.createElement('li');
   item.className = 'sd-evidence-item';
@@ -272,6 +277,13 @@ function evidenceItem(
   const copy = button('Copy reference', 'sd-button sd-button-small');
   copy.addEventListener('click', () => onCopyReference(evidence.reference));
   item.append(copy);
+
+  if (onOpenEvidence) {
+    const open = button('エディターで開く', 'sd-button sd-button-small');
+    open.title = evidence.reference;
+    open.addEventListener('click', () => onOpenEvidence(evidence.id));
+    item.append(open);
+  }
 
   return item;
 }
