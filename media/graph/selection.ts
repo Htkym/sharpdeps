@@ -170,9 +170,9 @@ export function wireGraphInteraction(
       return;
     }
 
-    if (event.key === 'Escape') {
-      selection.clear();
-    }
+    // Escape is owned by the application: clearing the selection here would bypass the
+    // view state, and the state sync would then report the cleared selection back as a
+    // fresh user selection (which reopened the inspector, SD-024).
   };
 
   svg.addEventListener('click', onClick);

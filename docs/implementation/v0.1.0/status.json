@@ -864,37 +864,40 @@
       "id": "SD-024",
       "title": "キーボード・テーマ・狭幅の完成",
       "milestone": "M3",
-      "status": "in_progress",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
         "media/app/shortcuts.ts",
         "media/app/app.ts",
+        "media/graph/selection.ts",
         "media/components/inspector.ts",
         "media/app/entry.ts",
+        "media/app/state.ts",
         "media/styles/shell.css",
         "tests/webview/shortcuts.test.ts",
+        "tests/webview/state.test.ts",
         "docs/implementation/v0.1.0/tasks/SD-024.md",
-        "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json"
+        "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json",
+        "docs/implementation/v0.1.0/evidence/sd-024-escape-diagnosis.txt"
       ],
       "tests": [
-        "npm test (webview) — 10 files / 64 tests pass (4 shortcut tests)",
+        "npm test (webview) — 10 files / 66 tests pass (6 new)",
         "npm run compile / lint / format:check / build — pass",
-        "browser: \"/\" focuses search, t/g switch views, Enter on an edge reaches evidence and openEvidence, Escape closes the inspector",
-        "browser: no horizontal overflow at 1440/900/360 px, toolbar wraps at 360 px",
-        "browser: forced-colors gives CanvasText borders and reduced motion gives 0s transitions",
-        "browser: screenshots at 1440/900/360 and high contrast"
+        "browser keyboard flow: \"/\" search, t/g switch, Enter on an edge to evidence and openEvidence",
+        "browser real-key Escape: inspector closes and focus returns to the triggering edge",
+        "browser: forced-colors gives CanvasText borders, reduced motion gives 0s transitions, no horizontal overflow at 1440/900/360"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-024.md",
         "docs/implementation/v0.1.0/evidence/sd-024-accessibility.json",
         "docs/implementation/v0.1.0/evidence/sd-024-escape-diagnosis.txt",
-        "docs/implementation/v0.1.0/evidence/sd-024-shell-1440.png",
-        "docs/implementation/v0.1.0/evidence/sd-024-shell-900.png",
-        "docs/implementation/v0.1.0/evidence/sd-024-shell-360.png",
-        "docs/implementation/v0.1.0/evidence/sd-024-high-contrast.png"
+        "docs/implementation/v0.1.0/evidence/sd024-shell-1440.png",
+        "docs/implementation/v0.1.0/evidence/sd024-shell-900.png",
+        "docs/implementation/v0.1.0/evidence/sd024-shell-360.png",
+        "docs/implementation/v0.1.0/evidence/sd024-high-contrast.png"
       ],
       "blockers": [],
-      "notes": "Implemented: keyboard map, evidence open button, focus return, forced-colors/reduced-motion/480px CSS. Verified: keyboard flow, widths without overflow, high contrast borders, reduced motion, synthetic Escape. Blocked on a diagnosis: a real-key Escape runs the handler (defaultPrevented true) but the state stays open while a synthetic window keydown closes it, which points at two state holders; documented in evidence/sd-024-escape-diagnosis.txt."
+      "notes": "Done: keyboard map (tested resolver), evidence open button completing the keyboard flow, focus return on drawer close, forced-colors/reduced-motion/480px CSS, and the Escape root cause (the graph cleared its own selection outside the view state, so the sync re-reported it and reopened the inspector). Remaining: real VS Code high contrast/200% checks (SD-027), a direct table-row to evidence path, and label wrapping evidence."
     },
     {
       "id": "SD-025",

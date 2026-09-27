@@ -4,10 +4,11 @@
   "keyboardFlow": {
     "searchFocus": "\"/\" moves focus to the search field",
     "viewSwitch": "\"t\" shows the table, \"g\" returns to the graph",
-    "edgeToEvidence": "Enter on a focused edge selects it, the inspector shows the evidence, and the \"エディターで開く\" button posts openEvidence with ev_0000000000000001",
-    "escape": "A keydown for Escape on window closes the inspector (state false, pane class without open)",
+    "edgeToEvidence": "Enter on a focused edge selects it, the inspector shows the evidence, and \"エディターで開く\" posts openEvidence with ev_0000000000000001",
+    "escape": "A real Escape closes the inspector (state false, pane class without open) and focus returns to the triggering edge (data-id rel_0000000000000001)",
     "hostCombinations": "Ctrl/Cmd/Alt combinations are ignored so VS Code keeps them"
   },
+  "rootCauseFixed": "The graph cleared its own selection on Escape without going through the view state; the state sync then reported that as a user selection (relationSelected), which reopened the inspector. Escape is now owned by the app only, and the close action is idempotent.",
   "layout": [
     {
       "width": 1440,
@@ -26,14 +27,19 @@
     }
   ],
   "theme": {
-    "forcedColors": "CanvasText borders and Highlight outlines for active/selected states",
-    "reducedMotion": "transitions and animations disabled",
+    "forcedColors": "CanvasText borders and Highlight outlines; verified through browser emulation",
+    "reducedMotion": "transitions and animations disabled (transition duration 0s)",
     "colorIndependence": "inferred/generated/cycle use text badges and ARIA descriptions"
   },
+  "screenshots": [
+    "docs/implementation/v0.1.0/evidence/sd024-shell-1440.png",
+    "docs/implementation/v0.1.0/evidence/sd024-shell-900.png",
+    "docs/implementation/v0.1.0/evidence/sd024-shell-360.png",
+    "docs/implementation/v0.1.0/evidence/sd024-high-contrast.png"
+  ],
   "notVerifiedHere": [
-    "Real high-contrast and 200% zoom rendering (SD-027).",
-    "Focus return after closing the drawer with a real key event (the scripted real-key run did not confirm it; the synthetic window keydown closes the inspector).",
+    "Real VS Code high-contrast themes and 200% zoom (SD-027).",
     "Moving from a table row directly to the evidence list (a relation must be selected).",
-    "Screenshots at each width."
+    "Long Japanese label wrapping at narrow widths beyond what the screenshots show."
   ]
 }

@@ -285,3 +285,20 @@ describe('state restoration', () => {
     expect(restored.paneWidths.inspector).toBe(800);
   });
 });
+
+describe('inspector close action', () => {
+  it('closes idempotently instead of toggling back open', () => {
+    const opened = viewReducer(INITIAL_STATE, { type: 'inspectorToggled' });
+    expect(opened.inspectorOpen).toBe(true);
+
+    const closed = viewReducer(opened, { type: 'inspectorClosed' });
+    expect(closed.inspectorOpen).toBe(false);
+
+    // Escape may be seen by more than one handler: a second close must stay closed.
+    expect(viewReducer(closed, { type: 'inspectorClosed' })).toBe(closed);
+  });
+
+  it('ignores a close when the pane is already closed', () => {
+    expect(viewReducer(INITIAL_STATE, { type: 'inspectorClosed' })).toBe(INITIAL_STATE);
+  });
+});
