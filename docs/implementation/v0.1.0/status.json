@@ -903,12 +903,30 @@
       "id": "SD-025",
       "title": "C#解析精度・統合回帰テスト",
       "milestone": "M3",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "tests/helpers/semanticSummary.ts",
+        "tests/fixtures/semantic-baseline/expected/semantic-summary.json",
+        "tests/analyzer/semanticV2.test.ts",
+        "analyzer/src/SharpDeps.Analysis.Roslyn/SemanticReportWriter.cs",
+        "docs/implementation/v0.1.0/tasks/SD-025.md",
+        "docs/implementation/v0.1.0/evidence/sd-025-precision.json"
+      ],
+      "tests": [
+        "npm test — semantic precision summary passes (3 semantic tests)",
+        "dotnet test — 101 tests pass",
+        "npm run compile / lint / format:check / build:analyzer — pass",
+        "per-TFM assertions: two Domain variants with distinct type and relation counts",
+        "bug verification: types referencing an unknown variant went from 13 to 0"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-025.md",
+        "docs/implementation/v0.1.0/evidence/sd-025-precision.json",
+        "tests/fixtures/semantic-baseline/expected/semantic-summary.json"
+      ],
+      "blockers": [],
+      "notes": "Done: normalised precision golden with per-variant counts, explicit TFM and Quick-vs-Semantic assertions, and a real bug found by the golden (13 types referenced a variant with no project entry because the writer merged multi-TFM projects; fixed by per-variant entries with TFM-suffixed logical ids). Remaining: missing-SDK failure path (SD-028), cycle precision on real cycles, full node/edge golden."
     },
     {
       "id": "SD-026",

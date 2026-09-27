@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { AnalysisSnapshot, EvidenceRecord } from '../../src/analyzer/reportV2';
 import { validateEvidenceRecord, validateSnapshot } from '../../src/analyzer/reportV2Validation';
 import { ReportStore } from '../../src/analyzer/reportStore';
+import { compareWithGolden, diff, summarize } from '../helpers/semanticSummary';
 
 const repoRoot = process.cwd();
 const fixtureDirectory = path.join(repoRoot, 'tests', 'fixtures', 'semantic-baseline');
@@ -67,6 +68,34 @@ function runSemanticHost(): SemanticOutput {
 }
 
 describe.skipIf(!fs.existsSync(hostDll))('Semantic report v2', () => {
+  it('matches the committed precision summary (SD-025)', () => {
+    const { snapshot } = runSemanticHost();
+    const summary = summarize(snapshot);
+    const goldenPath = path.join(fixtureDirectory, 'expected', 'semantic-summary.json');
+    const result = compareWithGolden(
+      summary,
+      goldenPath,
+      process.env.SHARPDEPTS_UPDATE_BASELINE === '1'
+    );
+
+    const differences = result.expected ? diff(summary, result.expected) : [];
+    expect(
+      result.matches,
+      differences.length > 0
+        ? `Semantic precision summary changed:\n${differences.join('\n')}`
+        : 'Semantic precision summary changed (run with SHARPDEPTS_UPDATE_BASELINE=1 to refresh).'
+    ).toBe(true);
+
+    // The two Domain variants must stay distinguishable: their edge sets and type sets
+    // are the explicit proof that a multi-TFM project is never merged.
+    const domainVariants = summary.variants.filter((variant) => variant.name.startsWith('Domain'));
+    expect(domainVariants.length).toBe(2);
+    expect(new Set(domainVariants.map((variant) => variant.targetFramework)).size).toBe(2);
+    // Quick and Semantic are intentionally different: this report is resolved only.
+    expect(summary.basis).toEqual({ symbolResolved: summary.totals.relations });
+    expect(summary.confidence).toEqual({ resolved: summary.totals.relations });
+  }, 120000);
+
   it('satisfies the v2 contract with resolved evidence', () => {
     const { directory, snapshot, evidence } = runSemanticHost();
     try {

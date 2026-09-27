@@ -48,11 +48,32 @@ public static class SemanticReportWriter
         var variants = new List<ProjectVariant>();
         var projects = new List<AnalysisProject>();
 
-        foreach (var variant in report.Variants.Where(variant => variant.LoadState == "loaded"))
+        // A multi-targeted project keeps one entry per TFM: the logical id gains the
+        // target framework so ids stay unique, and each type/namespace keeps the variant
+        // it belongs to. Single-TFM projects keep their plain path-based id (SD-025).
+        var loadedVariants = report.Variants.Where(variant => variant.LoadState == "loaded").ToArray();
+        var multiTargeted = loadedVariants
+            .GroupBy(
+                variant => Identity.NormalizeRelativePath(
+                    Path.GetRelativePath(rootDirectory, variant.ProjectPath)),
+                StringComparer.Ordinal)
+            .Where(
+                group => group
+                    .Select(entry => entry.TargetFramework ?? "(not specified)")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var variant in loadedVariants)
         {
             var relativePath = Identity.NormalizeRelativePath(
                 Path.GetRelativePath(rootDirectory, variant.ProjectPath));
-            var logicalId = Identity.ProjectLogicalId(rootId, relativePath);
+            var logicalId = Identity.ProjectLogicalId(
+                rootId,
+                multiTargeted.Contains(relativePath)
+                    ? $"{relativePath}#{variant.TargetFramework ?? "(not specified)"}"
+                    : relativePath);
             var variantId = Identity.ProjectVariantId(
                 logicalId,
                 variant.TargetFramework ?? "(not specified)",
@@ -72,30 +93,21 @@ public static class SemanticReportWriter
                 variant.TargetFramework is null ? "notSpecified" : "targetFramework"));
         }
 
-        // A multi-targeted project appears once as a node; its variants are listed in
-        // the profile (each type and namespace keeps the variant it belongs to).
-        foreach (var projectGroup in report.Variants
-                     .Where(variant => variant.LoadState == "loaded")
-                     .GroupBy(
-                         variant => Identity.ProjectLogicalId(
-                             rootId,
-                             Identity.NormalizeRelativePath(
-                                 Path.GetRelativePath(rootDirectory, variant.ProjectPath))),
-                         StringComparer.Ordinal)
-                     .OrderBy(group => group.Key, StringComparer.Ordinal))
+        // One project entry per loaded variant, each with its own logical id (SD-025).
+        foreach (var variant in loadedVariants.OrderBy(
+                     entry => logicalIdByVariantKey[entry.VariantKey],
+                     StringComparer.Ordinal))
         {
-            var first = projectGroup.First();
             var relativePath = Identity.NormalizeRelativePath(
-                Path.GetRelativePath(rootDirectory, first.ProjectPath));
-            var variantId = variantIdByVariantKey[first.VariantKey];
+                Path.GetRelativePath(rootDirectory, variant.ProjectPath));
             projects.Add(new AnalysisProject(
-                projectGroup.Key,
-                variantId,
-                first.ProjectName,
+                logicalIdByVariantKey[variant.VariantKey],
+                variantIdByVariantKey[variant.VariantKey],
+                variant.ProjectName,
                 relativePath,
                 relativePath.Contains('/') ? relativePath[..relativePath.LastIndexOf('/')] : string.Empty,
-                KindOf(first.ProjectName),
-                first.TargetFramework ?? "(not specified)",
+                KindOf(variant.ProjectName),
+                variant.TargetFramework ?? "(not specified)",
                 configuration,
                 platform,
                 [],
