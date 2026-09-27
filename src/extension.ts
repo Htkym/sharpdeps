@@ -24,7 +24,7 @@ const STAGE_LABELS: Record<AnalysisStage, string> = {
   write: 'Writing results…'
 };
 
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext): ReturnType<typeof extensionTestApi> {
   const output = vscode.window.createOutputChannel('SharpDeps');
   const diagnostics = new CycleDiagnostics(output);
   const store = new ReportStore();
@@ -361,10 +361,25 @@ export function activate(context: vscode.ExtensionContext): void {
         )
     )
   );
+
+  return extensionTestApi(store, context);
 }
 
 export function deactivate(): void {
   // The controller and output channel are disposed through context.subscriptions.
+}
+
+/**
+ * Test surface for the end-to-end suite (SD-027): the analysis ids the store holds and
+ * the persisted view state. Nothing here changes behaviour; it only lets an automated
+ * run assert what the UI would show.
+ */
+export function extensionTestApi(store: ReportStore, context: vscode.ExtensionContext) {
+  return {
+    getAnalysisIds: () => store.analysisIds,
+    getCurrentAnalysisId: () => store.currentAnalysisId,
+    getViewState: () => context.workspaceState.get<Record<string, unknown>>('sharpdeps.viewState')
+  };
 }
 
 function reportError(err: unknown, output: vscode.OutputChannel): void {

@@ -1,0 +1,31 @@
+{
+  "task": "SD-027",
+  "checkedAt": "2026-09-27",
+  "executed": false,
+  "reason": "No VS Code installation and no @vscode/test-electron in this environment; the runner exits with code 2 and says so.",
+  "runner": "node scripts/e2e.js (npm run test:e2e)",
+  "harness": {
+    "script": "scripts/e2e.js",
+    "suite": "tests/extension/suite.js",
+    "report": "docs/implementation/v0.1.0/evidence/sd-027-e2e.json",
+    "checks": [
+      "extension activates and all seven command ids are registered",
+      "the workspace is trusted",
+      "sharpdeps.showDependencyMap completes and registers an analysis (extensionTestApi.getAnalysisIds)",
+      "the current analysis id is set",
+      "the diagnostics collection is queryable"
+    ]
+  },
+  "manualChecklist": [
+    "SD-019: cursor type commands reveal the scope; evidence opens the editor at the recorded position; generated documents open read-only; a changed file warns before revealing",
+    "SD-021: hiding the tab and reloading restores target, selection, filters, and camera without starting an analysis",
+    "SD-023: an untrusted workspace refuses to analyze and offers trust management; no CSP violations in the console",
+    "SD-024: high contrast and 200% zoom stay readable; \"/\" search, g/t views, Enter on an edge to evidence, Escape closes the inspector and restores focus",
+    "SD-011/022: generated document display; Mermaid/JSON/SVG/PNG saves; Copy for agent content reviews what is copied and sends nothing"
+  ],
+  "notVerifiedHere": [
+    "The end-to-end run itself needs a machine with VS Code.",
+    "Untrusted-workspace behaviour is a manual step (the launcher disables workspace trust for the automated run).",
+    "CI wiring of test:e2e is deferred to SD-029."
+  ]
+}

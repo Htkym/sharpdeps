@@ -959,12 +959,26 @@
       "id": "SD-027",
       "title": "Webview・Extension実機E2E",
       "milestone": "M3",
-      "status": "not_started",
-      "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "status": "in_progress",
+      "owner": "agent",
+      "changedFiles": [
+        "scripts/e2e.js",
+        "tests/extension/suite.js",
+        "src/extension.ts",
+        "package.json",
+        "docs/implementation/v0.1.0/tasks/SD-027.md",
+        "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
+      ],
+      "tests": [
+        "node scripts/e2e.js — exits 2 with a clear reason in this environment (no VS Code, no @vscode/test-electron)",
+        "npm run compile / lint / format:check — pass"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-027.md",
+        "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
+      ],
+      "blockers": [],
+      "notes": "Harness ready (runner + in-VS-Code suite + a read-only test API), with the manual checklist that consolidates the real-machine items from SD-019/021/023/024. Not executed here: this environment has no VS Code and no @vscode/test-electron, and the runner reports that with exit code 2 instead of a false pass."
     },
     {
       "id": "SD-028",
