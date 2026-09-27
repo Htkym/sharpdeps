@@ -932,12 +932,28 @@
       "id": "SD-026",
       "title": "TS・契約・ライフサイクルの自動テスト",
       "milestone": "M3",
-      "status": "not_started",
+      "status": "done",
       "owner": null,
-      "changedFiles": [],
-      "tests": [],
-      "evidence": [],
-      "blockers": []
+      "changedFiles": [
+        "tests/webview/layoutClient.test.ts",
+        "src/view/protocolV2.test.ts",
+        "src/view/protocolV2.ts",
+        "media/graph/layoutClient.ts",
+        "docs/implementation/v0.1.0/tasks/SD-026.md",
+        "docs/implementation/v0.1.0/evidence/sd-026-suite.json"
+      ],
+      "tests": [
+        "npm test — 26 files / 205 tests pass (6 new)",
+        "npm run compile / lint / format:check — pass",
+        "worker lifecycle: supersede, cancel, dispose, error, measurement",
+        "host contract: reveal and viewState rules added after the test found them missing"
+      ],
+      "evidence": [
+        "docs/implementation/v0.1.0/tasks/SD-026.md",
+        "docs/implementation/v0.1.0/evidence/sd-026-suite.json"
+      ],
+      "blockers": [],
+      "notes": "Done: worker lifecycle tests with an injected fake (which found and fixed a concurrent double-worker leak), host-direction contract rules for reveal/viewState (missing until now), and the boundary coverage recorded per area. Remaining: an automatic guard against deleted tests, webview-side validateHostMessage, and the SD-027 end-to-end out-of-order check."
     },
     {
       "id": "SD-027",

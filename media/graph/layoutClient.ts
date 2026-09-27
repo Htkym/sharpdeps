@@ -47,6 +47,8 @@ export class LayoutClient {
   private readonly pending = new Map<number, PendingRequest>();
   private nextRequestId = 1;
   private currentRequestId: number | undefined;
+  /** Shared so two concurrent layouts cannot create (and leak) two workers. */
+  private workerPromise: Promise<LayoutWorkerLike> | undefined;
 
   constructor(options: LayoutClientOptions) {
     this.options = options;
@@ -104,11 +106,16 @@ export class LayoutClient {
     }
   }
 
-  private async ensureWorker(): Promise<LayoutWorkerLike> {
+  private ensureWorker(): Promise<LayoutWorkerLike> {
     if (this.worker) {
-      return this.worker;
+      return Promise.resolve(this.worker);
     }
 
+    this.workerPromise ??= this.startWorker();
+    return this.workerPromise;
+  }
+
+  private async startWorker(): Promise<LayoutWorkerLike> {
     if (!this.scriptUrl) {
       const response = await fetch(this.options.workerUrl);
       if (!response.ok) {
@@ -164,6 +171,7 @@ export class LayoutClient {
   private terminateWorker(): void {
     this.worker?.terminate();
     this.worker = undefined;
+    this.workerPromise = undefined;
   }
 }
 

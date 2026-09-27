@@ -141,6 +141,28 @@ describe('validateHostMessage', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('accepts the reveal and view-state messages added for SD-019/SD-021', () => {
+    expect(
+      validateHostMessage({
+        type: 'reveal',
+        analysisId: 'an_0000000000000001',
+        entityId: 'ty_0000000000000001',
+        scope: { kind: 'dependencies', id: 'ty_0000000000000001', depth: 1 },
+        granularity: 'type'
+      }).ok
+    ).toBe(true);
+
+    expect(
+      validateHostMessage({
+        type: 'viewState',
+        state: { version: 1, targetName: 'Sample.sln' }
+      }).ok
+    ).toBe(true);
+
+    // A reveal without an analysis is invalid, and a view state must be an object.
+    expect(validateHostMessage({ type: 'reveal', entityId: 'ty_0000000000000001' }).ok).toBe(false);
+    expect(validateHostMessage({ type: 'viewState', state: 'restore me' }).ok).toBe(false);
+  });
   it('accepts a stale notification', () => {
     const result = validateHostMessage({
       type: 'stale',

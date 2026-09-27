@@ -399,6 +399,14 @@ const HOST_RULES: Record<string, MessageRule> = {
     required: { protocolVersion: 'positiveInteger', capabilities: 'object' },
     optional: { analysisId: 'analysisId' }
   },
+  reveal: {
+    required: { analysisId: 'analysisId', entityId: 'entityId' },
+    optional: { scope: 'scope', granularity: 'granularity' }
+  },
+  viewState: {
+    required: { state: 'object' },
+    optional: {}
+  },
   analysisProgress: {
     required: { analysisId: 'analysisId', stage: 'string' },
     optional: {

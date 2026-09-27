@@ -1,0 +1,37 @@
+{
+  "task": "SD-026",
+  "checkedAt": "2026-09-27",
+  "suite": {
+    "files": 26,
+    "tests": 205,
+    "added": [
+      "layoutClient lifecycle: supersede drops the stale response, cancel rejects and recreates, dispose releases, worker error rejects, node sizes are measured",
+      "host contract: reveal and viewState accepted; missing analysisId or a non-object state rejected"
+    ]
+  },
+  "bugsFoundAndFixed": [
+    {
+      "what": "ensureWorker created two workers when layout() was called concurrently; the first leaked and could deliver the shown result.",
+      "fix": "The in-flight worker promise is shared and cleared when the worker is terminated.",
+      "verification": "The supersede test now observes a single worker with both requests."
+    },
+    {
+      "what": "HOST_RULES had no entry for reveal or viewState, so validateHostMessage rejected the messages added in SD-019/SD-021.",
+      "fix": "Both rules were added.",
+      "verification": "src/view/protocolV2.test.ts"
+    }
+  ],
+  "pureFunctionCoverage": "reducer (state.test.ts), query (query.test.ts), projection (graphProjection.test.ts), export (contextExport.test.ts), serializer (serializer.test.ts), shortcuts, inspector view model, security helpers.",
+  "boundariesCovered": [
+    "same-name and Unicode names (security/contextExport tests)",
+    "long queries (protocol test caps at 200)",
+    "empty sets (graphProjection empty scope, inspector empty lists)",
+    "page end (reportStore evidence and search cursors)",
+    "pane width and zoom clamps (serializer)"
+  ],
+  "notVerifiedHere": [
+    "Automatic detection of deleted tests (a test-count golden) is not implemented; expectation changes are documented per task instead.",
+    "The webview does not run validateHostMessage; it sanitises on read (tested).",
+    "Out-of-order async responses are covered by store generations and the bridge, with the end-to-end check in SD-027."
+  ]
+}
