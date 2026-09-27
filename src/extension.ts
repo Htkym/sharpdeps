@@ -25,7 +25,30 @@ const STAGE_LABELS: Record<AnalysisStage, string> = {
 };
 
 export function activate(context: vscode.ExtensionContext): ReturnType<typeof extensionTestApi> {
-  const output = vscode.window.createOutputChannel('SharpDeps');
+  const channel = vscode.window.createOutputChannel('SharpDeps');
+  // A short ring buffer so the end-to-end suite can report why a run failed (SD-027).
+  // The channel object itself is not patched: VS Code's output channel properties are
+  // read-only, so the tail lives in a thin wrapper.
+  const outputTail: string[] = [];
+  const output = {
+    name: 'SharpDeps',
+    append: (value: string) => channel.append(value),
+    appendLine: (value: string) => {
+      outputTail.push(value);
+      if (outputTail.length > 60) {
+        outputTail.shift();
+      }
+
+      channel.appendLine(value);
+    },
+    replace: (value: string) => channel.replace(value),
+    clear: () => channel.clear(),
+    show: (...args: unknown[]) => {
+      (channel.show as (...parameters: unknown[]) => void)(...args);
+    },
+    hide: () => channel.hide(),
+    dispose: () => channel.dispose()
+  } as unknown as vscode.OutputChannel;
   const diagnostics = new CycleDiagnostics(output);
   const store = new ReportStore();
   const bridge = createReportBridge(store, { maxProjectionNodes: 300, maxProjectionEdges: 1000 });
@@ -362,7 +385,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     )
   );
 
-  return extensionTestApi(store, context);
+  return extensionTestApi(store, context, outputTail);
 }
 
 export function deactivate(): void {
@@ -374,11 +397,17 @@ export function deactivate(): void {
  * the persisted view state. Nothing here changes behaviour; it only lets an automated
  * run assert what the UI would show.
  */
-export function extensionTestApi(store: ReportStore, context: vscode.ExtensionContext) {
+export function extensionTestApi(
+  store: ReportStore,
+  context: vscode.ExtensionContext,
+  outputTail: string[]
+) {
   return {
     getAnalysisIds: () => store.analysisIds,
     getCurrentAnalysisId: () => store.currentAnalysisId,
-    getViewState: () => context.workspaceState.get<Record<string, unknown>>('sharpdeps.viewState')
+    getViewState: () => context.workspaceState.get<Record<string, unknown>>('sharpdeps.viewState'),
+    /** Last lines of the SharpDeps output channel, for end-to-end failure reports. */
+    getOutputTail: () => [...outputTail]
   };
 }
 

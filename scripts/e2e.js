@@ -87,11 +87,34 @@ async function main() {
       child.on('error', () => resolve(1));
     });
     if (exitCode !== 0) {
-      console.error(
-        'The .NET Install Tool extension could not be installed into the test profile; ' +
-          'the end-to-end run needs it because the extension depends on it.'
-      );
-      process.exit(1);
+      // The marketplace may be unreachable from the CLI; an installed copy of the same
+      // extension in the user profile works just as well.
+      const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+      const source = path.join(home, '.vscode', 'extensions');
+      const target = path.join(profile, 'extensions');
+      let copied = false;
+      try {
+        const match = fs
+          .readdirSync(source)
+          .find((entry) => entry.startsWith('ms-dotnettools.vscode-dotnet-runtime-'));
+        if (match) {
+          fs.mkdirSync(target, { recursive: true });
+          fs.cpSync(path.join(source, match), path.join(target, match), { recursive: true });
+          copied = true;
+        }
+      } catch {
+        copied = false;
+      }
+
+      if (!copied) {
+        console.error(
+          'The .NET Install Tool extension could not be installed into the test profile; ' +
+            'the end-to-end run needs it because the extension depends on it.'
+        );
+        process.exit(1);
+      }
+
+      console.log('Copied the .NET Install Tool from the user profile into the test profile.');
     }
   }
 

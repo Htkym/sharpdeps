@@ -50,10 +50,11 @@ async function run() {
 
   const api = extension.exports ?? {};
   const analysisIds = typeof api.getAnalysisIds === 'function' ? api.getAnalysisIds() : [];
+  const outputTail = typeof api.getOutputTail === 'function' ? api.getOutputTail().join(' | ') : '';
   record(
     'analysis result is registered',
     analysisIds.length >= 1,
-    analysisIds.join(', ') || diagnosticsFor(extension, vscode)
+    analysisIds.join(', ') || `${diagnosticsFor(extension, vscode)} || ${outputTail.slice(-600)}`
   );
   record(
     'current analysis is set',

@@ -959,7 +959,7 @@
       "id": "SD-027",
       "title": "Webview・Extension実機E2E",
       "milestone": "M3",
-      "status": "in_progress",
+      "status": "done",
       "owner": "agent",
       "changedFiles": [
         "scripts/e2e.js",
@@ -970,16 +970,15 @@
         "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
       ],
       "tests": [
-        "node scripts/e2e.js — exits 2 with a clear reason in this environment (no VS Code, no @vscode/test-electron)",
-        "npm run compile / lint / format:check — pass",
-        "VS Code 1.139.1 end-to-end run: 5/7 checks passed; the extension host, command registration, trust, workspace, and the Problems collection pass, while the analysis does not register a result in the test instance"
+        "npm run test:e2e — 7/7 checks passed on VS Code 1.139.1 (extension host, commands, trust, workspace, analysis registration, current analysis, Problems collection)",
+        "npm run compile / lint / format:check — pass"
       ],
       "evidence": [
         "docs/implementation/v0.1.0/tasks/SD-027.md",
         "docs/implementation/v0.1.0/evidence/sd-027-e2e.json"
       ],
       "blockers": [],
-      "notes": "Harness runs on this machine now: a dedicated --user-data-dir profile, the runtime extension copied from the user profile, and a fresh-profile onboarding fix (skip-welcome/release-notes/telemetry/updates). 5/7 checks pass; the analysis result is not registered inside the test instance and the suite now records diagnostics (analyzer DLL, dotnet, mode) for the next run. A second run aborted without a report, so the watchdog and report-based verdict were added before CI gating."
+      "notes": "Done on a real VS Code install: 7/7 checks pass. Two causes were found for the earlier 5/7: the suite asserted before the controller registered the result, and a diagnostics patch that assigned to the read-only vscode.OutputChannel.appendLine prevented activation (it is now captured with a wrapper object). The runner uses a dedicated profile, skips onboarding, watches the process tree, and copies the dotnet-runtime dependency from the user profile when the marketplace install is unavailable. Remaining: untrusted-workspace behaviour and the manual window checklist (SD-019/021/023/024); CI wiring in SD-029."
     },
     {
       "id": "SD-028",
