@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SharpDeps.Analysis.Contracts/SharpDeps.Analysis.Contracts.csproj" />
+    <Project Path="src/SharpDeps.Analysis.Core/SharpDeps.Analysis.Core.csproj" />
+    <Project Path="src/SharpDeps.Analysis.Quick/SharpDeps.Analysis.Quick.csproj" />
+    <Project Path="src/SharpDeps.Analysis.Roslyn/SharpDeps.Analysis.Roslyn.csproj" />
+    <Project Path="src/SharpDeps.QuickHost/SharpDeps.QuickHost.csproj" />
+    <Project Path="src/SharpDeps.SemanticHost/SharpDeps.SemanticHost.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,883 @@
+// Webview view state, actions, and selectors (SD-015).
+//
+// The state is the single source of truth: the DOM is rendered from it and never
+// read back to derive it. The reducer is pure so every UI state (initial, partial,
+// failed, stale, filtered-to-empty) can be produced from a fixture in tests.
+
+import type { Granularity } from '../../src/analyzer/reportV2';
+import { translate, translator, type Language } from './i18n';
+import type {
+  EntitySummary,
+  Filters,
+  Projection,
+  ProjectionCycleGroup,
+  Scope
+} from '../../src/view/protocolV2';
+import type { Capabilities, ProfileRequest } from '../../src/view/protocolV2';
+import { matchesEntity } from '../../src/analyzer/graphProjection';
+import {
+  DEFAULT_SORT,
+  toggleSort,
+  TABLE_PAGE_SIZE,
+  classifySearchResult,
+  paginate,
+  sortEntities,
+  type SearchResultVisibility,
+  type SortState
+} from './query';
+
+export type ViewKind = 'graph' | 'table';
+
+export type AnalysisStage = 'discover' | 'load' | 'compile' | 'extract' | 'aggregate' | 'write';
+
+/**
+ * Analysis status as the UI shows it. `partial` and `stale` are distinct from
+ * `complete` and from each other: an incomplete analysis is never presented as a
+ * finished one.
+ */
+export type AnalysisStatus =
+  'noTarget' | 'ready' | 'analyzing' | 'complete' | 'partial' | 'failed' | 'cancelled' | 'stale';
+
+export interface HistoryEntry {
+  scope: Scope;
+  granularity: Granularity;
+  selectionId?: string;
+  camera?: ViewState['camera'];
+  search?: string;
+  filters?: Filters;
+}
+
+export interface ViewState {
+  language: Language;
+  /** Target shown in the top bar. */
+  target: { name: string; relativePath: string } | null;
+  mode: 'quick' | 'semantic';
+  resultMode?: 'quick' | 'semantic';
+  profile: ProfileRequest;
+  resultProfile?: ProfileRequest;
+  layout: { direction: 'RIGHT' | 'DOWN'; nodeSpacing: number; rankSpacing: number };
+  imageOptions: { profile: boolean; omissions: boolean; legend: boolean };
+  variantOptions: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
+  capabilities: Capabilities;
+  runningAnalysisId?: string;
+  granularity: Granularity;
+  viewKind: ViewKind;
+  scope: Scope;
+  search: string;
+  filters: Filters;
+  selection: { entityId?: string; relationId?: string };
+  status: AnalysisStatus;
+  statusMessage: string;
+  analysisId?: string;
+  progress?: { stage: AnalysisStage; loaded?: number; analyzed?: number; elapsedMs: number };
+  coverage?: {
+    discovered: number;
+    loaded: number;
+    analyzed: number;
+    failed: number;
+    skipped: number;
+  };
+  projection: Projection | null;
+  /** True when the projection only contains part of the analysis. */
+  projectionTruncated: boolean;
+  /** SCC groups and their verified cycles, from the current projection. */
+  cycles: ProjectionCycleGroup[];
+  details: {
+    entityId: string;
+    entity?: EntitySummary;
+    dependencies: EntitySummary[];
+    dependents: EntitySummary[];
+  } | null;
+  evidence: {
+    relationId: string;
+    total: number;
+    items: Record<string, unknown>[];
+    nextCursor?: string | null;
+    /** True while the next page is on its way. */
+    pending: boolean;
+  } | null;
+  /** Restored camera of the graph view; null until the view reports one. */
+  camera: { zoom: number; scrollLeft: number; scrollTop: number } | null;
+  limitations: Array<{ code: string; message: string }>;
+  error?: { code: string; message: string };
+  paneWidths: { navigation: number; inspector: number };
+  inspectorOpen: boolean;
+  history: HistoryEntry[];
+  /** Table view: sort and page. Both are state so the same input renders the same. */
+  tableSort: SortState;
+  tablePage: number;
+  /** Full-index search results, kept separately from the display projection. */
+  searchResults: { query: string; items: EntitySummary[]; total: number; pending: boolean };
+  tree: Record<string, { items: EntitySummary[]; total: number; nextCursor?: string }>;
+  /** Entities the user chose to show even though filters exclude them. */
+  temporaryDisplayIds: string[];
+}
+
+export const HISTORY_LIMIT = 20;
+
+export const INITIAL_STATE: ViewState = {
+  language: 'en',
+  target: null,
+  mode: 'quick',
+  profile: { configuration: 'Debug' },
+  layout: { direction: 'RIGHT', nodeSpacing: 40, rankSpacing: 80 },
+  imageOptions: { profile: true, omissions: true, legend: true },
+  variantOptions: [],
+  capabilities: {
+    typeGraph: false,
+    evidence: false,
+    generatedDocuments: false,
+    cycleWitness: false,
+    search: true
+  },
+  granularity: 'project',
+  viewKind: 'graph',
+  scope: { kind: 'root', id: null, depth: null },
+  search: '',
+  filters: {},
+  selection: {},
+  status: 'noTarget',
+  statusMessage: 'No analysis target selected.',
+  projection: null,
+  projectionTruncated: false,
+  cycles: [],
+  details: null,
+  evidence: null,
+  limitations: [],
+  paneWidths: { navigation: 220, inspector: 320 },
+  inspectorOpen: false,
+  camera: null,
+  history: [],
+  tableSort: DEFAULT_SORT,
+  tablePage: 0,
+  searchResults: { query: '', items: [], total: 0, pending: false },
+  tree: {},
+  temporaryDisplayIds: []
+};
+
+export type ViewAction =
+  | { type: 'languageChanged'; language: Language }
+  | { type: 'targetSelected'; name: string; relativePath: string }
+  | { type: 'analyzeStarted'; analysisId: string; mode: 'quick' | 'semantic' }
+  | { type: 'modeChanged'; mode: 'quick' | 'semantic' }
+  | { type: 'profileChanged'; profile: ProfileRequest }
+  | { type: 'layoutChanged'; layout: ViewState['layout'] }
+  | { type: 'imageOptionsChanged'; options: ViewState['imageOptions'] }
+  | { type: 'capabilitiesReceived'; capabilities: Capabilities }
+  | {
+      type: 'analysisProgress';
+      stage: AnalysisStage;
+      loaded?: number;
+      analyzed?: number;
+      elapsedMs: number;
+    }
+  | {
+      type: 'analysisComplete';
+      analysisId: string;
+      completeness: 'completeWithinScope' | 'partial' | 'failed';
+      coverage: ViewState['coverage'];
+      limitations?: Array<{ code: string; message: string }>;
+      mode?: 'quick' | 'semantic';
+      profile?: ProfileRequest;
+      variantOptions?: ViewState['variantOptions'];
+      capabilities?: Capabilities;
+    }
+  | { type: 'analysisFailed'; analysisId?: string; message: string; cancelled?: boolean }
+  | { type: 'analysisStale'; message: string }
+  | { type: 'projectionReceived'; projection: Projection }
+  | {
+      type: 'detailsReceived';
+      entityId: string;
+      entity?: EntitySummary;
+      dependencies: EntitySummary[];
+      dependents: EntitySummary[];
+    }
+  | {
+      type: 'evidenceReceived';
+      relationId: string;
+      total: number;
+      items: Record<string, unknown>[];
+      nextCursor?: string | null;
+      /** True when the answer continues the current list instead of replacing it. */
+      append?: boolean;
+    }
+  | { type: 'evidencePageRequested' }
+  | {
+      /** Editor-driven reveal (SD-019): select an entity, optionally in a new scope. */
+      type: 'revealRequested';
+      entityId: string;
+      scope?: Scope;
+      granularity?: Granularity;
+    }
+  | { type: 'granularityChanged'; granularity: Granularity }
+  | { type: 'viewKindChanged'; viewKind: ViewKind }
+  | { type: 'scopeChanged'; scope: Scope; granularity?: Granularity }
+  | { type: 'searchChanged'; search: string }
+  | { type: 'searchStarted'; query: string }
+  | { type: 'treeRequested'; parentId: string; granularity: Granularity; cursor?: string }
+  | {
+      type: 'treeReceived';
+      parentId: string;
+      items: EntitySummary[];
+      total: number;
+      nextCursor?: string;
+      append?: boolean;
+    }
+  | { type: 'searchResultsReceived'; query: string; items: EntitySummary[]; total: number }
+  | { type: 'searchCleared' }
+  | { type: 'tableSortChanged'; key: SortState['key'] }
+  | { type: 'tablePageChanged'; page: number }
+  | { type: 'temporaryDisplayAdded'; entityId: string }
+  | { type: 'temporaryDisplayCleared' }
+  | { type: 'filtersChanged'; filters: Filters }
+  | { type: 'entitySelected'; entityId: string }
+  | { type: 'cameraChanged'; camera: { zoom: number; scrollLeft: number; scrollTop: number } }
+  | { type: 'relationSelected'; relationId: string }
+  | { type: 'selectionCleared' }
+  | { type: 'inspectorToggled' }
+  | { type: 'inspectorClosed' }
+  | { type: 'paneResized'; pane: 'navigation' | 'inspector'; width: number }
+  | { type: 'historyBack' }
+  | { type: 'errorRaised'; code: string; message: string }
+  | { type: 'stateRestored'; state: Partial<ViewState> };
+
+function mergeEvidence(
+  existing: Record<string, unknown>[],
+  incoming: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const seen = new Set(existing.map((item) => String(item.id ?? '')));
+  const merged = [...existing];
+  for (const item of incoming) {
+    const id = String(item.id ?? '');
+    if (id.length > 0 && seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    merged.push(item);
+  }
+
+  return merged;
+}
+
+export function viewReducer(state: ViewState, action: ViewAction): ViewState {
+  switch (action.type) {
+    case 'treeRequested':
+      return state;
+    case 'treeReceived':
+      return {
+        ...state,
+        tree: {
+          ...state.tree,
+          [action.parentId]: {
+            items: action.append
+              ? [...(state.tree[action.parentId]?.items ?? []), ...action.items]
+              : action.items,
+            total: action.total,
+            nextCursor: action.nextCursor
+          }
+        }
+      };
+    case 'layoutChanged':
+      return { ...state, layout: { ...state.layout, ...action.layout } };
+    case 'imageOptionsChanged':
+      return { ...state, imageOptions: action.options };
+    case 'modeChanged':
+      return { ...state, mode: action.mode };
+    case 'languageChanged':
+      return action.language === state.language ? state : { ...state, language: action.language };
+    case 'profileChanged':
+      return {
+        ...state,
+        profile: action.profile,
+        status: state.analysisId ? 'stale' : state.status
+      };
+    case 'capabilitiesReceived':
+      return { ...state, capabilities: action.capabilities };
+    case 'targetSelected':
+      return {
+        ...state,
+        ...(state.target && state.target.relativePath !== action.relativePath
+          ? {
+              scope: INITIAL_STATE.scope,
+              selection: {},
+              projection: null,
+              details: null,
+              evidence: null,
+              history: [],
+              temporaryDisplayIds: [],
+              camera: null,
+              profile: {
+                configuration: state.profile.configuration,
+                platform: state.profile.platform
+              }
+            }
+          : {}),
+        target: { name: action.name, relativePath: action.relativePath },
+        status: 'ready',
+        statusMessage: 'Ready to analyze.',
+        error: undefined
+      };
+
+    case 'analyzeStarted':
+      return {
+        ...state,
+        mode: action.mode,
+        runningAnalysisId: action.analysisId,
+        status: 'analyzing',
+        statusMessage: 'Analyzing…',
+        progress: undefined,
+        // The previous projection stays visible until a new one arrives; it is marked
+        // as stale rather than cleared, so the map does not blink out.
+        error: undefined
+      };
+
+    case 'analysisProgress':
+      return {
+        ...state,
+        status: state.status === 'analyzing' ? 'analyzing' : state.status,
+        progress: {
+          stage: action.stage,
+          loaded: action.loaded,
+          analyzed: action.analyzed,
+          elapsedMs: action.elapsedMs
+        },
+        statusMessage: progressMessage(action)
+      };
+
+    case 'analysisComplete':
+      return {
+        ...state,
+        analysisId: action.analysisId,
+        tree: action.analysisId === state.analysisId ? state.tree : {},
+        runningAnalysisId: undefined,
+        mode: action.mode ?? state.mode,
+        resultMode: action.mode ?? state.mode,
+        resultProfile: {
+          ...action.profile,
+          projectVariants: action.variantOptions?.map((variant) => ({
+            projectLogicalId: variant.projectLogicalId,
+            targetFramework: variant.targetFramework
+          }))
+        },
+        profile: { ...state.profile, ...action.profile },
+        variantOptions: action.variantOptions ?? state.variantOptions,
+        capabilities: action.capabilities ?? state.capabilities,
+        granularity:
+          action.mode === 'quick' && state.granularity === 'type' ? 'project' : state.granularity,
+        status: action.completeness === 'completeWithinScope' ? 'complete' : action.completeness,
+        statusMessage: completionMessage(action),
+        coverage: action.coverage,
+        limitations: action.limitations ?? state.limitations,
+        progress: undefined,
+        error: undefined
+      };
+
+    case 'analysisFailed':
+      return {
+        ...state,
+        status: action.cancelled ? 'cancelled' : 'failed',
+        statusMessage: action.cancelled ? 'Analysis stopped.' : action.message,
+        error: action.cancelled ? undefined : { code: 'analysis.failed', message: action.message },
+        progress: undefined,
+        runningAnalysisId: undefined
+      };
+
+    case 'analysisStale':
+      return { ...state, status: 'stale', statusMessage: action.message };
+
+    case 'projectionReceived':
+      return {
+        ...state,
+        projection: action.projection,
+        projectionTruncated: action.projection.truncated,
+        cycles: action.projection.cycleGroups ?? [],
+        details: state.details,
+        evidence: state.evidence
+      };
+
+    case 'detailsReceived':
+      return {
+        ...state,
+        details: {
+          entityId: action.entityId,
+          entity: action.entity,
+          dependencies: action.dependencies,
+          dependents: action.dependents
+        },
+        inspectorOpen: true
+      };
+
+    case 'evidenceReceived':
+      return {
+        ...state,
+        evidence: {
+          relationId: action.relationId,
+          total: action.total,
+          items:
+            action.append && state.evidence?.relationId === action.relationId
+              ? mergeEvidence(state.evidence.items, action.items)
+              : action.items,
+          nextCursor: action.nextCursor,
+          pending: false
+        },
+        inspectorOpen: true
+      };
+
+    case 'evidencePageRequested':
+      return state.evidence?.nextCursor
+        ? { ...state, evidence: { ...state.evidence, pending: true } }
+        : state;
+
+    case 'revealRequested':
+      return {
+        ...state,
+        selection: { entityId: action.entityId },
+        inspectorOpen: true,
+        details: null,
+        evidence: null,
+        granularity: action.granularity ?? state.granularity,
+        scope: action.scope ?? state.scope,
+        history: pushHistory(state, {
+          scope: action.scope ?? state.scope,
+          granularity: action.granularity ?? state.granularity,
+          selectionId: action.entityId
+        })
+      };
+
+    case 'granularityChanged':
+      return {
+        ...state,
+        granularity: action.granularity,
+        scope: { kind: 'root', id: null, depth: null },
+        selection: {},
+        projection: null,
+        details: null,
+        evidence: null,
+        history: pushHistory(state, {
+          scope: { kind: 'root', id: null, depth: null },
+          granularity: action.granularity
+        })
+      };
+
+    case 'viewKindChanged':
+      // Switching between graph and table keeps scope, search, filters, and selection.
+      return { ...state, viewKind: action.viewKind };
+
+    case 'scopeChanged':
+      return {
+        ...state,
+        scope: action.scope,
+        granularity: action.granularity ?? state.granularity,
+        selection: {},
+        projection: null,
+        details: null,
+        evidence: null,
+        history: pushHistory(state, {
+          scope: action.scope,
+          granularity: state.granularity,
+          selectionId: state.selection.entityId
+        })
+      };
+
+    case 'searchChanged':
+      // The host query is asynchronous: mark it pending and reset the page so the
+      // table always shows the first page of the new query.
+      return {
+        ...state,
+        search: action.search,
+        tablePage: 0,
+        searchResults: { ...state.searchResults, query: action.search, pending: true }
+      };
+
+    case 'searchStarted':
+      return {
+        ...state,
+        searchResults: { ...state.searchResults, query: action.query, pending: true }
+      };
+
+    case 'searchResultsReceived':
+      if (action.query !== state.search) return state;
+      return {
+        ...state,
+        searchResults: {
+          query: action.query,
+          items: action.items,
+          total: action.total,
+          pending: false
+        }
+      };
+
+    case 'searchCleared':
+      return {
+        ...state,
+        search: '',
+        tablePage: 0,
+        temporaryDisplayIds: [],
+        searchResults: { query: '', items: [], total: 0, pending: false }
+      };
+
+    case 'tableSortChanged':
+      return { ...state, tableSort: toggleSort(state.tableSort, action.key), tablePage: 0 };
+
+    case 'tablePageChanged':
+      return { ...state, tablePage: Math.max(0, action.page) };
+
+    case 'temporaryDisplayAdded':
+      return state.temporaryDisplayIds.includes(action.entityId)
+        ? state
+        : { ...state, temporaryDisplayIds: [...state.temporaryDisplayIds, action.entityId] };
+
+    case 'temporaryDisplayCleared':
+      return state.temporaryDisplayIds.length === 0 ? state : { ...state, temporaryDisplayIds: [] };
+
+    case 'filtersChanged':
+      return { ...state, filters: action.filters, tablePage: 0 };
+
+    case 'entitySelected':
+      // Selecting something opens the details pane right away; the content arrives with
+      // the details response, so the pane never waits on an analysis.
+      return { ...state, selection: { entityId: action.entityId }, inspectorOpen: true };
+
+    case 'relationSelected':
+      return { ...state, selection: { relationId: action.relationId }, inspectorOpen: true };
+
+    case 'selectionCleared':
+      return { ...state, selection: {}, details: null, evidence: null };
+
+    case 'inspectorToggled':
+      return { ...state, inspectorOpen: !state.inspectorOpen };
+
+    case 'inspectorClosed':
+      // Idempotent close: Escape may be seen by more than one handler, and a toggle
+      // would reopen the pane if it ran twice.
+      return state.inspectorOpen ? { ...state, inspectorOpen: false } : state;
+
+    case 'cameraChanged':
+      return { ...state, camera: action.camera };
+
+    case 'paneResized':
+      return {
+        ...state,
+        paneWidths: { ...state.paneWidths, [action.pane]: Math.max(120, Math.round(action.width)) }
+      };
+
+    case 'historyBack':
+      return back(state);
+
+    case 'errorRaised':
+      return { ...state, error: { code: action.code, message: action.message } };
+
+    case 'stateRestored':
+      return sanitizeRestoredState({ ...state, ...action.state });
+
+    default:
+      return state;
+  }
+}
+
+function pushHistory(state: ViewState, entry: HistoryEntry): HistoryEntry[] {
+  void entry;
+  return [
+    ...state.history,
+    {
+      scope: state.scope,
+      granularity: state.granularity,
+      selectionId: state.selection.entityId,
+      camera: state.camera,
+      search: state.search,
+      filters: state.filters
+    }
+  ].slice(-HISTORY_LIMIT);
+}
+
+function back(state: ViewState): ViewState {
+  const previous = state.history.at(-1);
+  if (!previous) {
+    return state;
+  }
+
+  return {
+    ...state,
+    history: state.history.slice(0, -1),
+    scope: previous.scope,
+    granularity: previous.granularity,
+    camera: previous.camera ?? null,
+    search: previous.search ?? '',
+    filters: previous.filters ?? {},
+    selection: previous.selectionId ? { entityId: previous.selectionId } : {},
+    projection: null,
+    details: null,
+    evidence: null
+  };
+}
+
+/** Restored state is untrusted: keep the safe defaults for anything unexpected. */
+function sanitizeRestoredState(state: ViewState): ViewState {
+  const granularity: Granularity = ['project', 'namespace', 'type'].includes(state.granularity)
+    ? state.granularity
+    : INITIAL_STATE.granularity;
+  const viewKind: ViewKind = state.viewKind === 'table' ? 'table' : 'graph';
+
+  return {
+    ...state,
+    granularity,
+    viewKind,
+    language: state.language === 'ja' ? 'ja' : 'en',
+    paneWidths: {
+      navigation: clampWidth(state.paneWidths?.navigation, INITIAL_STATE.paneWidths.navigation),
+      inspector: clampWidth(state.paneWidths?.inspector, INITIAL_STATE.paneWidths.inspector)
+    },
+    history: (state.history ?? []).slice(-HISTORY_LIMIT),
+    // A restored view never pretends an analysis is running.
+    status: state.status === 'analyzing' ? 'ready' : state.status,
+    progress: undefined
+  };
+}
+
+function clampWidth(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(Math.round(value), 120), 800);
+}
+
+function progressMessage(action: Extract<ViewAction, { type: 'analysisProgress' }>): string {
+  const parts: string[] = [stageLabel(action.stage)];
+  if (typeof action.loaded === 'number') {
+    parts.push(`loaded ${action.loaded}`);
+  }
+
+  if (typeof action.analyzed === 'number') {
+    parts.push(`analyzed ${action.analyzed}`);
+  }
+
+  return parts.join(' · ');
+}
+
+function completionMessage(action: Extract<ViewAction, { type: 'analysisComplete' }>): string {
+  const coverage = action.coverage;
+  const base =
+    action.completeness === 'completeWithinScope'
+      ? 'Analysis complete'
+      : action.completeness === 'partial'
+        ? 'Analysis complete (partial)'
+        : 'Analysis failed';
+  if (!coverage) {
+    return base;
+  }
+
+  return `${base} · ${coverage.analyzed}/${coverage.discovered} project(s) analyzed`;
+}
+
+export function stageLabel(stage: AnalysisStage): string {
+  switch (stage) {
+    case 'discover':
+      return 'Discovering projects';
+    case 'load':
+      return 'Loading projects';
+    case 'compile':
+      return 'Compiling';
+    case 'extract':
+      return 'Collecting evidence';
+    case 'aggregate':
+      return 'Aggregating';
+    default:
+      return 'Writing results';
+  }
+}
+
+// ---- Selectors -----------------------------------------------------------------
+
+export interface VisibleData {
+  nodes: EntitySummary[];
+  edges: Projection['edges'];
+  /** Node count after search and filters, before the display budget. */
+  matchedNodeCount: number;
+  filterCount: number;
+  isFilteredEmpty: boolean;
+  totalNodeCount: number;
+  totalEdgeCount: number;
+}
+
+/** Applies search and filters to the projection without touching the analysis. */
+export function selectVisibleData(state: ViewState): VisibleData {
+  const projection = state.projection;
+  if (!projection) {
+    return {
+      nodes: [],
+      edges: [],
+      matchedNodeCount: 0,
+      filterCount: countFilters(state.filters),
+      isFilteredEmpty: false,
+      totalNodeCount: 0,
+      totalEdgeCount: 0
+    };
+  }
+
+  const filters = state.filters;
+  const temporary = new Set(state.temporaryDisplayIds);
+  const nodes = projection.nodes.filter(
+    (node) =>
+      state.scope.kind === 'cycle' ||
+      temporary.has(node.id) ||
+      matchesEntity(node, filters, state.search)
+  );
+
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = projection.edges.filter((edge) => {
+    // Both ends must remain visible, otherwise the edge would dangle.
+    if (!nodeIds.has(edge.sourceId) || !nodeIds.has(edge.targetId)) {
+      return false;
+    }
+    if (state.scope.kind === 'cycle') return true;
+    if (filters.basis?.length && !filters.basis.includes(edge.basis)) return false;
+
+    if (filters.relationKinds && filters.relationKinds.length > 0) {
+      return filters.relationKinds.some((kind) => edge.kinds.includes(kind));
+    }
+
+    return true;
+  });
+
+  return {
+    nodes,
+    edges,
+    matchedNodeCount: nodes.length,
+    filterCount: countFilters(filters),
+    isFilteredEmpty:
+      nodes.length === 0 &&
+      (projection.nodes.length > 0 || state.search.trim().length > 0 || countFilters(filters) > 0),
+    totalNodeCount: projection.totalNodeCount,
+    totalEdgeCount: projection.totalEdgeCount
+  };
+}
+
+/** Breadcrumb segments for the current scope. */
+export function selectBreadcrumbs(state: ViewState): string[] {
+  const crumbs: string[] = [state.target?.name ?? translate(state.language, 'No target')];
+  if (state.scope.kind !== 'root') {
+    crumbs.push(translate(state.language, state.scope.kind));
+    if (state.selection.entityId && state.details?.entityId === state.selection.entityId) {
+      const entity = state.details.dependencies.concat(state.details.dependents);
+      void entity;
+    }
+  }
+
+  return crumbs;
+}
+
+/** Footer text: what is shown out of the analysis, always including the mode. */
+export function selectStatusFooter(state: ViewState): string {
+  const tr = translator(state.language);
+  const visible = selectVisibleData(state);
+  const parts = [tr('Showing {0}/{1} node(s)', visible.nodes.length, visible.totalNodeCount)];
+  parts.push(tr('{0}/{1} relation(s)', visible.edges.length, visible.totalEdgeCount));
+  parts.push(tr((state.resultMode ?? state.mode) === 'quick' ? 'Quick' : 'Semantic'));
+  parts.push(state.profile.configuration ?? 'Debug');
+  if (state.status === 'stale') {
+    parts.push(tr('stale result'));
+  } else if (state.status === 'partial') {
+    parts.push(tr('partial result'));
+  }
+
+  if (state.projectionTruncated) {
+    parts.push(tr('display budget applied'));
+  }
+
+  return parts.join(' · ');
+}
+
+/** Translate generated status text when rendering, without restarting analysis. */
+export function selectStatusMessage(state: ViewState): string {
+  const tr = translator(state.language);
+  if (state.progress && state.status === 'analyzing') {
+    const parts = [tr(stageLabel(state.progress.stage))];
+    if (state.progress.loaded !== undefined) parts.push(tr('loaded {0}', state.progress.loaded));
+    if (state.progress.analyzed !== undefined)
+      parts.push(tr('analyzed {0}', state.progress.analyzed));
+    return parts.join(' · ');
+  }
+  const completion =
+    /^(Analysis complete(?: \(partial\))?|Analysis failed) · (\d+)\/(\d+) project\(s\) analyzed$/.exec(
+      state.statusMessage
+    );
+  if (completion)
+    return `${tr(completion[1])} · ${tr('{0}/{1} project(s) analyzed', completion[2], completion[3])}`;
+  if (state.status === 'cancelled') return tr('The analysis was stopped.');
+  return tr(state.statusMessage);
+}
+
+/**
+ * Table rows: filtered, sorted, then paged. Temporary rows are marked so the UI can
+ * show that they are outside the current filters.
+ */
+export function selectTableRows(state: ViewState): {
+  rows: Array<{ entity: EntitySummary; temporary: boolean }>;
+  page: number;
+  pageCount: number;
+  totalItems: number;
+  isFilteredEmpty: boolean;
+} {
+  const visible = selectVisibleData(state);
+  const temporary = new Set(state.temporaryDisplayIds);
+  const dependencyCount = dependencyCounter(state);
+  const sorted = sortEntities(visible.nodes, state.tableSort, {
+    dependencyCount: (id) => dependencyCount.outgoing.get(id) ?? 0,
+    dependentCount: (id) => dependencyCount.incoming.get(id) ?? 0
+  });
+  const page = paginate(sorted, state.tablePage, TABLE_PAGE_SIZE);
+
+  return {
+    rows: page.items.map((entity) => ({ entity, temporary: temporary.has(entity.id) })),
+    page: page.page,
+    pageCount: page.pageCount,
+    totalItems: page.totalItems,
+    isFilteredEmpty: visible.isFilteredEmpty
+  };
+}
+
+/** Search hits with their relation to the current view, so none look "not found". */
+export function selectSearchPresentation(
+  state: ViewState
+): Array<{ entity: EntitySummary; visibility: SearchResultVisibility }> {
+  const visibleIds = new Set(selectVisibleData(state).nodes.map((node) => node.id));
+  return state.searchResults.items.map((entity) => ({
+    entity,
+    visibility: classifySearchResult(entity, {
+      visibleIds,
+      filters: state.filters,
+      search: state.search
+    })
+  }));
+}
+
+function dependencyCounter(state: ViewState): {
+  outgoing: Map<string, number>;
+  incoming: Map<string, number>;
+} {
+  const outgoing = new Map<string, number>();
+  const incoming = new Map<string, number>();
+  for (const edge of state.projection?.edges ?? []) {
+    outgoing.set(edge.sourceId, (outgoing.get(edge.sourceId) ?? 0) + 1);
+    incoming.set(edge.targetId, (incoming.get(edge.targetId) ?? 0) + 1);
+  }
+
+  return { outgoing, incoming };
+}
+
+export function countFilters(filters: Filters): number {
+  let count = 0;
+  for (const value of Object.values(filters)) {
+    if (Array.isArray(value)) {
+      if (value.length > 0) {
+        count++;
+      }
+    } else if (value === false) {
+      count++;
+    }
+  }
+
+  return count;
+}

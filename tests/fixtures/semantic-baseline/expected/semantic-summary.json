@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 2,
+  "mode": "semantic",
+  "completeness": "completeWithinScope",
+  "capabilities": {
+    "typeGraph": true,
+    "evidence": true,
+    "generatedDocuments": true,
+    "cycleWitness": true,
+    "search": true
+  },
+  "totals": {
+    "projects": 7,
+    "namespaces": 9,
+    "types": 44,
+    "relations": 49,
+    "evidence": 71,
+    "declarations": 33,
+    "generatedDocuments": 2,
+    "cycleGroups": 0
+  },
+  "variants": [
+    {
+      "name": "(external)",
+      "targetFramework": "external",
+      "types": 13,
+      "relations": 0,
+      "outgoing": 0
+    },
+    {
+      "name": "Application",
+      "targetFramework": "net8.0",
+      "types": 2,
+      "relations": 3,
+      "outgoing": 3
+    },
+    {
+      "name": "Domain(net10.0)",
+      "targetFramework": "net10.0",
+      "types": 12,
+      "relations": 12,
+      "outgoing": 12
+    },
+    {
+      "name": "Domain(netstandard2.0)",
+      "targetFramework": "netstandard2.0",
+      "types": 13,
+      "relations": 12,
+      "outgoing": 12
+    },
+    {
+      "name": "Generator",
+      "targetFramework": "netstandard2.0",
+      "types": 1,
+      "relations": 8,
+      "outgoing": 8
+    },
+    {
+      "name": "Infrastructure",
+      "targetFramework": "net10.0",
+      "types": 2,
+      "relations": 7,
+      "outgoing": 7
+    },
+    {
+      "name": "Infrastructure.Tests",
+      "targetFramework": "net10.0",
+      "types": 1,
+      "relations": 4,
+      "outgoing": 4
+    }
+  ],
+  "basis": {
+    "symbolResolved": 46,
+    "projectEvaluated": 3
+  },
+  "confidence": {
+    "resolved": 49
+  },
+  "relationKinds": {
+    "calls": 6,
+    "signature": 34,
+    "memberAccess": 14,
+    "implements": 2,
+    "attribute": 1,
+    "constructs": 5,
+    "typeUse": 2,
+    "projectEvaluated": 3
+  },
+  "limitations": [
+    "semantic.transitiveReferencesAdded"
+  ],
+  "documents": {
+    "generatedSource": 2,
+    "userSource": 15
+  }
+}

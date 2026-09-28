@@ -5,9 +5,9 @@ import prettier from 'eslint-config-prettier';
 export default tseslint.config(
   {
     ignores: [
+      '.local/**',
+      '.playwright-cli/**',
       'out/**',
-      'media/viewer.js',
-      'media/viewer.js.map',
       'analyzer/**',
       'node_modules/**',
       '**/*.vsix',
@@ -18,7 +18,7 @@ export default tseslint.config(
     ]
   },
   {
-    files: ['src/**/*.ts', 'media/**/*.ts'],
+    files: ['src/**/*.ts', 'media/**/*.ts', 'tests/**/*.ts'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended, prettier],
     languageOptions: {
       ecmaVersion: 2021,

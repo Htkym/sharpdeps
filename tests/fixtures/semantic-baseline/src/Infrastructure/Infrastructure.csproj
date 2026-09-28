@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Infrastructure</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Domain\Domain.csproj" />
+    <!-- Evaluated only for Release; Debug must not show this edge. -->
+    <ProjectReference Include="..\Application\Application.csproj" Condition="'$(Configuration)' == 'Release'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A file outside the project directory, compiled through a link. -->
+    <Compile Include="..\..\shared\Shared.cs" Link="Shared.cs" />
+    <!-- Compiled out on purpose: it must not appear in the evaluated input list. -->
+    <Compile Remove="Removed.cs" />
+  </ItemGroup>
+
+</Project>

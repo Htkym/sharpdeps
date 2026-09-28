@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SharpDeps.Analysis.Roslyn</RootNamespace>
+    <AssemblyName>SharpDeps.Analysis.Roslyn</AssemblyName>
+    <Description>Roslyn/MSBuild semantic analysis for SharpDeps.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
+    <ProjectReference Include="..\SharpDeps.Analysis.Core\SharpDeps.Analysis.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Locator" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" />
+    <!-- Required by MSBuildLocator's MSBL001 check: MSBuild must load from the SDK. -->
+    <PackageReference
+      Include="Microsoft.Build.Framework"
+      ExcludeAssets="runtime"
+      PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

@@ -1,8 +1,8 @@
 {
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
-  "description": "Visualize .NET solution dependencies at project and namespace granularity, with circular-dependency detection.",
-  "version": "0.0.4",
+  "description": "Explore .NET project, namespace, and type dependencies with source evidence and cycle detection.",
+  "version": "0.1.0",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
@@ -34,7 +34,18 @@
   "extensionDependencies": [
     "ms-dotnettools.vscode-dotnet-runtime"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onWebviewPanel:sharpdeps.codeMap"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Viewing data is available; analysis, project evaluation, generators and runtime execution require workspace trust.",
+      "restrictedConfigurations": [
+        "sharpdeps.dotnetPath"
+      ]
+    }
+  },
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -46,6 +57,16 @@
       {
         "command": "sharpdeps.refresh",
         "title": "Refresh Dependency Map",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.showTypeDependencies",
+        "title": "Show Type Dependencies (cursor)",
+        "category": "SharpDeps"
+      },
+      {
+        "command": "sharpdeps.showTypeDependents",
+        "title": "Show Type Dependents (cursor)",
         "category": "SharpDeps"
       },
       {
@@ -98,18 +119,39 @@
           "type": "number",
           "default": 60,
           "minimum": 1,
-          "markdownDescription": "Maximum number of projects to include in the project-level graph. Passed to the analyzer as `--max-projects`."
+          "markdownDescription": "Maximum number of projects or namespaces displayed. Does not limit analysis."
         },
         "sharpdeps.maxEdges": {
           "type": "number",
           "default": 200,
           "minimum": 1,
-          "markdownDescription": "Maximum number of dependency edges to include in the graph. Passed to the analyzer as `--max-edges`."
+          "markdownDescription": "Maximum number of displayed relations. Does not limit analysis or cycle detection."
+        },
+        "sharpdeps.analysisMode": {
+          "type": "string",
+          "enum": [
+            "quick",
+            "semantic"
+          ],
+          "default": "quick",
+          "markdownDescription": "Analysis mode. Quick works without the .NET SDK; Semantic uses MSBuild and Roslyn and is only used when selected explicitly."
+        },
+        "sharpdeps.analysisTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 10,
+          "markdownDescription": "Time limit for one analysis run, in seconds. When exceeded, the run is stopped and the process tree it started is terminated."
         },
         "sharpdeps.dotnetPath": {
           "type": "string",
           "default": "",
           "markdownDescription": "Absolute path to a `dotnet` executable to use. When empty, SharpDeps resolves one via the .NET Install Tool (`dotnet.findPath`), then `PATH`, then acquires a private .NET runtime on demand."
+        },
+        "sharpdeps.maxVisibleTypes": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "markdownDescription": "Maximum number of types in the graph. Search and analysis still cover the full result."
         }
       }
     }
@@ -125,20 +167,27 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package": "vsce package"
+    "package": "vsce package",
+    "test:e2e": "node scripts/e2e.js",
+    "test:browser": "playwright test",
+    "perf": "node scripts/perf.js",
+    "check:vsix": "node scripts/check-vsix.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "^3.9.2",
+    "ajv": "^8.20.0",
+    "elkjs": "^0.12.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
-    "mermaid": "^11.4.0",
     "prettier": "^3.9.4",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.62.1",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   }
 }

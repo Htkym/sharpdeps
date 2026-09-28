@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/**']
   pull_request:
 
 permissions:
@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -37,15 +38,94 @@ jobs:
       - name: Type-check
         run: npm run compile
 
-      - name: Test
+      - name: Build the analyzer hosts
+        run: npm run build:analyzer
+
+      - name: Prepare semantic fixture
+        run: |
+          dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet restore tests/fixtures/project-kinds/ProjectKinds.slnx
+          dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
+
+      - name: C# tests
+        run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release
+
+      - name: TypeScript and analyzer contract tests
         run: npm test
 
-      - name: Package VSIX
-        run: npm run package
+      - name: Build webview
+        run: npm run build
+
+      - name: Browser tests
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:browser
+
+      - name: Check the packaged VSIX content
+        run: npm run check:vsix
+
+      # The end-to-end suite needs a VS Code binary. On CI that comes from
+      # @vscode/test-electron, which the runner falls back to when no installation is
+      # present; locally the installed VS Code is used instead.
+      - name: End-to-end (VS Code)
+        run: xvfb-run -a npm run test:e2e
+
+      - name: End-to-end (installed VSIX)
+        run: xvfb-run -a npm run test:e2e
+        env:
+          SHARPDEPTS_E2E_MODE: vsix
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: sharpdeps-vsix
           path: '*.vsix'
+          if-no-files-found: error
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-verification
+          path: |
+            .local/verification/sd-027-e2e*.json
+            .local/verification/sd-028-browser.json
+            .local/verification/sd-029-vsix.json
+            .local/browser-results/
+
+  macos-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Record environment
+        run: |
+          mkdir -p .local/ci
+          sw_vers > .local/ci/macos.txt
+          dotnet --info > .local/ci/dotnet.txt
+      - run: npm ci
+      - name: Publish Quick and Semantic hosts
+        run: npm run build:analyzer
+      - name: Prepare semantic fixture
+        run: |
+          dotnet restore tests/fixtures/semantic-baseline/SemanticBaseline.sln
+          dotnet restore tests/fixtures/project-kinds/ProjectKinds.slnx
+          dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
+      - name: C# tests
+        run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet
+      - name: Quick and Semantic golden and contract tests
+        run: npx vitest run tests/analyzer tests/contract --reporter=default --reporter=json --outputFile=.local/ci/analyzers.json
+      - name: Upload macOS verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-verification
+          path: .local/ci/
           if-no-files-found: error

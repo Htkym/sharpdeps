@@ -1,0 +1,735 @@
+// Webview protocol v2 (SD-002, plan section 5.5).
+//
+// The normative definition is schemas/protocol-v2.schema.json. This module holds
+// the compile-time shapes plus the runtime validation the receivers use:
+// unknown message types are rejected, ids and cursors are pattern-checked, and
+// `protocolVersion` is only accepted on the negotiation messages.
+//
+// The webview never sends file paths or byte offsets: it sends opaque ids and
+// cursors that the host resolves against the registered analysis result.
+
+import type { Granularity, RelationKind } from '../analyzer/reportV2';
+
+export const PROTOCOL_VERSION = 2;
+
+export type ExportFormat = 'mermaid' | 'svg' | 'png' | 'json';
+
+export interface Scope {
+  kind: 'root' | 'project' | 'namespace' | 'type' | 'dependencies' | 'dependents' | 'cycle';
+  id?: string | null;
+  depth?: number | null;
+}
+
+export interface Filters {
+  kinds?: string[];
+  projectKinds?: string[];
+  relationKinds?: RelationKind[];
+  basis?: string[];
+  includeGenerated?: boolean;
+  includeExternal?: boolean;
+  includeTests?: boolean;
+}
+
+export interface ProfileRequest {
+  configuration?: string;
+  platform?: string | null;
+  projectVariants?: { projectLogicalId: string; targetFramework: string }[];
+}
+
+export interface Capabilities {
+  typeGraph: boolean;
+  evidence: boolean;
+  generatedDocuments: boolean;
+  cycleWitness: boolean;
+  search: boolean;
+}
+
+export interface Coverage {
+  discovered: number;
+  loaded: number;
+  analyzed: number;
+  failed: number;
+  skipped: number;
+  unresolved: number;
+}
+
+export interface EntitySummary {
+  id: string;
+  name: string;
+  granularity: Granularity;
+  kind?: string;
+  projectName?: string;
+  inCycle?: boolean;
+  isExternal?: boolean;
+  isGenerated?: boolean;
+  fullName?: string;
+  projectId?: string;
+  projectPath?: string;
+  projectKind?: string;
+  namespaceId?: string;
+  namespaceName?: string;
+  targetFramework?: string;
+  analysisStatus?: 'complete' | 'partial' | 'failed' | 'skipped';
+  analysisLimitations?: string[];
+  dependencyCount?: number;
+  dependentCount?: number;
+}
+
+export interface ProjectionEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  basis: string;
+  kinds: string[];
+  evidenceCount: number;
+  inCycle: boolean;
+  generatedEvidenceCount?: number;
+  publicSurfaceEvidenceCount?: number;
+  /**
+   * Relations this edge is derived from. A coarse-granularity edge aggregates several
+   * type-level relations, and each can be paged for evidence.
+   */
+  underlyingRelationIds?: string[];
+  /** Per-relation detail of an aggregated edge, representative first. */
+  underlyingRelations?: Array<{
+    id: string;
+    basis: string;
+    kinds: string[];
+    evidenceCount: number;
+    confidence?: string | null;
+  }>;
+}
+
+export interface ProjectionCycleGroup {
+  id: string;
+  scope: string;
+  basis: string;
+  /** Members as a set: the order is not a path. */
+  memberIds: string[];
+  internalRelationIds: string[];
+  /** The cycle the analyzer verified; the order of these ids is a real path. */
+  witness: { memberIds: string[]; relationIds: string[] } | null;
+  truncated?: boolean;
+}
+
+export interface Projection {
+  scope: Scope;
+  granularity: Granularity;
+  nodes: EntitySummary[];
+  edges: ProjectionEdge[];
+  totalNodeCount: number;
+  totalEdgeCount: number;
+  truncated: boolean;
+  includedOutOfFilterIds?: string[];
+  /**
+   * SCC groups and their verified cycles, sent with the projection so the cycle view has
+   * both the member set and the real path in one round trip.
+   */
+  cycleGroups?: ProjectionCycleGroup[];
+}
+
+export interface AnalysisProgress {
+  analysisId: string;
+  stage: 'discover' | 'load' | 'compile' | 'extract' | 'aggregate' | 'write';
+  discovered?: number;
+  loaded?: number;
+  analyzed?: number;
+  elapsedMs?: number;
+  message?: string;
+}
+
+// Webview -> extension host
+export type WebviewToHostMessage =
+  | { type: 'ready'; protocolVersion: number; webviewVersion?: string }
+  | {
+      type: 'analyze';
+      requestId: string;
+      mode: 'quick' | 'semantic';
+      targetId?: string | null;
+      profile?: ProfileRequest;
+    }
+  | { type: 'cancelAnalysis'; requestId: string; analysisId: string }
+  | {
+      type: 'getProjection';
+      requestId: string;
+      analysisId: string;
+      scope: Scope;
+      granularity: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
+    }
+  | {
+      type: 'searchEntities';
+      requestId: string;
+      analysisId: string;
+      query: string;
+      parentId?: string;
+      granularity?: Granularity;
+      filters?: Filters;
+      limit?: number;
+      cursor?: string;
+    }
+  | { type: 'getEntityDetails'; requestId: string; analysisId: string; entityId: string }
+  | {
+      type: 'getEvidencePage';
+      requestId: string;
+      analysisId: string;
+      relationId: string;
+      limit?: number;
+      cursor?: string;
+    }
+  | { type: 'getCycleWitness'; requestId: string; analysisId: string; cycleGroupId: string }
+  | { type: 'openEvidence'; requestId: string; analysisId: string; evidenceId: string }
+  | {
+      type: 'openDeclaration';
+      requestId: string;
+      analysisId: string;
+      entityId: string;
+      declarationIndex?: number;
+    }
+  | {
+      type: 'copyContext';
+      requestId: string;
+      analysisId: string;
+      scope: Scope;
+      includeSnippets?: boolean;
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
+    }
+  | {
+      type: 'export';
+      requestId: string;
+      analysisId: string;
+      format: ExportFormat;
+      copy?: boolean;
+      scope: Scope;
+      /** Rendered SVG text or PNG data URL, when the webview produced it (SD-022). */
+      data?: string;
+      granularity?: Granularity;
+      filters?: Filters;
+      search?: string;
+      includeIds?: string[];
+    }
+  | { type: 'persistViewState'; viewState: Record<string, unknown> };
+
+// Extension host -> webview
+export type HostToWebviewMessage =
+  | {
+      type: 'capabilities';
+      protocolVersion: number;
+      capabilities: Capabilities;
+      analysisId?: string | null;
+    }
+  | ({ type: 'analysisProgress' } & AnalysisProgress)
+  | {
+      type: 'analysisStarted';
+      analysisId: string;
+      mode: 'quick' | 'semantic';
+      target: { name: string; relativePath: string };
+    }
+  | { type: 'requestExport'; format: ExportFormat; copy?: boolean }
+  | {
+      type: 'analysisComplete';
+      analysisId: string;
+      completeness: 'completeWithinScope' | 'partial' | 'failed';
+      coverage: Coverage;
+      mode?: 'quick' | 'semantic';
+      limitations?: unknown[];
+      capabilities?: Capabilities;
+      target?: { name: string; relativePath: string };
+      profile?: ProfileRequest;
+      variantOptions?: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
+    }
+  | {
+      type: 'analysisFailed';
+      analysisId: string;
+      message: string;
+      detail?: string;
+      cancelled?: boolean;
+    }
+  | { type: 'projection'; requestId: string; analysisId: string; projection: Projection }
+  | {
+      /** Editor-driven reveal (SD-019): select an entity, optionally in a new scope. */
+      type: 'reveal';
+      analysisId: string;
+      entityId: string;
+      scope?: Scope;
+      granularity?: Granularity;
+    }
+  | {
+      /** Restored small view state from workspace storage (SD-021). */
+      type: 'viewState';
+      state: Record<string, unknown>;
+    }
+  | {
+      type: 'searchResults';
+      requestId: string;
+      analysisId: string;
+      total: number;
+      items: EntitySummary[];
+      nextCursor?: string | null;
+    }
+  | {
+      type: 'details';
+      requestId: string;
+      analysisId: string;
+      entity: Record<string, unknown>;
+      dependencies?: EntitySummary[];
+      dependents?: EntitySummary[];
+    }
+  | {
+      type: 'evidencePage';
+      requestId: string;
+      analysisId: string;
+      relationId: string;
+      total: number;
+      items: Record<string, unknown>[];
+      nextCursor?: string | null;
+    }
+  | {
+      type: 'cycleWitness';
+      requestId: string;
+      analysisId: string;
+      cycleGroupId: string;
+      witness: Record<string, unknown> | null;
+    }
+  | {
+      type: 'stale';
+      analysisId: string;
+      reason: 'unsavedChange' | 'savedChange' | 'profileChange' | 'unknown';
+      relativePaths?: string[];
+    }
+  | {
+      type: 'error';
+      code: string;
+      message: string;
+      requestId?: string | null;
+      analysisId?: string | null;
+    };
+
+export interface ProtocolValidationFailure {
+  ok: false;
+  code: 'unknownType' | 'invalidMessage';
+  errors: string[];
+}
+
+export type ProtocolValidationResult<T> = { ok: true; value: T } | ProtocolValidationFailure;
+
+/** Query text is echoed back to the UI; it must not be an unbounded payload. */
+export const MAX_QUERY_LENGTH = 200;
+
+const PATTERNS = {
+  requestId: /^req_[0-9a-f]{16}$/,
+  analysisId: /^an_[0-9a-f]{16}$/,
+  cursor: /^cur_[0-9a-f]{16}$/,
+  entityId: /^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/,
+  relationId: /^rel_[0-9a-f]{16}$/,
+  evidenceId: /^ev_[0-9a-f]{16}$/,
+  cycleGroupId: /^cyc_[0-9a-f]{16}$/
+} as const;
+
+type FieldKind =
+  | keyof typeof PATTERNS
+  | 'string'
+  | 'object'
+  | 'array'
+  | 'entityIds'
+  | 'boolean'
+  | 'positiveInteger'
+  | 'granularity'
+  | 'scope'
+  | 'filters'
+  | 'profile'
+  | 'exportFormat'
+  | 'mode'
+  | 'viewState';
+
+interface MessageRule {
+  required: Record<string, FieldKind>;
+  optional: Record<string, FieldKind>;
+}
+
+const MODES = ['quick', 'semantic'] as const;
+const GRANULARITIES = ['project', 'namespace', 'type'] as const;
+const EXPORT_FORMATS = ['mermaid', 'svg', 'png', 'json'] as const;
+const SCOPE_KINDS = [
+  'root',
+  'project',
+  'namespace',
+  'type',
+  'dependencies',
+  'dependents',
+  'cycle'
+] as const;
+
+const WEBVIEW_RULES: Record<string, MessageRule> = {
+  ready: {
+    required: {},
+    optional: { protocolVersion: 'positiveInteger', webviewVersion: 'string' }
+  },
+  analyze: {
+    required: { requestId: 'requestId', mode: 'mode' },
+    optional: { targetId: 'string', profile: 'profile' }
+  },
+  cancelAnalysis: { required: { requestId: 'requestId', analysisId: 'analysisId' }, optional: {} },
+  getProjection: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      scope: 'scope',
+      granularity: 'granularity'
+    },
+    optional: { filters: 'filters', search: 'string', includeIds: 'entityIds' }
+  },
+  searchEntities: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', query: 'string' },
+    optional: {
+      parentId: 'entityId',
+      granularity: 'granularity',
+      filters: 'filters',
+      limit: 'positiveInteger',
+      cursor: 'cursor'
+    }
+  },
+  getEntityDetails: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
+    optional: {}
+  },
+  getEvidencePage: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', relationId: 'relationId' },
+    optional: { limit: 'positiveInteger', cursor: 'cursor' }
+  },
+  getCycleWitness: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', cycleGroupId: 'cycleGroupId' },
+    optional: {}
+  },
+  openEvidence: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', evidenceId: 'evidenceId' },
+    optional: {}
+  },
+  openDeclaration: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
+    optional: { declarationIndex: 'positiveInteger' }
+  },
+  copyContext: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', scope: 'scope' },
+    optional: {
+      includeSnippets: 'boolean',
+      granularity: 'granularity',
+      filters: 'filters',
+      search: 'string',
+      includeIds: 'entityIds'
+    }
+  },
+  export: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      format: 'exportFormat',
+      scope: 'scope'
+    },
+    optional: {
+      data: 'string',
+      copy: 'boolean',
+      granularity: 'granularity',
+      filters: 'filters',
+      search: 'string',
+      includeIds: 'entityIds'
+    }
+  },
+  persistViewState: { required: { viewState: 'viewState' }, optional: {} }
+};
+
+const HOST_RULES: Record<string, MessageRule> = {
+  analysisStarted: {
+    required: { analysisId: 'analysisId', mode: 'mode', target: 'object' },
+    optional: {}
+  },
+  requestExport: { required: { format: 'exportFormat' }, optional: { copy: 'boolean' } },
+  capabilities: {
+    required: { protocolVersion: 'positiveInteger', capabilities: 'object' },
+    optional: { analysisId: 'analysisId' }
+  },
+  reveal: {
+    required: { analysisId: 'analysisId', entityId: 'entityId' },
+    optional: { scope: 'scope', granularity: 'granularity' }
+  },
+  viewState: {
+    required: { state: 'object' },
+    optional: {}
+  },
+  analysisProgress: {
+    required: { analysisId: 'analysisId', stage: 'string' },
+    optional: {
+      discovered: 'positiveInteger',
+      loaded: 'positiveInteger',
+      analyzed: 'positiveInteger',
+      elapsedMs: 'positiveInteger',
+      message: 'string'
+    }
+  },
+  analysisComplete: {
+    required: { analysisId: 'analysisId', completeness: 'string', coverage: 'object' },
+    optional: {
+      mode: 'mode',
+      limitations: 'array',
+      capabilities: 'object',
+      target: 'object',
+      profile: 'profile',
+      variantOptions: 'array'
+    }
+  },
+  analysisFailed: {
+    required: { analysisId: 'analysisId', message: 'string' },
+    optional: { detail: 'string', cancelled: 'boolean' }
+  },
+  projection: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', projection: 'object' },
+    optional: {}
+  },
+  searchResults: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      total: 'positiveInteger',
+      items: 'array'
+    },
+    optional: { nextCursor: 'cursor' }
+  },
+  details: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', entity: 'object' },
+    optional: { dependencies: 'array', dependents: 'array' }
+  },
+  evidencePage: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      relationId: 'relationId',
+      total: 'positiveInteger',
+      items: 'array'
+    },
+    optional: { nextCursor: 'cursor' }
+  },
+  cycleWitness: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      cycleGroupId: 'cycleGroupId',
+      witness: 'object'
+    },
+    optional: {}
+  },
+  stale: {
+    required: { analysisId: 'analysisId', reason: 'string' },
+    optional: { relativePaths: 'array' }
+  },
+  error: {
+    required: { code: 'string', message: 'string' },
+    optional: { requestId: 'string', analysisId: 'analysisId' }
+  }
+};
+
+/** Validates a message received by the extension host. */
+export function validateWebviewMessage(
+  input: unknown
+): ProtocolValidationResult<WebviewToHostMessage> {
+  const result = validateMessage<WebviewToHostMessage>(input, WEBVIEW_RULES, 'webview');
+  if (!result.ok) {
+    return result;
+  }
+
+  // Search text is echoed back to the UI and the host: keep it bounded (SD-023).
+  if (result.value.type === 'searchEntities' && result.value.query.length > MAX_QUERY_LENGTH) {
+    return {
+      ok: false,
+      code: 'invalidMessage',
+      errors: [`$.query: longer than ${MAX_QUERY_LENGTH} characters`]
+    };
+  }
+  if (
+    'search' in result.value &&
+    typeof result.value.search === 'string' &&
+    result.value.search.length > MAX_QUERY_LENGTH
+  )
+    return {
+      ok: false,
+      code: 'invalidMessage',
+      errors: [`$.search: longer than ${MAX_QUERY_LENGTH} characters`]
+    };
+
+  return result;
+}
+
+/** Validates a message received by the webview. */
+export function validateHostMessage(
+  input: unknown
+): ProtocolValidationResult<HostToWebviewMessage> {
+  return validateMessage(input, HOST_RULES, 'host');
+}
+
+function validateMessage<T>(
+  input: unknown,
+  rules: Record<string, MessageRule>,
+  sender: string
+): ProtocolValidationResult<T> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return { ok: false, code: 'invalidMessage', errors: ['$: expected an object'] };
+  }
+  const message = input as Record<string, unknown>;
+  const type = message.type;
+  if (typeof type !== 'string') {
+    return { ok: false, code: 'invalidMessage', errors: ['$.type: expected a string'] };
+  }
+  const rule = rules[type];
+  if (!rule) {
+    return {
+      ok: false,
+      code: 'unknownType',
+      errors: [`$.type: unknown ${sender} message type '${type}'`]
+    };
+  }
+
+  const errors: string[] = [];
+  for (const [field, kind] of Object.entries(rule.required)) {
+    if (!checkField(message[field], kind, `$.${field}`, errors, true)) {
+      continue;
+    }
+  }
+  for (const [field, kind] of Object.entries(rule.optional)) {
+    checkField(message[field], kind, `$.${field}`, errors, false);
+  }
+
+  return errors.length === 0
+    ? { ok: true, value: input as T }
+    : { ok: false, code: 'invalidMessage', errors };
+}
+
+function checkField(
+  value: unknown,
+  kind: FieldKind,
+  path: string,
+  errors: string[],
+  required: boolean
+): boolean {
+  if (value === undefined || value === null) {
+    if (required) {
+      errors.push(`${path}: missing required field`);
+    }
+    return !required;
+  }
+
+  const fail = (message: string): false => {
+    errors.push(`${path}: ${message}`);
+    return false;
+  };
+
+  switch (kind) {
+    case 'string':
+      return typeof value === 'string' ? true : fail('expected a string');
+    case 'boolean':
+      return typeof value === 'boolean' ? true : fail('expected a boolean');
+    case 'positiveInteger':
+      return typeof value === 'number' && Number.isInteger(value) && value >= 0
+        ? true
+        : fail('expected a non-negative integer');
+    case 'object':
+      return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
+    case 'array':
+      return Array.isArray(value) ? true : fail('expected an array');
+    case 'entityIds':
+      return Array.isArray(value) &&
+        value.length <= 1000 &&
+        value.every((id) => typeof id === 'string' && PATTERNS.entityId.test(id))
+        ? true
+        : fail('expected at most 1000 entity ids');
+    case 'mode':
+      return MODES.includes(value as (typeof MODES)[number])
+        ? true
+        : fail(`expected one of ${MODES.join(', ')}`);
+    case 'granularity':
+      return GRANULARITIES.includes(value as (typeof GRANULARITIES)[number])
+        ? true
+        : fail(`expected one of ${GRANULARITIES.join(', ')}`);
+    case 'exportFormat':
+      return EXPORT_FORMATS.includes(value as (typeof EXPORT_FORMATS)[number])
+        ? true
+        : fail(`expected one of ${EXPORT_FORMATS.join(', ')}`);
+    case 'scope': {
+      if (typeof value !== 'object' || Array.isArray(value)) return fail('expected a scope object');
+      const scope = value as Record<string, unknown>;
+      if (
+        typeof scope.kind !== 'string' ||
+        !SCOPE_KINDS.includes(scope.kind as (typeof SCOPE_KINDS)[number])
+      ) {
+        return fail(`scope.kind must be one of ${SCOPE_KINDS.join(', ')}`);
+      }
+      if (
+        scope.id !== undefined &&
+        scope.id !== null &&
+        !(scope.kind === 'cycle' ? PATTERNS.cycleGroupId : PATTERNS.entityId).test(String(scope.id))
+      ) {
+        return fail('scope.id must be an entity id');
+      }
+      if (scope.depth !== undefined && scope.depth !== null) {
+        const depth = Number(scope.depth);
+        if (!Number.isInteger(depth) || depth < 1 || depth > 3) {
+          return fail('scope.depth must be between 1 and 3');
+        }
+      }
+      return true;
+    }
+    case 'filters': {
+      if (typeof value !== 'object' || Array.isArray(value)) return fail('expected an object');
+      const filters = value as Record<string, unknown>;
+      for (const key of ['includeGenerated', 'includeExternal', 'includeTests'])
+        if (filters[key] !== undefined && typeof filters[key] !== 'boolean')
+          return fail(`${key} must be a boolean`);
+      for (const key of ['kinds', 'projectKinds', 'relationKinds', 'basis']) {
+        const items = filters[key];
+        if (
+          items !== undefined &&
+          (!Array.isArray(items) ||
+            items.length > 100 ||
+            items.some((item) => typeof item !== 'string' || item.length > 100))
+        )
+          return fail(`${key} must be an array of at most 100 short strings`);
+      }
+      return true;
+    }
+    case 'profile': {
+      if (typeof value !== 'object' || Array.isArray(value)) return fail('expected an object');
+      const profile = value as Record<string, unknown>;
+      for (const key of ['configuration', 'platform'])
+        if (
+          profile[key] != null &&
+          (typeof profile[key] !== 'string' || (profile[key] as string).length > 64)
+        )
+          return fail(`${key} must be a short string`);
+      const variants = profile.projectVariants;
+      if (
+        variants !== undefined &&
+        (!Array.isArray(variants) ||
+          variants.length > 10000 ||
+          variants.some(
+            (variant) =>
+              !variant ||
+              typeof variant !== 'object' ||
+              !/^prj_[0-9a-f]{16}$/.test(variant.projectLogicalId) ||
+              typeof variant.targetFramework !== 'string' ||
+              !/^[a-zA-Z0-9.+_-]{1,100}$/.test(variant.targetFramework)
+          ))
+      )
+        return fail('projectVariants must contain valid project ids and target frameworks');
+      return true;
+    }
+    case 'viewState':
+      return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
+    default:
+      return PATTERNS[kind].test(String(value))
+        ? true
+        : fail(`value does not match ${PATTERNS[kind]}`);
+  }
+}

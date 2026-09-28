@@ -1,0 +1,34 @@
+<!doctype html>
+<!--
+  SD-015 verification page.
+
+  Reproduces the webview constraints (strict CSP, local resources only) and mounts the
+  new shell. `window.sharpdepsApp.dispatch(...)` drives every UI state from a fixture,
+  and the layout is checked at 1440 / 900 / 360 CSS px.
+
+  Serve the repository root over HTTP (see scripts/serve-webview.mjs) and open:
+
+    http://127.0.0.1:4173/tests/webview/fixtures/shell-fixture.html
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'nonce-shell-fixture'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src blob:; connect-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="../../../media/styles/shell.css" rel="stylesheet" />
+    <link href="../../../media/styles/graph.css" rel="stylesheet" />
+    <title>SharpDeps shell fixture (SD-015)</title>
+  </head>
+  <body>
+    <!-- The worker is fetched and started from a Blob URL, exactly as in the panel. -->
+    <div
+      id="app"
+      data-fixture="true"
+      data-worker-uri="../../../media/workers/elkLayout.worker.js"
+    ></div>
+    <script nonce="shell-fixture" src="../../../media/app/entry.js"></script>
+  </body>
+</html>

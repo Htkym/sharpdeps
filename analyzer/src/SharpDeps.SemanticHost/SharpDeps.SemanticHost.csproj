@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SharpDeps.SemanticHost</RootNamespace>
+    <AssemblyName>sharpdeps-semantic-host</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Description>Semantic (MSBuild/Roslyn) analysis host for SharpDeps (SD-003 prototype).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Roslyn\SharpDeps.Analysis.Roslyn.csproj" />
+  </ItemGroup>
+
+</Project>

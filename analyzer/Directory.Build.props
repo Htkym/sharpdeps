@@ -1,0 +1,23 @@
+<Project>
+
+  <!--
+    Shared build settings for the analyzer solution (analyzer/src, analyzer/tests).
+
+    The file-based Quick analyzer (analyzer/code-map.cs) must NOT inherit these
+    settings: it uses #:package directives and is published by
+    scripts/build-analyzer.js with -p:ImportDirectoryBuildProps=false.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+
+</Project>

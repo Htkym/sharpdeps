@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="WebAttribute.csproj" />
+  <Project Path="WebImport.csproj" />
+  <Project Path="WebSupport.csproj" />
+</Solution>

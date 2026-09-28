@@ -1,118 +1,57 @@
 # SharpDeps — .NET Dependency Map
 
-[![CI](https://img.shields.io/github/actions/workflow/status/Htkym/sharpdeps/ci.yml?branch=main&label=CI)](https://github.com/Htkym/sharpdeps/actions/workflows/ci.yml)
-[![VS Marketplace](https://badgen.net/vs-marketplace/v/htkym.sharpdeps)](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
+English · [日本語](README.ja.md) · [User guide](docs/guide.md)
 
-SharpDeps visualizes the dependencies in a .NET solution as an interactive graph, at both **project** and **namespace** granularity, and flags **circular dependencies**.
+SharpDeps helps you explore dependencies in a .NET solution from a VS Code editor tab. Start with projects, drill down to namespaces and types, and select a connection to inspect its source references.
 
-The graph opens as a normal editor tab (a webview). Mermaid is bundled into the extension, so rendering works offline with no CDN access.
+![Project dependencies in SharpDeps](images/overview-en.png)
 
-![SharpDeps showing the project-level dependency graph for a .NET solution](images/overview.png)
-
-## Features
-
-- Interactive Mermaid dependency graph for a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`), shown in an editor tab.
-- Toggle between **project-level** and **namespace-level** views instantly.
-- Nodes are **color-coded by project kind** (web, library, test, desktop, app), with a legend that lists the kinds present in the current graph.
-- Zoom and pan the graph: on-screen controls (including a **zoom slider**), Ctrl/⌘ + wheel, trackpad pinch, and drag to pan. The graph fits the available window when it opens and re-fits on resize.
-- Tune the layout with **node-spacing** and **rank-spacing** sliders, and resize the graph and cycle panes with a draggable splitter.
-- **Hide test projects** with a single toggle: the graph re-lays out without them so the remaining dependencies are easier to read.
-- Circular dependencies are highlighted in red on the graph.
-- Cycles are also reported in the **Problems** panel:
-  - project cycles anchor to the participating `.csproj` files,
-  - namespace cycles anchor to a representative source file for each namespace.
-- Export the current graph: **copy Mermaid source**, **save as SVG**, **save as PNG**.
-- Copy a compact analysis summary and handoff instructions for an AI coding agent from the toolbar.
-- Run from the Explorer context menu on a `.sln`, `.slnx`, or supported project file, or from the Command Palette. Right-clicking a project file generates a project-scoped graph for that project and everything it transitively references via `ProjectReference`, with no `.sln`/`.slnx` required.
-
-## Screenshots
-
-Namespace-level view — switch granularity with the **Projects / Namespaces** toggle to group dependencies by namespace:
-
-![Namespace-level dependency graph grouped into namespace clusters](images/namespace-graph.png)
-
-Circular dependencies are highlighted in red on the graph and listed in the sidebar; selecting one focuses the participating nodes:
-
-![A circular dependency highlighted in red between two namespaces](images/cycles.png)
+The screenshots and guide describe the **0.1.0 workbench**. Use a matching VSIX or build this source to follow these instructions.
 
 ## Install
 
-- **From the Marketplace:** open the Extensions view in VS Code, search for **SharpDeps**, and install — or visit the [Marketplace page](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps).
-- **From a VSIX:** download the latest `.vsix` from the [Releases](https://github.com/Htkym/sharpdeps/releases) page, then run **Extensions: Install from VSIX…** from the Command Palette.
+Install a `.vsix` with **Extensions: Install from VSIX…** in the Command Palette. Published versions are available from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) and [GitHub Releases](https://github.com/Htkym/sharpdeps/releases); check the version in VS Code's Extensions view.
 
-The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) is installed automatically as a dependency. See [Requirements](#requirements) for how the `dotnet` runtime is resolved.
+VS Code 1.90 or later and a trusted workspace are required to run analysis.
 
-## Requirements
-
-SharpDeps runs a small precompiled analyzer that needs the **.NET runtime** (not the full SDK).
-
-Resolution order for `dotnet`:
-
-1. The `sharpdeps.dotnetPath` setting, if set.
-2. The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) (`dotnet.findPath`). This extension is declared as a dependency and is installed automatically.
-3. `dotnet` on your `PATH`.
-4. A private runtime acquired on demand via the .NET Install Tool, using VS Code's standard download/progress UI (no administrator rights required).
-
-If none of these succeed, SharpDeps shows a notification with a **Download .NET** link and lets you point at a `dotnet` executable via settings.
-
-## Usage
-
-- Right-click a `.sln`, `.slnx`, or supported project file (`.csproj`/`.fsproj`/`.vbproj`/`.vcxproj`) in the Explorer and choose **SharpDeps: Show Dependency Map**. Right-clicking a project file generates a project-scoped graph for that project and everything it transitively references via `ProjectReference`, with no `.sln`/`.slnx` required.
-- Run **SharpDeps: Show Dependency Map** from the Command Palette. If the active editor is a `.sln`, `.slnx`, or supported project file, SharpDeps uses that; otherwise it falls back to discovering `.sln`/`.slnx` files in the workspace.
-
-While the map is open, these palette commands are available:
-
-- **SharpDeps: Refresh Dependency Map**
-- **SharpDeps: Copy Mermaid Source**
-- **SharpDeps: Export Graph as SVG**
-- **SharpDeps: Export Graph as PNG**
-
-## Settings
-
-| Setting | Default | Description |
+| Mode | What it shows | Requirements |
 | --- | --- | --- |
-| `sharpdeps.maxProjects` | `60` | Maximum number of projects in the project-level graph (`--max-projects`). |
-| `sharpdeps.maxEdges` | `200` | Maximum number of dependency edges in the graph (`--max-edges`). |
-| `sharpdeps.dotnetPath` | `""` | Absolute path to a `dotnet` executable. When empty, SharpDeps resolves one automatically. |
+| Quick | Declared project references and namespace dependencies inferred from `using` directives. | .NET 10 runtime; no SDK or MSBuild evaluation. The .NET Install Tool can acquire the runtime. |
+| Semantic | Evaluated C# project references and code references resolved with MSBuild and Roslyn, including types and reference locations. | .NET 10 runtime and an installed SDK compatible with the target and its `global.json`. Restore the target's packages yourself. |
 
-## How it works
+The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) is installed as an extension dependency. SharpDeps does not acquire an SDK or restore project packages automatically.
 
-```mermaid
-flowchart LR
-  cmd["Command / right-click"] --> resolve["Resolve target (.sln/.slnx/project)"]
-  resolve --> rt["Resolve dotnet (findPath / acquire)"]
-  rt --> run["Run analyzer DLL via dotnet"]
-  run --> json["Parse JSON report"]
-  json --> view["Webview viewer (Mermaid bundled)"]
-  json --> diag["Cycle diagnostics (Problems)"]
-  view -->|copy / export| ext["Extension host (clipboard / save)"]
-```
+## Open your first map
 
-The analyzer parses the selected solution or project scope with Roslyn (no MSBuild/SDK dependency) and emits a JSON report. The extension renders it in the webview and publishes any cycles to the Problems panel.
+1. Open your solution folder in VS Code.
+2. Right-click a `.sln`, `.slnx`, or supported project file in Explorer and choose **SharpDeps: Show Dependency Map**.
+3. Select a node or connection. Use **Dependencies** or **Dependents** to narrow the graph, and open reference evidence from **Details**.
 
-## Building from source
+You can also use the Command Palette. Quick supports `.csproj`, `.fsproj`, `.vbproj`, and `.vcxproj` targets; Semantic is intended for SDK-style C# projects. A project target follows its transitive project references.
 
-Prerequisites: Node.js, and the .NET SDK (only to precompile the analyzer).
+For type-level references, select **Semantic** and choose **Analyze**. See the [user guide](docs/guide.md) for setup, filters, evidence, cycles, exports, and troubleshooting.
 
-```bash
-npm install
-npm run build:analyzer   # publishes analyzer/code-map.cs -> analyzer/bin/code-map.dll
-npm run build            # bundles the extension host and the webview client
-npm run compile          # type-check (tsc --noEmit)
-```
+## Explore and share
 
-Run the extension:
+- Use the hierarchy or search to find projects, namespaces, and types. Graph and table views share the same scope.
+- Use the **bottom bar** for horizontal/vertical direction, zoom, and **Fit**. **Spacing** opens above the bar to adjust node and rank spacing.
+- A directed node pair has one line: solid when a declared, evaluated, or resolved relation exists; dashed when only inferred. Quick's solid lines show declarations, not proof of compiled code usage. Underlying relations remain available in Details.
+- Export the current scope as Mermaid, JSON, SVG, or PNG. **Copy for agent** copies an evidence-backed context to the clipboard; it does not contact a service.
+- Switch the UI with **日本語** or **English** in the top menu. Language, orientation, filters, selection, pane sizes, and camera are saved with the view.
 
-- Open this folder in VS Code and press **F5** (Run Extension) to launch an Extension Development Host.
+Analysis and graph rendering run locally. A failed or cancelled analysis keeps the last successful result. Display limits restrict the picture, not discovery, search, or cycle detection.
 
-Package a VSIX:
+## Build from source
+
+Use Node.js 20 or later and .NET SDK 10:
 
 ```bash
-npm run package          # runs vscode:prepublish, then vsce package
+npm ci
+npm run package
 ```
 
-`vscode:prepublish` rebuilds the analyzer DLL and produces a production bundle, so the precompiled analyzer and the bundled viewer are included in the VSIX.
+This builds both analyzer hosts and the webview, then creates `sharpdeps-0.1.0.vsix`. To run a development host, use `npm run build:analyzer` and `npm run build`, then press **F5** in VS Code.
 
 ## License
 
-Licensed under the MIT License. See the `LICENSE` file in this folder.
+[MIT](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for bundled components.

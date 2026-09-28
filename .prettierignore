@@ -1,10 +1,21 @@
 out
-media/viewer.js
-media/viewer.js.map
+media/workers/elkLayout.worker.js
+media/workers/elkLayout.worker.js.map
+media/app/entry.js
+media/app/entry.js.map
 analyzer/bin
 analyzer/obj
 analyzer/.build
+analyzer/**/obj
+analyzer/**/bin
+tests/fixtures/**/obj
+tests/fixtures/**/bin
+# Regression snapshots are generated artifacts; they are compared by value.
+tests/fixtures/**/expected
 node_modules
 *.vsix
 package-lock.json
 *.md
+.local
+.playwright-mcp
+.playwright-cli
