@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { DeclarationMatch, ReportStore } from '../analyzer/reportStore';
 import type { AnalysisSnapshot } from '../analyzer/reportV2';
+import { isInsideRoot } from '../security/paths';
 
 export interface ResolvedType {
   analysisId: string;
@@ -107,10 +108,12 @@ function preferEnclosingProject(
   let bestLength = -1;
   for (const match of matches) {
     const project = report.projects.find((entry) => entry.variantId === match.projectVariantId);
-    const directory = project
-      ? project.relativePath.replace(/\\/g, '/').replace(/\/[^/]*$/, '')
-      : '';
-    if (directory.length > bestLength && relativePath.startsWith(directory)) {
+    if (!project) continue;
+    const directory = path.dirname(project.relativePath.replace(/\\/g, '/'));
+    if (
+      directory.length > bestLength &&
+      isInsideRoot(directory, path.relative(directory, relativePath))
+    ) {
       best = match;
       bestLength = directory.length;
     }

@@ -129,6 +129,58 @@ async function waitForWorkers(workers: FakeWorker[], count: number): Promise<voi
 }
 
 describe('LayoutClient lifecycle', () => {
+  it('retries a failed script fetch without requiring cancellation', async () => {
+    const previousFetch = globalThis.fetch;
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValue({ ok: true, text: async () => '/* worker */' });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const { client, workers } = setup();
+      await expect(client.layout(projection())).rejects.toThrow('503');
+      const retried = client.layout(projection());
+      await waitForWorkers(workers, 1);
+      workers[0].emitMessage(layout(workers[0].sent[0].requestId, projection().nodes));
+      await expect(retried).resolves.toMatchObject({ width: 200 });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      client.dispose();
+    } finally {
+      vi.stubGlobal('fetch', previousFetch);
+    }
+  });
+
+  it('does not clear a newer initialization when a cancelled fetch later rejects', async () => {
+    const previousFetch = globalThis.fetch;
+    let fail!: (error: Error) => void;
+    let complete!: (value: unknown) => void;
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)))
+      .mockImplementationOnce(() => new Promise((resolve) => (complete = resolve)));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const { client, workers } = setup();
+      const old = client.layout(projection());
+      const rejected = expect(old).rejects.toThrow('old fetch');
+      client.cancel();
+      const pending = client.layout(projection());
+      const superseded = expect(pending).rejects.toBeInstanceOf(LayoutCancelledError);
+      fail(new Error('old fetch'));
+      await rejected;
+      const latest = client.layout(projection());
+      expect(fetch).toHaveBeenCalledTimes(2);
+      complete({ ok: true, text: async () => '' });
+      await waitForWorkers(workers, 1);
+      workers[0].emitMessage(layout(workers[0].sent.at(-1)!.requestId, projection().nodes));
+      await expect(latest).resolves.toMatchObject({ width: 200 });
+      await superseded;
+      client.dispose();
+    } finally {
+      vi.stubGlobal('fetch', previousFetch);
+    }
+  });
+
   it('does not recreate a worker or Blob URL when disposed during script fetch', async () => {
     const previousFetch = globalThis.fetch;
     let complete!: (value: unknown) => void;

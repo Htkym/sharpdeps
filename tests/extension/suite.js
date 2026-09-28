@@ -165,7 +165,8 @@ async function run() {
       if (id === 'spacing') {
         const bounds = await panel.boundingBox();
         const anchor = await trigger.boundingBox();
-        expect(bounds.y + bounds.height).toBeCloseTo(anchor.y - 4, 1);
+        // innerHeight is integral; an embedded VS Code frame can have a fractional height.
+        expect(Math.abs(bounds.y + bounds.height - (anchor.y - 4))).toBeLessThanOrEqual(1);
         expect(
           await panel.evaluate((element) => element.scrollHeight - element.clientHeight)
         ).toBeLessThanOrEqual(1);

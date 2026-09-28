@@ -41,7 +41,7 @@ const REQUIRED = [
   'analyzer/bin/semantic/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
   'resources/ELK-LICENSE.md',
   'resources/icon.png',
-  'LICENSE.txt',
+  'LICENSE.txt', // VSCE adds .txt to an extensionless LICENSE in the archive.
   'package.json',
   'readme.md',
   'README.ja.md',

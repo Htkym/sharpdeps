@@ -11,7 +11,7 @@
 // is off by default.
 
 import { createServer } from 'node:http';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,36 +35,60 @@ const CONTENT_TYPES = {
   '.map': 'application/json; charset=utf-8'
 };
 
+function isInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`);
 
     if (evidenceDirectory && request.method === 'POST' && url.pathname.startsWith('/__evidence/')) {
       const name = path.basename(decodeURIComponent(url.pathname.slice('/__evidence/'.length)));
+      if (!name || name === '.' || name === '..') {
+        response.writeHead(400).end('Invalid file name');
+        return;
+      }
       const chunks = [];
       for await (const chunk of request) {
         chunks.push(chunk);
       }
       await mkdir(evidenceDirectory, { recursive: true });
-      await writeFile(path.join(evidenceDirectory, name), Buffer.concat(chunks));
+      const evidenceRoot = await realpath(evidenceDirectory);
+      const destination = path.join(evidenceRoot, name);
+      const existing = await lstat(destination).catch((error) => {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (existing?.isSymbolicLink()) {
+        response.writeHead(403).end('Forbidden');
+        return;
+      }
+      await writeFile(destination, Buffer.concat(chunks));
       response.writeHead(204).end();
       return;
     }
 
     const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, '');
     const target = path.resolve(repositoryRoot, relativePath);
-    if (!target.startsWith(repositoryRoot)) {
+    if (!isInside(repositoryRoot, target)) {
       response.writeHead(403).end('Forbidden');
       return;
     }
 
-    const info = await stat(target);
+    const [realRoot, realTarget] = await Promise.all([realpath(repositoryRoot), realpath(target)]);
+    if (!isInside(realRoot, realTarget)) {
+      response.writeHead(403).end('Forbidden');
+      return;
+    }
+    const info = await stat(realTarget);
     if (info.isDirectory()) {
       response.writeHead(404).end('Not found');
       return;
     }
 
-    const body = await readFile(target);
+    const body = await readFile(realTarget);
     response.writeHead(200, {
       'Content-Type':
         CONTENT_TYPES[path.extname(target).toLowerCase()] ?? 'application/octet-stream',

@@ -287,7 +287,9 @@ for (const [width, theme] of [
     await expectPopover(page, 'spacing', mapBounds, toolbarBounds);
     const spacingBounds = await page.locator('#sd-spacing-panel').boundingBox();
     const spacingTriggerBounds = await page.locator('#sd-spacing-toggle').boundingBox();
-    expect(spacingBounds.y + spacingBounds.height).toBeCloseTo(spacingTriggerBounds.y - 4, 1);
+    expect(
+      Math.abs(spacingBounds.y + spacingBounds.height - (spacingTriggerBounds.y - 4))
+    ).toBeLessThanOrEqual(1);
     expect(
       await page
         .locator('#sd-spacing-panel')

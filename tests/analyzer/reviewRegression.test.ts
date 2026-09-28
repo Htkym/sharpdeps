@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -36,7 +36,7 @@ function run(target: string, mode: 'quick' | 'semantic', args: string[] = []) {
     .filter(Boolean)
     .map((line) => JSON.parse(line) as EvidenceRecord);
   expect(validateSnapshot(snapshot)).toMatchObject({ ok: true });
-  return { snapshot, evidence };
+  return { snapshot, evidence, output };
 }
 beforeAll(() => {
   expect(fs.existsSync(quick), 'Build both hosts before the contract tests.').toBe(true);
@@ -45,6 +45,52 @@ beforeAll(() => {
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe('review regressions through the published analyzers', () => {
+  it('uses the SDK pinned by the target global.json and records the registered instance', () => {
+    const sdk = execFileSync(dotnet, ['--list-sdks'], { encoding: 'utf8' })
+      .split('\n')
+      .map((line) => line.split(' ')[0])
+      .filter((version) => /^10\.\d+\.\d+$/.test(version))
+      .sort((first, second) => first.localeCompare(second, undefined, { numeric: true }))[0];
+    expect(sdk, 'A .NET 10 SDK is required for Semantic contract tests.').toBeDefined();
+    const target = write('sdk-pinned/Project/Project.csproj', project());
+    write('sdk-pinned/Project/Types.cs', 'public class Pinned {}');
+    const globalJson = write(
+      'sdk-pinned/global.json',
+      JSON.stringify({ sdk: { version: sdk, rollForward: 'disable' } })
+    );
+    execFileSync(dotnet, ['restore', target], {
+      cwd: path.dirname(target),
+      encoding: 'utf8',
+      timeout: 60000
+    });
+    const { snapshot, output } = run(target, 'semantic');
+    const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(snapshot.completeness).toBe('completeWithinScope');
+    expect(snapshot.types.some((type) => type.name === 'Pinned')).toBe(true);
+    expect(report.environment.sdkVersion).toBe(sdk);
+    expect(path.basename(report.environment.msBuildPath)).toBe(sdk);
+    expect(path.resolve(report.environment.globalJsonPath)).toBe(globalJson);
+    expect(report.environment.globalJsonSdkVersion).toBe(sdk);
+  }, 90000);
+
+  it('rejects an unavailable pinned SDK instead of choosing a different installation', () => {
+    const target = write('sdk-unavailable/Project.csproj', project());
+    write(
+      'sdk-unavailable/global.json',
+      JSON.stringify({ sdk: { version: '10.0.999', rollForward: 'disable' } })
+    );
+    const output = path.join(root, 'sdk-unavailable-output', 'report.json');
+    const result = spawnSync(dotnet, [semantic, '--solution', target, '--output', output], {
+      encoding: 'utf8',
+      timeout: 60000
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Semantic analysis is unavailable');
+    expect(fs.existsSync(output)).toBe(false);
+    expect(fs.existsSync(path.join(path.dirname(output), 'report-v2.json'))).toBe(false);
+  });
+
   it('retains failed projects and reports partial compilation per project', () => {
     const good = write('mixed/Good/Good.csproj', project());
     const broken = write('mixed/Broken/Broken.csproj', project());

@@ -43,8 +43,12 @@ export function locateAnalyzer(
         ];
   const found = candidates.find((candidate) => fs.existsSync(candidate));
   if (!found) {
+    const name = mode === 'semantic' ? 'Semantic' : 'Quick';
+    const expectedPath = path
+      .relative(context.extensionUri.fsPath, candidates[0])
+      .replace(/\\/g, '/');
     throw new AnalyzerError(
-      'The Quick analyzer was not found in this installation (analyzer/bin/quick/code-map.dll).',
+      `The ${name} analyzer was not found in this installation (${expectedPath}).`,
       'Reinstall SharpDeps. When running from source, execute `npm run build:analyzer` first.'
     );
   }

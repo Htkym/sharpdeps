@@ -121,7 +121,7 @@ jobs:
       - name: C# tests
         run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet
       - name: Quick and Semantic golden and contract tests
-        run: npx vitest run tests/analyzer --reporter=default --reporter=json --outputFile=.local/ci/analyzers.json
+        run: npx vitest run tests/analyzer tests/contract --reporter=default --reporter=json --outputFile=.local/ci/analyzers.json
       - name: Upload macOS verification evidence
         if: always()
         uses: actions/upload-artifact@v4

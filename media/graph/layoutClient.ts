@@ -117,7 +117,13 @@ export class LayoutClient {
       return Promise.resolve(this.worker);
     }
 
-    this.workerPromise ??= this.startWorker();
+    if (!this.workerPromise) {
+      const pending = this.startWorker();
+      this.workerPromise = pending;
+      void pending.catch(() => {
+        if (this.workerPromise === pending) this.workerPromise = undefined;
+      });
+    }
     return this.workerPromise;
   }
 

@@ -26,6 +26,8 @@ public sealed record SemanticEnvironmentInfo(
 /// </remarks>
 public static class SemanticEnvironment
 {
+    private static Microsoft.Build.Locator.VisualStudioInstance? registeredInstance;
+
     /// <summary>
     /// Locates and registers an MSBuild instance. Returns false with a reason when
     /// no usable instance exists; the caller must then report a diagnosable
@@ -45,8 +47,13 @@ public static class SemanticEnvironment
         {
             if (!Microsoft.Build.Locator.MSBuildLocator.IsRegistered)
             {
-                var instances = Microsoft.Build.Locator.MSBuildLocator.QueryVisualStudioInstances().ToList();
-                if (instances.Count == 0)
+                var selected = Microsoft.Build.Locator.MSBuildLocator.QueryVisualStudioInstances(
+                    new Microsoft.Build.Locator.VisualStudioInstanceQueryOptions
+                    {
+                        WorkingDirectory = Path.GetFullPath(workingDirectory),
+                        DiscoveryTypes = Microsoft.Build.Locator.DiscoveryType.DotNetSdk
+                    }).FirstOrDefault();
+                if (selected is null)
                 {
                     failureReason =
                         "No MSBuild instance was found. Install the .NET SDK for the target projects "
@@ -54,10 +61,9 @@ public static class SemanticEnvironment
                     return false;
                 }
 
-                var selected = instances
-                    .OrderByDescending(instance => instance.Version)
-                    .First();
+                // Locator returns the SDK selected by global.json before newer installations.
                 Microsoft.Build.Locator.MSBuildLocator.RegisterInstance(selected);
+                registeredInstance = selected;
             }
 
             return true;
@@ -77,19 +83,10 @@ public static class SemanticEnvironment
     {
         var notes = new List<string>();
 
-        var instances = Microsoft.Build.Locator.MSBuildLocator.IsRegistered
-            ? Microsoft.Build.Locator.MSBuildLocator.QueryVisualStudioInstances().ToList()
-            : [];
-        var registered = instances.OrderByDescending(instance => instance.Version).FirstOrDefault();
-        var msBuildPath = registered?.MSBuildPath;
+        var msBuildPath = registeredInstance?.MSBuildPath;
         var msBuildVersion = ReadMsBuildVersion(msBuildPath);
 
-        var sdkVersion = Microsoft.Build.Locator.MSBuildLocator.IsRegistered
-            ? Microsoft.Build.Locator.MSBuildLocator.QueryVisualStudioInstances()
-                .OrderByDescending(instance => instance.Version)
-                .FirstOrDefault()
-                ?.Version.ToString()
-            : null;
+        var sdkVersion = registeredInstance?.Version.ToString();
         var roslynVersion = typeof(Microsoft.CodeAnalysis.Compilation).Assembly.GetName().Version?.ToString();
 
         var globalJsonPath = FindGlobalJson(workingDirectory);
