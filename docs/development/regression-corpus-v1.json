@@ -1,0 +1,620 @@
+{
+  "schemaVersion": 1,
+  "taskId": "J-02",
+  "purpose": "既存の小さい回帰入力・観測期待値と許可差分を固定する。新parserの実行結果ではない。",
+  "repositories": {
+    "lithosharp": {
+      "branch": "feature/2.0.0",
+      "baselineCommit": "9317af45a7bf8b08b000b693d27fbe33406db7a6"
+    },
+    "sharpdeps": {
+      "branch": "feature/0.2.0",
+      "baselineCommit": "e16985d01c1e8e5f4bc1a530f84389ba308b1545"
+    }
+  },
+  "provenance": {
+    "fileHashes": "git show baselineCommit:path の未変換blob bytes。checkoutのCRLF変換後bytesとは区別する。",
+    "fixtureTrees": "基準commitの追跡済みfixtureディレクトリ全体。expectedとREADMEも含む。"
+  },
+  "fixtureTrees": [
+    {
+      "repository": "sharpdeps",
+      "path": "tests/fixtures/quick-baseline",
+      "gitTree": "0f89917fbf0598e3e2c7279ce6f930b469de3b79"
+    },
+    {
+      "repository": "sharpdeps",
+      "path": "tests/fixtures/semantic-baseline",
+      "gitTree": "0abe417ec073c3ec36d7ba6debfe6ad1594ce38f"
+    }
+  ],
+  "sourceRefs": [
+    {
+      "id": "L-BODY",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.Tests/Fixtures/MarkdigBaseline/body-basics.md",
+      "gitBlob": "3ff894d54722d6e10098af19bc93953e66df0b17",
+      "gitBlobBytesSha256": "2083aafa15fc746c383438fe36ce1e083495c218ae7effa9be77403475c6ba3f"
+    },
+    {
+      "id": "L-COMPARE",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.MarkdigComparison/LithoParserComparisonTests.cs",
+      "gitBlob": "122860f9755906d178e82af9ab7a71d917e0e365",
+      "gitBlobBytesSha256": "1f7ba1fe4e72e57ed687011d3c4b745dea37ab6f38c6e9010ad080ecad160ccc"
+    },
+    {
+      "id": "L-ORACLE-PROJECT",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.MarkdigComparison/LithoSharp.MarkdigComparison.csproj",
+      "gitBlob": "18112c93827a2c410069acdac8d1d00fc29790a8",
+      "gitBlobBytesSha256": "1c94bde5a330b4ba028760edf7ca7f6c4b31bb3baca4f29bd8181f066319b57b"
+    },
+    {
+      "id": "L-ORACLE-LOCK",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.MarkdigComparison/packages.lock.json",
+      "gitBlob": "54e1d751885b7dffd938c56978c02754d724de57",
+      "gitBlobBytesSha256": "9f99ae16c096f187582dbd71457971198fcb41205cf478428b0bf7cd0564eac9"
+    },
+    {
+      "id": "L-COMPILER",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.Tests/MarkdownCompilerTests.cs",
+      "gitBlob": "4cf1f7c5ba5d44bb2e2b64e15417197c01ddaf1f",
+      "gitBlobBytesSha256": "3d81dd06fb47c33f1294def3bcb5b2b046a98df4cd8e9c44ab00f81bb8027800"
+    },
+    {
+      "id": "L-FINGERPRINT",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.Tests/MarkdownDocumentFingerprintTests.cs",
+      "gitBlob": "26dffb505e5dfe73bb3dcbcb609b5c62c49ce24d",
+      "gitBlobBytesSha256": "2a4b4070f78ce10f78585bb8b63fdf0849e90554d56bfde2ce4ceca819d0d840"
+    },
+    {
+      "id": "L-INSPECTION",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.Tests/DocumentInspectionTests.cs",
+      "gitBlob": "e087f966081dde860c1f8bcbf4d57bfd067819bd",
+      "gitBlobBytesSha256": "f4c47ed3d467def57b61d9531b43adbd80651a913139ccaa2706698353a2feee"
+    },
+    {
+      "id": "J01-FIXTURES",
+      "repository": "lithosharp",
+      "path": "docs/contracts/markdown-v1.fixtures.json",
+      "gitBlob": "757c8e9bc33f13c31e6c96d688f98363fef8bb21",
+      "gitBlobBytesSha256": "1d32309d26894feb2edecf5e94d31371ec3b3489427cae32e4269decd3af2d18"
+    },
+    {
+      "id": "L-LIMITS",
+      "repository": "lithosharp",
+      "path": "src/LithoSharp/Content/Compilation/LithoLimits.cs",
+      "gitBlob": "276f2c3b3db7bd726da8fe1623032aca47e14bc4",
+      "gitBlobBytesSha256": "9aab4838520729ded475ad9bfe8ac38580d47daaf058eb868af8460a95e74199"
+    },
+    {
+      "id": "L-HTML-ASSERTIONS",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.Tests/SiteTestingDocumentTests.cs",
+      "gitBlob": "3f1ccdae644308e4cdef466fefbd9fee2955d2f1",
+      "gitBlobBytesSha256": "5e1d9a6d0157ded211cc31fe2c07c1ddb4eedaab5612c5bb0cb3d782ba12b9df"
+    },
+    {
+      "id": "L-HTML-PRODUCT",
+      "repository": "lithosharp",
+      "path": "src/LithoSharp.Testing/SiteTestDocument.cs",
+      "gitBlob": "faa87e6eb13c5ed9aa05be2b97d7ccce12c10214",
+      "gitBlobBytesSha256": "3beb1a87132152891fbfe0d3405dbc46e329d3bad3ed3f0254a29693c7705a12"
+    },
+    {
+      "id": "L-SITE-ASSERTIONS",
+      "repository": "lithosharp",
+      "path": "tests/LithoSharp.Tests/SiteQualityTests.cs",
+      "gitBlob": "f6ceb8eb94050f23127406326e60d47ce5b74767",
+      "gitBlobBytesSha256": "87876e929aa963665a470ec7d8c1a8b96b50985997bdaf79b8baaedd2df6ddc8"
+    },
+    {
+      "id": "L-SITE-PRODUCT",
+      "repository": "lithosharp",
+      "path": "src/LithoSharp/Quality/SiteQualityValidator.cs",
+      "gitBlob": "5195817399e4f1a519b351d682d950dce0a63db2",
+      "gitBlobBytesSha256": "d14930b2431f67af2ae1f97943afe753dba31569b9ebec55a90a792cf6919771"
+    },
+    {
+      "id": "S-QUICK-GOLDEN",
+      "repository": "sharpdeps",
+      "path": "tests/fixtures/quick-baseline/expected/quick-v2-structure.json",
+      "gitBlob": "73670bdc615647c71eda0a942c04a802a16ccb81",
+      "gitBlobBytesSha256": "fb292f03dd7ec5008e97a5f1dc26bf0b475c0b3a3042e4ec96f36ababf61bb1b"
+    },
+    {
+      "id": "S-QUICK-TEST",
+      "repository": "sharpdeps",
+      "path": "tests/analyzer/quickV2.test.ts",
+      "gitBlob": "7f26955d4f78ab856376a8fc7ec7dd866c2a2a0d",
+      "gitBlobBytesSha256": "4c0d3025d158622348aa4ce8e159b089d9938435b66899f5886a364a77c00111"
+    },
+    {
+      "id": "S-QUICK-PROJECTION",
+      "repository": "sharpdeps",
+      "path": "tests/helpers/quickV2Snapshot.ts",
+      "gitBlob": "141388acf23fddc90306496c11c7f1a2da332684",
+      "gitBlobBytesSha256": "52d66d5b2309249ea6bfcab619fa2aa3533b5a3bd26e36a066b68b13c4aaf691"
+    },
+    {
+      "id": "S-SEMANTIC-GOLDEN",
+      "repository": "sharpdeps",
+      "path": "tests/fixtures/semantic-baseline/expected/semantic-summary.json",
+      "gitBlob": "b029be23ce6335245d12399d9a5ff3790f94a811",
+      "gitBlobBytesSha256": "48b8e42a223898b1b10e8399cfa68deebaadd80962eb7dfda20d95108237ccf6"
+    },
+    {
+      "id": "S-SEMANTIC-TEST",
+      "repository": "sharpdeps",
+      "path": "tests/analyzer/semanticV2.test.ts",
+      "gitBlob": "7e62fd67d91de1d054ffd075ba2b07ed073014a6",
+      "gitBlobBytesSha256": "a987201d5153977d959e24d4e9d5a9eee773ddd14cefeefcde87d4e4a218534f"
+    },
+    {
+      "id": "S-SEMANTIC-PROJECTION",
+      "repository": "sharpdeps",
+      "path": "tests/helpers/semanticSummary.ts",
+      "gitBlob": "5b3864948b8f104f4f620d12d281189459155797",
+      "gitBlobBytesSha256": "d6e00e95fc775291d7e07deb3c00ee624b8db72c53631638773182f15c75a1c2"
+    },
+    {
+      "id": "S-MAPPED",
+      "repository": "sharpdeps",
+      "path": "tests/analyzer/reviewRegression.test.ts",
+      "gitBlob": "45d959c97fa7992322eac3db3e2a854e58155481",
+      "gitBlobBytesSha256": "7d2df7b6ad123d886618f83795c1bc05e134e9581e87e955deddbaa4f9de3f10"
+    },
+    {
+      "id": "S-OPERATION-TEST",
+      "repository": "sharpdeps",
+      "path": "analyzer/tests/SharpDeps.Analysis.Tests/OperationDependencyCollectorTests.cs",
+      "gitBlob": "00e16f09b4836d2fafd34b8f350b66521bba762b",
+      "gitBlobBytesSha256": "2bb84884bccd92280fa55c863fcfd0d69bbeed919c97dc18300585c288012f3e"
+    },
+    {
+      "id": "S-OPERATION-PRODUCT",
+      "repository": "sharpdeps",
+      "path": "analyzer/src/SharpDeps.Analysis.Roslyn/Evidence/OperationDependencyCollector.cs",
+      "gitBlob": "c128c39d530fb7be65fd7451a08382cef3ddd81c",
+      "gitBlobBytesSha256": "080a0f6c5ae016c82256baadd59a1d6e10f1acc23915fa44300c26a84c60cac7"
+    }
+  ],
+  "oracle": {
+    "repository": "lithosharp",
+    "project": "L-ORACLE-PROJECT",
+    "lock": "L-ORACLE-LOCK",
+    "package": "Markdig",
+    "resolvedVersion": "1.4.0",
+    "packageContentHash": "lLhaiI/mNDTNzgLqnmknhf4LjgTqOAyjx5+GNz0X3AxYMxUhmFppF2WVMdER+SDqwhE5wUF1pzs/cuLwFxs7xA==",
+    "role": "対応済みのMarkdown構文に限定した参照比較。製品の仕様決定器にはしない。",
+    "isolation": "既存の別test projectのみ。製品へのMarkdig参照を追加しない。AngleSharpは現行製品依存が残っており、J-02では撤去しない。"
+  },
+  "allowedDeltas": [
+    {
+      "id": "D-DOM",
+      "reason": "HT-05/IN-02で許可されたmajor変更として公開IDocument getterをsnapshot/queryへ移す。Assertの意味とdispose後拒否は保持し、移行文書を添える。"
+    },
+    {
+      "id": "D-STRICT",
+      "reason": "J-01の新entryに限定しfrontmatter任意・不正UTF-16拒否・raw TextHash/SourceSegmentsを追加する。既存inspectionのLSM001/LSM002や旧SourceHash/SemanticHashは変更しない。"
+    },
+    {
+      "id": "D-HTML",
+      "reason": "新HTML層の位置・coverage追加や限定selectorの許可差分はHT-01で個別固定する。serializationや全DOM構造の一致を前提にしない。既存text/meta/URL/品質診断の差は無条件に許容しない。"
+    },
+    {
+      "id": "D-GRAPH",
+      "reason": "SD2-01/SD2-02で新member graph等を追加する場合は既存v2の意味を保つ。確認済みの欠落修正だけは入力・symbol・before/after根拠をレビューしてgoldenを更新する。根拠のないedgeやconfidence昇格は許容しない。"
+    },
+    {
+      "id": "D-HOST",
+      "reason": "既存projectionが正規化するroot固有ID・時刻・絶対パスを比較対象から外す。同じroot/checkoutでのID安定性、TFM/variant分離、実位置とconfidenceは保持する。入力を編集して位置が移った差は入力変更として記録する。"
+    },
+    {
+      "id": "D-ORACLE",
+      "reason": "Markdigが扱う未対応構文や製品独自renderを期待値に昇格しない。現行LithoLimitsと既存製品assertionを優先し、差ごとに理由を記録する。"
+    }
+  ],
+  "cases": [
+    {
+      "id": "C01",
+      "title": "既存Markdownの意味とoracle隔離",
+      "taskOwners": ["MD-01", "MD-03", "IN-02"],
+      "inputRefs": ["L-BODY"],
+      "assertionRefs": [
+        {
+          "ref": "L-COMPARE",
+          "symbols": ["BaselineFixture_Agrees", "AssertAgreementAsync"]
+        },
+        {
+          "ref": "L-COMPILER",
+          "symbols": ["DefaultCompiler_PreservesBaselineOutput", "NoMarkdigAssemblyLoads"]
+        },
+        {
+          "ref": "L-FINGERPRINT",
+          "symbols": ["SourceHash_IsStableSha256", "SemanticHash_IgnoresPositions"]
+        }
+      ],
+      "expected": {
+        "supportedBaseline": "body-basicsのHTML（既存のタグ間空白のみ正規化）、SemanticPlainText、headingのRawLevel/OutputLevel/Id/Text、linkのURL/Title/Image、block kind/head levelが既存参照と一致する。",
+        "productCompiler": "## Shared\n\nBody text. の既存h2/id/body出力を保持する。",
+        "dependency": "通常製品経路でMarkdig assemblyをロードしない。",
+        "identity": "位置が異なる同じ意味でSemanticHashは同じ。旧SourceHashを新TextHashへ置き換えない。"
+      },
+      "allowedDeltaIds": ["D-STRICT", "D-ORACLE"],
+      "runWhen": "parser抽出・renderer/adapter・旧hash・製品依存が変わるとき。巨大文書や全Docusaurus corpusを毎回追加しない。"
+    },
+    {
+      "id": "C02",
+      "title": "原文位置・任意frontmatterと既存inspection",
+      "taskOwners": ["MD-02", "MD-03", "MD-04", "SD2-03", "IN-01"],
+      "inputRefs": ["L-INSPECTION", "J01-FIXTURES"],
+      "assertionRefs": [
+        {
+          "ref": "L-INSPECTION",
+          "symbols": [
+            "Inspect_ReturnsDocumentInfoFromSingleCall",
+            "Inspect_AcceptsUnsavedTextWithoutFrontMatter",
+            "Inspect_IncompleteSyntaxReturnsDiagnostics"
+          ]
+        }
+      ],
+      "expected": {
+        "legacyInspection": {
+          "title": "Title",
+          "frontMatterTitle": "Hello",
+          "headings": 2,
+          "firstRawLevel": 1,
+          "firstOutputLevel": 2,
+          "secondText": "Sub",
+          "secondStartLine": 6,
+          "secondEndLine": 6,
+          "links": 2,
+          "firstLinkUrl": "https://example.com/guide",
+          "firstLinkTitle": "Guide",
+          "image": "img/photo.png",
+          "assets": 1,
+          "components": 0,
+          "diagnostics": 0
+        },
+        "legacyNoFrontMatter": {
+          "input": "# Draft\n",
+          "diagnostic": "LSM001"
+        },
+        "legacyUnclosedFrontMatter": {
+          "input": "---\ntitle: x\n# Hi\n[bad](link",
+          "diagnostic": "LSM002"
+        },
+        "newContract": "J-01の同一5群fixtureとBOM付きAbsent variantを再利用。UTF-16半開位置、gapを埋めないsegments、strict raw hash、binding区別を後続実parser/hostで確認する。"
+      },
+      "allowedDeltaIds": ["D-STRICT"],
+      "runWhen": "DTO/SourceSegments/FM policyまたはcache bindingが変わるとき。J-01机上確認は新parserの合格証にしない。"
+    },
+    {
+      "id": "C03",
+      "title": "既存HTML assertionの文字参照・URL・寿命",
+      "taskOwners": ["HT-01", "HT-02", "HT-03", "HT-05", "IN-02"],
+      "input": {
+        "rawHtml": "<html><head><meta name='description' content='line 1\nline 2'><meta property='og:title' content=\"A 'quoted' value\"></head><body><a href=\"/docs?a=1&amp;b=2\">link</a><img src='/image.png'><p>&lt;safe&gt;</p></body></html>",
+        "source": "L-HTML-ASSERTIONS"
+      },
+      "assertionRefs": [
+        {
+          "ref": "L-HTML-ASSERTIONS",
+          "symbols": [
+            "AssertionsMatchEncodedTextMetaAttributesAndUrls",
+            "MismatchesAndInvalidInputsFailClearly",
+            "DisposeRejectsFurtherAssertions"
+          ]
+        }
+      ],
+      "expected": {
+        "element": "p",
+        "text": "<safe>",
+        "metaDescription": "line 1\nline 2",
+        "metaOgTitle": "A 'quoted' value",
+        "link": "/docs?a=1&b=2",
+        "image": "/image.png",
+        "legacyDocumentTitle": "",
+        "afterDispose": "AssertElementはObjectDisposedException。旧Document getterも同例外だがgetter自体は許可major差分の対象。",
+        "invalidInput": "既存missing assertion/null html/空selector/null属性の例外契約を保持する。"
+      },
+      "allowedDeltaIds": ["D-DOM", "D-HTML"],
+      "runWhen": "HTML文字参照・query・Testing snapshot/寿命が変わるとき。DOMの変更操作や完全serializationの一致を新要件にしない。"
+    },
+    {
+      "id": "C04",
+      "title": "既存の小さいsite品質観測",
+      "taskOwners": ["HT-01", "HT-03", "HT-04", "HT-06", "IN-03"],
+      "input": {
+        "source": "L-SITE-ASSERTIONS",
+        "baseUrl": "https://example.test/sub/",
+        "pageHelper": "SiteQualityTests.Page",
+        "pages": [
+          {
+            "route": "",
+            "title": "Home",
+            "body": "<a href='guide/?a=1&amp;b=2#章'>Guide</a><img srcset='data:image/png;base64,AAAA 1x, images/p.png 2x'><link rel='stylesheet' href='site.css'>"
+          },
+          {
+            "route": "guide/",
+            "title": "Guide",
+            "body": "<h2 id='章'>Heading</h2><a href='../'>Home</a>"
+          },
+          {
+            "route": "",
+            "title": "Home",
+            "body": "<base href='/sub/guide/'><a href='#章'>Guide</a><img src='../images/p.png'>"
+          }
+        ],
+        "css": {
+          "path": "site.css",
+          "text": "body { background: url('images/p.png'); }"
+        },
+        "assets": ["images/p.png"],
+        "variants": [
+          "初期のindex.html/guide/index.html/site.css",
+          "index.htmlだけ3件目のPageへ置換。他のfiles/assetsは同じ。"
+        ]
+      },
+      "assertionRefs": [
+        {
+          "ref": "L-SITE-ASSERTIONS",
+          "symbols": [
+            "DomResolvesRelativeLinksEntitiesFragmentsImagesAndBasePath",
+            "BrokenTargetsAnchorsCanonicalAndOrphansHaveLocations"
+          ]
+        }
+      ],
+      "expected": {
+        "diagnosticsCountByVariant": [0, 0],
+        "observations": [
+          "query中の&amp;復号",
+          "日本語fragmentがguideのidへ到達",
+          "相対URLと/sub/を含むbase href解決",
+          "data URIを含むsrcsetのimages/p.png参照",
+          "CSSからimages/p.pngへの参照"
+        ],
+        "negativeCanary": {
+          "idsPresent": ["LSQ001", "LSQ002", "LSQ003", "LSQ007", "LSQ008", "LSQ009", "LSQ010"],
+          "lsq001LocationLineKnown": true,
+          "otherHtmlLsq007": false
+        }
+      },
+      "allowedDeltaIds": ["D-HTML"],
+      "runWhen": "final HTML facts・URL/anchor/asset/qualityの観測が変わるとき。negative canaryは同じ変更の誤検出/見逃し確認に選ぶ。"
+    },
+    {
+      "id": "C05",
+      "title": "既存Quick reportの構造と信頼",
+      "taskOwners": ["SD2-01", "SD2-02", "SD2-08", "IN-01"],
+      "input": {
+        "fixtureTree": "tests/fixtures/quick-baseline",
+        "solution": "Baseline.sln"
+      },
+      "assertionRefs": [
+        {
+          "ref": "S-QUICK-TEST",
+          "symbols": []
+        },
+        {
+          "ref": "S-QUICK-PROJECTION",
+          "symbols": ["buildStructureSnapshot"]
+        },
+        {
+          "ref": "S-QUICK-GOLDEN",
+          "symbols": []
+        }
+      ],
+      "expected": {
+        "mode": "quick",
+        "completeness": "partial",
+        "capabilities": {
+          "typeGraph": false,
+          "evidence": true,
+          "generatedDocuments": false,
+          "cycleWitness": false,
+          "search": true
+        },
+        "coverage": {
+          "discovered": 6,
+          "loaded": 6,
+          "analyzed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "unresolved": 0
+        },
+        "typesCount": 0,
+        "relationsCount": 15,
+        "evidenceCount": 17,
+        "cycleGroupsCount": 2,
+        "relationConfidence": ["inferred"],
+        "evidenceConfidence": ["inferred"],
+        "limitations": [
+          "quick.conditionNotEvaluated",
+          "quick.evidenceIsDeclarationOnly",
+          "quick.typeGraphUnavailable",
+          "quick.usingInferred",
+          "quick.witnessUnavailable",
+          "quick.xmlSpanIsDeclarationLine"
+        ]
+      },
+      "allowedDeltaIds": ["D-GRAPH", "D-HOST"],
+      "runWhen": "report schema/projection・旧Quick provider・信頼分類が変わるとき。quick-v2-structure全体の既存比較を再利用し、新規のraw巨大snapshotを作らない。"
+    },
+    {
+      "id": "C06",
+      "title": "既存Semantic reportのTFM・根拠・generated",
+      "taskOwners": ["SD2-01", "SD2-02", "SD2-08", "IN-01"],
+      "input": {
+        "fixtureTree": "tests/fixtures/semantic-baseline",
+        "solution": "SemanticBaseline.sln"
+      },
+      "assertionRefs": [
+        {
+          "ref": "S-SEMANTIC-TEST",
+          "symbols": []
+        },
+        {
+          "ref": "S-SEMANTIC-PROJECTION",
+          "symbols": ["summarize"]
+        },
+        {
+          "ref": "S-SEMANTIC-GOLDEN",
+          "symbols": []
+        }
+      ],
+      "expected": {
+        "schemaVersion": 2,
+        "mode": "semantic",
+        "completeness": "completeWithinScope",
+        "capabilities": {
+          "typeGraph": true,
+          "evidence": true,
+          "generatedDocuments": true,
+          "cycleWitness": true,
+          "search": true
+        },
+        "totals": {
+          "projects": 7,
+          "namespaces": 9,
+          "types": 44,
+          "relations": 49,
+          "evidence": 71,
+          "declarations": 33,
+          "generatedDocuments": 2,
+          "cycleGroups": 0
+        },
+        "variants": [
+          {
+            "name": "(external)",
+            "targetFramework": "external",
+            "types": 13,
+            "relations": 0,
+            "outgoing": 0
+          },
+          {
+            "name": "Application",
+            "targetFramework": "net8.0",
+            "types": 2,
+            "relations": 3,
+            "outgoing": 3
+          },
+          {
+            "name": "Domain(net10.0)",
+            "targetFramework": "net10.0",
+            "types": 12,
+            "relations": 12,
+            "outgoing": 12
+          },
+          {
+            "name": "Domain(netstandard2.0)",
+            "targetFramework": "netstandard2.0",
+            "types": 13,
+            "relations": 12,
+            "outgoing": 12
+          },
+          {
+            "name": "Generator",
+            "targetFramework": "netstandard2.0",
+            "types": 1,
+            "relations": 8,
+            "outgoing": 8
+          },
+          {
+            "name": "Infrastructure",
+            "targetFramework": "net10.0",
+            "types": 2,
+            "relations": 7,
+            "outgoing": 7
+          },
+          {
+            "name": "Infrastructure.Tests",
+            "targetFramework": "net10.0",
+            "types": 1,
+            "relations": 4,
+            "outgoing": 4
+          }
+        ],
+        "basis": {
+          "symbolResolved": 46,
+          "projectEvaluated": 3
+        },
+        "confidence": {
+          "resolved": 49
+        },
+        "relationKinds": {
+          "calls": 6,
+          "signature": 34,
+          "memberAccess": 14,
+          "implements": 2,
+          "attribute": 1,
+          "constructs": 5,
+          "typeUse": 2,
+          "projectEvaluated": 3
+        },
+        "limitations": ["semantic.transitiveReferencesAdded"],
+        "documents": {
+          "generatedSource": 2,
+          "userSource": 15
+        }
+      },
+      "allowedDeltaIds": ["D-GRAPH", "D-HOST"],
+      "runWhen": "Semantic graph/evidence/projectionまたはreport consumerが変わるとき。数はこの固定fixtureだけの観測値で、製品精度やcoverage目標にしない。"
+    },
+    {
+      "id": "C07",
+      "title": "確定根拠とmapped/physical位置の小さいcanary",
+      "taskOwners": ["SD2-01", "SD2-02", "IN-03"],
+      "inputRefs": ["S-OPERATION-TEST", "S-MAPPED"],
+      "assertionRefs": [
+        {
+          "ref": "S-OPERATION-TEST",
+          "symbols": ["UnusedUsingDoesNotAddEdges", "DoesNotPromoteDynamicOrUnresolvedReferences"]
+        },
+        {
+          "ref": "S-MAPPED",
+          "symbols": [
+            "keeps evaluated project references without code usage and preserves mapped positions"
+          ]
+        }
+      ],
+      "expected": {
+        "unusedUsing": "追加usingだけでkind/source/targetの依存集合を増やさない。位置由来IDの全一致は要求しない。",
+        "dynamicOrUnresolved": "dynamic/unresolved統計を記録し、解決したOrderへのedgeを捏造しない。候補だけの参照もresolvedへ昇格しない。",
+        "projectEvaluated": "コード利用のないProjectReferenceはprojectEvaluated根拠を保持しphysicalSpanはnull。",
+        "mapped": "filename付き#line120はmapped startLine119/physical startLine2、filenameなし#line70はmapped startLine69/physical startLine2を区別する。"
+      },
+      "allowedDeltaIds": ["D-GRAPH", "D-HOST"],
+      "runWhen": "IOperation収集・member graph・位置の正規化を変えるとき。既存MSBuild fixture restoreを含むtestをローカルで無断実行しない。"
+    }
+  ],
+  "verification": {
+    "sourceAndGoldenReadback": "J-02で実行する軽い確認。sourceのassertionと期待値、既存golden JSON projection、blob/fixture treeの参照、task IDとJSON読戻しを照合する。",
+    "baselineCi": [
+      {
+        "repository": "lithosharp",
+        "commit": "e6419c202bb95bb0055650bc7f04e0dcd6fe0f29",
+        "runId": 37594613458,
+        "conclusion": "success",
+        "url": "https://github.com/Htkym/lithosharp/actions/runs/37594613458",
+        "scope": "既存buildのWindows/Ubuntu/macOS Test step。選定した全caseを今回個別実行した証拠ではない。"
+      },
+      {
+        "repository": "sharpdeps",
+        "commit": "e16985d01c1e8e5f4bc1a530f84389ba308b1545",
+        "runId": 37715916248,
+        "conclusion": "success",
+        "url": "https://github.com/Htkym/sharpdeps/actions/runs/37715916248",
+        "scope": "J-01 exact SHAのbuild/macOS smokeと既存Quick/Semantic golden検証。新harnessや新Markdown parserの証拠ではない。"
+      }
+    ],
+    "localBuildTestRestorePackExecuted": false,
+    "notExecutedReason": "同PCで進行中のZendiator計測への影響を避ける。文書と既存goldenの読み取りのみ。変更した実装境界に必要なcaseは後続タスクでBocchiと調整して実行する。"
+  }
+}

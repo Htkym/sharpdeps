@@ -54,7 +54,7 @@ Unknownな位置やdecoded mappingは、resolved evidenceや完全なMarkdown co
 
 両repoの`markdown-v1.fixtures.json`には同一の5件の机上契約例を置きます。AbsentのBOM付きheading例を含め、invalid UnicodeはrawUtf16CodeUnits=[55296]から構成します。JSON読戻しはNode.jsで確認します。BOM/CRLF/frontmatter、entity/escape/surrogate pair、prefix gap、同本文・別binding、new strict entryのinvalid Unicodeを扱います。原文長、既知slice、Linear対応、strict UTF-8 hash、bindingの区別を軽いscriptで確認しました。実parser出力やhost compileを確認したとは扱いません。
 
-runtime/sourceのpack、YAML Mark位置単位の実測、host compile、両consumerの同profile出力一致は後続MD-03/MD-04/IN-01の確認です。stable公開や別repo移管は同版の実証後です。J-01ではfull build/testやローカルrestoreを起動しません。同PCの計測へ影響する検証はBocchiと調整します。
+YAML Mark位置単位の実測はMD-02、runtime adapterはMD-03、host compileはMD-04、runtime/sourceの最終packはMD-05、両consumerの同profile出力一致はIN-01で確認します。stable公開や別repo移管は同版の実証後です。J-01ではfull build/testやローカルrestoreを起動しません。同PCの計測へ影響する検証はBocchiと調整します。
 
 J-00修正SHA `46f910b3744a5e07328a388119910f4d1ab70342`のCI run `37709418593`はLinux成功、macOS失敗でした。既存`tests/analyzer/reviewRegression.test.ts:136`のfixture用restoreが失敗し、詳細stderrは保存されていません。文書だけの差分との因果は確認できず、原因は未確定です。今回のpush後のCIはSHAとともに別途報告します。
 
