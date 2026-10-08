@@ -1,0 +1,322 @@
+{
+  "task": "SD2-01",
+  "state": "SELECTED_CHECKS_PASS_BOCCHI_REVIEW_PENDING",
+  "repository": "SharpDeps",
+  "branch": "feature/0.2.0",
+  "baseSha": "19f2e1993bd24828b61a922a2f719c72be441776",
+  "selectionReason": "IN-01 requires SD2-03, whose SharpDeps prerequisite SD2-01 has no implementation at base. J-01/MD-05 accepted; prioritize this prerequisite before SD2-03. MD-06 waits IN-01.",
+  "predecessors": {
+    "J01": "e16985d; accepted prerequisite",
+    "MD05": {
+      "sha": "15edc2765198e48ba9200bae8d3fd6d4ae127eb8",
+      "bocchiReview": "PASS all11"
+    }
+  },
+  "compatibility": {
+    "legacyIdentity": "unchanged",
+    "reportV2": "unchanged",
+    "oldProviderCommandsSettingsTrust": "unchanged",
+    "quickDependencyBoundary": "BCL Contracts/Core only; no Markdown/MSBuild/SQLite reference added",
+    "packageVersion": "0.1.0 unchanged until release task"
+  },
+  "scope": [
+    "Contracts/Harness envelope + separate JsonContext",
+    "Core/Identity/HarnessIdentity persisted UUID and logical/variant occurrence separation",
+    "C#/TypeScript readSaved vs write trust helpers; existing entry unchanged"
+  ],
+  "deferred": [
+    "UUID/ID storage, verified move/alias and section matching SD2-04/05/09",
+    "Member graph/provenance SD2-02",
+    "Actual Markdown consumer SD2-03",
+    "Actual Roslyn+bothrepo matrix IN-01",
+    "MD-06 relocation"
+  ],
+  "localBuildTest": "PASS_SELECTED_4_ACTIONS_FIRST_ATTEMPT",
+  "ownership": {
+    "buildTestStarted": true,
+    "count": 0,
+    "verifiedAt": "2026-10-08T11:12:25.3118015Z",
+    "policy": "Single final snapshot after all selected checks+AGY completion; UTC creation-time guard and task/repo-window candidate check. No unrelated process stopped."
+  },
+  "fastTier": false,
+  "publicationAuthorized": false,
+  "sourceFiles": [
+    "analyzer/src/SharpDeps.Analysis.Core/Identity/HarnessIdentity.cs",
+    "analyzer/src/SharpDeps.Analysis.Contracts/Harness/HarnessGraphEnvelope.cs",
+    "analyzer/src/SharpDeps.Analysis.Contracts/Harness/HarnessTrustPolicy.cs",
+    "src/security/harnessTrust.ts",
+    "src/security/harnessTrust.test.ts",
+    "analyzer/tests/SharpDeps.Analysis.Tests/HarnessContractTests.cs",
+    "docs/contracts/harness-v1.ja.md",
+    "docs/development/sd2-01-verification.json",
+    "docs/contracts/harness-v1.fixtures.json"
+  ],
+  "cliReviews": {
+    "muse": {
+      "requestedModel": "opencode-go/muse-spark-1.3-contributor",
+      "actualModel": {
+        "id": "muse-spark-1.3-contributor",
+        "providerID": "opencode-go",
+        "variant": "default"
+      },
+      "agent": "sd201-muse",
+      "sessionId": "ses_ee4ed9270ffeul7HJrEdCSar79",
+      "outcome": "succeeded",
+      "classificationRows": 4
+    },
+    "copilot": {
+      "modelBefore": {
+        "modelId": "claude-opus-5.5",
+        "reasoningEffort": "high"
+      },
+      "modelAfter": {
+        "modelId": "claude-opus-5.5",
+        "reasoningEffort": "high"
+      },
+      "modelMatch": true,
+      "outcome": "completed",
+      "startedAt": "2026-10-08T10:32:34.388Z",
+      "finishedAt": "2026-10-08T10:35:09.912Z",
+      "quotaBefore": {
+        "entitlement": 20000,
+        "used": 860,
+        "remaining": 19140
+      },
+      "quotaAfter": {
+        "entitlement": 20000,
+        "used": 860,
+        "remaining": 19140
+      },
+      "sessionUsage": [
+        {
+          "model": "claude-opus-5.5",
+          "reasoningEffort": "high",
+          "inputTokens": 8745,
+          "outputTokens": 15240,
+          "reasoningTokens": 13124,
+          "cost": 15,
+          "isAuto": false,
+          "availableToolCount": 0,
+          "numToolCalls": 0,
+          "copilotUsage": {
+            "tokenDetails": [
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 400000000000,
+                "tokenCount": 4,
+                "tokenType": "input",
+                "model": "claude-opus-5.5"
+              },
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 20000000000,
+                "tokenCount": 0,
+                "tokenType": "cache_read",
+                "model": "claude-opus-5.5"
+              },
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 500000000000,
+                "tokenCount": 8741,
+                "tokenType": "cache_write",
+                "model": "claude-opus-5.5"
+              },
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 2000000000000,
+                "tokenCount": 15240,
+                "tokenType": "output",
+                "model": "claude-opus-5.5"
+              }
+            ],
+            "totalNanoAiu": 34852100000
+          }
+        }
+      ],
+      "quotaCaution": "Cumulative used count was unchanged; session usage cost is recorded separately and is not zero.",
+      "findings": [
+        {
+          "id": "CP-SD201-1",
+          "decision": "ACCEPTED_AND_FIXED",
+          "reason": "RespectRequiredConstructorParameters=true; missing coverage/certainty/generation cannot default to strongest states. Missing-coverage and missing-certainty negatives in existing roundtrip fact."
+        },
+        {
+          "id": "CP-SD201-2",
+          "decision": "ACCEPTED_AND_FIXED",
+          "reason": "MSBuild selection null/empty/whitespace Platform/RID normalized to unspecified before nullable frame; updated fixture and tests. General nullable framing still distinct."
+        },
+        {
+          "id": "CP-SD201-3",
+          "decision": "ACCEPTED_AND_FIXED",
+          "reason": "Single HarnessGraphContract.Read checks header and converts constructor ArgumentException/OverflowException to JsonException; small invalid-span negative. Full graph validation stays later storage/query work."
+        }
+      ],
+      "tools": 0,
+      "permissionRequests": 0,
+      "finalRepairedSourceExternalRereview": "NOT_RUN; Bocchi exact-diff review pending"
+    },
+    "agy": {
+      "actualModel": "gemini-3.8-flash-high",
+      "modelListVerified": true,
+      "status": "SUCCESS",
+      "numTurns": 1,
+      "stepTypes": [
+        "user_input",
+        "agent_response"
+      ],
+      "yomiyasu": "Full local SKILL.md supplied; 3 Japanese prose edits applied",
+      "isolation": "Observed no tool steps; init exposes tools and always-proceed, so no hard isolation claim"
+    },
+    "fastTier": false,
+    "agyFinal": {
+      "actualModel": "gemini-3.8-flash-high",
+      "status": "SUCCESS",
+      "numTurns": 1,
+      "stepTypes": [
+        "user_input",
+        "agent_response"
+      ],
+      "yomiyasu": "Full SKILL.md supplied; final Japanese validation record",
+      "editsApplied": 2,
+      "modelListVerified": true,
+      "fastTier": false,
+      "isolation": "No observed tool steps; no hard isolation claim"
+    }
+  },
+  "smallChecks": [
+    {
+      "action": "restore",
+      "target": "analyzer/tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj",
+      "args": [
+        "--disable-parallel",
+        "-nr:false"
+      ],
+      "reason": "Contracts/Core new Csharp DTO/context/helper and existing test graph"
+    },
+    {
+      "action": "test",
+      "target": "analyzer/tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj",
+      "args": [
+        "--no-restore",
+        "-m:1",
+        "-nr:false",
+        "-p:UseSharedCompilation=false",
+        "--filter",
+        "FullyQualifiedName~HarnessContractTests|FullyQualifiedName~IdentityTests|FullyQualifiedName~QuickV2MapperTests|FullyQualifiedName~QuickDependencyBoundaryTests"
+      ],
+      "reason": "New durable ID/header/span/trust + unchanged legacy IDs/old snapshot read + Quick deps boundary; no semantic integration"
+    },
+    {
+      "action": "tsc",
+      "target": "node_modules/typescript/bin/tsc",
+      "args": [
+        "--noEmit"
+      ],
+      "reason": "New pure trust helper types; no bundling/publish"
+    },
+    {
+      "action": "vitest",
+      "target": "node_modules/vitest/vitest.mjs",
+      "args": [
+        "run",
+        "src/security/harnessTrust.test.ts",
+        "src/analyzer/legacyAdapter.test.ts",
+        "tests/contract/identityAgreement.test.ts",
+        "--maxWorkers",
+        "1"
+      ],
+      "reason": "Read/write fail closed, existing old-report reader and legacy cross-language IDs; no full suite"
+    }
+  ],
+  "completionGate": [
+    "Selected 4 actions PASS (completed)",
+    "Owned verification processes zero (completed)",
+    "Bocchi exact committed diff review PASS before SD2-02/03"
+  ],
+  "staticScopeClarification": {
+    "id": "STATIC-SD201-1",
+    "decision": "CLARIFIED_SCOPE",
+    "reason": "LogicalSymbolId takes hpr persisted project ID. External assembly/symbol producer remains SD2-02; do not advertise an unsupported assembly ID input."
+  },
+  "validation": {
+    "results": [
+      {
+        "action": "restore",
+        "startedAt": "2026-10-08T11:06:26.905Z",
+        "endedAt": "2026-10-08T11:06:29.849Z",
+        "seconds": 2.944,
+        "exitCode": 0,
+        "timedOut": false,
+        "passed": true,
+        "arguments": [
+          "restore",
+          "analyzer/tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj",
+          "--disable-parallel",
+          "-nr:false"
+        ]
+      },
+      {
+        "action": "test",
+        "startedAt": "2026-10-08T11:06:29.850Z",
+        "endedAt": "2026-10-08T11:06:41.892Z",
+        "seconds": 12.042,
+        "exitCode": 0,
+        "timedOut": false,
+        "passed": true,
+        "arguments": [
+          "test",
+          "analyzer/tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj",
+          "--no-restore",
+          "-m:1",
+          "-nr:false",
+          "-p:UseSharedCompilation=false",
+          "--filter",
+          "FullyQualifiedName~HarnessContractTests|FullyQualifiedName~IdentityTests|FullyQualifiedName~QuickV2MapperTests|FullyQualifiedName~QuickDependencyBoundaryTests"
+        ]
+      },
+      {
+        "action": "tsc",
+        "startedAt": "2026-10-08T11:06:41.892Z",
+        "endedAt": "2026-10-08T11:06:43.543Z",
+        "seconds": 1.651,
+        "exitCode": 0,
+        "timedOut": false,
+        "passed": true,
+        "arguments": [
+          "node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      {
+        "action": "vitest",
+        "startedAt": "2026-10-08T11:06:43.544Z",
+        "endedAt": "2026-10-08T11:06:44.651Z",
+        "seconds": 1.107,
+        "exitCode": 0,
+        "timedOut": false,
+        "passed": true,
+        "arguments": [
+          "node_modules/vitest/vitest.mjs",
+          "run",
+          "src/security/harnessTrust.test.ts",
+          "src/analyzer/legacyAdapter.test.ts",
+          "tests/contract/identityAgreement.test.ts",
+          "--maxWorkers",
+          "1"
+        ]
+      }
+    ],
+    "commandSeconds": 17.744,
+    "csharpTests": 16,
+    "csharpWarnings": 0,
+    "typescriptTypecheck": "PASS",
+    "vitestFiles": 3,
+    "vitestTests": 14,
+    "attempts": 1,
+    "codeFixAfterExecution": false,
+    "warnings": [
+      "RTK no-hook informational notice; no rtk init/config mutation",
+      "Existing Vite config native-loader advisory; config unchanged"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "task": "SD2-01",
+  "state": "Independent Node golden calculation; selected Csharp contract checks PASS (project/symbol/net10 variant+occurrence/legacy goldens, separation/normalization)",
+  "identityVersion": "sharpdeps-harness/1",
+  "input": {
+    "workspaceUuid": "11111111-2222-4333-8444-555555555555",
+    "originalRoot": "C:/repo",
+    "movedRoot": "D:/moved/repo",
+    "projectPath": "src/App/App.csproj",
+    "sourceBefore": "src/App/Service.cs",
+    "sourceAfter": "src/App/Moved/Service.cs",
+    "symbolKind": "method",
+    "canonicalSignature": "M:App.Service.Run(System.String)"
+  },
+  "expected": {
+    "workspace": "hw_11111111222243338444555555555555",
+    "project": "hpr_f16c63705a1074a8b908eb1c93cecad71f020f382b58389262ba7221f1b95683",
+    "symbol": "hsym_78c4d83a1356dec3d24b4db70d11eac59c2cedbf87974eae1b3178bfc48a40ce",
+    "variant10": "hvar_967d141905b1dccd2487ed22381d5867f742fd582efa1c745408e2c1f685a51b",
+    "variant9": "hvar_ad381393d0d0c020e5a2fd1b4c373577a93b9ecb6e0e284407abc7f6f8bbc9d8",
+    "occurrence10": "hocc_ba49230bfc6fc6a7f1e7e9e6b642dd4e30705122164faaf78eded6589fb0f894",
+    "occurrence9": "hocc_90c862d354da9c64793b6c9272544f370138833bfce17537e513261c3b85efda",
+    "variantEmptyPlatform": "hvar_967d141905b1dccd2487ed22381d5867f742fd582efa1c745408e2c1f685a51b",
+    "legacyRoot": "wrk_65aa6de15d22cae5",
+    "legacyProject": "prj_e69fd820b24f1b1f"
+  },
+  "trust": {
+    "readSavedUntrusted": true,
+    "indexUntrusted": false,
+    "updateUntrusted": false,
+    "watchUntrusted": false,
+    "restoreUntrusted": false,
+    "writeStoreUntrusted": false,
+    "unknownTrusted": false
+  },
+  "variantNormalization": "Platform/RID null/empty/whitespace -> unspecified(null), before framing; general null/empty bytes remain distinct"
+}
