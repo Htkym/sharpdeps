@@ -1,0 +1,38 @@
+{
+  "format": "sharpdeps-markdown-runtime-pin",
+  "schemaVersion": 1,
+  "componentVersion": "2.0.0-preview.1",
+  "sourceCommit": "ccd165a1fd0eff9cb7b54004c8b472547ba74e8e",
+  "lithoArtifactCommit": "15edc2765198e48ba9200bae8d3fd6d4ae127eb8",
+  "canonicalSourceHash": "02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
+  "parserVersion": "1/02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
+  "contractVersion": "1.0",
+  "profileId": "lithosharp-markdown/1",
+  "dependencies": [
+    {
+      "packageId": "YamlDotNet",
+      "version": "18.1.0",
+      "range": "[18.1.0]",
+      "assemblyFullName": "YamlDotNet, Version=18.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e",
+      "informationalVersion": "18.1.0",
+      "identityRole": "expected; actual loaded metadata must be verified by consumer"
+    }
+  ],
+  "artifacts": {
+    "runtime": {
+      "packageId": "LithoSharp.Markdown",
+      "componentVersion": "2.0.0-preview.1",
+      "fileName": "LithoSharp.Markdown.2.0.0-preview.1.nupkg",
+      "sha256": "554a4c71de4fb8c55872895a985cf8f66e9518346e451e91a2607d69d17fb8ed",
+      "byteLength": 77332,
+      "assemblySha256": "1208ca8b32332ef58ea68838a6c672e3ea760257f84728e0a7e20b353d8389a5"
+    },
+    "source": {
+      "packageId": "LithoSharp.Markdown.Source",
+      "componentVersion": "2.0.0-preview.1",
+      "fileName": "LithoSharp.Markdown.Source.2.0.0-preview.1.nupkg",
+      "sha256": "537bd22998e5a2560a8cffea2f829b3bfae79179b91572671fbf66d0a46d9a06",
+      "byteLength": 54966
+    }
+  }
+}

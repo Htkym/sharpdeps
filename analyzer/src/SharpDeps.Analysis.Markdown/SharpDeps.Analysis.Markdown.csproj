@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>SharpDeps.Analysis.Markdown</RootNamespace>
+    <AssemblyName>SharpDeps.Analysis.Markdown</AssemblyName>
+    <Description>Opt-in Markdown graph projection from the fixed shared runtime package.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
+    <ProjectReference Include="..\SharpDeps.Analysis.Core\SharpDeps.Analysis.Core.csproj" />
+    <PackageReference Include="LithoSharp.Markdown" VersionOverride="[2.0.0-preview.1]" />
+    <PackageReference Include="YamlDotNet" VersionOverride="[18.1.0]" />
+  </ItemGroup>
+</Project>
