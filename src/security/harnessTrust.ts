@@ -1,9 +1,13 @@
 import { trustDecision, type TrustDecision } from './trust';
 
-export type HarnessOperation = 'readSaved' | 'index' | 'update' | 'watch' | 'restore' | 'writeStore';
+export type HarnessOperation =
+  'readSaved' | 'index' | 'update' | 'watch' | 'restore' | 'writeStore';
 
 /** New harness policy; existing analyzer calls continue to use trustDecision unchanged. */
-export function harnessTrustDecision(operation: HarnessOperation, isTrusted: boolean): TrustDecision {
+export function harnessTrustDecision(
+  operation: HarnessOperation,
+  isTrusted: boolean
+): TrustDecision {
   switch (operation) {
     case 'readSaved':
       return { allowed: true };

@@ -160,10 +160,7 @@
       "modelListVerified": true,
       "status": "SUCCESS",
       "numTurns": 1,
-      "stepTypes": [
-        "user_input",
-        "agent_response"
-      ],
+      "stepTypes": ["user_input", "agent_response"],
       "yomiyasu": "Full local SKILL.md supplied; 3 Japanese prose edits applied",
       "isolation": "Observed no tool steps; init exposes tools and always-proceed, so no hard isolation claim"
     },
@@ -172,10 +169,7 @@
       "actualModel": "gemini-3.8-flash-high",
       "status": "SUCCESS",
       "numTurns": 1,
-      "stepTypes": [
-        "user_input",
-        "agent_response"
-      ],
+      "stepTypes": ["user_input", "agent_response"],
       "yomiyasu": "Full SKILL.md supplied; final Japanese validation record",
       "editsApplied": 2,
       "modelListVerified": true,
@@ -187,10 +181,7 @@
     {
       "action": "restore",
       "target": "analyzer/tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj",
-      "args": [
-        "--disable-parallel",
-        "-nr:false"
-      ],
+      "args": ["--disable-parallel", "-nr:false"],
       "reason": "Contracts/Core new Csharp DTO/context/helper and existing test graph"
     },
     {
@@ -209,9 +200,7 @@
     {
       "action": "tsc",
       "target": "node_modules/typescript/bin/tsc",
-      "args": [
-        "--noEmit"
-      ],
+      "args": ["--noEmit"],
       "reason": "New pure trust helper types; no bundling/publish"
     },
     {
@@ -282,10 +271,7 @@
         "exitCode": 0,
         "timedOut": false,
         "passed": true,
-        "arguments": [
-          "node_modules/typescript/bin/tsc",
-          "--noEmit"
-        ]
+        "arguments": ["node_modules/typescript/bin/tsc", "--noEmit"]
       },
       {
         "action": "vitest",
