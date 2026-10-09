@@ -72,11 +72,7 @@ if (relative !== 'syntamark/' + pin.componentVersion)
   throw new Error('Unexpected restored package path');
 let restored;
 for (const folder of Object.keys(assets.packageFolders)) {
-  const file = path.join(
-    folder,
-    relative,
-    'syntamark.' + pin.componentVersion + '.nupkg'
-  );
+  const file = path.join(folder, relative, 'syntamark.' + pin.componentVersion + '.nupkg');
   if (!fs.existsSync(file)) continue;
   const bytes = fs.readFileSync(file);
   const assembly = path.join(folder, relative, 'lib/net10.0/Syntamark.dll');
