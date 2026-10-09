@@ -23,7 +23,11 @@ public sealed class MarkdownConformanceTests
             Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), "pair-scope", "same.md", null, "snapshot-1", 1);
         var projection = new LithoSharpMarkdownAdapter().Analyze(request, true);
         Assert.Equal(fixture.GetProperty("utf16Length").GetInt32(), raw.Length);
-        var json = JsonSerializer.Serialize(Normalize(projection.Facts));
+        Assert.Equal(MarkdownRuntimePin.ParserVersion, projection.Facts.ParserVersion);
+        var golden = (Dictionary<string, object?>)Normalize(projection.Facts)!;
+        // The old immutable oracle includes its stamp; only this root field changes with a rename.
+        golden[nameof(projection.Facts.ParserVersion)] = fixtureFile.RootElement.GetProperty("parserVersion").GetString();
+        var json = JsonSerializer.Serialize(golden);
         var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
         Assert.Equal(fixture.GetProperty("lithoRuntimeSourceFactsSha256").GetString(), actual);
         Assert.Equal(MarkdownRuntimePin.ParserVersion, projection.Graph.Markdown!.ParserVersion);

@@ -1,10 +1,10 @@
 {
   "format": "sharpdeps-markdown-runtime-pin",
   "schemaVersion": 1,
-  "componentVersion": "2.0.0-preview.2",
-  "sourceCommit": "54295e8275cf5f2da7769a76668cea1c6cf7a7cc",
-  "canonicalSourceHash": "02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
-  "parserVersion": "1/02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
+  "componentVersion": "2.0.0-preview.3",
+  "sourceCommit": "a1e27e071c0e50bcad82986e83bc76929e6addef",
+  "canonicalSourceHash": "7e854150d5cad96e554b90a550251dce74d29b79ceef2964fa9cfa4a226e2051",
+  "parserVersion": "1/7e854150d5cad96e554b90a550251dce74d29b79ceef2964fa9cfa4a226e2051",
   "contractVersion": "1.0",
   "profileId": "lithosharp-markdown/1",
   "dependencies": [
@@ -19,24 +19,25 @@
   ],
   "artifacts": {
     "runtime": {
-      "packageId": "LithoSharp.Markdown",
-      "componentVersion": "2.0.0-preview.2",
-      "fileName": "LithoSharp.Markdown.2.0.0-preview.2.nupkg",
-      "sha256": "613261660f8f15c0d56d160886af042d8d6eca316bf14f3b4b7d0811a960bd80",
-      "byteLength": 77263,
-      "assemblySha256": "f7a153d16f5ac06a8c9f975205c5529662a89aa9842fcfdfcfab238d24c4a817"
+      "packageId": "Syntamark",
+      "componentVersion": "2.0.0-preview.3",
+      "fileName": "Syntamark.2.0.0-preview.3.nupkg",
+      "sha256": "ad0e010a1443d3f969f6ed41af5ba3c551034c591bf03a315f8b45bdb27eca7c",
+      "byteLength": 78372,
+      "assemblySha256": "1603cfdfe41cb06b2f7772990d5898fae5687947ab5adc93c78a82c41a1b13d4"
     },
     "source": {
-      "packageId": "LithoSharp.Markdown.Source",
-      "componentVersion": "2.0.0-preview.2",
-      "fileName": "LithoSharp.Markdown.Source.2.0.0-preview.2.nupkg",
-      "sha256": "6bc469aca1f1e687361fede6010c14c5a30e9cee141bdc7c8eb494fb81e0ea94",
-      "byteLength": 55020
+      "packageId": "Syntamark.Source",
+      "componentVersion": "2.0.0-preview.3",
+      "fileName": "Syntamark.Source.2.0.0-preview.3.nupkg",
+      "sha256": "075bef89ccbae2e2d26607e65a1559ab65e753e00ced6fa715c3c406d7dd397e",
+      "byteLength": 55987
     }
   },
   "sourceRepository": {
-    "kind": "local-scoped-migration",
-    "component": "LithoSharp.Markdown",
+    "kind": "git",
+    "url": "https://github.com/Htkym/syntamark",
+    "component": "Syntamark",
     "historyMap": "eng/markdown/source-history.json"
   },
   "sourceHistory": {

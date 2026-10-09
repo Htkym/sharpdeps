@@ -26,11 +26,11 @@ J-01として、[LithoSharpの公開契約案](https://github.com/Htkym/lithosha
 
 ## 同版artifactの取り込み
 
-runtime IDは`LithoSharp.Markdown`、compiler host用source IDは`LithoSharp.Markdown.Source`とする設計案です。両方ともimmutableな同じV=`2.0.0-preview.N`から始め、stable候補は2.0.0です。SharpDeps自体の次版候補0.2.0とは別に管理します。
+runtime IDは`Syntamark`、compiler host用source IDは`Syntamark.Source`とする設計案です。両方ともimmutableな同じV=`2.0.0-preview.N`から始め、stable候補は2.0.0です。SharpDeps自体の次版候補0.2.0とは別に管理します。
 
 net10 runtimeはpublic facadeを使います。netstandard2.0 Generator/Analyzerはinternal portable factsを固定版source packageからCompileへ取り込み、net10 DLLをhostへ読み込みません。hostの必要依存はexact版で直接参照し、初期YamlDotNet 18.1.0とcompiler hostの同梱方針をmanifestで確認します。runtime nupkgの依存も`[18.1.0]`とし、復元結果とロード済み依存identityがmanifestと一致することを確認します。不一致/確認不能なら新entryの起動を拒否し、そのcacheを再利用しません。
 
-source取り込みは`LithoSharpMarkdownIncludeSource=true`でopt-inするbuild targetsで行います。PackageReferenceはexact range `[V]`、PrivateAssets=all、IncludeAssets=buildとします。project property設定前のpropsに条件付きCompileを置きません。buildTransitive、浮動版、latest checkout、手動copyで供給を代用しません。
+source取り込みは`SyntamarkIncludeSource=true`でopt-inするbuild targetsで行います。PackageReferenceはexact range `[V]`、PrivateAssets=all、IncludeAssets=buildとします。project property設定前のpropsに条件付きCompileを置きません。buildTransitive、浮動版、latest checkout、手動copyで供給を代用しません。
 
 移管前も両repo hostが同じ固定版source packageを復元します。独立componentはGenerator/Analyzer/siteを参照せずに先にpackし、未公開のlocal feedへ同版pairを置きます。host側はmanifest照合後にrestore/buildします。公開NuGetへのpublishやlatest sourceの直接Compileをbootstrapの前提にしません。
 

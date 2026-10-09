@@ -6,11 +6,11 @@ SD2-03はSharpDeps `feature/0.2.0`、基準SHA `fdadba7620f0c22e00690ede73df63a2
 
 ## 固定artifactと起動
 
-`LithoSharp.Markdown [2.0.0-preview.2]` と `YamlDotNet [18.1.0]` をexact参照します。MD-06では共有componentの正本とpackを別のローカルrepoへ移管し、対応するruntime/source候補を新しいimmutable版で作成しました。`markdown-runtime-pin.json` は選択版、移管先source commitと旧commitの対応、canonical hash、parser/contract/profile、依存identity、両nupkgとruntime DLL hashを固定します。MD-05のpreview.1は保持し、再pack・上書きしません。
+`Syntamark [2.0.0-preview.3]` と `YamlDotNet [18.1.0]` をexact参照します。MD-06では共有componentのソースとpackを別のrepoへ移管し、対応するruntime/source候補を新しいimmutable版で作成しました。`markdown-runtime-pin.json` は選択版、移管先source commitと旧commitの対応、canonical hash、parser/contract/profile、依存identity、両nupkgとruntime DLL hashを固定します。MD-05のpreview.1は保持し、再pack・上書きしません。
 
 restore後に `Verify-ConsumerArtifacts.mjs` で同pair、feedの両artifact、実際のrestored runtime nupkg/DLL、YamlDotNetのexact package versionを確認します。trusted Index入口では、ロード済みruntime DLL hashとYamlDotNet assembly/informational identity、callerが期待したParserVersionを照合し、不一致・確認不能を拒否します。parse後もfactsのparser/contract/profileを確認します。startupのassembly hash読取りはconsumer hostのI/Oで、共有parserのI/Oではありません。assembly version 18.0.0.0をpackage version 18.1.0と混同しません。
 
-固定候補は`eng/markdown/feed`に保存し、`NuGet.Config`のexact package mappingで復元します。NuGetへの公開をbootstrapの前提にしません。既存analyzer solution/CIはMarkdown projectを含まないため、`analyzer/tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj`を明示検証します。IN-01の4host小fixtureは移管後も再利用します。共有repoの正式owner/名前と公開先は未確定で、候補metadataの`sourceRepository`はローカル履歴移管を表します。
+固定候補は`eng/markdown/feed`に保存し、`NuGet.Config`のexact package mappingで復元します。NuGetへの公開をbootstrapの前提にしません。既存analyzer solution/CIはMarkdown projectを含まないため、`analyzer/tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj`を明示検証します。IN-01の4host小fixtureは移管後も再利用します。候補metadataの`sourceRepository`は移管先の`Htkym/syntamark`を示し、`source-history.json`は元の履歴対応を保持します。
 
 ## 元factsを保持する投影
 

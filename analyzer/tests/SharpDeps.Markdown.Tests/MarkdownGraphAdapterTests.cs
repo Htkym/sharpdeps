@@ -2,7 +2,7 @@ namespace SharpDeps.Markdown.Tests;
 
 using System.Security.Cryptography;
 using System.Text;
-using LithoSharp.Markdown;
+using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Markdown;

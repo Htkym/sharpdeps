@@ -1,6 +1,6 @@
 namespace SharpDeps.Analysis.Markdown;
 
-using LithoSharp.Markdown;
+using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
 
 /// <summary>IDs/section tokens are supplied by the trusted owner; this adapter never allocates persistent storage.</summary>

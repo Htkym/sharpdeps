@@ -68,18 +68,18 @@ const yamlVersions = Object.keys(assets.libraries).filter((k) =>
 if (runtimeVersions.length !== 1 || yamlVersions.length !== 1)
   throw new Error('Ambiguous restored package version');
 const relative = assets.libraries[runtimeKey].path;
-if (relative !== 'lithosharp.markdown/' + pin.componentVersion)
+if (relative !== 'syntamark/' + pin.componentVersion)
   throw new Error('Unexpected restored package path');
 let restored;
 for (const folder of Object.keys(assets.packageFolders)) {
   const file = path.join(
     folder,
     relative,
-    'lithosharp.markdown.' + pin.componentVersion + '.nupkg'
+    'syntamark.' + pin.componentVersion + '.nupkg'
   );
   if (!fs.existsSync(file)) continue;
   const bytes = fs.readFileSync(file);
-  const assembly = path.join(folder, relative, 'lib/net10.0/LithoSharp.Markdown.dll');
+  const assembly = path.join(folder, relative, 'lib/net10.0/Syntamark.dll');
   if (
     hash(bytes) !== pin.artifacts.runtime.sha256 ||
     hash(fs.readFileSync(assembly)) !== pin.artifacts.runtime.assemblySha256
