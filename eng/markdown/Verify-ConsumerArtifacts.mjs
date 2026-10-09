@@ -16,12 +16,15 @@ const pair = read(args[0]);
 const hash = (b) => createHash('sha256').update(b).digest('hex');
 for (const key of [
   'componentVersion',
+  'sourceCommit',
   'canonicalSourceHash',
   'parserVersion',
   'contractVersion',
   'profileId'
 ])
   if (pair[key] !== pin[key]) throw new Error('Pair metadata mismatch: ' + key);
+if (!same(pair.sourceRepository, pin.sourceRepository))
+  throw new Error('Pair source repository identity mismatch');
 if (!same(pair.dependencies, pin.dependencies))
   throw new Error('Pair dependency identity mismatch');
 function same(a, b) {

@@ -1,9 +1,8 @@
 {
   "format": "sharpdeps-markdown-runtime-pin",
   "schemaVersion": 1,
-  "componentVersion": "2.0.0-preview.1",
-  "sourceCommit": "ccd165a1fd0eff9cb7b54004c8b472547ba74e8e",
-  "lithoArtifactCommit": "15edc2765198e48ba9200bae8d3fd6d4ae127eb8",
+  "componentVersion": "2.0.0-preview.2",
+  "sourceCommit": "54295e8275cf5f2da7769a76668cea1c6cf7a7cc",
   "canonicalSourceHash": "02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
   "parserVersion": "1/02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
   "contractVersion": "1.0",
@@ -21,18 +20,65 @@
   "artifacts": {
     "runtime": {
       "packageId": "LithoSharp.Markdown",
-      "componentVersion": "2.0.0-preview.1",
-      "fileName": "LithoSharp.Markdown.2.0.0-preview.1.nupkg",
-      "sha256": "554a4c71de4fb8c55872895a985cf8f66e9518346e451e91a2607d69d17fb8ed",
-      "byteLength": 77332,
-      "assemblySha256": "1208ca8b32332ef58ea68838a6c672e3ea760257f84728e0a7e20b353d8389a5"
+      "componentVersion": "2.0.0-preview.2",
+      "fileName": "LithoSharp.Markdown.2.0.0-preview.2.nupkg",
+      "sha256": "613261660f8f15c0d56d160886af042d8d6eca316bf14f3b4b7d0811a960bd80",
+      "byteLength": 77263,
+      "assemblySha256": "f7a153d16f5ac06a8c9f975205c5529662a89aa9842fcfdfcfab238d24c4a817"
     },
     "source": {
       "packageId": "LithoSharp.Markdown.Source",
-      "componentVersion": "2.0.0-preview.1",
-      "fileName": "LithoSharp.Markdown.Source.2.0.0-preview.1.nupkg",
-      "sha256": "537bd22998e5a2560a8cffea2f829b3bfae79179b91572671fbf66d0a46d9a06",
-      "byteLength": 54966
+      "componentVersion": "2.0.0-preview.2",
+      "fileName": "LithoSharp.Markdown.Source.2.0.0-preview.2.nupkg",
+      "sha256": "6bc469aca1f1e687361fede6010c14c5a30e9cee141bdc7c8eb494fb81e0ea94",
+      "byteLength": 55020
     }
+  },
+  "sourceRepository": {
+    "kind": "local-scoped-migration",
+    "component": "LithoSharp.Markdown",
+    "historyMap": "eng/markdown/source-history.json"
+  },
+  "sourceHistory": {
+    "origin": "https://github.com/Htkym/lithosharp",
+    "originCanonicalCommit": "ccd165a1fd0eff9cb7b54004c8b472547ba74e8e",
+    "migration": [
+      {
+        "originalCommit": "1c242a986f9d80f188b6c3c8459c4a41cd3e0347",
+        "newCommit": "63ed7a166fbf3b5260816964801fe5c950234780"
+      },
+      {
+        "originalCommit": "d3f9b272a92ce484f9ee29c60f697b9dbcaf2edb",
+        "newCommit": "4b40d41301c585268394ed29b9edf644235c2e70"
+      },
+      {
+        "originalCommit": "0eeffe2ddf389b05c2b0937608bd51b70562b73e",
+        "newCommit": "88d79d616539a09da50d504c91f2a92285250dea"
+      },
+      {
+        "originalCommit": "aef618b6031ac26485f7b4e457a885aa9de471f5",
+        "newCommit": "c956a140cffb0d9bb407494855a6fd3559d404d2"
+      },
+      {
+        "originalCommit": "41f80208cd7256421f84dcb927a7d34308704a91",
+        "newCommit": "bc5eef76a7401c1a696816b85925d52525c7a893"
+      },
+      {
+        "originalCommit": "1c5cc789ba389ff6abbbfa5c501a3a833d54d30c",
+        "newCommit": "c52c296412155a1e3a73238e4d89285917678ffd"
+      },
+      {
+        "originalCommit": "00d18f770afc529949429ff4ab6b9e59432d870b",
+        "newCommit": "30fc2022c4119afb5a81b3c5b054c622244bcdc6"
+      },
+      {
+        "originalCommit": "15edc2765198e48ba9200bae8d3fd6d4ae127eb8",
+        "newCommit": "b3471517823db4576e27d4cc5aa63fd697f931f0"
+      },
+      {
+        "originalCommit": "230f02391614d083acf43a14e4493902b643a0b0",
+        "newCommit": "f60dbc51d4bd487282ef76b79128565e25875ce4"
+      }
+    ]
   }
 }
