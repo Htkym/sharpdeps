@@ -11,5 +11,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />
     <Project Path="tests/SharpDeps.Index.Tests/SharpDeps.Index.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Index.Tests/WriterLockProbe/WriterLockProbe.csproj" />
   </Folder>
 </Solution>

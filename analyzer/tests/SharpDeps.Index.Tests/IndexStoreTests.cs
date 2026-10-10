@@ -360,7 +360,7 @@ public sealed class IndexStoreTests
         public static readonly UTF8Encoding Utf8 = new(false, true);
         private static readonly string FixtureBase = OperatingSystem.IsWindows()
             ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd205-20261010-01\fixtures-revision01"
-            : Path.Combine(Path.GetTempPath(), "sharpdeps-sd205-fixtures-revision01");
+            : Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-sd205-fixtures-revision01");
         public const string Code = "namespace App; class Service { public void Before() { } }\n";
         public const string Markdown = "# 設定\r\n\r\n😀 Service の設定の手順を説明する。\r\n";
         public Guid Workspace { get; }
