@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sharpdeps:cli-response:1",
+  "title": "SharpDeps CLI response v1 (provisional)",
+  "description": "Current CLI command/error and QueryReply.Json wire shapes. This schema does not prove command-result semantics, source hash/span consistency, freshness, coverage completeness, UTF-16 accounting or final UTF-8 byte budgets. Null optional Query properties are omitted.",
+  "oneOf": [
+    { "$ref": "#/$defs/commandReply" },
+    { "$ref": "#/$defs/queryReply" }
+  ],
+  "$defs": {
+    "text": { "type": "string", "maxLength": 1000000 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "path": { "type": "string", "maxLength": 4096 },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "count": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+    "certainty": { "enum": ["Resolved", "Candidate", "Unresolved"] },
+    "coverage": { "enum": ["CompleteWithinScope", "Partial", "Failed"] },
+    "jsonValue": {
+      "anyOf": [
+        { "type": ["null", "boolean", "number"] },
+        { "$ref": "#/$defs/text" },
+        { "type": "array", "maxItems": 1000000, "items": { "$ref": "#/$defs/jsonValue" } },
+        { "type": "object", "maxProperties": 1000000, "additionalProperties": { "$ref": "#/$defs/jsonValue" } }
+      ]
+    },
+    "issue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/id" },
+        "message": { "$ref": "#/$defs/text" },
+        "path": { "$ref": "#/$defs/path" }
+      }
+    },
+    "commandReply": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "command", "requestId", "errors"],
+      "description": "Success includes result and no errors. Pre-query CLI errors omit result. Result internals remain command-specific JSON; they are not a complete semantic contract.",
+      "properties": {
+        "apiVersion": { "const": "1" },
+        "command": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "result": { "type": "object", "maxProperties": 1000000, "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "errors": { "type": "array", "maxItems": 1, "items": { "$ref": "#/$defs/issue" } }
+      },
+      "oneOf": [
+        { "required": ["result"], "properties": { "errors": { "maxItems": 0 } } },
+        { "not": { "required": ["result"] }, "properties": { "errors": { "minItems": 1 } } }
+      ]
+    },
+    "queryReply": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "snapshot", "items", "candidates", "unresolved", "budget", "truncated", "truncationReasons", "diagnostics", "errors"],
+      "properties": {
+        "apiVersion": { "const": "1" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "snapshot": { "$ref": "#/$defs/snapshot" },
+        "items": { "type": "array", "maxItems": 500, "items": { "allOf": [{ "$ref": "#/$defs/item" }, { "properties": { "certainty": { "const": "Resolved" } } }] } },
+        "candidates": { "type": "array", "maxItems": 500, "items": { "allOf": [{ "$ref": "#/$defs/item" }, { "properties": { "certainty": { "const": "Candidate" } } }] } },
+        "unresolved": { "type": "array", "maxItems": 500, "items": { "allOf": [{ "$ref": "#/$defs/item" }, { "properties": { "certainty": { "const": "Unresolved" } } }] } },
+        "budget": { "$ref": "#/$defs/usage" },
+        "truncated": { "type": "boolean" },
+        "truncationReasons": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "nextCursor": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "diagnostics": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/issue" } },
+        "errors": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/issue" } }
+      }
+    },
+    "snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workspaceId", "id", "generation", "variantIds", "variantCount", "freshness", "coverage", "dirtyPaths", "dirtyPathCount", "unverified", "unverifiedCount", "graphSchemaVersion", "identityVersion", "indexSchemaVersion", "coordinatorState"],
+      "properties": {
+        "workspaceId": { "type": "string", "pattern": "^hw_[0-9a-f]{32}$" },
+        "id": { "$ref": "#/$defs/id" },
+        "generation": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "variantIds": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "variantCount": { "$ref": "#/$defs/count" },
+        "freshness": { "enum": ["unverified", "dirty", "verified-current"] },
+        "checkedAt": { "type": "string", "maxLength": 64, "format": "date-time" },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "dirtyPaths": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/path" } },
+        "dirtyPathCount": { "$ref": "#/$defs/count" },
+        "unverified": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/text" } },
+        "unverifiedCount": { "$ref": "#/$defs/count" },
+        "graphSchemaVersion": { "const": 1 },
+        "identityVersion": { "const": "sharpdeps-harness/1" },
+        "indexSchemaVersion": { "const": 1 },
+        "coordinatorState": { "const": "not-connected" }
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxNodes", "maxEdges", "maxDepth", "maxMilliseconds", "maxChars", "maxBytes"],
+      "properties": {
+        "maxNodes": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "maxEdges": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxDepth": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "maxMilliseconds": { "type": "integer", "minimum": 10, "maximum": 30000 },
+        "maxChars": { "type": "integer", "minimum": 2048, "maximum": 1000000 },
+        "maxBytes": { "type": "integer", "minimum": 2048, "maximum": 4000000 }
+      }
+    },
+    "usage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["limits", "usedNodes", "usedEdges", "usedChars", "usedBytes", "estimatedTokens", "tokenCountKind"],
+      "properties": {
+        "limits": { "$ref": "#/$defs/limits" },
+        "usedNodes": { "type": "integer", "minimum": 0, "maximum": 500 },
+        "usedEdges": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "usedChars": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "usedBytes": { "type": "integer", "minimum": 0, "maximum": 4000000 },
+        "estimatedTokens": { "type": "integer", "minimum": 0, "maximum": 250000 },
+        "tokenCountKind": { "const": "estimate" }
+      }
+    },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "label", "reason", "certainty", "viaEdgeIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/text" },
+        "reason": { "$ref": "#/$defs/text" },
+        "certainty": { "$ref": "#/$defs/certainty" },
+        "path": { "$ref": "#/$defs/path" },
+        "evidence": { "$ref": "#/$defs/location" },
+        "viaEdgeIds": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/id" } },
+        "node": { "$ref": "#/$defs/node" },
+        "edge": { "$ref": "#/$defs/edge" },
+        "occurrence": { "$ref": "#/$defs/occurrence" },
+        "snippet": { "$ref": "#/$defs/snippet" },
+        "rank": { "type": "number" },
+        "matchMethod": { "$ref": "#/$defs/id" }
+      }
+    },
+    "span": {
+      "type": "object", "additionalProperties": false,
+      "description": "Original UTF-16 zero-based half-open range. End is serialized by HarnessRawSpan; the schema cannot assert end = start + length or source length.",
+      "required": ["start", "length", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "length": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "end": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
+    "location": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceId"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/id" },
+        "sourceVersion": { "type": "string", "maxLength": 4096 },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "rawSpan": { "$ref": "#/$defs/span" }
+      }
+    },
+    "node": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["Workspace", "Project", "Namespace", "Type", "Member", "ExternalSymbol", "SourceFile", "Document", "Section", "FrontMatter", "CodeFence", "LinkTarget", "SymbolMention"] },
+        "name": { "type": "string", "maxLength": 65536 },
+        "parentId": { "$ref": "#/$defs/id" },
+        "location": { "$ref": "#/$defs/location" },
+        "signature": { "type": "string", "maxLength": 65536 }
+      }
+    },
+    "edge": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "sourceNodeId", "targetNodeId", "kind", "certainty", "producer"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "sourceNodeId": { "$ref": "#/$defs/id" },
+        "targetNodeId": { "$ref": "#/$defs/id" },
+        "sourceOccurrenceId": { "$ref": "#/$defs/id" },
+        "targetOccurrenceId": { "$ref": "#/$defs/id" },
+        "variantId": { "$ref": "#/$defs/id" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "certainty": { "$ref": "#/$defs/certainty" },
+        "producer": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "evidence": { "$ref": "#/$defs/location" },
+        "origin": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "occurrence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "logicalSymbolId", "variantId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "logicalSymbolId": { "$ref": "#/$defs/id" },
+        "variantId": { "$ref": "#/$defs/id" },
+        "location": { "$ref": "#/$defs/location" },
+        "declarations": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/location" } }
+      }
+    },
+    "snippet": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceId", "contentHash", "span", "text", "omittedBefore", "omittedAfter"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/id" },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "span": { "$ref": "#/$defs/span" },
+        "text": { "$ref": "#/$defs/text" },
+        "omittedBefore": { "type": "boolean" },
+        "omittedAfter": { "type": "boolean" }
+      }
+    }
+  }
+}
