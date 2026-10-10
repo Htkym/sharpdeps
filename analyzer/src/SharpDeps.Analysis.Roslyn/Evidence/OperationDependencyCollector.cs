@@ -26,9 +26,11 @@ public sealed record OperationCollectionStats(
     int DynamicReferences,
     int CandidateOnlySymbols);
 
+/// <summary>Evidence preserves report-v2; non-null HarnessEvidence is the full immutable harness input.</summary>
 public sealed record OperationCollectionResult(
     IReadOnlyList<CollectedEvidence> Evidence,
-    OperationCollectionStats Stats);
+    OperationCollectionStats Stats,
+    IReadOnlyList<CollectedEvidence>? HarnessEvidence = null);
 
 public sealed class OperationDependencyCollector
 {
@@ -59,6 +61,7 @@ public sealed class OperationDependencyCollector
         CancellationToken cancellationToken = default)
     {
         var results = new List<CollectedEvidence>();
+        var methodReferences = new List<CollectedEvidence>();
         var bodies = 0;
         var unresolved = 0;
         var dynamic = 0;
@@ -92,6 +95,7 @@ public sealed class OperationDependencyCollector
                             input,
                             owner,
                             results,
+                            methodReferences,
                             ref unresolved,
                             ref dynamic,
                             ref candidateOnly);
@@ -126,7 +130,8 @@ public sealed class OperationDependencyCollector
 
         return new OperationCollectionResult(
             results,
-            new OperationCollectionStats(bodies, unresolved, dynamic, candidateOnly));
+            new OperationCollectionStats(bodies, unresolved, dynamic, candidateOnly),
+            methodReferences.Count == 0 ? null : Array.AsReadOnly(results.Concat(methodReferences).ToArray()));
     }
 
     /// <summary>
@@ -207,6 +212,7 @@ public sealed class OperationDependencyCollector
         SymbolIndexInput input,
         ISymbol? owner,
         List<CollectedEvidence> results,
+        List<CollectedEvidence> methodReferences,
         ref int unresolved,
         ref int dynamic,
         ref int candidateOnly)
@@ -252,6 +258,28 @@ public sealed class OperationDependencyCollector
                 return;
             }
 
+            case IMethodReferenceOperation methodReference:
+            {
+                var target = methodReference.Method.ReducedFrom ?? methodReference.Method;
+                if (target.ContainingType is null
+                    || target.ContainingType.TypeKind is TypeKind.Error or TypeKind.Dynamic)
+                {
+                    unresolved++;
+                    return;
+                }
+                if (HasCandidatesOnly(model, methodReference.Syntax))
+                {
+                    candidateOnly++;
+                    return;
+                }
+
+                // Taking a delegate/event handler is a reference, not a call to its runtime target.
+                // Keep new occurrences out of report-v2 and its external-type registry.
+                AddEvidence(input, owner, target.ContainingType, methodReference.Syntax,
+                    "memberAccess", methodReferences, member: target, harnessOnly: true);
+                return;
+            }
+
             case IPropertyReferenceOperation property:
                 if (property.Property.ContainingType is null)
                 {
@@ -272,7 +300,8 @@ public sealed class OperationDependencyCollector
                     property.Syntax,
                     "memberAccess",
                     results,
-                    member: property.Property);
+                    member: property.Property,
+                    access: AccessOf(property));
                 return;
 
             case IFieldReferenceOperation field:
@@ -295,7 +324,8 @@ public sealed class OperationDependencyCollector
                     field.Syntax,
                     "memberAccess",
                     results,
-                    member: field.Field);
+                    member: field.Field,
+                    access: AccessOf(field));
                 return;
 
             case IEventReferenceOperation eventReference:
@@ -312,7 +342,8 @@ public sealed class OperationDependencyCollector
                     eventReference.Syntax,
                     "memberAccess",
                     results,
-                    member: eventReference.Event);
+                    member: eventReference.Event,
+                    access: AccessOf(eventReference));
                 return;
 
             case ITypeOfOperation typeOf:
@@ -380,13 +411,45 @@ public sealed class OperationDependencyCollector
                 return;
 
             default:
-                if (operation.Type?.TypeKind == TypeKind.Error)
+                // An incompatible method group can have no typed operation but still carry candidate symbols.
+                if (operation.Kind == OperationKind.None && HasCandidatesOnly(model, operation.Syntax))
+                {
+                    candidateOnly++;
+                }
+                else if (operation.Type?.TypeKind == TypeKind.Error)
                 {
                     unresolved++;
                 }
 
                 return;
         }
+    }
+
+    /// <summary>Classifies the referenced storage, not its receiver or an index argument.</summary>
+    private static string? AccessOf(IOperation reference)
+    {
+        for (var ancestor = reference.Parent; ancestor is not null; ancestor = ancestor.Parent)
+            if (ancestor is INameOfOperation) return null;
+
+        var storage = reference;
+        // A tuple assignment writes its elements; receivers inside those elements still read.
+        while (storage.Parent is ITupleOperation or IParenthesizedOperation)
+            storage = storage.Parent;
+        return storage.Parent switch
+        {
+            ICompoundAssignmentOperation compound when compound.Target == storage => "readWrite",
+            ICoalesceAssignmentOperation coalesce when coalesce.Target == storage => "readWrite",
+            IAssignmentOperation assignment when assignment.Target == storage => "write",
+            IIncrementOrDecrementOperation increment when increment.Target == storage => "readWrite",
+            IArgumentOperation argument when argument.Value == storage => argument.Parameter?.RefKind switch
+            {
+                RefKind.Out => "write",
+                RefKind.Ref => "readWrite",
+                _ => "read"
+            },
+            IEventAssignmentOperation assignment when assignment.EventReference == storage => "write",
+            _ => "read"
+        };
     }
 
     private static bool IsWrittenConversion(IConversionOperation conversion)
@@ -429,7 +492,9 @@ public sealed class OperationDependencyCollector
         SyntaxNode? syntax,
         string kind,
         List<CollectedEvidence> results,
-        ISymbol? member = null)
+        ISymbol? member = null,
+        string? access = null,
+        bool harnessOnly = false)
     {
         if (syntax is null)
         {
@@ -448,7 +513,7 @@ public sealed class OperationDependencyCollector
             return;
         }
 
-        if (!_typesById.ContainsKey(targetTypeId))
+        if (!harnessOnly && !_typesById.ContainsKey(targetTypeId))
         {
             _externalTypes?.Register(targetTypeId, target.ToDisplayString());
         }
@@ -504,7 +569,13 @@ public sealed class OperationDependencyCollector
             SourceNamespaceId: NamespaceOf(sourceTypeId),
             TargetVariantId: TargetVariantOf(targetTypeId),
             TargetNamespaceId: NamespaceOf(targetTypeId),
-            TargetIsExternal: !_typesById.ContainsKey(targetTypeId)));
+            TargetIsExternal: !_typesById.ContainsKey(targetTypeId),
+            CanonicalSourceMemberId: _resolver.ResolveCanonicalMemberId(owner, input.VariantId),
+            CanonicalTargetMemberId: _resolver.ResolveCanonicalTargetMemberId(member, input.VariantId),
+            Access: access,
+            TargetSymbol: !_typesById.ContainsKey(targetTypeId)
+                ? _resolver.DescribeHarnessTarget(target, member, input.VariantId) : null,
+            Producer: "roslyn-operation"));
 
     }
 

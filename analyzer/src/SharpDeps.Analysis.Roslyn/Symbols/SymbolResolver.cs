@@ -11,6 +11,7 @@
 namespace SharpDeps.Analysis.Roslyn.Symbols;
 
 using Microsoft.CodeAnalysis;
+using SharpDeps.Analysis.Roslyn.Evidence;
 
 public sealed class SymbolResolver
 {
@@ -70,6 +71,60 @@ public sealed class SymbolResolver
         return DeclaringVariantOf(containingType, ownerVariantKey) is { } variantKey
             ? Core.Identity.Identity.MemberId(variantKey, key)
             : Core.Identity.Identity.MemberId(AssemblyIdentityOf(containingType), key);
+    }
+
+    /// <summary>Harness declaration owners; report-v2 ResolveMemberId remains unchanged.</summary>
+    public static ISymbol? NormalizeHarnessMember(ISymbol? member)
+    {
+        while (member is IMethodSymbol { MethodKind: MethodKind.AnonymousFunction or MethodKind.LocalFunction })
+            member = member.ContainingSymbol;
+        if (member is IMethodSymbol { AssociatedSymbol: not null } accessor)
+            member = accessor.AssociatedSymbol;
+        if (member is IMethodSymbol method)
+        {
+            method = (method.ReducedFrom ?? method).OriginalDefinition;
+            return method.PartialDefinitionPart ?? method;
+        }
+        return member is IPropertySymbol or IFieldSymbol or IEventSymbol ? member.OriginalDefinition : null;
+    }
+
+    public string? ResolveCanonicalMemberId(ISymbol? member, string ownerVariantKey)
+        => ResolveMemberId(NormalizeHarnessMember(member), ownerVariantKey);
+
+    // A lexical body owner is not the callee. Unindexed locals remain unresolved in the projection.
+    public string? ResolveCanonicalTargetMemberId(ISymbol? member, string ownerVariantKey)
+        => member is IMethodSymbol { MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction }
+            ? ResolveMemberId(member, ownerVariantKey)
+            : ResolveCanonicalMemberId(member, ownerVariantKey);
+
+    public static string HarnessSignatureOf(ISymbol symbol)
+        => string.Join("|", symbol.GetDocumentationCommentId() ?? string.Empty, symbol.ToDisplayString(
+            SymbolIndexBuilder.DisplayFormat
+                .WithMemberOptions(SymbolDisplayMemberOptions.IncludeContainingType | SymbolDisplayMemberOptions.IncludeType
+                    | SymbolDisplayMemberOptions.IncludeParameters | SymbolDisplayMemberOptions.IncludeExplicitInterface
+                    | SymbolDisplayMemberOptions.IncludeRef)
+                .WithParameterOptions(SymbolDisplayParameterOptions.IncludeType | SymbolDisplayParameterOptions.IncludeParamsRefOut)
+                .WithGenericsOptions(SymbolDisplayGenericsOptions.IncludeTypeParameters)));
+
+    public HarnessTargetSymbol? DescribeHarnessTarget(ITypeSymbol target, ISymbol? member, string ownerVariantKey)
+    {
+        var type = Normalize(target);
+        var typeId = ResolveTypeId(type, ownerVariantKey);
+        if (type is null || typeId is null) return null;
+        var normalized = NormalizeHarnessMember(member);
+        var typeSignature = SymbolIndexBuilder.TypeKeyOf(type);
+        var typeName = type.ToDisplayString(SymbolIndexBuilder.DisplayFormat);
+        var kind = normalized switch
+        {
+            IMethodSymbol { MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor } => "constructor",
+            IMethodSymbol => "method",
+            IPropertySymbol => "property",
+            IFieldSymbol => "field",
+            IEventSymbol => "event",
+            _ => "type"
+        };
+        return new(typeId, ResolveMemberId(normalized, ownerVariantKey), kind, normalized?.Name ?? typeName,
+            normalized is null ? typeSignature : HarnessSignatureOf(normalized), AssemblyIdentityOf(type), typeSignature, typeName);
     }
 
     /// <summary>True when the type is defined outside the analyzed projects.</summary>

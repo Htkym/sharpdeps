@@ -18,7 +18,13 @@ public sealed record CollectedEvidence(
     string? SourceNamespaceId,
     string? TargetVariantId,
     string? TargetNamespaceId,
-    bool TargetIsExternal)
+    bool TargetIsExternal,
+    string? CanonicalSourceMemberId = null,
+    string? CanonicalTargetMemberId = null,
+    string? Access = null,
+    HarnessTargetSymbol? TargetSymbol = null,
+    string? Producer = null,
+    IReadOnlyList<HarnessDeclarationOwner>? HarnessDeclarationOwners = null)
 {
     /// <summary>A type that depends on itself must not be reported as a cycle.</summary>
     public bool IsSelfReference => Evidence.SourceEntityId == Evidence.TargetEntityId;
@@ -52,6 +58,20 @@ public sealed record CollectedEvidence(
             TargetProjectId: TargetVariantId,
             TargetIsExternal: TargetIsExternal);
 }
+
+/// <summary>Owner-specific declaration provenance, separate from legacy type aggregation.</summary>
+public sealed record HarnessDeclarationOwner(string? SourceMemberId, bool PublicSurface);
+
+/// <summary>Normalized external identity inputs; legacy hashes are lookup keys, not signatures.</summary>
+public sealed record HarnessTargetSymbol(
+    string LegacyTypeId,
+    string? LegacyMemberId,
+    string Kind,
+    string Name,
+    string CanonicalSignature,
+    string AssemblyIdentity,
+    string TypeCanonicalSignature,
+    string TypeName);
 
 /// <summary>Effective accessibility, including the containing types.</summary>
 public static class PublicSurface

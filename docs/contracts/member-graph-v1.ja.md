@@ -1,0 +1,37 @@
+# SharpDeps member graph v1
+
+SD2-02は既存RoslynのSymbolIndexと宣言・IOperation収集結果を、SD2-01のHarnessGraphEnvelopeへ投影します。入口はSharpDeps.Analysis.Roslyn.HarnessGraphProjector.Projectです。UUID、永続project ID、loader variant keyとTFM/Configuration、snapshot ID、世代、loader coverageはownerから明示的に受け取ります。投影自体はファイルを読まず、UUIDを割り当てず、解析hostを起動せず、保存しません。旧Quick/Semantic host、report v2、provider、command/settingsは現在の入口を維持します。新CLI・保存・Query接続は後続のSD2-05以降で扱います。
+
+## 論理symbolとoccurrence
+
+型・memberの論理IDは永続project scopeと完全signatureに属し、TFMや世代を含めません。TFM等の選択条件はvariant、宣言位置はvariant別occurrenceへ分けます。論理nodeの位置を一つのTFMへ固定しません。member signatureには所属型、kind、Roslyn documentation IDまたは完全signature、arityと型signatureを含めます。partial methodはdefinitionへ正規化し、definition/implementationの原文位置をoccurrenceのDeclarationsへ保持します。
+
+accessorのownerはassociated property/eventです。lambdaとlocal functionのbody内の根拠は外側の宣言memberへ属します。型自体の宣言根拠は型をownerにします。既存indexにowner/targetがない場合は別の確定memberを推測せず、診断を数えcoverageをPartialへ下げます。暗黙のtop-level entry pointなど、既存indexがmemberを公開しない入力にもこの規則が適用されます。
+
+外部symbolはassemblyの完全identityと正規signatureで識別します。外部memberには所属する外部型nodeを付け、参照したvariantでoccurrenceを保持します。NuGet packageやprojectを推測しません。既存16桁hashはLegacyReferencesの対応keyであり、正規signatureの代わりには使いません。外部ID・edge IDもidentityVersionを含む長さ付きUTF-8のfull SHA256で生成します。
+
+同じ論理nodeが複数variantで現れてもoccurrenceと辺は別々に保持します。異なる世代で同じsource hash・位置・束縛なら同じedge IDです。file-local型の既存SymbolKeyはファイルscopeを含むため、移動・aliasによるidentity保持はSD2-04/05/09で扱います。
+
+## 根拠とread/write
+
+旧EvidenceRecordのID、kind、source/target member ID、旧集約は変更しません。CollectedEvidenceに新Harness専用の正規owner/target、Access、外部symbol metadata、producerを追加します。複数field/eventの共有された型・属性tokenには、全ownerと各PublicSurfaceをHarnessDeclarationOwnersへ保持し、新投影だけがownerごとに展開します。旧report v2は最初のownerを持つ一つの根拠として集約します。
+
+Projectへ渡す根拠は、DeclarationDependencyCollector.Collectの結果と、OperationDependencyCollector.Collectの結果の `(operation.HarnessEvidence ?? operation.Evidence)` を連結します。OperationCollectionResult.Evidenceは旧report v2用です。method referenceの追加がなければHarnessEvidenceはnullです。非nullなら旧Evidenceの全件と追加分を含むため、Evidenceを再度連結しません。method-groupのdelegate変換・delegate構築・event-handlerは静的に束縛した参照先へのreferences_memberを返し、実呼出しのcallsやevent storageのwritesと区別します。
+
+| 原文の利用 | 新Harnessの辺 |
+| --- | --- |
+| property/field等の読取り、in引数 | reads |
+| 単純代入、out引数、eventの購読更新 | writes |
+| 複合代入、increment/decrement、coalesce代入、ref引数 | 同じ原文位置を持つreadsとwrites |
+| nameof等の評価しないmember参照、method-group/delegate/event-handlerのmethod参照 | references_member |
+| 静的束縛したcall/構築・型利用 | 既存calls/constructs等の種別 |
+
+receiverやindex引数を代入先のwriteへ昇格させません。tuple代入も対象となるstorageだけをwriteとします。producerはroslyn-declarationまたはroslyn-operation、Originは既存userSource/generatedSourceを保持します。位置は原文UTF-16の半開区間で、source IDとcontent hashを一緒に返します。空・未知位置を実際の位置へ補完しません。
+
+Resolvedは与えられたcompilationの静的束縛を表します。virtual/interface dispatchのruntime実装やdynamic/reflectionの結果を確定しません。candidate/inferredはCandidate、未知confidenceはUnresolvedです。duplicate根拠のcertaintyは強めません。dynamic/unresolved/candidate-onlyの統計、owner/target欠落やsource根拠不足をDiagnosticsへ返し、loaderがCompleteWithinScopeでもこれらがあればPartialです。loaderのPartial/FailedをCompleteへ変えません。
+
+Harness DTOのSignature、Declarations、Origin、Diagnosticsは追加の任意項目です。null時にはJSONへ出力しないため、既存のSD2-01/03 JSONはこれらを付けずに使えます。旧report v2のDTO/serializer/schemaは変更しません。Graph全体の保存入力検証、source hashの再確認、trust・transaction・Query budgetはSD2-05/06の責務です。
+
+## 確認状態
+
+実収集からの投影、TFM別occurrence、原文hash、外部assembly、candidate非昇格を確認する小fixtureと、既存collectorのowner/read-write/partialテストを作成しました。検証枠待ちのため、build、テスト実行、serializer生成の型確認、実host/CLIからの保存は未実施です。静的確認と親の実差分レビューを実行結果と区別します。既存corpusのC07とQuick/report-v2互換checkを後続の限定検証で再利用します。

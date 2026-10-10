@@ -54,6 +54,11 @@ public sealed class HarnessContractTests
             [new(occurrence, symbol, variant, null)], [],
             [new(2, "ty_0123456789abcdef", symbol, occurrence)], null);
         var json = JsonSerializer.Serialize(graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope);
+        // SD2-02's optional provenance fields do not change existing contract JSON.
+        Assert.DoesNotContain("\"signature\"", json);
+        Assert.DoesNotContain("\"declarations\"", json);
+        Assert.DoesNotContain("\"diagnostics\"", json);
+        Assert.DoesNotContain("\"origin\"", json);
         var restored = HarnessGraphContract.Read(json);
         HarnessGraphContract.ValidateHeader(restored);
         Assert.Throws<JsonException>(() => HarnessGraphContract.ValidateHeader(restored with { SchemaVersion = 2 }));

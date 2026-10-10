@@ -35,7 +35,8 @@ public sealed class OperationDependencyCollectorTests : IDisposable
     private sealed record Collected(
         SymbolIndex Index,
         IReadOnlyList<CollectedEvidence> Evidence,
-        OperationCollectionStats Stats)
+        OperationCollectionStats Stats,
+        IReadOnlyList<CollectedEvidence>? HarnessEvidence = null)
     {
         public IndexedType Type(string name)
             => Index.Types.First(type => type.Name == name);
@@ -102,7 +103,7 @@ public sealed class OperationDependencyCollectorTests : IDisposable
 
         var collector = new OperationDependencyCollector(resolver, documents, index, ProfileHash);
         var result = collector.Collect([input]);
-        return new Collected(index, result.Evidence, result.Stats);
+        return new Collected(index, result.Evidence, result.Stats, result.HarnessEvidence);
     }
 
     [Fact]
@@ -394,7 +395,7 @@ public sealed class OperationDependencyCollectorTests : IDisposable
         var collected = CollectAllowingErrors(
             (
                 "Order.cs",
-                "namespace Sample;\n\npublic sealed class Order\n{\n}\n"),
+                "namespace Sample;\n\npublic sealed class Order\n{\n    public static void Save(string value) { }\n    public static void Save(System.Uri value) { }\n}\n"),
             (
                 "Service.cs",
                 """
@@ -405,6 +406,8 @@ public sealed class OperationDependencyCollectorTests : IDisposable
                     public void Run(dynamic value)
                     {
                         value.Save();
+                        Order.Save(null); // Ambiguous overload: candidates are not confirmed callees.
+                        System.Action action = Order.Save; // No matching delegate signature either.
                         MissingType other = null!;
                         other.ToString();
                     }
@@ -416,6 +419,21 @@ public sealed class OperationDependencyCollectorTests : IDisposable
 
         var order = collected.Type("Order");
         Assert.DoesNotContain(collected.Evidence, entry => entry.Evidence.TargetEntityId == order.Id);
+        Assert.DoesNotContain(collected.HarnessEvidence ?? collected.Evidence, entry => entry.Evidence.TargetEntityId == order.Id);
+
+        // Isolate an invalid delegate signature so unrelated dynamic/errors cannot hide missing diagnostics.
+        var invalidGroup = CollectAllowingErrors(("InvalidGroup.cs", """
+            public sealed class Service
+            {
+                static void Target(string value) { }
+                static void Target(System.Uri value) { }
+                public void Run() { System.Action action = Target; }
+            }
+            """));
+        Assert.True(invalidGroup.Stats.CandidateOnlySymbols > 0);
+        var targets = invalidGroup.Index.Members.Where(member => member.Name == "Target").Select(member => member.Id).ToHashSet();
+        Assert.DoesNotContain(invalidGroup.HarnessEvidence ?? invalidGroup.Evidence,
+            entry => entry.CanonicalTargetMemberId is { } id && targets.Contains(id));
     }
 
     [Fact]
@@ -481,7 +499,189 @@ public sealed class OperationDependencyCollectorTests : IDisposable
         // The call inside the lambda and the one inside the local function are both
         // attributed to the enclosing member.
         Assert.Equal(2, saves.Length);
-        Assert.All(saves, entry => Assert.NotNull(entry.Evidence.SourceMemberId));
+        var owner = Assert.Single(collected.Index.Members, member => member.TypeId == service.Id && member.Name == "Run");
+        Assert.All(saves, entry =>
+        {
+            Assert.Equal(owner.Id, entry.Evidence.SourceMemberId);
+            Assert.Equal(owner.Id, entry.CanonicalSourceMemberId);
+            Assert.Equal("roslyn-operation", entry.Producer);
+        });
+        var localCall = Assert.Single(collected.From("Service", "calls"), entry => !entry.TargetIsExternal && entry.Evidence.TargetMemberId is not null
+            && !collected.Index.Members.Any(member => member.Id == entry.Evidence.TargetMemberId));
+        Assert.Equal(owner.Id, localCall.CanonicalSourceMemberId);
+        Assert.Equal(localCall.Evidence.TargetMemberId, localCall.CanonicalTargetMemberId);
+        Assert.NotEqual(owner.Id, localCall.CanonicalTargetMemberId);
+    }
+
+    [Fact]
+    public void KeepsMethodGroupsAndEventHandlersAsHarnessReferencesWithoutGuessingDelegateCallees()
+    {
+        var collected = Collect(("References.cs", """
+            namespace Sample;
+            public sealed class Service
+            {
+                public event System.Action Changed;
+                public void Run()
+                {
+                    System.Action action = Target;
+                    Changed += Target;
+                    Changed -= Target;
+                    System.Action<string> external = System.Console.WriteLine;
+                    void Local() { }
+                    System.Action local = Local;
+                    action();
+                    local();
+                }
+                static void Target() { }
+            }
+            """));
+        var harness = Assert.IsAssignableFrom<IReadOnlyList<CollectedEvidence>>(collected.HarnessEvidence);
+        var references = harness.Except(collected.Evidence).ToArray();
+        Assert.Equal(5, references.Length);
+        Assert.Equal(collected.Evidence.Count + references.Length, harness.Count);
+        Assert.All(collected.Evidence, entry => Assert.Contains(entry, harness));
+        Assert.True(Assert.IsAssignableFrom<ICollection<CollectedEvidence>>(harness).IsReadOnly);
+        var run = Assert.Single(collected.Index.Members, member => member.Name == "Run");
+        var target = Assert.Single(collected.Index.Members, member => member.Name == "Target");
+        Assert.Equal(3, references.Count(entry => entry.CanonicalTargetMemberId == target.Id));
+        Assert.All(references, entry =>
+        {
+            Assert.Equal("memberAccess", entry.Evidence.Kind);
+            Assert.Null(entry.Access);
+            Assert.Equal(run.Id, entry.CanonicalSourceMemberId);
+            Assert.Equal("roslyn-operation", entry.Producer);
+        });
+        var external = Assert.Single(references, entry => entry.TargetIsExternal);
+        Assert.Equal("WriteLine", external.TargetSymbol!.Name);
+        Assert.DoesNotContain(collected.Evidence, entry => entry.Evidence.TargetTypeId == external.Evidence.TargetTypeId);
+        var local = Assert.Single(references, entry => !entry.TargetIsExternal && entry.CanonicalTargetMemberId != target.Id);
+        Assert.Equal(local.Evidence.TargetMemberId, local.CanonicalTargetMemberId);
+        Assert.NotEqual(run.Id, local.CanonicalTargetMemberId);
+        // Delegate invocation binds to Invoke; assigning Target/Local does not prove its runtime callee.
+        var calls = harness.Where(entry => entry.Evidence.Kind == "calls").ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.All(calls, entry => Assert.Equal("Invoke", entry.TargetSymbol!.Name));
+    }
+
+    [Fact]
+    public void NormalizesAccessorAndPartialOwnersWithoutChangingLegacyEvidence()
+    {
+        var collected = Collect(
+            ("Service.cs", """
+                namespace Sample;
+                public sealed class Order { public void Save() { } }
+                public sealed partial class Service
+                {
+                    private readonly Order order = new();
+                    public int Count { get { order.Save(); return 1; } set { order.Save(); } }
+                    public event System.Action Changed { add { order.Save(); } remove { order.Save(); } }
+                    partial void Work(Order order);
+                    public void Run(Order order) => Work(order);
+                }
+                """),
+            ("Service.Work.cs", """
+                namespace Sample;
+                public sealed partial class Service { partial void Work(Order order) { order.Save(); } }
+                """));
+        var members = collected.Index.Members.Where(member => member.TypeId == collected.Type("Service").Id).ToArray();
+        var property = Assert.Single(members, member => member.Name == "Count");
+        var @event = Assert.Single(members, member => member.Name == "Changed");
+        var partial = Assert.Single(members, member => member.Name == "Work");
+        var saves = collected.To(collected.Type("Order"), "calls").ToArray();
+        Assert.Equal(5, saves.Length);
+        Assert.Equal(2, saves.Count(entry => entry.CanonicalSourceMemberId == property.Id));
+        Assert.Equal(2, saves.Count(entry => entry.CanonicalSourceMemberId == @event.Id));
+        Assert.Single(saves, entry => entry.CanonicalSourceMemberId == partial.Id);
+        Assert.All(saves.Where(entry => entry.CanonicalSourceMemberId != partial.Id), entry =>
+            Assert.NotEqual(entry.Evidence.SourceMemberId, entry.CanonicalSourceMemberId));
+        var call = Assert.Single(collected.From("Service", "calls"), entry => entry.CanonicalTargetMemberId == partial.Id);
+        Assert.Equal(partial.Id, call.Evidence.TargetMemberId);
+        Assert.Equal(2, partial.HarnessDeclarations!.Count);
+    }
+
+    [Fact]
+    public void ClassifiesStorageAccessWithoutWritingReceiversOrReadingNameof()
+    {
+        var collected = Collect(("Access.cs", """
+            namespace Sample;
+            public sealed class Node
+            {
+                public int Read, Write, Compound, Increment, Ref, Out, In, NameOnly, TupleLeft, TupleRight;
+                public int Property { get; set; }
+                public object Optional;
+                public Node Receiver => this;
+                public event System.Action Changed;
+            }
+            public sealed class Service
+            {
+                public void Run(Node node)
+                {
+                    _ = node.Read;
+                    node.Write = 1;
+                    node.Compound += 1;
+                    node.Increment++;
+                    Ref(ref node.Ref);
+                    Out(out node.Out);
+                    In(in node.In);
+                    node.Changed += Handler;
+                    node.Changed -= Handler;
+                    node.Property = 2;
+                    node.Receiver.Write = 3;
+                    _ = nameof(node.NameOnly);
+                    (node.TupleLeft, node.TupleRight) = (1, 2);
+                    node.Optional ??= new object();
+                }
+                static void Ref(ref int value) { }
+                static void Out(out int value) { value = 0; }
+                static void In(in int value) { }
+                static void Handler() { }
+            }
+            """));
+        var expected = new Dictionary<string, string?>
+        {
+            ["Read"] = "read", ["Write"] = "write", ["Compound"] = "readWrite",
+            ["Increment"] = "readWrite", ["Ref"] = "readWrite", ["Out"] = "write", ["In"] = "read",
+            ["Changed"] = "write", ["Property"] = "write", ["Receiver"] = "read", ["NameOnly"] = null,
+            ["TupleLeft"] = "write", ["TupleRight"] = "write", ["Optional"] = "readWrite"
+        };
+        foreach (var (name, access) in expected)
+        {
+            var member = Assert.Single(collected.Index.Members, member => member.TypeId == collected.Type("Node").Id && member.Name == name);
+            var entries = collected.From("Service", "memberAccess").Where(entry => entry.CanonicalTargetMemberId == member.Id).ToArray();
+            Assert.Equal(name is "Write" or "Changed" ? 2 : 1, entries.Length);
+            Assert.All(entries, entry =>
+            {
+                Assert.Equal(access, entry.Access);
+                Assert.Equal(member.Id, entry.Evidence.TargetMemberId);
+                Assert.Null(entry.TargetSymbol);
+            });
+        }
+    }
+
+    [Fact]
+    public void RetainsExternalOverloadSignaturesInsteadOfUsingOpaqueLegacyIds()
+    {
+        var collected = Collect(("External.cs", """
+            namespace Sample;
+            public sealed class Service
+            {
+                public void Run() { System.Console.WriteLine(1); System.Console.WriteLine("text"); }
+            }
+            """));
+        var calls = collected.From("Service", "calls").ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.All(calls, entry =>
+        {
+            Assert.True(entry.TargetIsExternal);
+            var symbol = Assert.IsType<HarnessTargetSymbol>(entry.TargetSymbol);
+            Assert.Equal(entry.Evidence.TargetTypeId, symbol.LegacyTypeId);
+            Assert.Equal(entry.CanonicalTargetMemberId, symbol.LegacyMemberId);
+            Assert.Equal("method", symbol.Kind);
+            Assert.Equal("WriteLine", symbol.Name);
+            Assert.Equal("doc:T:System.Console", symbol.TypeCanonicalSignature);
+            Assert.Contains("Version=", symbol.AssemblyIdentity, StringComparison.Ordinal);
+        });
+        Assert.Equal(2, calls.Select(entry => entry.TargetSymbol!.CanonicalSignature).Distinct().Count());
     }
 
     [Fact]

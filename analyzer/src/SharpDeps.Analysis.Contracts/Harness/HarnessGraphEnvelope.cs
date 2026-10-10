@@ -64,23 +64,29 @@ public readonly record struct HarnessRawSpan
 public sealed record HarnessLocation(string SourceId, string? SourceVersion, string? ContentHash, HarnessRawSpan? RawSpan);
 public sealed record HarnessVariant(string Id, string ProjectId, string TargetFramework, string Configuration,
     string? Platform, string? RuntimeIdentifier, string? AnalysisFingerprint);
-public sealed record HarnessNode(string Id, HarnessNodeKind Kind, string Name, string? ParentId, HarnessLocation? Location);
-public sealed record HarnessSymbolOccurrence(string Id, string LogicalSymbolId, string VariantId, HarnessLocation? Location);
+public sealed record HarnessNode(string Id, HarnessNodeKind Kind, string Name, string? ParentId, HarnessLocation? Location,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Signature = null);
+public sealed record HarnessSymbolOccurrence(string Id, string LogicalSymbolId, string VariantId, HarnessLocation? Location,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<HarnessLocation>? Declarations = null);
 public sealed record HarnessEdge(string Id, string SourceNodeId, string TargetNodeId,
     string? SourceOccurrenceId, string? TargetOccurrenceId, string? VariantId,
-    string Kind, HarnessCertainty Certainty, string Producer, HarnessLocation? Evidence);
+    string Kind, HarnessCertainty Certainty, string Producer, HarnessLocation? Evidence,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Origin = null);
 public sealed record HarnessLegacyReference(int SchemaVersion, string LegacyId, string NodeId, string? OccurrenceId);
 public sealed record HarnessMarkdownIdentity(string ComponentVersion, string CanonicalSourceHash,
     string ParserVersion, string ContractVersion, string ProfileId, string OptionsHash);
 
 // A new envelope; AnalysisSnapshot/report-v2 and their serializer/schema stay unchanged.
 // Producers retain separate occurrences/variant edges. Candidate evidence is never promoted to Resolved.
+public sealed record HarnessGraphDiagnostic(string Code, int Count);
+
 public sealed record HarnessGraphEnvelope(
     string Format, int SchemaVersion, string IdentityVersion, string WorkspaceId, string SnapshotId,
     long Generation, HarnessCoverage Coverage,
     IReadOnlyList<HarnessVariant> Variants, IReadOnlyList<HarnessNode> Nodes,
     IReadOnlyList<HarnessSymbolOccurrence> SymbolOccurrences, IReadOnlyList<HarnessEdge> Edges,
-    IReadOnlyList<HarnessLegacyReference> LegacyReferences, HarnessMarkdownIdentity? Markdown);
+    IReadOnlyList<HarnessLegacyReference> LegacyReferences, HarnessMarkdownIdentity? Markdown,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<HarnessGraphDiagnostic>? Diagnostics = null);
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     UseStringEnumConverter = true, RespectRequiredConstructorParameters = true)]

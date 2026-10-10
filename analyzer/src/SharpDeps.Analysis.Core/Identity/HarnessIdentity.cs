@@ -36,6 +36,18 @@ public static class HarnessIdentity
     public static string SymbolOccurrenceId(Guid workspaceUuid, string logicalSymbolId, string variantId)
         => Hash("hocc", WorkspaceId(workspaceUuid), RequireId(logicalSymbolId, "hsym"), RequireId(variantId, "hvar"));
 
+    // External symbols belong to an assembly identity, never to a guessed project/package.
+    public static string ExternalSymbolId(Guid workspaceUuid, string assemblyIdentity, string symbolKind, string canonicalSignature)
+        => Hash("hsym", WorkspaceId(workspaceUuid), "external", Required(assemblyIdentity),
+            Required(symbolKind), Required(canonicalSignature));
+
+    public static string EdgeId(Guid workspaceUuid, string sourceOccurrenceId, string targetOccurrenceId,
+        string kind, string sourceId, string contentHash, HarnessRawSpan? span, string producer)
+        => Hash("hedg", WorkspaceId(workspaceUuid), RequireId(sourceOccurrenceId, "hocc"),
+            RequireId(targetOccurrenceId, "hocc"), Required(kind), Required(producer), Required(sourceId), contentHash,
+            span?.Start.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            span?.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
     // UUID allocation and persistence belong to the trusted storage owner, not this pure helper.
     public static string DocumentId(Guid workspaceUuid, Guid documentUuid)
     {
