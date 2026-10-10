@@ -133,7 +133,12 @@ describe('review regressions through the published analyzers', () => {
       'release/All.slnx',
       '<Solution><Project Path="A/A.csproj"/><Project Path="B/B.csproj"/></Solution>'
     );
-    execFileSync(dotnet, ['restore', solution], { encoding: 'utf8', timeout: 60000 });
+    // Preserve restore diagnostics in CI; the JSON reporter omits captured child-process output.
+    execFileSync(dotnet, ['restore', solution], {
+      encoding: 'utf8',
+      timeout: 60000,
+      stdio: 'inherit'
+    });
     const { snapshot, evidence } = run(solution, 'semantic');
     const evaluated = snapshot.relations.filter(
       (relation) => relation.basis === 'projectEvaluated'
