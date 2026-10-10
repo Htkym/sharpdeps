@@ -73,6 +73,25 @@ export interface EntitySummary {
   analysisLimitations?: string[];
   dependencyCount?: number;
   dependentCount?: number;
+  certainty?: 'Resolved' | 'Candidate' | 'Unresolved';
+}
+
+/** Saved Query bounds describe the returned page, never a complete legacy report. */
+export interface QueryResultMetadata {
+  provider: 'savedIndex';
+  workspaceId: string;
+  snapshotId: string;
+  generation: number;
+  variantIds: string[];
+  coverage: 'CompleteWithinScope' | 'Partial' | 'Failed';
+  freshness: string;
+  truncated: boolean;
+  truncationReasons: string[];
+  diagnostics: { code: string; message: string }[];
+  returnedCount: number;
+  totalKind: 'returned';
+  candidateCount: number;
+  unresolvedCount: number;
 }
 
 export interface ProjectionEdge {
@@ -83,6 +102,10 @@ export interface ProjectionEdge {
   kinds: string[];
   evidenceCount: number;
   inCycle: boolean;
+  certainty?: 'Resolved' | 'Candidate' | 'Unresolved';
+  sourceOccurrenceId?: string | null;
+  targetOccurrenceId?: string | null;
+  variantId?: string | null;
   generatedEvidenceCount?: number;
   publicSurfaceEvidenceCount?: number;
   /**
@@ -120,6 +143,7 @@ export interface Projection {
   totalNodeCount: number;
   totalEdgeCount: number;
   truncated: boolean;
+  queryMetadata?: QueryResultMetadata;
   includedOutOfFilterIds?: string[];
   /**
    * SCC groups and their verified cycles, sent with the projection so the cycle view has
@@ -242,6 +266,7 @@ export type HostToWebviewMessage =
       target?: { name: string; relativePath: string };
       profile?: ProfileRequest;
       variantOptions?: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'analysisFailed';
@@ -271,6 +296,7 @@ export type HostToWebviewMessage =
       total: number;
       items: EntitySummary[];
       nextCursor?: string | null;
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'details';
@@ -279,6 +305,7 @@ export type HostToWebviewMessage =
       entity: Record<string, unknown>;
       dependencies?: EntitySummary[];
       dependents?: EntitySummary[];
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'evidencePage';
@@ -288,6 +315,7 @@ export type HostToWebviewMessage =
       total: number;
       items: Record<string, unknown>[];
       nextCursor?: string | null;
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'cycleWitness';
@@ -479,7 +507,8 @@ const HOST_RULES: Record<string, MessageRule> = {
       capabilities: 'object',
       target: 'object',
       profile: 'profile',
-      variantOptions: 'array'
+      variantOptions: 'array',
+      queryMetadata: 'object'
     }
   },
   analysisFailed: {
@@ -497,11 +526,11 @@ const HOST_RULES: Record<string, MessageRule> = {
       total: 'positiveInteger',
       items: 'array'
     },
-    optional: { nextCursor: 'cursor' }
+    optional: { nextCursor: 'cursor', queryMetadata: 'object' }
   },
   details: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entity: 'object' },
-    optional: { dependencies: 'array', dependents: 'array' }
+    optional: { dependencies: 'array', dependents: 'array', queryMetadata: 'object' }
   },
   evidencePage: {
     required: {
@@ -511,7 +540,7 @@ const HOST_RULES: Record<string, MessageRule> = {
       total: 'positiveInteger',
       items: 'array'
     },
-    optional: { nextCursor: 'cursor' }
+    optional: { nextCursor: 'cursor', queryMetadata: 'object' }
   },
   cycleWitness: {
     required: {

@@ -32,6 +32,14 @@ const quickOutDir = path.join(analyzerDir, 'bin', 'quick');
 const semanticOutDir = path.join(analyzerDir, 'bin', 'semantic');
 const quickDll = path.join(quickOutDir, 'code-map.dll');
 const semanticDll = path.join(semanticOutDir, 'sharpdeps-semantic-host.dll');
+const queryProject = path.join(
+  analyzerDir,
+  'src',
+  'SharpDeps.QueryHost',
+  'SharpDeps.QueryHost.csproj'
+);
+const queryOutDir = path.join(analyzerDir, 'bin', 'query');
+const queryDll = path.join(queryOutDir, 'sharpdeps-query-host.dll');
 
 function run(command, args, cwd) {
   console.log(`> ${command} ${args.join(' ')}`);
@@ -69,6 +77,15 @@ function main() {
   }
 
   console.log(`Semantic analyzer host built: ${semanticDll}`);
+  // A separate runtime-only reader host: no Roslyn, CLI PackAsTool, SDK or writer.
+  if (path.relative(analyzerDir, queryOutDir) !== path.join('bin', 'query'))
+    throw new Error('Query output directory escaped the analyzer directory.');
+  fs.rmSync(queryOutDir, { recursive: true, force: true });
+  if (!publish(queryProject, queryOutDir) || !fs.existsSync(queryDll)) {
+    console.error('Failed to build the saved Query host.');
+    process.exit(1);
+  }
+  console.log(`Saved Query host built: ${queryDll}`);
 }
 
 main();

@@ -136,6 +136,20 @@
           "default": "quick",
           "markdownDescription": "Analysis mode. Quick works without the .NET SDK; Semantic uses MSBuild and Roslyn and is only used when selected explicitly."
         },
+        "sharpdeps.resultProvider": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "savedIndex"
+          ],
+          "default": "legacy",
+          "markdownDescription": "Result provider for Show/Refresh Dependency Map. Legacy keeps Quick/Semantic analysis. SavedIndex reads an existing .sharpdeps index with the shared Query engine; it never analyzes or updates it. An absent index can display a retained legacy report from the same workspace, read-only."
+        },
+        "sharpdeps.savedIndexVariant": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Exact saved hvar_ ID for the savedIndex provider. Required when the saved index contains multiple variants. Blank selects a variant only when exactly one exists; variants are never combined implicitly."
+        },
         "sharpdeps.analysisTimeoutSeconds": {
           "type": "number",
           "default": 180,

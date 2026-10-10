@@ -9,6 +9,7 @@
     <Project Path="src/SharpDeps.Index/SharpDeps.Index.csproj" />
     <Project Path="src/SharpDeps.Query/SharpDeps.Query.csproj" />
     <Project Path="src/SharpDeps.Cli/SharpDeps.Cli.csproj" />
+    <Project Path="src/SharpDeps.QueryHost/SharpDeps.QueryHost.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />

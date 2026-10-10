@@ -11,6 +11,7 @@ import type {
   Filters,
   Projection,
   ProjectionCycleGroup,
+  QueryResultMetadata,
   Scope
 } from '../../src/view/protocolV2';
 import type { Capabilities, ProfileRequest } from '../../src/view/protocolV2';
@@ -69,6 +70,8 @@ export interface ViewState {
   status: AnalysisStatus;
   statusMessage: string;
   analysisId?: string;
+  /** Metadata of the current saved-index session; never restored from persisted view state. */
+  queryMetadata?: QueryResultMetadata;
   progress?: { stage: AnalysisStage; loaded?: number; analyzed?: number; elapsedMs: number };
   coverage?: {
     discovered: number;
@@ -87,6 +90,7 @@ export interface ViewState {
     entity?: EntitySummary;
     dependencies: EntitySummary[];
     dependents: EntitySummary[];
+    queryMetadata?: QueryResultMetadata;
   } | null;
   evidence: {
     relationId: string;
@@ -95,6 +99,7 @@ export interface ViewState {
     nextCursor?: string | null;
     /** True while the next page is on its way. */
     pending: boolean;
+    queryMetadata?: QueryResultMetadata;
   } | null;
   /** Restored camera of the graph view; null until the view reports one. */
   camera: { zoom: number; scrollLeft: number; scrollTop: number } | null;
@@ -107,8 +112,22 @@ export interface ViewState {
   tableSort: SortState;
   tablePage: number;
   /** Full-index search results, kept separately from the display projection. */
-  searchResults: { query: string; items: EntitySummary[]; total: number; pending: boolean };
-  tree: Record<string, { items: EntitySummary[]; total: number; nextCursor?: string }>;
+  searchResults: {
+    query: string;
+    items: EntitySummary[];
+    total: number;
+    pending: boolean;
+    queryMetadata?: QueryResultMetadata;
+  };
+  tree: Record<
+    string,
+    {
+      items: EntitySummary[];
+      total: number;
+      nextCursor?: string;
+      queryMetadata?: QueryResultMetadata;
+    }
+  >;
   /** Entities the user chose to show even though filters exclude them. */
   temporaryDisplayIds: string[];
 }
@@ -181,6 +200,7 @@ export type ViewAction =
       profile?: ProfileRequest;
       variantOptions?: ViewState['variantOptions'];
       capabilities?: Capabilities;
+      queryMetadata?: QueryResultMetadata;
     }
   | { type: 'analysisFailed'; analysisId?: string; message: string; cancelled?: boolean }
   | { type: 'analysisStale'; message: string }
@@ -191,6 +211,7 @@ export type ViewAction =
       entity?: EntitySummary;
       dependencies: EntitySummary[];
       dependents: EntitySummary[];
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'evidenceReceived';
@@ -200,6 +221,7 @@ export type ViewAction =
       nextCursor?: string | null;
       /** True when the answer continues the current list instead of replacing it. */
       append?: boolean;
+      queryMetadata?: QueryResultMetadata;
     }
   | { type: 'evidencePageRequested' }
   | {
@@ -222,8 +244,15 @@ export type ViewAction =
       total: number;
       nextCursor?: string;
       append?: boolean;
+      queryMetadata?: QueryResultMetadata;
     }
-  | { type: 'searchResultsReceived'; query: string; items: EntitySummary[]; total: number }
+  | {
+      type: 'searchResultsReceived';
+      query: string;
+      items: EntitySummary[];
+      total: number;
+      queryMetadata?: QueryResultMetadata;
+    }
   | { type: 'searchCleared' }
   | { type: 'tableSortChanged'; key: SortState['key'] }
   | { type: 'tablePageChanged'; page: number }
@@ -261,6 +290,20 @@ function mergeEvidence(
 }
 
 export function viewReducer(state: ViewState, action: ViewAction): ViewState {
+  if (
+    state.queryMetadata &&
+    ((action.type === 'granularityChanged' && action.granularity !== 'type') ||
+      ((action.type === 'scopeChanged' || action.type === 'revealRequested') &&
+        ((action.granularity !== undefined && action.granularity !== 'type') ||
+          (action.scope && !['root', 'dependencies', 'dependents'].includes(action.scope.kind)))))
+  )
+    return {
+      ...state,
+      error: {
+        code: 'query.unsupportedOperation',
+        message: 'Saved index supports symbol views and bounded dependencies/dependents only.'
+      }
+    };
   switch (action.type) {
     case 'treeRequested':
       return state;
@@ -274,9 +317,11 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
               ? [...(state.tree[action.parentId]?.items ?? []), ...action.items]
               : action.items,
             total: action.total,
-            nextCursor: action.nextCursor
+            nextCursor: action.nextCursor,
+            ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
           }
-        }
+        },
+        queryMetadata: action.queryMetadata ?? state.queryMetadata
       };
     case 'layoutChanged':
       return { ...state, layout: { ...state.layout, ...action.layout } };
@@ -307,6 +352,15 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
               history: [],
               temporaryDisplayIds: [],
               camera: null,
+              queryMetadata: undefined,
+              ...(state.queryMetadata
+                ? {
+                    analysisId: undefined,
+                    searchResults: INITIAL_STATE.searchResults,
+                    tree: {},
+                    cycles: []
+                  }
+                : {}),
               profile: {
                 configuration: state.profile.configuration,
                 platform: state.profile.platform
@@ -349,6 +403,24 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return {
         ...state,
         analysisId: action.analysisId,
+        queryMetadata: action.queryMetadata,
+        ...((action.queryMetadata || state.queryMetadata) && action.analysisId !== state.analysisId
+          ? {
+              projection: null,
+              projectionTruncated: false,
+              details: null,
+              evidence: null,
+              selection: {},
+              scope: INITIAL_STATE.scope,
+              history: [],
+              temporaryDisplayIds: [],
+              camera: null,
+              searchResults: INITIAL_STATE.searchResults,
+              cycles: [],
+              tableSort: DEFAULT_SORT,
+              tablePage: 0
+            }
+          : {}),
         tree: action.analysisId === state.analysisId ? state.tree : {},
         runningAnalysisId: undefined,
         mode: action.mode ?? state.mode,
@@ -363,10 +435,21 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         profile: { ...state.profile, ...action.profile },
         variantOptions: action.variantOptions ?? state.variantOptions,
         capabilities: action.capabilities ?? state.capabilities,
-        granularity:
-          action.mode === 'quick' && state.granularity === 'type' ? 'project' : state.granularity,
-        status: action.completeness === 'completeWithinScope' ? 'complete' : action.completeness,
-        statusMessage: completionMessage(action),
+        granularity: action.queryMetadata
+          ? 'type'
+          : action.mode === 'quick' && state.granularity === 'type'
+            ? 'project'
+            : state.granularity,
+        status: action.queryMetadata
+          ? action.queryMetadata.coverage === 'Failed'
+            ? 'failed'
+            : 'partial'
+          : action.completeness === 'completeWithinScope'
+            ? 'complete'
+            : action.completeness,
+        statusMessage: action.queryMetadata
+          ? 'Saved index loaded (display subset)'
+          : completionMessage(action),
         coverage: action.coverage,
         limitations: action.limitations ?? state.limitations,
         progress: undefined,
@@ -390,8 +473,9 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return {
         ...state,
         projection: action.projection,
+        queryMetadata: action.projection.queryMetadata ?? state.queryMetadata,
         projectionTruncated: action.projection.truncated,
-        cycles: action.projection.cycleGroups ?? [],
+        cycles: action.projection.queryMetadata ? [] : (action.projection.cycleGroups ?? []),
         details: state.details,
         evidence: state.evidence
       };
@@ -403,8 +487,10 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
           entityId: action.entityId,
           entity: action.entity,
           dependencies: action.dependencies,
-          dependents: action.dependents
+          dependents: action.dependents,
+          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
         },
+        queryMetadata: action.queryMetadata ?? state.queryMetadata,
         inspectorOpen: true
       };
 
@@ -419,8 +505,10 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
               ? mergeEvidence(state.evidence.items, action.items)
               : action.items,
           nextCursor: action.nextCursor,
-          pending: false
+          pending: false,
+          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
         },
+        queryMetadata: action.queryMetadata ?? state.queryMetadata,
         inspectorOpen: true
       };
 
@@ -504,8 +592,10 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
           query: action.query,
           items: action.items,
           total: action.total,
-          pending: false
-        }
+          pending: false,
+          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
+        },
+        queryMetadata: action.queryMetadata ?? state.queryMetadata
       };
 
     case 'searchCleared':
@@ -569,7 +659,11 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return { ...state, error: { code: action.code, message: action.message } };
 
     case 'stateRestored':
-      return sanitizeRestoredState({ ...state, ...action.state });
+      return sanitizeRestoredState({
+        ...state,
+        ...action.state,
+        queryMetadata: state.queryMetadata
+      });
 
     default:
       return state;
@@ -614,14 +708,20 @@ function back(state: ViewState): ViewState {
 
 /** Restored state is untrusted: keep the safe defaults for anything unexpected. */
 function sanitizeRestoredState(state: ViewState): ViewState {
-  const granularity: Granularity = ['project', 'namespace', 'type'].includes(state.granularity)
-    ? state.granularity
-    : INITIAL_STATE.granularity;
+  const granularity: Granularity = state.queryMetadata
+    ? 'type'
+    : ['project', 'namespace', 'type'].includes(state.granularity)
+      ? state.granularity
+      : INITIAL_STATE.granularity;
   const viewKind: ViewKind = state.viewKind === 'table' ? 'table' : 'graph';
 
   return {
     ...state,
     granularity,
+    scope:
+      state.queryMetadata && !['root', 'dependencies', 'dependents'].includes(state.scope?.kind)
+        ? INITIAL_STATE.scope
+        : state.scope,
     viewKind,
     language: state.language === 'ja' ? 'ja' : 'en',
     paneWidths: {
@@ -772,6 +872,17 @@ export function selectBreadcrumbs(state: ViewState): string[] {
 export function selectStatusFooter(state: ViewState): string {
   const tr = translator(state.language);
   const visible = selectVisibleData(state);
+  const metadata = state.projection?.queryMetadata ?? state.queryMetadata;
+  if (metadata)
+    return [
+      queryResultSummary(metadata, state.language),
+      tr(
+        '{0} node(s), {1} relation(s) shown from the returned graph',
+        visible.nodes.length,
+        visible.edges.length
+      ),
+      ...(state.status === 'stale' ? [tr('stale result')] : [])
+    ].join(' · ');
   const parts = [tr('Showing {0}/{1} node(s)', visible.nodes.length, visible.totalNodeCount)];
   parts.push(tr('{0}/{1} relation(s)', visible.edges.length, visible.totalEdgeCount));
   parts.push(tr((state.resultMode ?? state.mode) === 'quick' ? 'Quick' : 'Semantic'));
@@ -787,6 +898,28 @@ export function selectStatusFooter(state: ViewState): string {
   }
 
   return parts.join(' · ');
+}
+
+/** Returned counts are never presented as total hits or proof of full graph coverage. */
+export function queryResultSummary(
+  metadata: QueryResultMetadata,
+  language: Language = 'en'
+): string {
+  const tr = translator(language);
+  return [
+    tr('Saved index'),
+    tr('Generation {0}', metadata.generation),
+    tr('Variants: {0}', metadata.variantIds.join(', ') || tr('unknown')),
+    tr('Coverage: {0}', metadata.coverage),
+    tr('Freshness: {0}', metadata.freshness),
+    tr('{0} item(s) returned', metadata.returnedCount),
+    tr('{0} candidate(s) · {1} unresolved', metadata.candidateCount, metadata.unresolvedCount),
+    tr(metadata.truncated ? 'truncated result' : 'query not truncated'),
+    ...(metadata.truncationReasons.length ? [metadata.truncationReasons.join(', ')] : []),
+    ...(metadata.diagnostics.length
+      ? [metadata.diagnostics.map((issue) => issue.code).join(', ')]
+      : [])
+  ].join(' · ');
 }
 
 /** Translate generated status text when rendering, without restarting analysis. */

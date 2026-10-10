@@ -8,12 +8,15 @@ import { resolveAnalysisTarget } from './solution/resolveTarget';
 import {
   ensureDotnet,
   ensureSemanticDotnet,
+  ensureSavedQueryDotnet,
   DotnetNotAvailableError
 } from './runtime/ensureDotnet';
 import { AnalyzerError, locateAnalyzer } from './analyzer/runAnalyzer';
 import { AnalysisController, type AnalysisStage } from './analyzer/analysisController';
 import { ReportStore, ReportStoreError } from './analyzer/reportStore';
 import { createReportBridge } from './analyzer/reportBridge';
+import { QueryClient, QueryClientError } from './analyzer/queryClient';
+import { SavedQueryProvider } from './analyzer/queryProvider';
 import type { CodeMapReport } from './analyzer/types';
 import { CodeMapPanel } from './view/codeMapPanel';
 import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
@@ -68,7 +71,10 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
       maxEdges: config.get<number>('maxEdges', 200)
     };
   };
-  const bridge = createReportBridge(store, { projectionLimits });
+  const legacyBridge = createReportBridge(store, { projectionLimits });
+  let savedProvider: SavedQueryProvider | undefined;
+  let pendingSavedClient: QueryClient | undefined;
+  const bridge = { handle: (message: unknown) => (savedProvider ?? legacyBridge).handle(message) };
   context.subscriptions.push(output, diagnostics);
 
   // Generated code is opened read-only from the analysis result (SD-011): the provider
@@ -148,10 +154,15 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   context.subscriptions.push({
     dispose: () => {
       requestGeneration++;
+      savedProvider?.dispose();
+      pendingSavedClient?.dispose();
       void controller.dispose();
     }
   });
-  const rootDirectory = (analysisId = store.currentAnalysisId): string | undefined => {
+  const rootDirectory = (
+    analysisId = savedProvider?.analysisId ?? store.currentAnalysisId
+  ): string | undefined => {
+    if (savedProvider && savedProvider.analysisId === analysisId) return savedProvider.root;
     const target = analysisId ? store.getTargetPath(analysisId) : undefined;
     return target ? path.dirname(target) : undefined;
   };
@@ -180,9 +191,28 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   function cancelAnalysis(): void {
     requestGeneration++;
     controller.cancel('user');
+    closePendingSavedClient();
+    if (savedProvider) {
+      CodeMapPanel.currentPanel?.notifyFailure(
+        savedProvider.analysisId,
+        'Saved Query stopped.',
+        true
+      );
+      closeSavedProvider();
+    }
     if (activeAnalysisId)
       CodeMapPanel.currentPanel?.notifyFailure(activeAnalysisId, 'Analysis stopped.', true);
     activeAnalysisId = undefined;
+  }
+
+  function closeSavedProvider(): void {
+    savedProvider?.dispose();
+    savedProvider = undefined;
+  }
+
+  function closePendingSavedClient(): void {
+    pendingSavedClient?.dispose();
+    pendingSavedClient = undefined;
   }
 
   function panelHost(): Parameters<typeof CodeMapPanel.show>[1] {
@@ -192,6 +222,11 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
       output,
       rootDirectory,
       projectionLimits,
+      currentAnalysisId: () => savedProvider?.analysisId ?? store.currentAnalysisId,
+      savedAnalysisState: (analysisId) =>
+        savedProvider?.analysisId === analysisId
+          ? savedProvider.analysisState(path.basename(savedProvider.root))
+          : undefined,
       targetName: () =>
         store.currentAnalysisId
           ? path.basename(store.getTargetPath(store.currentAnalysisId) ?? '')
@@ -200,7 +235,10 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
       loadViewState: () => context.workspaceState.get<Record<string, unknown>>(VIEW_STATE_KEY),
       onAnalyze: (mode, profile) => void runAndShow(lastTarget, mode, profile),
       onCancel: cancelAnalysis,
-      onDispose: cancelAnalysis
+      onDispose: () => {
+        cancelAnalysis();
+        closeSavedProvider();
+      }
     };
   }
   context.subscriptions.push(
@@ -304,6 +342,12 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   );
 
   async function showTypeFromEditor(kind: 'dependencies' | 'dependents'): Promise<void> {
+    if (savedProvider) {
+      void vscode.window.showInformationMessage(
+        'SharpDeps: Saved index navigation uses exact search results. Cursor-to-type declarations require the legacy Semantic provider.'
+      );
+      return;
+    }
     const resolution = await resolveTypeAtCursor(store, rootDirectory(), output);
     if (!resolution.ok) {
       // No result, Quick only, or no declaration index: say why and offer to analyze.
@@ -339,7 +383,18 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     requestedMode?: 'quick' | 'semantic',
     profile: ProfileRequest = lastProfile
   ): Promise<void> {
+    if (
+      !requestedMode &&
+      vscode.workspace
+        .getConfiguration('sharpdeps')
+        .get<'legacy' | 'savedIndex'>('resultProvider', 'legacy') === 'savedIndex'
+    ) {
+      await showSavedIndex(requestedTarget);
+      return;
+    }
     if (!requireTrustedWorkspace()) return;
+    closePendingSavedClient();
+    closeSavedProvider();
     const ticket = ++requestGeneration;
     controller.cancel('superseded');
     const target = await resolveAnalysisTarget(requestedTarget);
@@ -443,12 +498,116 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     );
   }
 
+  async function showSavedIndex(requestedTarget?: vscode.Uri): Promise<void> {
+    const ticket = ++requestGeneration;
+    controller.cancel('superseded');
+    if (activeAnalysisId) {
+      CodeMapPanel.currentPanel?.notifyFailure(
+        activeAnalysisId,
+        'Analysis stopped for saved Query.',
+        true
+      );
+      activeAnalysisId = undefined;
+    }
+    closePendingSavedClient();
+    const selectedUri =
+      requestedTarget ??
+      (savedProvider ? vscode.Uri.file(savedProvider.root) : undefined) ??
+      lastTarget ??
+      vscode.window.activeTextEditor?.document.uri;
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const folder =
+      (selectedUri ? vscode.workspace.getWorkspaceFolder(selectedUri) : undefined) ??
+      (folders.length === 1
+        ? folders[0]
+        : (
+            await vscode.window.showQuickPick(
+              folders.map((entry) => ({ label: entry.name, folder: entry })),
+              { placeHolder: 'Select the workspace folder with a saved SharpDeps index' }
+            )
+          )?.folder);
+    if (!folder || ticket !== requestGeneration) return;
+    let candidate: SavedQueryProvider | undefined;
+    try {
+      const dotnet = await ensureSavedQueryDotnet();
+      if (ticket !== requestGeneration) return;
+      const hostPath = path.join(
+        context.extensionUri.fsPath,
+        'analyzer',
+        'bin',
+        'query',
+        'sharpdeps-query-host.dll'
+      );
+      const client = new QueryClient({
+        dotnetPath: dotnet.dotnetPath,
+        hostPath,
+        root: folder.uri.fsPath,
+        cwd: context.extensionUri.fsPath
+      });
+      pendingSavedClient = client;
+      try {
+        candidate = await SavedQueryProvider.create(
+          client,
+          folder.uri.fsPath,
+          vscode.workspace
+            .getConfiguration('sharpdeps')
+            .get<string>('savedIndexVariant', '')
+            .trim() || undefined,
+          projectionLimits('type')
+        );
+      } finally {
+        if (pendingSavedClient === client) pendingSavedClient = undefined;
+      }
+      if (ticket !== requestGeneration) {
+        candidate.dispose();
+        return;
+      }
+      closeSavedProvider();
+      savedProvider = candidate;
+      diagnostics.clear();
+      CodeMapPanel.show(context.extensionUri, panelHost()).notifyAnalysis(candidate.analysisId);
+      output.appendLine(
+        `Read-only saved index: ${candidate.analysisId}. Refresh rereads the saved generation; no analysis is started.`
+      );
+    } catch (error) {
+      candidate?.dispose();
+      if (ticket !== requestGeneration) return;
+      const previousId = store.currentAnalysisId;
+      const previousTarget = previousId ? store.getTargetPath(previousId) : undefined;
+      const sameWorkspace =
+        previousTarget &&
+        vscode.workspace.getWorkspaceFolder(vscode.Uri.file(previousTarget))?.uri.fsPath ===
+          folder.uri.fsPath;
+      if (
+        error instanceof QueryClientError &&
+        error.code === 'INDEX_NOT_FOUND' &&
+        previousId &&
+        sameWorkspace
+      ) {
+        closeSavedProvider();
+        CodeMapPanel.show(context.extensionUri, panelHost()).notifyAnalysis(previousId);
+        output.appendLine(
+          'No saved index exists. Displaying the retained legacy result read-only; no analyzer fallback was started.'
+        );
+      } else {
+        output.appendLine(error instanceof Error ? error.message : 'Saved Query is unavailable.');
+        void vscode.window.showWarningMessage(
+          'SharpDeps: The saved index could not be opened. Check the runtime, index and savedIndexVariant setting, or select the legacy provider.'
+        );
+      }
+    }
+  }
+
   context.subscriptions.push(
     vscode.commands.registerCommand('sharpdeps.showDependencyMap', (uri?: vscode.Uri) =>
       runAndShow(uri)
     ),
     vscode.commands.registerCommand('sharpdeps.refresh', () =>
-      runAndShow(lastTarget, lastMode, lastProfile)
+      vscode.workspace
+        .getConfiguration('sharpdeps')
+        .get<'legacy' | 'savedIndex'>('resultProvider', 'legacy') === 'savedIndex'
+        ? showSavedIndex()
+        : runAndShow(lastTarget, lastMode, lastProfile)
     ),
     vscode.commands.registerCommand('sharpdeps.showTypeDependencies', () =>
       showTypeFromEditor('dependencies')

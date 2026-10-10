@@ -14,7 +14,24 @@ import {
   viewReducer,
   type ViewState
 } from '../../media/app/state';
-import type { Projection } from '../../src/view/protocolV2';
+import type { Projection, QueryResultMetadata } from '../../src/view/protocolV2';
+
+const savedMetadata: QueryResultMetadata = {
+  provider: 'savedIndex',
+  workspaceId: 'hw_fixture',
+  snapshotId: 'snapshot-3',
+  generation: 3,
+  variantIds: ['variant-net10'],
+  coverage: 'CompleteWithinScope',
+  freshness: 'unverified',
+  truncated: true,
+  truncationReasons: ['PAGE_LIMIT'],
+  diagnostics: [{ code: 'INPUTS_UNVERIFIED', message: 'No configuration proof.' }],
+  returnedCount: 2,
+  totalKind: 'returned',
+  candidateCount: 1,
+  unresolvedCount: 0
+};
 
 function projection(overrides: Partial<Projection> = {}): Projection {
   return {
@@ -72,6 +89,94 @@ function withProjection(state: ViewState = INITIAL_STATE): ViewState {
 }
 
 describe('viewReducer status transitions', () => {
+  it('shows a saved display subset separately from complete engine coverage and returned totals', () => {
+    let state = viewReducer(INITIAL_STATE, {
+      type: 'analysisComplete',
+      analysisId: 'an_0123456789abcdef',
+      completeness: 'completeWithinScope',
+      coverage: undefined,
+      queryMetadata: savedMetadata
+    });
+    expect(state.status).toBe('partial');
+    expect(state.granularity).toBe('type');
+    expect(state.queryMetadata?.coverage).toBe('CompleteWithinScope');
+    state = viewReducer(state, {
+      type: 'projectionReceived',
+      projection: projection({ queryMetadata: savedMetadata })
+    });
+    const footer = selectStatusFooter(state);
+    expect(footer).toContain('Saved index');
+    expect(footer).toContain('Generation 3');
+    expect(footer).toContain('variant-net10');
+    expect(footer).toContain('2 item(s) returned');
+    expect(footer).toContain('1 candidate(s)');
+    expect(footer).toContain('unverified');
+    expect(footer).toContain('PAGE_LIMIT');
+    expect(footer).not.toContain('/42');
+    expect(footer).not.toContain('/77');
+    expect(footer).not.toContain('Quick');
+    expect(state.cycles).toEqual([]);
+  });
+
+  it('retains response metadata and rejects unsupported aggregation without restoring snapshot claims', () => {
+    let state = viewReducer(INITIAL_STATE, {
+      type: 'analysisComplete',
+      analysisId: 'an_0123456789abcdef',
+      completeness: 'partial',
+      coverage: undefined,
+      queryMetadata: savedMetadata
+    });
+    state = viewReducer(state, { type: 'searchChanged', search: 'Run' });
+    const replyMetadata = {
+      ...savedMetadata,
+      returnedCount: 1,
+      truncated: false,
+      truncationReasons: []
+    };
+    state = viewReducer(state, {
+      type: 'searchResultsReceived',
+      query: 'Run',
+      items: [],
+      total: 999,
+      queryMetadata: replyMetadata
+    });
+    expect(state.searchResults.queryMetadata).toEqual(replyMetadata);
+    const unsupported = viewReducer(state, {
+      type: 'granularityChanged',
+      granularity: 'namespace'
+    });
+    expect(unsupported.granularity).toBe('type');
+    expect(unsupported.error?.code).toBe('query.unsupportedOperation');
+    expect(
+      viewReducer(INITIAL_STATE, { type: 'stateRestored', state: { queryMetadata: savedMetadata } })
+        .queryMetadata
+    ).toBeUndefined();
+    const legacy = viewReducer(state, {
+      type: 'analysisComplete',
+      analysisId: 'an_ffffffffffffffff',
+      completeness: 'completeWithinScope',
+      coverage: undefined,
+      mode: 'quick'
+    });
+    expect(legacy.queryMetadata).toBeUndefined();
+    expect(legacy.searchResults.queryMetadata).toBeUndefined();
+    expect(legacy.status).toBe('complete');
+    const scoped = viewReducer(state, {
+      type: 'revealRequested',
+      entityId: 'ty_1111111111111111',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const reopened = viewReducer(scoped, {
+      type: 'analysisComplete',
+      analysisId: 'an_ffffffffffffffff',
+      completeness: 'partial',
+      coverage: undefined,
+      queryMetadata: savedMetadata
+    });
+    expect(reopened.scope.kind).toBe('root');
+    expect(reopened.history).toEqual([]);
+    expect(reopened.selection).toEqual({});
+  });
   it('starts without a target and reports it explicitly', () => {
     expect(INITIAL_STATE.status).toBe('noTarget');
     expect(INITIAL_STATE.statusMessage).toContain('No analysis target');

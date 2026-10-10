@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'node:util';
 import * as fs from 'fs';
+import * as path from 'node:path';
 
 /** Runtime version that matches the analyzer's target framework (net10.0). */
 export const ANALYZER_RUNTIME_VERSION = '10.0';
@@ -11,6 +12,20 @@ const DOTNET_DOWNLOAD_URL = 'https://dotnet.microsoft.com/download/dotnet/10.0';
 export interface DotnetResolution {
   dotnetPath: string;
   source: 'config' | 'findPath' | 'path' | 'acquired';
+}
+
+/** Saved reads never acquire a runtime or probe the target's SDK/global.json. */
+export async function ensureSavedQueryDotnet(): Promise<DotnetResolution> {
+  const configured = vscode.workspace
+    .getConfiguration('sharpdeps')
+    .get<string>('dotnetPath', '')
+    .trim();
+  const candidate = configured || (await dotnetOnPath());
+  if (candidate && path.isAbsolute(candidate) && (await pathExists(candidate)))
+    return { dotnetPath: candidate, source: configured ? 'config' : 'path' };
+  throw new DotnetNotAvailableError(
+    'Saved index queries require an existing .NET 10 runtime. Set sharpdeps.dotnetPath or select the legacy provider.'
+  );
 }
 
 export class DotnetNotAvailableError extends Error {

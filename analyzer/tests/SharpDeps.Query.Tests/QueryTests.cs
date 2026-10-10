@@ -80,6 +80,49 @@ public sealed class QueryTests
         var wrongVariant = query.Execute(new("partial-wrong", QueryKind.Search, Term: "Service",
             Scope: new(HarnessNodeKind.Member, fixture.ProjectId, "other", [fixture.Variant]), Budget: Generous));
         Assert.Empty(wrongVariant.Envelope.Items);
+
+        // A blank tree request uses Browse; literal Search still requires a term.
+        var browse = new QueryRequest("browse", QueryKind.Browse,
+            Scope: new(HarnessNodeKind.Member, fixture.ProjectId, "src", [fixture.Variant]), PageSize: 1, Budget: Generous);
+        var expected = new[] { fixture.A, fixture.B, fixture.C, fixture.E }.Order(StringComparer.Ordinal).ToArray();
+        var firstPage = query.Execute(browse);
+        Assert.Equal(expected[0], Assert.Single(firstPage.Envelope.Items).Id);
+        var browseCursor = Assert.IsType<string>(firstPage.Envelope.NextCursor);
+        var secondPage = query.Execute(browse with { Cursor = browseCursor });
+        Assert.Equal(expected[1], Assert.Single(secondPage.Envelope.Items).Id);
+        Error(query.Execute(browse with { Cursor = browseCursor, Scope = new(VariantIds: [fixture.AlternateVariant]) }), "CURSOR_FILTER_CHANGED");
+
+        // MaxNodes applies per page, so continuations must pass the first capped node.
+        var boundedBrowse = browse with { PageSize = 100, Budget = Generous with { MaxNodes = 1 } };
+        var seen = new List<string>();
+        string? continuation = null;
+        do
+        {
+            var page = query.Execute(boundedBrowse with { Cursor = continuation });
+            Assert.True(page.Succeeded);
+            Assert.Equal(1, page.Envelope.Snapshot.Generation);
+            Assert.Equal(1, page.Envelope.Budget.UsedNodes);
+            Assert.Empty(page.Envelope.Candidates);
+            Assert.Empty(page.Envelope.Unresolved);
+            var item = Assert.Single(page.Envelope.Items);
+            Assert.NotNull(item.Node);
+            Assert.Null(item.Edge);
+            Assert.Equal("browse", item.Reason);
+            seen.Add(item.Id);
+            continuation = page.Envelope.NextCursor;
+            Assert.True(seen.Count <= expected.Length); // Detect a cursor that loops or duplicates pages.
+        } while (continuation is not null);
+        Assert.Equal(expected, seen);
+        var namespaces = browse with { Scope = new(Kind: HarnessNodeKind.Namespace, VariantIds: [fixture.Variant]), PageSize = 100 };
+        Assert.Equal(new[] { fixture.OuterNamespaceId, fixture.NamespaceId }.Order(StringComparer.Ordinal),
+            query.Execute(namespaces).Envelope.Items.Select(i => i.Id));
+        Assert.Empty(query.Execute(namespaces with { Scope = namespaces.Scope! with { ProjectId = fixture.OtherProjectId } }).Envelope.Items);
+        Assert.Empty(query.Execute(namespaces with { Scope = namespaces.Scope! with { PathPrefix = "src" } }).Envelope.Items);
+        // Browse adds containers using saved ancestry; ordinary symbol search keeps occurrence filtering.
+        Assert.Empty(query.Execute(new("namespace-search", QueryKind.Search, Term: "App",
+            Scope: namespaces.Scope, Budget: Generous)).Envelope.Items);
+        Assert.Throws<ArgumentException>(() => query.Execute(browse with { Term = "Service" }));
+        Assert.Throws<ArgumentException>(() => query.Execute(new("empty-search", QueryKind.Search, Budget: Generous)));
     }
 
     [Fact]
@@ -433,6 +476,9 @@ public sealed class QueryTests
         public string C => Symbol(ProjectId, "Bridge");
         public string D => Symbol(OtherProjectId, "Service");
         public string E => Symbol(ProjectId, "UnknownTarget");
+        public string OuterNamespaceId => HarnessIdentity.LogicalSymbolId(Workspace, ProjectId, "namespace", "N:App");
+        public string NamespaceId => HarnessIdentity.LogicalSymbolId(Workspace, ProjectId, "namespace", "N:App.Inner");
+        private string OtherNamespaceId => HarnessIdentity.LogicalSymbolId(Workspace, OtherProjectId, "namespace", "N:Other");
         private string DocumentId => HarnessIdentity.DocumentId(Workspace, Document);
         public string SectionId => HarnessIdentity.SectionId(Workspace, DocumentId, "intro-token");
 
@@ -477,6 +523,10 @@ public sealed class QueryTests
                 [new(workspace, HarnessNodeKind.Workspace, "Workspace", null, null),
                     new(ProjectId, HarnessNodeKind.Project, "App", workspace, null),
                     new(OtherProjectId, HarnessNodeKind.Project, "Other", workspace, null), .. members,
+                    .. (partialDeclarations ? new[] {
+                        new HarnessNode(OuterNamespaceId, HarnessNodeKind.Namespace, "App", ProjectId, null),
+                        new HarnessNode(NamespaceId, HarnessNodeKind.Namespace, "App.Inner", OuterNamespaceId, null),
+                        new HarnessNode(OtherNamespaceId, HarnessNodeKind.Namespace, "Other", OtherProjectId, null) } : []),
                     new(DocumentId, HarnessNodeKind.Document, "readme.md", workspace, markdown),
                     new(SectionId, HarnessNodeKind.Section, "設定", DocumentId, markdown)],
                 members.Select(n => new HarnessSymbolOccurrence(Occurrence(n.Id), n.Id, n.Id == D ? OtherVariant : Variant,

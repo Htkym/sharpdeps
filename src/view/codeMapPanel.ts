@@ -38,6 +38,10 @@ export interface CodeMapPanelHost {
   onCancel: () => void;
   onDispose?: () => void;
   projectionLimits?: (granularity: Granularity) => { maxNodes: number; maxEdges: number };
+  currentAnalysisId?: () => string | undefined;
+  savedAnalysisState?: (
+    analysisId: string
+  ) => Extract<HostToWebviewMessage, { type: 'analysisComplete' }> | undefined;
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -158,7 +162,10 @@ export class CodeMapPanel {
    * view requests the projection it needs; nothing is pushed unrequested.
    */
   revealEntity(entityId: string, scope: Scope, granularity?: Granularity): void {
-    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
+    const analysisId =
+      this.pendingAnalysisId ??
+      this.host.currentAnalysisId?.() ??
+      this.host.store.currentAnalysisId;
     if (!analysisId) {
       void vscode.window.showInformationMessage(
         'SharpDeps: 解析結果がありません。先に解析してください。'
@@ -199,6 +206,15 @@ export class CodeMapPanel {
     }
 
     const request = validation.value;
+    // Saved data never falls through to legacy source/export handlers or their store.
+    if (
+      'analysisId' in request &&
+      this.host.savedAnalysisState?.(request.analysisId) &&
+      ['openEvidence', 'openDeclaration', 'copyContext', 'export'].includes(request.type)
+    ) {
+      void this.host.bridge.handle(request).then((response) => this.post(response));
+      return;
+    }
     switch (request.type) {
       case 'ready':
         this.ready = true;
@@ -206,8 +222,16 @@ export class CodeMapPanel {
         void this.host.bridge
           .handle({ type: 'ready', protocolVersion: PROTOCOL_VERSION })
           .then((response) => this.post(response));
-        if (this.pendingAnalysisId ?? this.host.store.currentAnalysisId) {
-          this.postAnalysisState((this.pendingAnalysisId ?? this.host.store.currentAnalysisId)!);
+        if (
+          this.pendingAnalysisId ??
+          this.host.currentAnalysisId?.() ??
+          this.host.store.currentAnalysisId
+        ) {
+          this.postAnalysisState(
+            (this.pendingAnalysisId ??
+              this.host.currentAnalysisId?.() ??
+              this.host.store.currentAnalysisId)!
+          );
         }
         if (this.runningMessage) this.post(this.runningMessage);
         this.flushReveal();
@@ -505,6 +529,11 @@ export class CodeMapPanel {
     }
 
     try {
+      const saved = this.host.savedAnalysisState?.(analysisId);
+      if (saved) {
+        this.post(saved);
+        return;
+      }
       const report = this.host.store.getReport(analysisId);
       this.post({
         type: 'analysisComplete',

@@ -39,7 +39,16 @@ const REQUIRED = [
   'analyzer/bin/semantic/sharpdeps-semantic-host.dll',
   'analyzer/bin/semantic/sharpdeps-semantic-host.runtimeconfig.json',
   'analyzer/bin/semantic/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
+  'analyzer/bin/query/sharpdeps-query-host.dll',
+  'analyzer/bin/query/sharpdeps-query-host.runtimeconfig.json',
+  'analyzer/bin/query/SharpDeps.Query.dll',
+  'analyzer/bin/query/SharpDeps.Index.dll',
+  'analyzer/bin/query/Microsoft.Data.Sqlite.dll',
+  'analyzer/bin/query/SQLitePCLRaw.core.dll',
+  'analyzer/bin/query/SQLitePCLRaw.batteries_v2.dll',
+  'analyzer/bin/query/SQLitePCLRaw.provider.e_sqlite3.dll',
   'resources/ELK-LICENSE.md',
+  'resources/APACHE-2.0-LICENSE.txt',
   'resources/icon.png',
   'LICENSE.txt', // VSCE adds .txt to an extensionless LICENSE in the archive.
   'package.json',
@@ -71,7 +80,8 @@ const FORBIDDEN = [
   'media/app/entry.js.map',
   'media/workers/elkLayout.worker.js.map',
   'analyzer/bin/quick/code-map.exe',
-  'analyzer/bin/semantic/sharpdeps-semantic-host.exe'
+  'analyzer/bin/semantic/sharpdeps-semantic-host.exe',
+  'analyzer/bin/query/sharpdeps-query-host.exe'
 ];
 
 async function main() {

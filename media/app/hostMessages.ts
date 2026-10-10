@@ -5,7 +5,12 @@
 // leave the shell in a half-updated state.
 
 import type { AnalysisStage } from './state';
-import type { EntitySummary, ProjectionCycleGroup, Scope } from '../../src/view/protocolV2';
+import type {
+  EntitySummary,
+  ProjectionCycleGroup,
+  QueryResultMetadata,
+  Scope
+} from '../../src/view/protocolV2';
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
 import type { ViewState } from './state';
@@ -30,6 +35,13 @@ export function toViewActions(
   if (!isRecord(message) || typeof message.type !== 'string') {
     return [];
   }
+  const metadataValue =
+    message.type === 'projection' && isRecord(message.projection)
+      ? message.projection.queryMetadata
+      : message.queryMetadata;
+  const queryMetadata = readQueryMetadata(metadataValue);
+  // A malformed saved result must not silently acquire the legacy display semantics.
+  if (metadataValue !== undefined && !queryMetadata) return [];
   if (currentState) {
     if (
       ['projection', 'details', 'evidencePage', 'searchResults', 'stale', 'reveal'].includes(
@@ -51,6 +63,17 @@ export function toViewActions(
     )
       return [];
     if (message.type === 'evidencePage' && message.relationId !== currentState.selection.relationId)
+      return [];
+    if (
+      ['projection', 'details', 'searchResults', 'evidencePage'].includes(message.type) &&
+      currentState.queryMetadata &&
+      (!queryMetadata ||
+        queryMetadata.workspaceId !== currentState.queryMetadata.workspaceId ||
+        queryMetadata.snapshotId !== currentState.queryMetadata.snapshotId ||
+        queryMetadata.generation !== currentState.queryMetadata.generation ||
+        JSON.stringify([...queryMetadata.variantIds].sort()) !==
+          JSON.stringify([...currentState.queryMetadata.variantIds].sort()))
+    )
       return [];
   }
 
@@ -124,10 +147,14 @@ export function toViewActions(
         {
           type: 'analysisComplete',
           analysisId: message.analysisId,
-          completeness:
-            completeness === 'partial' || completeness === 'failed'
+          completeness: queryMetadata
+            ? queryMetadata.coverage === 'Failed'
+              ? 'failed'
+              : 'partial'
+            : completeness === 'partial' || completeness === 'failed'
               ? completeness
               : 'completeWithinScope',
+          ...(queryMetadata ? { queryMetadata } : {}),
           coverage: readCoverage(message.coverage),
           limitations: readLimitations(message.limitations),
           mode:
@@ -191,7 +218,8 @@ export function toViewActions(
             entityId,
             entity: readEntities([message.entity])[0],
             dependencies: readEntities(message.dependencies),
-            dependents: readEntities(message.dependents)
+            dependents: readEntities(message.dependents),
+            ...(queryMetadata ? { queryMetadata } : {})
           }
         ];
       }
@@ -202,7 +230,8 @@ export function toViewActions(
           entityId: message.entityId,
           entity: readEntities([message.entity])[0],
           dependencies: readEntities(message.dependencies),
-          dependents: readEntities(message.dependents)
+          dependents: readEntities(message.dependents),
+          ...(queryMetadata ? { queryMetadata } : {})
         }
       ];
     }
@@ -221,7 +250,8 @@ export function toViewActions(
           total: numberOrUndefined(message.total) ?? 0,
           items: Array.isArray(message.items) ? (message.items as Record<string, unknown>[]) : [],
           nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : null,
-          append: context?.appendEvidence === true
+          append: context?.appendEvidence === true,
+          ...(queryMetadata ? { queryMetadata } : {})
         }
       ];
     }
@@ -237,7 +267,8 @@ export function toViewActions(
             items: readEntities(message.items),
             total: numberOrUndefined(message.total) ?? 0,
             nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : undefined,
-            append: context.appendTree
+            append: context.appendTree,
+            ...(queryMetadata ? { queryMetadata } : {})
           }
         ];
       const query =
@@ -249,7 +280,8 @@ export function toViewActions(
           type: 'searchResultsReceived',
           query,
           total: numberOrUndefined(message.total) ?? 0,
-          items: readEntities(message.items)
+          items: readEntities(message.items),
+          ...(queryMetadata ? { queryMetadata } : {})
         }
       ];
     }
@@ -309,6 +341,7 @@ function readProjection(value: unknown): ProjectionLike | undefined {
   }
 
   const nodes = readEntities(value.nodes);
+  const queryMetadata = readQueryMetadata(value.queryMetadata);
   const edges = value.edges
     .filter(isRecord)
     .filter(
@@ -322,6 +355,25 @@ function readProjection(value: unknown): ProjectionLike | undefined {
       sourceId: edge.sourceId as string,
       targetId: edge.targetId as string,
       basis: typeof edge.basis === 'string' ? edge.basis : 'unknown',
+      certainty: readCertainty(edge.certainty),
+      sourceOccurrenceId:
+        edge.sourceOccurrenceId === null
+          ? null
+          : typeof edge.sourceOccurrenceId === 'string'
+            ? edge.sourceOccurrenceId
+            : undefined,
+      targetOccurrenceId:
+        edge.targetOccurrenceId === null
+          ? null
+          : typeof edge.targetOccurrenceId === 'string'
+            ? edge.targetOccurrenceId
+            : undefined,
+      variantId:
+        edge.variantId === null
+          ? null
+          : typeof edge.variantId === 'string'
+            ? edge.variantId
+            : undefined,
       kinds: Array.isArray(edge.kinds) ? edge.kinds.filter((kind) => typeof kind === 'string') : [],
       evidenceCount: numberOrUndefined(edge.evidenceCount) ?? 0,
       inCycle: edge.inCycle === true,
@@ -357,7 +409,8 @@ function readProjection(value: unknown): ProjectionLike | undefined {
     totalNodeCount: numberOrUndefined(value.totalNodeCount) ?? nodes.length,
     totalEdgeCount: numberOrUndefined(value.totalEdgeCount) ?? edges.length,
     truncated: value.truncated === true,
-    cycleGroups: readCycleGroups(value.cycleGroups)
+    cycleGroups: readCycleGroups(value.cycleGroups),
+    ...(queryMetadata ? { queryMetadata } : {})
   };
 }
 
@@ -408,6 +461,10 @@ interface ProjectionLike {
     sourceId: string;
     targetId: string;
     basis: string;
+    certainty?: EntitySummary['certainty'];
+    sourceOccurrenceId?: string | null;
+    targetOccurrenceId?: string | null;
+    variantId?: string | null;
     kinds: string[];
     evidenceCount: number;
     inCycle: boolean;
@@ -434,6 +491,7 @@ interface ProjectionLike {
     witness: { memberIds: string[]; relationIds: string[] } | null;
     truncated?: boolean;
   }>;
+  queryMetadata?: QueryResultMetadata;
 }
 
 function readScope(value: unknown): Scope {
@@ -495,6 +553,7 @@ function readEntities(value: unknown): EntitySummary[] {
           ? entity.granularity
           : 'type',
       kind: typeof entity.kind === 'string' ? entity.kind : undefined,
+      certainty: readCertainty(entity.certainty),
       projectName: typeof entity.projectName === 'string' ? entity.projectName : undefined,
       inCycle: entity.inCycle === true,
       isExternal: entity.isExternal === true,
@@ -536,6 +595,65 @@ function readLimitations(value: unknown): Array<{ code: string; message: string 
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readCertainty(value: unknown): EntitySummary['certainty'] {
+  return value === 'Resolved' || value === 'Candidate' || value === 'Unresolved'
+    ? value
+    : undefined;
+}
+
+function readQueryMetadata(value: unknown): QueryResultMetadata | undefined {
+  const text = (item: unknown, max = 4096): item is string =>
+    typeof item === 'string' && item.length > 0 && item.length <= max;
+  const count = (item: unknown): item is number =>
+    typeof item === 'number' && Number.isSafeInteger(item) && item >= 0;
+  const strings = (items: unknown, maxItems: number, maxLength: number): items is string[] =>
+    Array.isArray(items) &&
+    items.length <= maxItems &&
+    items.every((item) => text(item, maxLength));
+  if (
+    !isRecord(value) ||
+    value.provider !== 'savedIndex' ||
+    value.totalKind !== 'returned' ||
+    !text(value.workspaceId) ||
+    !text(value.snapshotId) ||
+    !count(value.generation) ||
+    !strings(value.variantIds, 64, 4096) ||
+    new Set(value.variantIds).size !== value.variantIds.length ||
+    (value.coverage !== 'CompleteWithinScope' &&
+      value.coverage !== 'Partial' &&
+      value.coverage !== 'Failed') ||
+    !text(value.freshness, 64) ||
+    typeof value.truncated !== 'boolean' ||
+    !strings(value.truncationReasons, 64, 128) ||
+    !count(value.returnedCount) ||
+    !count(value.candidateCount) ||
+    !count(value.unresolvedCount) ||
+    !Array.isArray(value.diagnostics) ||
+    value.diagnostics.length > 64 ||
+    !value.diagnostics.every((item) => isRecord(item) && text(item.code, 128) && text(item.message))
+  )
+    return undefined;
+  return {
+    provider: 'savedIndex',
+    workspaceId: value.workspaceId,
+    snapshotId: value.snapshotId,
+    generation: value.generation,
+    variantIds: [...value.variantIds],
+    coverage: value.coverage as QueryResultMetadata['coverage'],
+    freshness: value.freshness,
+    truncated: value.truncated,
+    truncationReasons: [...value.truncationReasons],
+    diagnostics: value.diagnostics.map((item) => ({
+      code: item.code as string,
+      message: item.message as string
+    })),
+    returnedCount: value.returnedCount,
+    totalKind: 'returned',
+    candidateCount: value.candidateCount,
+    unresolvedCount: value.unresolvedCount
+  };
 }
 
 const STAGES: readonly AnalysisStage[] = [

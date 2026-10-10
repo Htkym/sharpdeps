@@ -17,6 +17,7 @@ import {
 import { resolveShortcut } from './shortcuts';
 import { translate, translator, type Translator } from './i18n';
 import type { SortState } from './query';
+import type { EntitySummary, Projection, QueryResultMetadata } from '../../src/view/protocolV2';
 import {
   buildNavigationTree,
   renderNavigationTree,
@@ -24,6 +25,7 @@ import {
 } from '../components/navigationPane';
 import {
   INITIAL_STATE,
+  queryResultSummary,
   selectBreadcrumbs,
   selectSearchPresentation,
   selectStatusFooter,
@@ -114,7 +116,14 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       options.onHostAction?.({ type: 'searchStarted', query: search });
     },
     onExport: (format) => void exportCurrent(format),
-    onCopyContext: () => options.onCopyContext?.(),
+    onCopyContext: () =>
+      state.queryMetadata
+        ? dispatch({
+            type: 'errorRaised',
+            code: 'query.unsupportedOperation',
+            message: tr('This operation is unavailable for saved index.')
+          })
+        : options.onCopyContext?.(),
     onNavTab: (tab) => {
       activeTab = tab;
       render();
@@ -183,6 +192,16 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       state.searchResults.items.find((node) => node.id === entityId) ??
       (state.details?.entityId === entityId ? state.details.entity : undefined);
     if (!entity) return;
+    if (state.queryMetadata && entity.certainty !== 'Resolved') {
+      dispatch({
+        type: 'errorRaised',
+        code: 'query.candidateLeaf',
+        message: tr(
+          'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+        )
+      });
+      return;
+    }
     dispatch({
       type: 'revealRequested',
       entityId,
@@ -199,6 +218,14 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     format: 'mermaid' | 'svg' | 'png' | 'json',
     copy?: boolean
   ): Promise<void> {
+    if (state.queryMetadata) {
+      dispatch({
+        type: 'errorRaised',
+        code: 'query.unsupportedOperation',
+        message: tr('This operation is unavailable for saved index.')
+      });
+      return;
+    }
     try {
       if (format === 'svg' || format === 'png') {
         const view = graphView();
@@ -340,6 +367,10 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     const projection = state.projection;
     const selectedEdgeId = state.selection.relationId;
     const selectedEntityId = state.selection.entityId;
+    if (state.queryMetadata) {
+      renderSavedQueryInspector(elements, state, dispatch);
+      return;
+    }
 
     let edge: InspectorEdgeOptions | undefined;
     if (selectedEdgeId) {
@@ -489,7 +520,11 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     elements.legend.append(item);
   }
   const meaning = document.createElement('span');
-  meaning.textContent = tr('Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external');
+  meaning.textContent = state.queryMetadata
+    ? tr(
+        'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+      )
+    : tr('Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external');
   elements.legend.append(meaning);
   elements.targetName.textContent = state.target?.name ?? tr('No target');
   elements.targetPath.textContent = state.target?.relativePath ?? '';
@@ -509,7 +544,14 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
   if (typeOption) {
     typeOption.disabled = !state.capabilities.typeGraph;
     typeOption.title = state.capabilities.typeGraph ? '' : tr('Type analysis requires Semantic');
+    typeOption.textContent = tr(state.queryMetadata ? 'Symbols' : 'Type');
   }
+  for (const option of elements.granularitySelect.querySelectorAll<HTMLOptionElement>('option'))
+    if (option.value !== 'type') option.disabled = !!state.queryMetadata;
+  elements.exportButton.disabled = elements.copyButton.disabled = !!state.queryMetadata;
+  elements.exportButton.title = elements.copyButton.title = state.queryMetadata
+    ? tr('This operation is unavailable for saved index.')
+    : '';
   const controls = elements.filterControls;
   controls.tests.checked = state.filters.includeTests !== false;
   controls.external.checked = state.filters.includeExternal !== false;
@@ -621,18 +663,20 @@ function renderStructureTab(
     entity: import('../../src/view/protocolV2').EntitySummary
   ): NavigationTreeNode => ({
     id: entity.id,
-    label: entity.name,
+    label: state.queryMetadata ? savedEntityLabel(entity) : entity.name,
     granularity: entity.granularity,
     kind: entity.kind,
     inCycle: entity.inCycle,
     isExternal: entity.isExternal,
-    canExpand: entity.granularity !== 'type',
+    canExpand: !state.queryMetadata && entity.granularity !== 'type',
     moreCursor: state.tree[entity.id]?.nextCursor,
     children: (state.tree[entity.id]?.items ?? []).map(branch)
   });
   const tree = state.tree.root
     ? state.tree.root.items.map(branch)
-    : buildNavigationTree(visible.nodes);
+    : state.queryMetadata
+      ? visible.nodes.map(branch)
+      : buildNavigationTree(visible.nodes);
   const container = document.createElement('div');
   elements.navPaneBody.append(container);
   renderNavigationTree(container, {
@@ -667,9 +711,13 @@ function renderStructureTab(
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'sd-button';
-    more.textContent = tr('Load more projects');
+    more.textContent = tr(state.queryMetadata ? 'Load more symbols' : 'Load more projects');
     more.addEventListener('click', () =>
-      context.requestTree('root', 'project', state.tree.root.nextCursor)
+      context.requestTree(
+        'root',
+        state.queryMetadata ? 'type' : 'project',
+        state.tree.root.nextCursor
+      )
     );
     container.append(more);
   }
@@ -686,11 +734,14 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   const block = document.createElement('section');
   block.className = 'sd-search-results';
   const heading = document.createElement('h3');
-  heading.textContent =
-    results.length === 0 && !state.searchResults.pending
+  const metadata = state.searchResults.queryMetadata;
+  heading.textContent = metadata
+    ? tr('Search results ({0} returned)', metadata.returnedCount)
+    : results.length === 0 && !state.searchResults.pending
       ? tr('No match for "{0}"', state.search)
       : tr('Search results ({0} of {1})', results.length, state.searchResults.total);
   block.append(heading);
+  if (metadata) renderQueryMetadata(block, metadata, state.language);
 
   if (state.searchResults.pending && results.length === 0) {
     block.append(message(tr('Searching the analyzed index...'), 'sd-note'));
@@ -702,7 +753,7 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'sd-node-item';
-    button.textContent = result.entity.name;
+    button.textContent = metadata ? savedEntityLabel(result.entity) : result.entity.name;
     button.addEventListener('click', () =>
       elements.navPaneBody.dispatchEvent(
         new CustomEvent('sd-select', { detail: { entityId: result.entity.id }, bubbles: true })
@@ -753,6 +804,15 @@ function renderCyclesTab(
   state: ViewState,
   dispatch: (action: ViewAction) => void
 ): void {
+  if (state.queryMetadata) {
+    elements.navPaneBody.append(
+      message(
+        translator(state.language)('Cycle analysis is unavailable for saved index.'),
+        'sd-note'
+      )
+    );
+    return;
+  }
   const tr = translator(state.language);
   const cycles = state.cycles;
   if (cycles.length === 0) {
@@ -863,6 +923,16 @@ function renderAnalysisTab(
   dispatch: (action: ViewAction) => void
 ): void {
   const tr = translator(state.language);
+  if (state.queryMetadata) {
+    renderQueryMetadata(elements.navPaneBody, state.queryMetadata, state.language);
+    elements.navPaneBody.append(
+      message(
+        tr('Symbols keep their original kind. Type/member aggregation is not connected.'),
+        'sd-note'
+      )
+    );
+    return;
+  }
   const rows: Array<[string, string]> = [
     ['Status', tr(state.status)],
     [
@@ -991,6 +1061,15 @@ function renderCenter(
   }
 
   const visible = selectVisibleData(state);
+  const graphStamp = JSON.stringify([
+    state.analysisId,
+    state.scope,
+    state.search,
+    !!state.queryMetadata,
+    visible.nodes.map((node) => node.id),
+    visible.edges.map((edge) => edge.id)
+  ]);
+  elements.graphHost.dataset.queryRender = graphStamp;
   elements.mapContent.replaceChildren();
   elements.mapHost.dataset.viewKind = state.viewKind;
   elements.graphControls.hidden = state.viewKind !== 'graph';
@@ -1003,10 +1082,19 @@ function renderCenter(
     return;
   }
 
-  const summaryParts = [
-    tr('{0} node(s) shown of {1}', visible.nodes.length, visible.totalNodeCount),
-    tr('{0} relation(s) of {1}', visible.edges.length, visible.totalEdgeCount)
-  ];
+  const summaryParts = state.queryMetadata
+    ? [
+        queryResultSummary(state.projection.queryMetadata ?? state.queryMetadata, state.language),
+        tr(
+          '{0} node(s), {1} relation(s) shown from the returned graph',
+          visible.nodes.length,
+          visible.edges.length
+        )
+      ]
+    : [
+        tr('{0} node(s) shown of {1}', visible.nodes.length, visible.totalNodeCount),
+        tr('{0} relation(s) of {1}', visible.edges.length, visible.totalEdgeCount)
+      ];
   if (visible.filterCount > 0) {
     summaryParts.push(tr('{0} filter(s)', visible.filterCount));
   }
@@ -1071,10 +1159,29 @@ function renderCenter(
       elements.mapContent.hidden = true;
       // The graph shows exactly what the search and filters select, so the summary and
       // the picture can never disagree; the host's totals stay in the summary.
-      view.update(
-        { ...state.projection, nodes: visible.nodes, edges: visible.edges },
-        scopeLabel(state)
-      );
+      const renderedProjection = {
+        ...state.projection,
+        nodes: visible.nodes,
+        edges: visible.edges
+      };
+      void view
+        .update(
+          state.queryMetadata
+            ? {
+                ...renderedProjection,
+                nodes: visible.nodes.map((node) => ({ ...node, name: savedEntityLabel(node) }))
+              }
+            : renderedProjection,
+          scopeLabel(state)
+        )
+        .then(() => {
+          if (elements.graphHost.dataset.queryRender === graphStamp)
+            decorateSavedGraph(
+              elements.graphHost,
+              state.queryMetadata ? renderedProjection : undefined,
+              state.language
+            );
+        });
       // Selection and inspector state never change the layout; only the highlight.
       view.setSelection(
         state.selection.entityId ? [state.selection.entityId] : [],
@@ -1099,7 +1206,15 @@ function renderCenter(
 
   // The table is rendered even while the graph is shown, so switching views never
   // depends on the graph having succeeded.
-  renderEntityTable(elements.mapContent, tableOptions);
+  if (state.queryMetadata)
+    renderSavedQueryTable(
+      elements.mapContent,
+      state,
+      tableOptions.onSelect,
+      tableOptions.onActivate,
+      tableOptions.onPage
+    );
+  else renderEntityTable(elements.mapContent, tableOptions);
   if (state.viewKind === 'graph' && !graphShown) {
     elements.mapContent.prepend(
       message(
@@ -1113,9 +1228,321 @@ function renderCenter(
   }
 }
 
+function savedEntityLabel(entity: EntitySummary): string {
+  return `[${entity.kind ?? 'unknown'} · ${entity.certainty ?? 'unknown'}] ${entity.name}`;
+}
+
+function renderQueryMetadata(
+  container: HTMLElement,
+  metadata: QueryResultMetadata,
+  language: ViewState['language']
+): void {
+  const tr = translator(language);
+  container.append(message(queryResultSummary(metadata, language), 'sd-note'));
+  const facts = document.createElement('dl');
+  facts.className = 'sd-facts';
+  for (const [label, value] of [
+    ['Workspace id', metadata.workspaceId],
+    ['Snapshot id', metadata.snapshotId],
+    ['Generation', String(metadata.generation)],
+    ['Variants', metadata.variantIds.join(', ') || '—']
+  ]) {
+    const term = document.createElement('dt');
+    term.textContent = tr(label);
+    const definition = document.createElement('dd');
+    definition.textContent = value;
+    facts.append(term, definition);
+  }
+  container.append(facts);
+  for (const issue of metadata.diagnostics) {
+    const note = message(`${issue.code}: ${issue.message}`, 'sd-note');
+    note.dataset.code = issue.code;
+    container.append(note);
+  }
+}
+
+/** Saved Query does not supply the legacy occurrence/cycle counters. */
+function renderSavedQueryTable(
+  container: HTMLElement,
+  state: ViewState,
+  onSelect: (id: string) => void,
+  onActivate: (id: string) => void,
+  onPage: (page: number) => void
+): void {
+  const tr = translator(state.language);
+  const page = selectTableRows(state);
+  container.replaceChildren();
+  container.dataset.role = 'entity-table';
+  const table = document.createElement('table');
+  table.className = 'sd-table';
+  table.setAttribute('aria-label', tr('Returned symbols'));
+  const head = document.createElement('thead');
+  const header = document.createElement('tr');
+  for (const label of ['Name', 'Kind', 'Certainty']) {
+    const cell = document.createElement('th');
+    cell.scope = 'col';
+    cell.textContent = tr(label);
+    header.append(cell);
+  }
+  head.append(header);
+  const body = document.createElement('tbody');
+  for (const { entity, temporary } of page.rows) {
+    const row = document.createElement('tr');
+    row.dataset.entityId = entity.id;
+    row.tabIndex = 0;
+    row.setAttribute('aria-selected', String(entity.id === state.selection.entityId));
+    row.classList.toggle('sd-row-selected', entity.id === state.selection.entityId);
+    row.addEventListener('click', () => onSelect(entity.id));
+    row.addEventListener('dblclick', () => onActivate(entity.id));
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        onActivate(entity.id);
+      }
+    });
+    for (const value of [
+      entity.name,
+      entity.kind ?? tr('unknown'),
+      entity.certainty ?? tr('unknown')
+    ]) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    }
+    if (temporary) row.firstElementChild?.append(badge(tr('outside filters')));
+    body.append(row);
+  }
+  table.append(head, body);
+  const footer = document.createElement('div');
+  footer.className = 'sd-table-footer';
+  footer.append(
+    message(
+      tr(
+        '{0} row(s) · page {1}/{2} · 100 per page',
+        page.totalItems,
+        page.page + 1,
+        page.pageCount
+      ),
+      'sd-note'
+    )
+  );
+  if (page.pageCount > 1) {
+    for (const [label, destination] of [
+      ['Previous', page.page - 1],
+      ['Next', page.page + 1]
+    ] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sd-button';
+      button.textContent = tr(label);
+      button.disabled = destination < 0 || destination >= page.pageCount;
+      button.addEventListener('click', () => onPage(destination));
+      footer.append(button);
+    }
+  }
+  container.append(table, footer);
+}
+
+function renderSavedQueryInspector(
+  elements: ShellElements,
+  state: ViewState,
+  dispatch: (action: ViewAction) => void
+): void {
+  const tr = translator(state.language);
+  const body = elements.inspectorBody;
+  body.replaceChildren();
+  const edge = state.projection?.edges.find((item) => item.id === state.selection.relationId);
+  const details = state.details?.entityId === state.selection.entityId ? state.details : undefined;
+  const associated =
+    state.projection?.nodes.find((item) => item.id === state.selection.entityId) ??
+    state.searchResults.items.find((item) => item.id === state.selection.entityId);
+  const selected = details?.entity ?? associated;
+  // Resolving the symbol itself does not resolve the tentative relation that reached it.
+  const entity =
+    selected && (associated?.certainty === 'Candidate' || associated?.certainty === 'Unresolved')
+      ? { ...selected, certainty: associated.certainty }
+      : selected;
+  const savedEvidence =
+    state.evidence?.relationId === state.selection.relationId ? state.evidence : undefined;
+  const metadata = edge
+    ? (savedEvidence?.queryMetadata ?? state.projection?.queryMetadata)
+    : details?.queryMetadata;
+  if (state.selection.relationId) {
+    const nameOf = (id: string): string =>
+      state.projection?.nodes.find((node) => node.id === id)?.name ?? id;
+    elements.inspectorTitle.textContent = edge
+      ? `${nameOf(edge.sourceId)} → ${nameOf(edge.targetId)}`
+      : state.selection.relationId;
+    if (edge) {
+      for (const [label, value] of [
+        ['Kind', edge.kinds.join(', ')],
+        ['Certainty', edge.certainty ?? tr('unknown')],
+        ['Variant', edge.variantId ?? tr('unknown')],
+        ['Source occurrence', edge.sourceOccurrenceId ?? tr('unknown')],
+        ['Target occurrence', edge.targetOccurrenceId ?? tr('unknown')]
+      ])
+        body.append(message(`${tr(label)}: ${value}`, 'sd-note'));
+      if (savedEvidence) {
+        const heading = document.createElement('h3');
+        heading.textContent = tr('Saved evidence location');
+        body.append(heading);
+        for (const item of savedEvidence.items) {
+          const location =
+            item.location && typeof item.location === 'object' && !Array.isArray(item.location)
+              ? (item.location as Record<string, unknown>)
+              : undefined;
+          const rawSpan =
+            location?.rawSpan &&
+            typeof location.rawSpan === 'object' &&
+            !Array.isArray(location.rawSpan)
+              ? (location.rawSpan as Record<string, unknown>)
+              : undefined;
+          for (const [label, value] of [
+            ['Source id', location?.sourceId],
+            ['Content hash', location?.contentHash]
+          ] as const)
+            if (typeof value === 'string')
+              body.append(message(`${tr(label)}: ${value}`, 'sd-note'));
+          if (
+            rawSpan &&
+            ['start', 'length', 'end'].every(
+              (key) =>
+                typeof rawSpan[key] === 'number' &&
+                Number.isSafeInteger(rawSpan[key]) &&
+                (rawSpan[key] as number) >= 0
+            )
+          )
+            body.append(
+              message(
+                `${tr('Raw UTF-16 span')}: [${rawSpan.start}, ${rawSpan.end}) · length ${rawSpan.length}`,
+                'sd-note'
+              )
+            );
+        }
+        if (!savedEvidence.items.length)
+          body.append(message(tr('No saved evidence location returned.'), 'sd-note'));
+      }
+    }
+  } else if (state.selection.entityId) {
+    elements.inspectorTitle.textContent = entity?.name ?? state.selection.entityId;
+    body.append(
+      message(
+        `${tr('Kind')}: ${entity?.kind ?? tr('unknown')} · ${tr('Certainty')}: ${entity?.certainty ?? tr('unknown')}`,
+        'sd-note'
+      )
+    );
+    if (!details) body.append(message(tr('Loading details...'), 'sd-note'));
+    for (const [kind, label, entries] of [
+      ['dependencies', 'Dependencies (returned entries)', details?.dependencies ?? []],
+      ['dependents', 'Dependents (returned entries)', details?.dependents ?? []]
+    ] as const) {
+      const heading = document.createElement('h3');
+      heading.textContent = tr(label);
+      body.append(heading);
+      for (const entry of entries) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'sd-node-item';
+        button.textContent = savedEntityLabel(entry);
+        button.disabled = entry.certainty !== 'Resolved';
+        if (button.disabled)
+          button.title = tr(
+            'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+          );
+        button.addEventListener('click', () =>
+          dispatch({ type: 'entitySelected', entityId: entry.id })
+        );
+        body.append(button);
+      }
+      if (!entries.length) body.append(message(tr('No related entries returned.'), 'sd-note'));
+      const explore = document.createElement('button');
+      explore.type = 'button';
+      explore.className = 'sd-button';
+      explore.textContent = tr(
+        kind === 'dependencies' ? 'Explore dependencies' : 'Explore dependents'
+      );
+      explore.disabled = entity?.certainty !== 'Resolved';
+      explore.addEventListener('click', () =>
+        dispatch({
+          type: 'revealRequested',
+          entityId: state.selection.entityId!,
+          scope: { kind, id: state.selection.entityId, depth: 1 },
+          granularity: 'type'
+        })
+      );
+      body.append(explore);
+    }
+  } else {
+    elements.inspectorTitle.textContent = tr('Details');
+    body.append(message(tr('Select a node or relation to inspect it.'), 'sd-empty'));
+  }
+  renderQueryMetadata(body, metadata ?? state.queryMetadata!, state.language);
+  body.append(
+    message(
+      tr(
+        'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+      ),
+      'sd-note'
+    )
+  );
+  body.append(
+    message(
+      tr(
+        'Source opening, legacy evidence aggregation/paging, context copy and exports are unavailable for saved index.'
+      ),
+      'sd-note'
+    )
+  );
+}
+
+function decorateSavedGraph(
+  host: HTMLElement,
+  projection: Projection | undefined,
+  language: ViewState['language']
+): void {
+  const tr = translator(language);
+  const edges = new Map(projection?.edges.map((edge) => [edge.id, edge]));
+  for (const group of host.querySelectorAll<SVGGElement>('g.edge')) {
+    group.querySelector('.sd-query-certainty')?.remove();
+    group.querySelector('.sd-query-title')?.remove();
+    const edge = edges.get(group.getAttribute('data-id') ?? '');
+    if (!edge) continue;
+    const certainty = edge.certainty ?? tr('unknown');
+    const label = `${edge.kinds.join(', ')} · ${tr('Certainty')}: ${certainty}`;
+    group.setAttribute('aria-label', label);
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.setAttribute('class', 'sd-query-title');
+    title.textContent = label;
+    group.append(title);
+    const path = group.querySelector<SVGPathElement>('path.edge-line');
+    if (
+      path &&
+      typeof path.getTotalLength === 'function' &&
+      typeof path.getPointAtLength === 'function'
+    ) {
+      const position = path.getPointAtLength(path.getTotalLength() / 2);
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('class', 'sd-query-certainty');
+      text.setAttribute('x', String(position.x));
+      text.setAttribute('y', String(position.y - 4));
+      text.setAttribute('fill', 'var(--vscode-foreground)');
+      text.setAttribute('font-size', '10');
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('pointer-events', 'none');
+      text.textContent = certainty;
+      group.append(text);
+    }
+  }
+}
+
 /** Human-readable scope label for the graph header/exports. */
 export function imageMetadata(state: ViewState): string[] {
   const tr = translator(state.language);
+  if (state.queryMetadata)
+    return [
+      queryResultSummary(state.queryMetadata, state.language),
+      tr('This operation is unavailable for saved index.')
+    ];
   const notes: string[] = [];
   const visible = selectVisibleData(state);
   if (state.imageOptions.profile) {
@@ -1180,7 +1607,7 @@ function scopeLabel(state: ViewState, language: ViewState['language'] = 'en'): s
   const tr = translator(language);
   const scope = state.scope;
   if (!scope || scope.kind === 'root') {
-    return tr('all {0}', tr(state.granularity));
+    return state.queryMetadata ? tr('Returned symbols') : tr('all {0}', tr(state.granularity));
   }
 
   const origin = state.projection?.nodes.find((node) => node.id === scope.id);

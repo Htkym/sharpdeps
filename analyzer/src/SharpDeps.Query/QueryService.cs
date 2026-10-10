@@ -79,13 +79,13 @@ public sealed class QueryService
                 }
                 if (work.Errors.Count == 0)
                 {
-                    Select(work);
+                    Select(work, request.Kind == QueryKind.Browse ? offset : 0);
                     work.Check();
-                    if (offset > work.Items.Count) work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
+                    if (request.Kind != QueryKind.Browse && offset > work.Items.Count) work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
                     else
                     {
-                        var page = work.Items.Skip(offset).Take(request.PageSize).ToList();
-                        var hasMore = offset + page.Count < work.Items.Count;
+                        var page = work.Items.Skip(request.Kind == QueryKind.Browse ? 0 : offset).Take(request.PageSize).ToList();
+                        var hasMore = request.Kind == QueryKind.Browse ? work.BrowseHasMore : offset + page.Count < work.Items.Count;
                         if (hasMore) work.Reasons.Add("PAGE_LIMIT");
                         if (request.Kind == QueryKind.Context && workspace is not null)
                             AddSnippets(work, page, ref freshness);
@@ -129,10 +129,24 @@ public sealed class QueryService
             freshness.Unverified.Take(8).ToArray(), freshness.Unverified.Count);
     }
 
-    private void Select(Work work)
+    private void Select(Work work, int browseOffset)
     {
         var request = work.Request;
         if (request.Kind == QueryKind.Status) return;
+        if (request.Kind == QueryKind.Browse)
+        {
+            var matched = 0;
+            foreach (var node in saved.Graph.Nodes.OrderBy(n => n.Id, StringComparer.Ordinal))
+            {
+                work.Check();
+                if (!BrowseInScope(node, work) || (!request.IncludeDocuments && IsDocument(node.Kind))) continue;
+                if (matched++ < browseOffset) continue;
+                if (work.Items.Count == request.PageSize || !work.Add(NodeItem(node, "browse", [], request.Scope)))
+                { work.BrowseHasMore = true; return; }
+            }
+            if (browseOffset > matched) work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
+            return;
+        }
         if (request.Kind == QueryKind.Search)
         {
             foreach (var item in Search(work)) if (!work.Add(item)) break;
@@ -233,6 +247,33 @@ public sealed class QueryService
     }
 
     private readonly record struct WalkPosition(string Id, string? OccurrenceId, string? VariantId);
+
+    private bool BrowseInScope(HarnessNode node, Work work)
+    {
+        var scope = work.Request.Scope;
+        if (node.Kind != HarnessNodeKind.Namespace || scope?.VariantIds is not { Count: > 0 } variants)
+            return InScope(node, scope);
+        // A namespace has project ownership, but no declaration/path proof for the selected variant.
+        if (scope.PathPrefix is not null || (scope.Kind is { } kind && kind != node.Kind)) return false;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = node;
+        while (visited.Add(current.Id))
+        {
+            work.Check();
+            if (current.Kind == HarnessNodeKind.Project)
+            {
+                if (scope.ProjectId is { } project && project != current.Id) return false;
+                foreach (var variant in saved.Graph.Variants)
+                {
+                    work.Check();
+                    if (variant.ProjectId == current.Id && variants.Contains(variant.Id)) return true;
+                }
+                return false;
+            }
+            if (current.ParentId is not { } parent || !nodes.TryGetValue(parent, out current)) return false;
+        }
+        return false;
+    }
 
     private HashSet<WalkPosition> Walk(Work work, IReadOnlyList<string> seeds)
     {
@@ -473,7 +514,9 @@ public sealed class QueryService
             if (!errorOnly) work.Check();
             if (work.Request.RequireComplete && (saved.Graph.Coverage != HarnessCoverage.CompleteWithinScope || work.Reasons.Count > 0))
                 work.Error("INCOMPLETE_RESULT", "Retry with complete coverage and sufficient query/output budgets.");
-            var next = (hasMore || offset + page.Count < work.Items.Count) && page.Count > 0 && work.Errors.Count == 0
+            var selectedRemainder = work.Request.Kind == QueryKind.Browse
+                ? page.Count < work.Items.Count : offset + page.Count < work.Items.Count;
+            var next = (hasMore || selectedRemainder) && page.Count > 0 && work.Errors.Count == 0
                 ? cursors.Encode(snapshot, filter, offset + page.Count) : null;
             var errors = work.Errors.Take(8).ToArray(); var diagnostics = work.Diagnostics.Take(16).ToArray();
             if (work.Errors.Count > errors.Length || work.Diagnostics.Count > diagnostics.Length) work.Reasons.Add("DIAGNOSTIC_LIMIT");
@@ -536,6 +579,7 @@ public sealed class QueryService
             || (r.Ids is { } ids && (ids.Count > 64 || ids.Any(s => !Short(s, 128) || string.IsNullOrWhiteSpace(s))))
             || (r.Scope?.VariantIds is { } variants && (variants.Count is < 1 or > 64 || variants.Any(s => !Short(s, 128))))
             || (r.EdgeKinds is { } edges && (edges.Count is < 1 or > 32 || edges.Any(s => !Short(s, 64))))
+            || (r.Kind == QueryKind.Browse && (r.Term is not null || r.NodeId is not null || r.Ids is not null || r.EdgeKinds is not null))
             || (r.Kind == QueryKind.Search && string.IsNullOrWhiteSpace(r.Term))
             || (r.Kind is QueryKind.Symbol or QueryKind.Callers or QueryKind.Callees && r.NodeId is null && r.Ids is not { Count: > 0 })
             || (r.Kind == QueryKind.Impact && r.NodeId is null && r.Ids is not { Count: > 0 } && string.IsNullOrWhiteSpace(r.Term))
@@ -558,6 +602,7 @@ public sealed class QueryService
         public CancellationTokenSource Timer { get; }
         public CancellationToken Token => Timer.Token;
         public List<QueryItem> Items { get; } = [];
+        public bool BrowseHasMore { get; set; }
         public List<QueryIssue> Diagnostics { get; } = [];
         public List<QueryIssue> Errors { get; } = [];
         public HashSet<string> Reasons { get; } = new(StringComparer.Ordinal);

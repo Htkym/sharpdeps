@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Index;
 
-public enum QueryKind { Search, Symbol, Callers, Callees, Impact, Context, Status }
+public enum QueryKind { Search, Symbol, Callers, Callees, Impact, Context, Status, Browse }
 public enum QueryFreshnessPolicy { AllowStale, RequireFresh, Refresh }
 public sealed record QueryBudget(int MaxNodes = 60, int MaxEdges = 120, int MaxDepth = 2,
     int MaxMilliseconds = 1000, int MaxChars = 18000, int MaxBytes = 64000);
