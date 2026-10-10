@@ -7,10 +7,12 @@
     <Project Path="src/SharpDeps.QuickHost/SharpDeps.QuickHost.csproj" />
     <Project Path="src/SharpDeps.SemanticHost/SharpDeps.SemanticHost.csproj" />
     <Project Path="src/SharpDeps.Index/SharpDeps.Index.csproj" />
+    <Project Path="src/SharpDeps.Query/SharpDeps.Query.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />
     <Project Path="tests/SharpDeps.Index.Tests/SharpDeps.Index.Tests.csproj" />
     <Project Path="tests/SharpDeps.Index.Tests/WriterLockProbe/WriterLockProbe.csproj" />
+    <Project Path="tests/SharpDeps.Query.Tests/SharpDeps.Query.Tests.csproj" />
   </Folder>
 </Solution>
