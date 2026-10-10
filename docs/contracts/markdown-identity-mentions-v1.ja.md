@@ -1,0 +1,39 @@
+# Markdownの文書・節IDとsymbol mention
+
+SD2-04では、Syntamarkの公開factsを使う純粋な照合・解決APIを追加する。parser、renderer、ファイル探索、ユーザーコード実行、永続ストアは持たない。既存のQuick/Semantic host、report v2、固定runtime/source pairは変更しない。実際のhost・store・Query接続は後続taskで行う。
+
+## 文書と節のID
+
+`MarkdownIdentityMatcher.MatchDocuments`には、ownerが管理する同一workspace内の前後の文書一覧を渡す。workspace相対path、原文SHA256、UUID、任意の`sharpdeps.id`はownerが検証する。明示IDの一意な一致、ownerが実際に検証したrename、同じpath、原文内容の一意な移動の順でUUIDを保持する。原文内容による移動は、旧pathがなくなり、両方の一覧全体でそのhashが一意の場合だけ確定する。
+
+重複する明示IDは`duplicate-explicit-id`として拒否する。同じ内容の複数文書、copyと移動を区別できない場合は候補UUIDと理由を返し、自動で統合しない。未確定の文書にはUUIDを割り当てず、ownerが新しいUUIDを採番して後続transactionで保存する。renameの引数にはMarkdown内の移動申告をそのまま渡さない。pathの変更履歴を保持しても、実際の壊れたlinkを修復したことにはならない。
+
+`MatchSections`は、文書UUID、workspace UUID、原文とその原文hashに一致する完全なfacts、保存済みsnapshot、ownerのtoken採番関数を受け取る。parse・原文位置・decoded mappingが不完全な場合は照合を拒否する。保存済みsnapshotは文書・scopeと結びつけ、parser、contract、profile、optionsの一致も検査する。
+
+原文hashと上記の版がすべて同じ再解析では、LocalKeyと見出し・本文のdescriptor一致を検証し、重複節を含めて保存済みtokenを再bindする。原文が変わったときは、見出しと直接本文hashの組、一意な見出し、一意な直接本文hashの順で照合する。弱い見出し・本文の一意性は、照合済みの節を除く前の一覧全体で確認する。見出しと本文が両方変わった場合や、重複して識別できない場合は新しいtokenと候補・理由を返す。
+
+編集時のLocalKey、行番号、自動anchorを永続IDの根拠にしない。見出しはdecoded textとlevel、本文は共有factsの`DirectBodySpan`で指された原文bytesのUTF-8 SHA256を使う。節の順序に基づく推測はしないため、複数の親の下に同じ節がある場合も不確かな照合は確定しない。
+
+tokenは空値・前後空白・過去tokenとの重複を拒否する。採番関数はまだ保存していないtokenを提案する。取消や例外でtransactionを確定せず、成功時にownerがsnapshotとtokenを保存する。結果の`SectionTokens`と`TextHash`を既存adapter requestの`SectionTokens`・`SectionIdentityTextHash`へ渡すと、その原文に対するdurable `hsec_`へ投影できる。adapterの既存hash検査を省略しない。
+
+## mentionと再解決
+
+`MarkdownSymbolResolver.Resolve`は、adapterの投影、正確な原文、ownerが実際のHarness graphから用意したsymbol catalog、任意のproject・namespace・variant scopeを受け取る。catalogは同一workspaceの実在symbol nodeを要求し、variantを指定した別名には実在occurrenceを要求する。短縮名だけからprojectやassemblyを推測しない。後続のRoslyn接続では、SD2-02の`HarnessEvidence ?? Evidence`を使い、旧`Evidence`を重ねて連結しない。
+
+明示metadataではsymbol ID、documentation ID、FQN、短縮名を扱い、project等のscopeを適用する。explicit IDが削除された場合は、同じ名前の別symbolへfallbackしない。コード例や本文の名前から`calls`・`conforms`を作らない。明示metadataの根拠は`documents_symbol`、名前への言及は`mentions_symbol`として区別する。
+
+コードファイルの明示linkは、共有factsの`Target`とownerが検証済みの`CodeFileAliases`を完全一致で照合する。catalogの`SourceId`には実際のnode/occurrenceの宣言位置を要求する。URLや相対pathを別parserで解釈せず、alias未登録のlinkは未解決のまま保持する。共有factsに`TargetRawSpan`がないlinkは未知位置の候補として扱う。aliasの追加・変更・削除も再解決を要し、対象linkのTargetを変更tokenとして通知するか、全件再解決を選ぶ。
+
+variantを絞ってから同じlogical symbol IDをまとめる。候補が一つでも本文の推測や未知・部分的な位置は`Candidate`にする。複数候補はすべて保持し、`TargetNodeId`を確定しない。候補がない場合は`Unresolved`を保持する。Syntamarkの現行公開DTOにはinline code専用kindがなく、paragraph/tableCellのdecoded textに混在するため、本文は推測として扱い、この制約を結果にも記録する。
+
+symbol catalogのcoverageはMarkdownのcoverageと別に検査し、結果の`CatalogCoverage`へ保持する。catalogが`Partial`または`Failed`の場合は、明示metadataやFQNでも一候補の一意性を確定せず、`Candidate`と`catalog-incomplete`を残す。mentionが0件でも不足理由を保持し、完全なMarkdown graphへ投影した際に`Partial`を伝播する。catalogのcoverageが変わった場合は、変更token一覧が空でも全mentionを再解決する。`CompleteWithinScope`へ戻った際は不足理由を除去し、完全なcatalogと原文根拠から再確定する。
+
+根拠は共有projectionの`Map`が返すraw fragments、位置精度、原文sliceから作るsnippet、source/version/hashを保持する。entityやescapeの位置をdecoded文字数から逆算しない。raw mappingがない場合はsnippetを捏造せず、未確定の根拠として扱う。
+
+`ReResolve`は保存した抽出根拠からsymbol候補を再計算し、Markdownを再parseしない。確定済みmention、候補mention、未解決mentionをすべて再解決の対象にできる。token・旧target・scopeの逆索引を持ち、ownerが変更前後のselector、target、影響scopeを完全に提示できる場合だけ対象を絞る。情報が不足する場合は全mentionを再解決する。同名候補の追加で旧確定を候補へ戻し、削除やrenameで旧targetを残さない。
+
+`ProjectGraph`は同じ原文・snapshot・generationのgraphへ結果を投影する。ownerが候補symbol nodeを先にmergeし、dangling edgeを作らない。sourceが変わった新generationへ古い根拠を流用しない。実際のowner token採番・alias履歴・metadata取得・変更通知・永続化は、後続owner接続の責務となる。
+
+## 検証の範囲
+
+追加したfocused testsは、文書copyと移動、重複ID、節の挿入・編集・無変更再解析・重複本文、候補増減時の再解決、位置根拠と取消を対象とする。現段階では親の重い検証枠を待っており、build/testを実行していない。構文解析・実差分レビューの結果はrun成果物へ別に記録する。全suite、CLI golden、store/Query接続、host動作を証明したとは扱わない。
