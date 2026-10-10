@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>SharpDeps.Index.Tests</RootNamespace>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <ProjectReference Include="..\..\src\SharpDeps.Index\SharpDeps.Index.csproj" />
+    <ProjectReference Include="WriterLockProbe\WriterLockProbe.csproj" ReferenceOutputAssembly="false" />
+    <Compile Remove="WriterLockProbe\**\*.cs" />
+  </ItemGroup>
+  <Target Name="CopyWriterLockProbe" AfterTargets="Build">
+    <ItemGroup>
+      <WriterLockProbeOutput Include="$(MSBuildProjectDirectory)\WriterLockProbe\bin\$(Configuration)\$(TargetFramework)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WriterLockProbeOutput)" DestinationFolder="$(OutDir)WriterLockProbe\%(RecursiveDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

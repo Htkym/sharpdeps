@@ -6,6 +6,7 @@
   -->
 
   <ItemGroup>
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />
     <!--
       Quick uses syntax-only Roslyn and stays on the v0.0.4 parser version so its
