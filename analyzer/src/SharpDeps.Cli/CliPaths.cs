@@ -54,6 +54,11 @@ internal sealed record CliWorkspaceState(int SchemaVersion, Guid WorkspaceUuid, 
 
 internal static class CliPaths
 {
+    internal static bool SamePath(string? left, string? right) => left is not null && right is not null
+        && Path.IsPathFullyQualified(left) && Path.IsPathFullyQualified(right)
+        && string.Equals(Path.GetFullPath(left), Path.GetFullPath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
     internal static string Root(string value)
     {
         if (!Path.IsPathFullyQualified(value) || IsNetwork(value))

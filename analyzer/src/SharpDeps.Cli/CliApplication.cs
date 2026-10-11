@@ -16,7 +16,7 @@ public static class CliApplication
             options = CliArguments.Parse(args);
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
-                return await Reply(stdout, options, new { commands = new[] { "index", "update", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
+                return await Reply(stdout, options, new { commands = new[] { "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
                     root = "--root absolute-directory", index = "--target root-contained.slnx|.sln|.csproj --trusted", updateMode = "closed-input-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = "SharpDeps.Cli@0.2.0-preview.3 (provisional, unpublished)" });
@@ -25,13 +25,15 @@ public static class CliApplication
                     toolTargetFramework = "net10.0", indexing = "trusted target SDK/MSBuild required", savedQuery = "runtime-only; no restore/build/network",
                     configurationProof = "not-connected", updateMode = "closed-input-markdown-or-full-rebuild" });
             // Validate request syntax before opening any stored data.
-            var request = options.Command is "index" or "update" ? null : options.QueryRequest();
-            if (options.Command is "index" or "update" && !options.Has("trusted")) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
+            var request = options.Command is "index" or "update" or "serve" or "coordinator-status" ? null : options.QueryRequest();
+            if (options.Command is "index" or "update" or "serve" && !options.Has("trusted")) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
             var root = CliPaths.Root(options.Require("root"));
             var indexPath = CliPaths.InRoot(root, options.Get("index") ?? ".sharpdeps/index.sqlite");
             foreach (var sidecar in new[] { indexPath + "-wal", indexPath + "-shm", indexPath + ".writer.lock" }) CliPaths.RejectLinks(sidecar);
             if (options.Command is "index" or "update")
                 return await IndexAsync(options, root, indexPath, stdout, stderr, token);
+            if (options.Command == "serve") return await ServeAsync(options, root, indexPath, stdout, stderr, token);
+            if (options.Command == "coordinator-status") return await CoordinatorStatusAsync(options, root, indexPath, stdout, token);
             var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(indexPath)) throw new CliFailure("INDEX_MISSING", 3);
             using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid);
@@ -56,13 +58,8 @@ public static class CliApplication
     private static async Task<int> IndexAsync(CliArguments options, string root, string indexPath,
         TextWriter stdout, TextWriter stderr, CancellationToken token)
     {
-        var target = CliPaths.InRoot(root, options.Require("target"));
-        if (!File.Exists(target) || Path.GetExtension(target).ToLowerInvariant() is not (".sln" or ".slnx" or ".csproj"))
-            throw new CliFailure("TARGET_INVALID", 2);
-        var projects = options.Many("project")?.Select(path => CliPaths.InRoot(root, path)).ToArray();
-        if (projects is not null && (projects.Distinct(StringComparer.OrdinalIgnoreCase).Count() != projects.Length
-            || projects.Any(path => !File.Exists(path) || Path.GetExtension(path) != ".csproj")))
-            throw new CliFailure("PROJECT_SELECTION_INVALID", 2);
+        // Validate the entire selection before creating workspace identity or trying IPC.
+        var update = CoordinatorUpdate.Parse(options, root, indexPath, Guid.Empty);
         var timeout = options.Number("timeout-seconds", 180, 1, 300);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
         operation.CancelAfter(TimeSpan.FromSeconds(timeout));
@@ -72,37 +69,73 @@ public static class CliApplication
             var existed = File.Exists(indexPath);
             if (options.Command == "update" && !existed) throw new CliFailure("INDEX_MISSING", 3);
             var state = CliWorkspaceState.Open(root, create: !existed);
-            using var writer = IndexWriter.Open(root, indexPath, state.WorkspaceUuid, isTrusted: true);
-            IndexSnapshot? previous = null;
-            if (existed)
+            update = update with { Options = update.Options with { WorkspaceUuid = state.WorkspaceUuid } };
+            var discovered = CoordinatorProtocol.Discover(root, indexPath, state.WorkspaceUuid);
+            CoordinatorReply? reply = null;
+            if (discovered is not null)
             {
-                try
-                {
-                    using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid);
-                    previous = reader.Snapshot();
-                }
-                catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && options.Command == "index")
-                { /* A failed first extraction has no published generation; retry under this lease. */ }
+                reply = await CoordinatorProtocol.TrySendAsync(discovered, new(CoordinatorProtocol.Version, discovered.Instance,
+                    state.WorkspaceUuid, options.RequestId, "update", root, indexPath, true, update.Arguments()), operation.Token);
             }
-            if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: extraction started (no automatic restore)");
-            var extraction = new CliIndexOptions(root, target, indexPath, state.WorkspaceUuid,
-                options.Get("configuration") ?? "Debug", options.Get("platform"), projects, options.Get("tfm"), timeout,
-                AllowSemanticReuse: options.Command == "update");
-            var build = await CliIndexer.BuildForPublicationAsync(extraction, previous, operation.Token);
-            var snapshot = build.Snapshot;
-            operation.Token.ThrowIfCancellationRequested();
-            writer.Commit(IndexStage.Create(snapshot), operation.Token,
-                build.VerifySelection);
-            var updateMode = snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.semanticGraphReused" && d.Count == 1) == true
-                ? "markdown-incremental" : "full-rebuild";
-            if (!options.Has("quiet")) await stderr.WriteLineAsync($"sharpdeps: {updateMode} committed");
-            return await Reply(stdout, options, new { workspaceId = snapshot.Graph.WorkspaceId, snapshotId = snapshot.Graph.SnapshotId,
-                generation = snapshot.Graph.Generation, coverage = snapshot.Graph.Coverage, updateMode,
-                configurationProof = "unverified", coordinatorState = "not-connected", files = snapshot.Files.Count,
-                nodes = snapshot.Graph.Nodes.Count, edges = snapshot.Graph.Edges.Count });
+            if (reply is null)
+            {
+                // A stale descriptor never authorizes takeover: this Open must actually acquire the OS lease.
+                using var writer = IndexWriter.Open(root, indexPath, state.WorkspaceUuid, isTrusted: true);
+                await using var owner = new CliCoordinator(writer);
+                if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: extraction started (no automatic restore)");
+                try { reply = await owner.UpdateAsync(update, options.RequestId, operation.Token); }
+                finally { await owner.DrainAsync(); } // client cancellation cannot terminate other admitted clients
+            }
+            if (reply.ErrorCode is { } code) throw new CliFailure(code, ExitFor(code));
+            var result = reply.Result ?? throw new CliFailure("COORDINATOR_REPLY_INVALID", 6);
+            if (!options.Has("quiet")) await stderr.WriteLineAsync($"sharpdeps: {result.UpdateMode} committed");
+            return await Reply(stdout, options, new { result.WorkspaceId, result.SnapshotId, result.Generation,
+                result.Coverage, result.UpdateMode, configurationProof = "unverified", coordinatorState = reply.State,
+                ownerInstance = reply.Instance, revision = reply.Revision, desiredRevision = reply.DesiredRevision,
+                result.Files, result.Nodes, result.Edges });
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new CliFailure("TIMEOUT", 4); }
+    }
+
+    private static async Task<int> ServeAsync(CliArguments options, string root, string indexPath,
+        TextWriter stdout, TextWriter stderr, CancellationToken token)
+    {
+        var state = CliWorkspaceState.Open(root, create: !File.Exists(indexPath));
+        using var writer = IndexWriter.Open(root, indexPath, state.WorkspaceUuid, isTrusted: true);
+        Guid instance;
+        await using (var owner = new CliCoordinator(writer))
+        {
+            instance = owner.Owner.Instance;
+            if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: coordinator ready (local IPC; no automatic restore)");
+            var ownerStopped = owner.Stopped;
+            var stopped = await Task.WhenAny(Task.Delay(Timeout.InfiniteTimeSpan, token), ownerStopped);
+            if (!token.IsCancellationRequested && stopped == ownerStopped)
+                throw new CliFailure("COORDINATOR_UNAVAILABLE", 6);
+        }
+        return await Reply(stdout, options, new { coordinatorState = "stopped", ownerInstance = instance });
+    }
+
+    private static async Task<int> CoordinatorStatusAsync(CliArguments options, string root, string indexPath,
+        TextWriter stdout, CancellationToken token)
+    {
+        var state = CliWorkspaceState.Open(root, create: false);
+        var owner = CoordinatorProtocol.Discover(root, indexPath, state.WorkspaceUuid);
+        if (owner is null) return await Reply(stdout, options, new { coordinatorState = "absent", configurationProof = "unverified" });
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        CoordinatorReply? reply;
+        try
+        {
+            reply = await CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version, owner.Instance,
+                state.WorkspaceUuid, options.RequestId, "status", root, indexPath, false, []), timeout.Token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { throw new CliFailure("TIMEOUT", 4); }
+        if (reply?.ErrorCode is { } code) throw new CliFailure(code, ExitFor(code));
+        return await Reply(stdout, options, new { coordinatorState = reply?.State ?? "unreachable", ownerInstance = owner.Instance,
+            revision = reply?.Revision, desiredRevision = reply?.DesiredRevision, result = reply?.Result,
+            configurationProof = "unverified" });
     }
 
     internal static int ExitFor(string code) => code switch
@@ -113,6 +146,8 @@ public static class CliApplication
             or "INDEX_NO_SNAPSHOT" or "INDEX_NOT_FOUND" => 3,
         "SYMBOL_NOT_FOUND" => 2,
         "QUERY_TIMEOUT" or "INCOMPLETE_RESULT" or "OUTPUT_BUDGET_TOO_SMALL" => 4,
+        "COORDINATOR_SUPERSEDED" => 3,
+        _ when code.StartsWith("COORDINATOR_", StringComparison.Ordinal) => 6,
         _ when code.Contains("CURSOR", StringComparison.Ordinal) || code.StartsWith("INDEX_", StringComparison.Ordinal) => 6,
         _ => 4
     };

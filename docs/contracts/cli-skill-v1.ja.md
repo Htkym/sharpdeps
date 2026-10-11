@@ -30,6 +30,8 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 | command | 対象と実行境界 |
 |---|---|
 | `index`, `update` | root内の`sln`/`slnx`/`csproj`を`--target`で指定し、`--trusted`を明示する。解析・書込み。updateは[差分更新契約](incremental-update-v1.ja.md)で閉じた入力を照合できる場合にMarkdown差分を処理し、それ以外はfull rebuildへ戻す |
+| `serve` | `--trusted`を明示し、root/indexのownerを起動する。更新は専用local IPCで受理する |
+| `coordinator-status` | ownerの状態を専用IPCで読む。保存Queryのstatusやfreshnessとは別 |
 | `status`, `search`, `symbol`, `callers`, `callees`, `impact`, `context` | committed indexのQuery。untrustedでも保存値の読取りは可能。`--trusted`を指定したcontextだけが検証済みsource snippetを読める |
 | `query --kind search\|symbol\|callers\|callees\|impact\|context\|status` | 同じQueryへのalias |
 | `doctor` | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す |
@@ -71,7 +73,7 @@ exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialを
 
 ## 鮮度、sourceと権限
 
-CLIの現在入力集合・設定fingerprintのowner接続は未完了で、coordinator stateは`not-connected`。保存manifestのhashが全部一致しても、新規入力と現設定を証明できない。`require-fresh`は不足を未達として拒否し、`refresh`は`UPDATE_REQUIRED`を返す。mtime/sizeだけでverified-currentと称さない。明示的に許可されたtrusted index/update後、新readerから問い合わせる。
+trusted更新は[coordinator／IPC契約](coordinator-ipc-v1.ja.md)でownerへ接続する。保存Queryの現在入力集合・設定fingerprintのowner接続は未完了で、そのQuery snapshotのcoordinator stateは`not-connected`を保持する。保存manifestのhashが全部一致しても、新規入力と現設定を証明できない。`require-fresh`は不足を未達として拒否し、`refresh`は`UPDATE_REQUIRED`を返す。mtime/sizeだけでverified-currentと称さない。明示的に許可されたtrusted index/update後、新readerから問い合わせる。
 
 source snippetはmanifest/evidenceのcontent hashと同じ一回のbounded byte bufferを照合してから、元UTF-16のzero-based半開区間を切る。BOM/CRLFを除去しない。不一致は`SOURCE_CHANGED_SINCE_SNAPSHOT`でsnippetを省略する。unknown/generated spanを実source位置へ推測補完しない。untrusted ReadSavedではsourceを読まない。
 

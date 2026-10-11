@@ -1,6 +1,7 @@
 namespace SharpDeps.Cli.Tests;
 
 using System.Security.Cryptography;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts.Harness;
@@ -101,6 +102,170 @@ public sealed class CliTests
         Assert.Equal("not-run", info.RootElement.GetProperty("result").GetProperty("sdkProbe").GetString());
     }
 
+    [Fact]
+    public async Task ActualIpcCoalescesPendingClientsAndCancellingOneCannotCancelSharedPublication()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var firstBuild = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBuild = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondBuild = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builds = 0;
+        var publications = 0;
+        var remoteAdmissions = 0;
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var original = pinned.Snapshot();
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, async (_, token) =>
+        {
+            var count = Interlocked.Increment(ref builds);
+            if (count == 1)
+            {
+                firstBuild.TrySetResult();
+                await releaseBuild.Task.WaitAsync(token);
+            }
+            else
+            {
+                secondBuild.TrySetResult();
+                await releaseSecond.Task.WaitAsync(token);
+            }
+            using var latest = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var previous = latest.Snapshot();
+            return new(previous with { Graph = previous.Graph with { Generation = previous.Graph.Generation + 1,
+                SnapshotId = Guid.NewGuid().ToString("N") } }, () => Interlocked.Increment(ref publications));
+        });
+        owner.RequestAccepted = id =>
+        {
+            if ((id is "cancel-client" or "surviving-client") && Interlocked.Increment(ref remoteAdmissions) == 2)
+                admitted.TrySetResult();
+        };
+        var arguments = new[] { "update", "--root", fixture.Root, "--index", fixture.IndexPath, "--trusted", "--target", "App.csproj" };
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(arguments), fixture.Root, fixture.IndexPath, fixture.Uuid);
+        var initial = owner.UpdateAsync(update, "initial", deadline.Token);
+        await firstBuild.Task.WaitAsync(deadline.Token);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        var canceledClient = CoordinatorProtocol.TrySendAsync(owner.Owner, Request("cancel-client"), cancel.Token);
+        var survivingClient = CoordinatorProtocol.TrySendAsync(owner.Owner, Request("surviving-client"), deadline.Token);
+        await admitted.Task.WaitAsync(deadline.Token);
+        Assert.Equal(2, owner.Status("status").DesiredRevision);
+        releaseBuild.TrySetResult();
+        await secondBuild.Task.WaitAsync(deadline.Token);
+        Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+            IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+        var shortOwner = FinishShortOwnerAsync();
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await canceledClient);
+        releaseSecond.TrySetResult();
+        var survivor = Assert.IsType<CoordinatorReply>(await survivingClient);
+        Assert.Null(survivor.ErrorCode);
+        Assert.Equal(original.Graph.Generation + 1, survivor.Result!.Generation);
+        Assert.Equal(survivor.Result.Generation, (await shortOwner).Result!.Generation);
+        Assert.Equal(2, builds); // superseded extraction + one coalesced fresh extraction
+        Assert.Equal(1, publications);
+        Assert.Equal(original.Graph.Generation, pinned.Snapshot().Graph.Generation);
+        Assert.Contains(pinned.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
+        using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(survivor.Result.Generation, current.Snapshot().Graph.Generation);
+        Assert.Contains(current.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
+        CoordinatorRequest Request(string id) => new(CoordinatorProtocol.Version, owner.Owner.Instance, fixture.Uuid,
+            id, "update", fixture.Root, fixture.IndexPath, true, arguments);
+
+        async Task<CoordinatorReply> FinishShortOwnerAsync()
+        {
+            var reply = await initial;
+            await owner.DrainAsync();
+            await owner.DisposeAsync();
+            return reply;
+        }
+    }
+
+    [Fact]
+    public async Task IpcRejectsUntrustedAndWrongProtocolWithoutPublishingOrStealingTheLease()
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, (_, _) => throw new InvalidOperationException("Must not extract"));
+        var denied = await CoordinatorProtocol.TrySendAsync(owner.Owner, new(CoordinatorProtocol.Version, owner.Owner.Instance,
+            fixture.Uuid, "denied", "update", fixture.Root, fixture.IndexPath, false, []), deadline.Token);
+        Assert.Equal("WORKSPACE_UNTRUSTED", denied!.ErrorCode);
+        var mismatch = await CoordinatorProtocol.TrySendAsync(owner.Owner, new(99, owner.Owner.Instance,
+            fixture.Uuid, "mismatch", "status", fixture.Root, fixture.IndexPath, false, []), deadline.Token);
+        Assert.Equal("COORDINATOR_PROTOCOL_MISMATCH", mismatch!.ErrorCode);
+        Assert.Equal(0, owner.Status("status").DesiredRevision);
+        Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+            IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+        Assert.Throws<CliFailure>(() => CoordinatorProtocol.Decode<CoordinatorRequest>(
+            Encoding.UTF8.GetBytes("{\"protocol\":1,\"protocol\":99}")));
+        Assert.Throws<CliFailure>(() => CoordinatorProtocol.Decode<CoordinatorRequest>([0xff, 0xfe]));
+        using var tooLarge = new MemoryStream([0xff, 0xff, 0xff, 0x7f]);
+        await Assert.ThrowsAsync<CliFailure>(() => CoordinatorProtocol.ReadAsync<CoordinatorRequest>(tooLarge, deadline.Token));
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+
+    [Fact]
+    public void SdkUnavailableAtPublicationRequiresOwnerRestartAndKeepsSavedGeneration()
+    {
+        using var fixture = new Fixture();
+        var sdk = CliSdkSelection.Capture(fixture.Root);
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var previous = pinned.Snapshot();
+        var next = previous with { Graph = previous.Graph with { Generation = previous.Graph.Generation + 1,
+            SnapshotId = Guid.NewGuid().ToString("N") } };
+        var stage = IndexStage.Create(next);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        var buildGuardCalled = false;
+        var guard = CoordinatorExecutor.PublicationGuard(sdk, fixture.Root, () => buildGuardCalled = true);
+        // Change SDK selection after staging, before the real transaction's publication callback.
+        File.WriteAllText(Path.Combine(fixture.Root, "global.json"),
+            "{\"sdk\":{\"version\":\"99.0.999\",\"rollForward\":\"disable\"}}");
+        Assert.Equal("CLI_SDK_UNAVAILABLE", Assert.Throws<CliFailure>(() => CliSdkSelection.Capture(fixture.Root)).Code);
+        var failure = Assert.Throws<CliFailure>(() => writer.Commit(stage, verifySelection: guard));
+        Assert.Equal("COORDINATOR_SDK_RESTART_REQUIRED", failure.Code);
+        Assert.Equal(6, failure.ExitCode);
+        Assert.False(buildGuardCalled);
+        Assert.Equal(previous.Graph.Generation, pinned.Snapshot().Graph.Generation);
+        using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(previous.Graph.Generation, current.Snapshot().Graph.Generation);
+        Assert.Equal(previous.Graph.SnapshotId, current.Snapshot().Graph.SnapshotId);
+        Assert.Equal(previous.Graph.Nodes.Select(node => node.Id), current.Snapshot().Graph.Nodes.Select(node => node.Id));
+        Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), current.Search("Service").Select(hit => hit.NodeId));
+    }
+
+    [Fact]
+    public async Task ConnectionBudgetDoesNotStopOwnerOrCancelExistingSessions()
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, (_, _) => throw new InvalidOperationException("Must not extract"));
+        var connections = new List<NamedPipeClientStream>();
+        try
+        {
+            for (var i = 0; i < 32; i++)
+            {
+                var pipe = new NamedPipeClientStream(".", owner.Owner.Endpoint, PipeDirection.InOut,
+                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                connections.Add(pipe);
+                await pipe.ConnectAsync(1000, deadline.Token);
+            }
+            var request = new CoordinatorRequest(CoordinatorProtocol.Version, owner.Owner.Instance, fixture.Uuid,
+                "within-cap", "status", fixture.Root, fixture.IndexPath, false, []);
+            await CoordinatorProtocol.WriteAsync(connections[0], request, deadline.Token);
+            var reply = await CoordinatorProtocol.ReadAsync<CoordinatorReply>(connections[0], deadline.Token);
+            Assert.Equal("idle", reply.State);
+            Assert.Null(reply.ErrorCode);
+            Assert.False(owner.Stopped.IsCompleted);
+            Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+                IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+        }
+        finally { foreach (var connection in connections) connection.Dispose(); }
+    }
+
     private static string Code(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -120,6 +285,7 @@ public sealed class CliTests
             : OperatingSystem.IsMacOS() ? "/private/tmp/sharpdeps-sd207-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-sd207-fixtures");
         private const string Text = "public class Service {} public class ServiceExtra {}\n";
         private readonly Guid uuid = Guid.NewGuid();
+        public Guid Uuid => uuid;
         public string Root { get; } = Path.Combine(Base, Guid.NewGuid().ToString("N"));
         public string IndexPath => Path.Combine(Root, ".sharpdeps/index.sqlite");
         private string Project => HarnessIdentity.ProjectId(uuid, "App.csproj");

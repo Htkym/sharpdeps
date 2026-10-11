@@ -37,11 +37,11 @@ internal sealed class CliArguments
         if (args.Length == 0 || args is ["--help"] or ["-h"]) return parsed;
         if (args.Length > 200) throw new CliFailure("ARGUMENT_INVALID", 2);
         parsed.Command = args[0].ToLowerInvariant();
-        if (parsed.Command is not ("index" or "update" or "query" or "doctor" or "help")
+        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "doctor" or "help")
             && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
         if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
-        else if (parsed.Command is not ("help" or "doctor")) allowed.UnionWith(Query);
+        else if (parsed.Command is not ("help" or "doctor" or "serve" or "coordinator-status")) allowed.UnionWith(Query);
         for (var i = 1; i < args.Length; i++)
         {
             var argument = args[i];

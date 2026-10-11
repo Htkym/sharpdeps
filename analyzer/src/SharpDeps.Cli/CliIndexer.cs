@@ -438,7 +438,7 @@ public static class CliIndexer
                     }
                     else
                     {
-                        if (PathComparer.Equals(path, absoluteIndex) || new[] { "-wal", "-shm", ".writer.lock" }
+                        if (PathComparer.Equals(path, absoluteIndex) || new[] { "-wal", "-shm", ".writer.lock", ".owner.json" }
                             .Any(s => PathComparer.Equals(path, absoluteIndex + s))) continue;
                         if ((attributes & FileAttributes.ReparsePoint) != 0) return null;
                         if (!IsMarkdown(path)) paths.Add(path);
