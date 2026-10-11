@@ -374,10 +374,13 @@ for (const [width, theme] of [
     await expectPopover(page, 'profile', profileMapBounds, profileToolbarBounds);
     await page.getByLabel('Configuration', { exact: true }).fill('Release');
     await page.getByLabel('Configuration', { exact: true }).press('Tab');
-    expect((await page.locator('#sd-profile-panel').boundingBox()).y).toBeGreaterThanOrEqual(
-      (await page.locator('.sd-topbar').boundingBox()).y +
-        (await page.locator('.sd-topbar').boundingBox()).height
-    );
+    await expect
+      .poll(async () => {
+        const panel = await page.locator('#sd-profile-panel').boundingBox();
+        const toolbar = await page.locator('.sd-topbar').boundingBox();
+        return panel.y - toolbar.y - toolbar.height;
+      })
+      .toBeGreaterThanOrEqual(0);
     await page.locator('#sd-analyze').click();
     await expect(page.locator('#sd-profile-panel')).toBeHidden();
     expect(

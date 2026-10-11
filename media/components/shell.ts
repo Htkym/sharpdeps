@@ -649,10 +649,7 @@ function toolbarPopover(
   panel.setAttribute('aria-label', label);
   trigger.setAttribute('popovertarget', panel.id);
   trigger.setAttribute('aria-expanded', 'false');
-  panel.addEventListener('beforetoggle', (event) => {
-    const open = (event as ToggleEvent).newState === 'open';
-    trigger.setAttribute('aria-expanded', String(open));
-    if (!open) return;
+  const positionPanel = (): void => {
     const anchor = trigger.getBoundingClientRect();
     const width = Math.min(320, window.innerWidth - 16);
     // A wrapped top bar can put actions below the trigger. Keep them clickable.
@@ -664,6 +661,22 @@ function toolbarPopover(
     panel.style.bottom =
       placement === 'above' ? `${window.innerHeight - anchor.top + 4}px` : 'auto';
     panel.style.maxHeight = `${Math.max(0, placement === 'above' ? anchor.top - 12 : window.innerHeight - top - 8)}px`;
+  };
+  let toolbarObserver: ResizeObserver | undefined;
+  panel.addEventListener('beforetoggle', (event) => {
+    const open = (event as ToggleEvent).newState === 'open';
+    trigger.setAttribute('aria-expanded', String(open));
+    toolbarObserver?.disconnect();
+    toolbarObserver = undefined;
+    if (!open) return;
+    positionPanel();
+    const toolbar = trigger.closest('.sd-topbar');
+    if (toolbar && placement === 'below') {
+      toolbarObserver = new ResizeObserver(() => {
+        if (panel.matches(':popover-open')) positionPanel();
+      });
+      toolbarObserver.observe(toolbar);
+    }
   });
   window.addEventListener('resize', () => panel.hidePopover());
   return { trigger, panel };
