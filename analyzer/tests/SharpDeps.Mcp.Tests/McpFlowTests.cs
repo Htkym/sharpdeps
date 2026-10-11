@@ -96,7 +96,9 @@ public sealed class McpFlowTests
 
     private sealed class Fixture : IDisposable
     {
-        public string Root { get; } = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-" + Guid.NewGuid().ToString("N"));
+        private static readonly string Base = OperatingSystem.IsMacOS()
+            ? "/private/tmp/sharpdeps-mcp-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-fixtures");
+        public string Root { get; } = Path.Combine(Base, Guid.NewGuid().ToString("N"));
         public Guid Workspace { get; } = Guid.NewGuid();
         public string IndexPath => Path.Combine(Root, ".sharpdeps", "index.sqlite");
         public string Symbol { get; }

@@ -295,19 +295,25 @@ public sealed class CliTests
         Assert.False(CliIndexer.IsIndexOutput(neighbor, customIndex));
         Assert.True(CliIndexer.IsIndexOutput(customIndex + ".owner.json." + Guid.NewGuid().ToString("N") + ".tmp", customIndex));
         var beforeOwner = await CliIndexer.CaptureWatchInputsAsync(fixture.Root, customIndex, deadline.Token);
-        var fullBuilds = 0;
+        var recoveryInput = Path.Combine(fixture.Root, "additional.dat");
+        string? recoveredSnapshot = null;
         var incrementalBuilds = 0;
         await using var owner = new CliCoordinator(writer, (update, token) =>
         {
-            if (update.Full) Interlocked.Increment(ref fullBuilds); else Interlocked.Increment(ref incrementalBuilds);
+            if (!update.Full) Interlocked.Increment(ref incrementalBuilds);
             using var reader = IndexReader.Open(customIndex, fixture.Uuid);
             var prior = reader.Snapshot();
-            return Task.FromResult(new CliIndexBuild(prior with { Graph = prior.Graph with {
-                Generation = prior.Graph.Generation + 1, SnapshotId = Guid.NewGuid().ToString("N") } }, () => { }));
+            var snapshot = prior with { Graph = prior.Graph with {
+                Generation = prior.Graph.Generation + 1, SnapshotId = Guid.NewGuid().ToString("N") } };
+            if (update.Full && File.Exists(recoveryInput)
+                && File.ReadAllBytes(recoveryInput).SequenceEqual(new byte[] { 1, 0, 2, 0 }))
+                Volatile.Write(ref recoveredSnapshot, snapshot.Graph.SnapshotId);
+            return Task.FromResult(new CliIndexBuild(snapshot, () => { }));
         });
         var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root, "--index", customIndex,
             "--trusted", "--target", "App.csproj"]), fixture.Root, customIndex, fixture.Uuid);
-        owner.StartWatch(update, TimeSpan.FromSeconds(1));
+        // Keep the periodic timer out of the native-event/self-output assertions.
+        owner.StartWatch(update, TimeSpan.FromHours(1));
         await WaitUntilAsync(() => owner.Status("initial").Result?.Generation >= 2, deadline.Token);
         Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
             IndexWriter.Open(fixture.Root, customIndex, fixture.Uuid, true)).Code);
@@ -323,13 +329,25 @@ public sealed class CliTests
         File.Delete(temporary);
         await Task.Delay(200, deadline.Token);
         Assert.Equal(generation, owner.Status("no-self-loop").Result!.Generation);
-        var oldFullBuilds = Volatile.Read(ref fullBuilds);
+        // Restart only the watch on the same owner/lease, then observe a subsequent periodic extraction.
+        await owner.StopWatchAsync();
+        owner.StartWatch(update, TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => owner.Status("resync-started").Result?.Generation > generation
+            && owner.Status("resync-started").State == "idle", deadline.Token);
         owner.Watch!.SetNotificationsEnabled(false);
-        File.WriteAllBytes(Path.Combine(fixture.Root, "additional.dat"), [1, 0, 2, 0]);
-        await WaitUntilAsync(() => Volatile.Read(ref fullBuilds) > oldFullBuilds
-            && owner.Status("periodic").Result?.Generation > generation, deadline.Token);
+        File.WriteAllBytes(recoveryInput, [1, 0, 2, 0]);
+        IndexReader? recoveredReader = null;
+        await WaitUntilAsync(() =>
+        {
+            var expected = Volatile.Read(ref recoveredSnapshot);
+            if (expected is null || owner.Status("periodic").Result?.SnapshotId != expected) return false;
+            var committed = IndexReader.Open(customIndex, fixture.Uuid);
+            if (committed.Snapshot().Graph.SnapshotId != expected) { committed.Dispose(); return false; }
+            recoveredReader = committed; // Pin this observed full commit before the next periodic stage.
+            return true;
+        }, deadline.Token);
         // Lost events use full extraction even when the selected Markdown manifest alone would be unchanged.
-        using var current = IndexReader.Open(customIndex, fixture.Uuid);
+        using var current = recoveredReader!;
         Assert.Equal(original.Graph.Nodes.Select(node => node.Id), current.Snapshot().Graph.Nodes.Select(node => node.Id));
         Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), current.Search("Service").Select(hit => hit.NodeId));
         Assert.Equal(1, pinned.Snapshot().Graph.Generation);
