@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Granularity } from './reportV2';
 import type { ReportBridge } from './reportBridge';
+import type { SavedSourceLocation } from '../security/savedSource';
 import {
   QueryClientError,
   type SavedQueryClient,
@@ -40,6 +41,9 @@ export class SavedQueryProvider implements ReportBridge {
   >();
   private readonly cursors = new Map<string, { cursor: string; key: string }>();
   private sequence = 0;
+  private disposed = false;
+  private readonly declarations = new Map<string, SavedSourceLocation>();
+  private readonly evidenceLocations = new Map<string, SavedSourceLocation>();
   private inputStaleReason?: Extract<HostToWebviewMessage, { type: 'stale' }>['reason'];
 
   get staleReason(): Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined {
@@ -152,6 +156,7 @@ export class SavedQueryProvider implements ReportBridge {
     const request = checked.value;
     const requestId = 'requestId' in request ? request.requestId : undefined;
     try {
+      if (this.disposed) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
       if (request.type === 'ready')
         return {
           type: 'capabilities',
@@ -191,6 +196,7 @@ export class SavedQueryProvider implements ReportBridge {
     kind: string,
     fields: Record<string, unknown> = {}
   ): Promise<QueryWireReply> {
+    if (this.disposed) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
     const reply = await this.client.request({
       requestId: `provider_${++this.sequence}`,
       kind,
@@ -206,6 +212,7 @@ export class SavedQueryProvider implements ReportBridge {
       },
       ...fields
     });
+    if (this.disposed) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
     if (
       reply.snapshot.workspaceId !== this.readyReply.snapshot.workspaceId ||
       reply.snapshot.id !== this.readyReply.snapshot.id ||
@@ -257,11 +264,16 @@ export class SavedQueryProvider implements ReportBridge {
         : entry.node.kind === 'Namespace'
           ? 'namespace'
           : 'type';
+    const id = this.id(
+      nodeId,
+      granularity === 'project' ? 'prj' : granularity === 'namespace' ? 'ns' : 'ty'
+    );
+    const source = this.source(entry.item.path, entry.node.location);
+    if (source && (entry.node.kind === 'Type' || entry.node.kind === 'Member'))
+      this.declarations.set(id, source);
+    else this.declarations.delete(id);
     return {
-      id: this.id(
-        nodeId,
-        granularity === 'project' ? 'prj' : granularity === 'namespace' ? 'ns' : 'ty'
-      ),
+      id,
       name: entry.node.name,
       fullName: entry.node.signature || entry.node.name,
       granularity,
@@ -467,7 +479,7 @@ export class SavedQueryProvider implements ReportBridge {
           sourceOccurrenceId: edge.sourceOccurrenceId ?? null,
           targetOccurrenceId: edge.targetOccurrenceId ?? null,
           variantId: edge.variantId ?? null,
-          evidenceCount: 0,
+          evidenceCount: edge.evidence ? 1 : 0,
           inCycle: false
         }
       ];
@@ -545,10 +557,14 @@ export class SavedQueryProvider implements ReportBridge {
     if (request.cursor) throw new QueryClientError('QUERY_CURSOR_INVALID');
     const saved = this.edges.get(request.relationId);
     if (!saved) throw new QueryClientError('QUERY_EDGE_UNKNOWN');
+    const evidenceId = this.id(saved.edge.id, 'ev');
+    const source = this.source(saved.item.path, saved.edge.evidence);
+    if (source) this.evidenceLocations.set(evidenceId, source);
+    else this.evidenceLocations.delete(evidenceId);
     const items = saved.edge.evidence
       ? [
           {
-            id: this.id(saved.edge.id, 'ev'),
+            id: evidenceId,
             certainty:
               certaintyRank(saved.item.certainty) > certaintyRank(saved.edge.certainty)
                 ? saved.item.certainty
@@ -572,6 +588,35 @@ export class SavedQueryProvider implements ReportBridge {
       items,
       nextCursor: null,
       queryMetadata: this.metadata(saved.reply, items.length)
+    };
+  }
+
+  /** Resolves only IDs actually issued by this pinned provider, never paths from the view. */
+  resolveSource(
+    request: Extract<WebviewToHostMessage, { type: 'openDeclaration' | 'openEvidence' }>
+  ): SavedSourceLocation {
+    if (this.disposed || request.analysisId !== this.analysisId)
+      throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+    if (request.type === 'openDeclaration' && (request.declarationIndex ?? 0) !== 0)
+      throw new QueryClientError('QUERY_DECLARATION_UNAVAILABLE');
+    const source =
+      request.type === 'openDeclaration'
+        ? this.declarations.get(request.entityId)
+        : this.evidenceLocations.get(request.evidenceId);
+    if (!source) throw new QueryClientError('QUERY_SOURCE_NOT_RETURNED');
+    return { ...source, span: { ...source.span } };
+  }
+
+  private source(
+    relativePath: string | undefined,
+    location: QueryNode['location']
+  ): SavedSourceLocation | undefined {
+    if (!relativePath || !location?.contentHash || !location.rawSpan) return undefined;
+    return {
+      root: this.root,
+      relativePath,
+      contentHash: location.contentHash,
+      span: { ...location.rawSpan }
     };
   }
 
@@ -611,12 +656,15 @@ export class SavedQueryProvider implements ReportBridge {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.client.dispose();
     this.nodes.clear();
     this.edges.clear();
     this.cursors.clear();
     this.opaque.clear();
     this.reverse.clear();
+    this.declarations.clear();
+    this.evidenceLocations.clear();
   }
 }
 

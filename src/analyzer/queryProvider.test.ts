@@ -54,6 +54,127 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it('opens only host-issued source IDs from the pinned session and one available declaration', async () => {
+    const location = {
+      sourceId: 'source-a',
+      contentHash: 'a'.repeat(64),
+      rawSpan: { start: 5, length: 3, end: 8 }
+    };
+    const input = {
+      ...node('member-a'),
+      path: 'Input.cs',
+      node: { ...node('member-a').node!, location }
+    };
+    const wire = client([reply({ items: [input] })]);
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const search = await provider.handle({
+      type: 'searchEntities',
+      requestId,
+      analysisId: provider.analysisId,
+      query: 'member-a'
+    });
+    if (search.type !== 'searchResults') throw new Error('search failed');
+    const request = {
+      type: 'openDeclaration' as const,
+      requestId,
+      analysisId: provider.analysisId,
+      entityId: search.items[0].id
+    };
+    expect(provider.resolveSource(request)).toMatchObject({
+      root: 'D:/fixture',
+      relativePath: 'Input.cs',
+      contentHash: location.contentHash,
+      span: location.rawSpan
+    });
+    expect(() => provider.resolveSource({ ...request, declarationIndex: 1 })).toThrow(
+      'QUERY_DECLARATION_UNAVAILABLE'
+    );
+    expect(() => provider.resolveSource({ ...request, entityId: 'ty_0000000000000000' })).toThrow(
+      'QUERY_SOURCE_NOT_RETURNED'
+    );
+    const other = await SavedQueryProvider.create(client([]), 'D:/fixture');
+    expect(() => other.resolveSource({ ...request, analysisId: other.analysisId })).toThrow(
+      'QUERY_SOURCE_NOT_RETURNED'
+    );
+    const returned = provider.resolveSource(request);
+    returned.span.start = 0;
+    expect(provider.resolveSource(request).span.start).toBe(5);
+    provider.dispose();
+    expect(() => provider.resolveSource(request)).toThrow('QUERY_ANALYSIS_EXPIRED');
+    other.dispose();
+  });
+
+  it('issues evidence source IDs only with their evidence page and preserves real edge counts', async () => {
+    const location = {
+      sourceId: 'source-a',
+      contentHash: 'b'.repeat(64),
+      rawSpan: { start: 0, length: 3, end: 3 }
+    };
+    const edge = {
+      id: 'edge-a',
+      sourceNodeId: 'member-a',
+      targetNodeId: 'member-b',
+      kind: 'calls',
+      certainty: 'Resolved' as const,
+      producer: 'fixture',
+      evidence: location
+    };
+    const provider = await SavedQueryProvider.create(
+      client([
+        reply({
+          items: [
+            node('member-a'),
+            node('member-b'),
+            {
+              id: edge.id,
+              kind: 'calls',
+              label: 'a → b',
+              certainty: 'Resolved',
+              edge,
+              path: 'Input.cs'
+            }
+          ]
+        })
+      ]),
+      'D:/fixture'
+    );
+    const projection = await provider.handle({
+      type: 'getProjection',
+      requestId,
+      analysisId: provider.analysisId,
+      granularity: 'type',
+      scope: { kind: 'root' }
+    });
+    if (projection.type !== 'projection') throw new Error('projection failed');
+    const relationId = projection.projection.edges[0].id;
+    expect(projection.projection.edges[0].evidenceCount).toBe(1);
+    expect(() =>
+      provider.resolveSource({
+        type: 'openEvidence',
+        requestId,
+        analysisId: provider.analysisId,
+        evidenceId: relationId.replace('rel_', 'ev_')
+      })
+    ).toThrow('QUERY_SOURCE_NOT_RETURNED');
+    const page = await provider.handle({
+      type: 'getEvidencePage',
+      requestId,
+      analysisId: provider.analysisId,
+      relationId
+    });
+    if (page.type !== 'evidencePage') throw new Error('evidence failed');
+    const evidenceId = (page.items[0] as { id: string }).id;
+    expect(
+      provider.resolveSource({
+        type: 'openEvidence',
+        requestId,
+        analysisId: provider.analysisId,
+        evidenceId
+      })
+    ).toMatchObject({ relativePath: 'Input.cs', span: location.rawSpan });
+    provider.dispose();
+  });
+
   it('retains observed input changes when rereading the same pinned snapshot', async () => {
     const original = await SavedQueryProvider.create(client([]), 'D:/fixture');
     original.markStale('savedChange');

@@ -24,6 +24,7 @@ import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
 import { createGeneratedDocumentProvider } from './generatedDocuments/generatedDocumentProvider';
 import { GENERATED_DOCUMENT_SCHEME } from './generatedDocuments/documentUri';
 import { resolveTypeAtCursor } from './commands/typeNavigation';
+import { openSavedLocation } from './commands/openSavedLocation';
 import { trustDecision } from './security/trust';
 
 const STAGE_LABELS: Record<AnalysisStage, string> = {
@@ -232,6 +233,19 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
           : undefined,
       savedStaleReason: (analysisId) =>
         savedProvider?.analysisId === analysisId ? savedProvider.staleReason : undefined,
+      openSavedSource: async (request) => {
+        const provider = savedProvider;
+        if (!provider) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        const location = provider.resolveSource(request);
+        await openSavedLocation(
+          location,
+          () =>
+            savedProvider === provider &&
+            (vscode.workspace.workspaceFolders ?? []).some(
+              (folder) => folder.uri.scheme === 'file' && folder.uri.fsPath === provider.root
+            )
+        );
+      },
       targetName: () =>
         store.currentAnalysisId
           ? path.basename(store.getTargetPath(store.currentAnalysisId) ?? '')

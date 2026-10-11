@@ -13,7 +13,7 @@ import { buildContextExport, buildExportJson, buildMermaid } from '../export/con
 import type { ContextEvidence, ContextExportInput } from '../export/contextExport';
 import { getWebviewHtml } from './html';
 import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
-import type { ExportFormat, HostToWebviewMessage, Scope } from './protocolV2';
+import type { ExportFormat, HostToWebviewMessage, Scope, WebviewToHostMessage } from './protocolV2';
 import type { Granularity } from '../analyzer/reportV2';
 import type { AnalysisProgressEvent } from '../analyzer/analysisController';
 import type { ProfileRequest, Filters } from './protocolV2';
@@ -45,6 +45,9 @@ export interface CodeMapPanelHost {
   savedStaleReason?: (
     analysisId: string
   ) => Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined;
+  openSavedSource?: (
+    request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>
+  ) => Promise<void>;
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -215,6 +218,22 @@ export class CodeMapPanel {
       this.host.savedAnalysisState?.(request.analysisId) &&
       ['openEvidence', 'openDeclaration', 'copyContext', 'export'].includes(request.type)
     ) {
+      if (
+        (request.type === 'openEvidence' || request.type === 'openDeclaration') &&
+        this.host.openSavedSource
+      ) {
+        void this.host.openSavedSource(request).catch((error: unknown) => {
+          this.post({
+            type: 'error',
+            analysisId: request.analysisId,
+            requestId: request.requestId,
+            code: 'QUERY_SOURCE_OPEN_FAILED',
+            message:
+              error instanceof Error ? error.message : 'The saved source could not be opened.'
+          });
+        });
+        return;
+      }
       void this.host.bridge.handle(request).then((response) => this.post(response));
       return;
     }
