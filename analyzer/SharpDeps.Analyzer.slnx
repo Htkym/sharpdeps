@@ -10,6 +10,7 @@
     <Project Path="src/SharpDeps.Query/SharpDeps.Query.csproj" />
     <Project Path="src/SharpDeps.Cli/SharpDeps.Cli.csproj" />
     <Project Path="src/SharpDeps.QueryHost/SharpDeps.QueryHost.csproj" />
+    <Project Path="src/SharpDeps.Mcp/SharpDeps.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />
@@ -17,5 +18,6 @@
     <Project Path="tests/SharpDeps.Index.Tests/WriterLockProbe/WriterLockProbe.csproj" />
     <Project Path="tests/SharpDeps.Query.Tests/SharpDeps.Query.Tests.csproj" />
     <Project Path="tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Mcp.Tests/SharpDeps.Mcp.Tests.csproj" />
   </Folder>
 </Solution>

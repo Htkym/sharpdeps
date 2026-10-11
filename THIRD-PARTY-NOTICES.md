@@ -36,3 +36,11 @@ Full Apache licence text: [resources/APACHE-2.0-LICENSE.txt](resources/APACHE-2.
 The upstream package metadata records the licences and sources:
 https://github.com/dotnet/dotnet and https://github.com/ericsink/SQLitePCL.raw.
 SQLite's public-domain dedication is available at https://sqlite.org/copyright.html.
+
+## Optional stdio MCP tool
+
+The separate SharpDeps.Mcp tool uses the official ModelContextProtocol.Core 2.2.0
+SDK (Apache-2.0), maintained at https://github.com/modelcontextprotocol/csharp-sdk.
+It is not added to the VSIX or the existing CLI package. Its NuGet dependency
+metadata records the SDK's dependencies and licences. Full Apache licence text
+is linked above.
