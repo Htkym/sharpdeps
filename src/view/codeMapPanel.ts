@@ -98,6 +98,12 @@ export class CodeMapPanel {
     extensionUri: vscode.Uri,
     host: CodeMapPanelHost
   ): CodeMapPanel {
+    const current = CodeMapPanel.current;
+    if (current) {
+      // A late serializer must not replace a panel already opened in this session.
+      if (current.panel !== panel) panel.dispose();
+      return current;
+    }
     panel.webview.options = {
       enableScripts: true,
       enableCommandUris: false,
@@ -701,12 +707,18 @@ export class CodeMapPanel {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.host.onDispose?.();
-    CodeMapPanel.current = undefined;
-    setPanelActiveContext(false);
-    this.panel.dispose();
-    while (this.disposables.length) {
-      this.disposables.pop()?.dispose();
+    const ownsCurrent = CodeMapPanel.current === this;
+    if (ownsCurrent) {
+      CodeMapPanel.current = undefined;
+      setPanelActiveContext(false);
+    }
+    try {
+      if (ownsCurrent) this.host.onDispose?.();
+    } finally {
+      this.panel.dispose();
+      while (this.disposables.length) {
+        this.disposables.pop()?.dispose();
+      }
     }
   }
 }

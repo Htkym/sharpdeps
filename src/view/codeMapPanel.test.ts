@@ -6,12 +6,12 @@ import type { QueryWireReply, SavedQueryClient } from '../analyzer/queryClient';
 import type { ReportStore } from '../analyzer/reportStore';
 
 const api = vi.hoisted(() => ({
-  receive: undefined as ((message: unknown) => void) | undefined,
   post: vi.fn(),
   clipboard: vi.fn(),
   writeFile: vi.fn(),
   dialog: vi.fn(),
   info: vi.fn(),
+  createPanel: vi.fn(),
   getReport: vi.fn()
 }));
 vi.mock('vscode', () => ({
@@ -21,7 +21,12 @@ vi.mock('vscode', () => ({
   },
   env: { clipboard: { writeText: api.clipboard } },
   workspace: { fs: { writeFile: api.writeFile } },
-  window: { showSaveDialog: api.dialog, showInformationMessage: api.info },
+  ViewColumn: { One: 1 },
+  window: {
+    showSaveDialog: api.dialog,
+    showInformationMessage: api.info,
+    createWebviewPanel: api.createPanel
+  },
   commands: { executeCommand: vi.fn() }
 }));
 vi.mock('./html', () => ({ getWebviewHtml: () => '<div id="app"></div>' }));
@@ -62,6 +67,7 @@ let provider: SavedQueryProvider | undefined;
 beforeEach(() => {
   vi.clearAllMocks();
   api.dialog.mockReset();
+  api.createPanel.mockReset();
   api.getReport.mockImplementation(() => {
     throw new Error('legacy store must not be read');
   });
@@ -72,7 +78,35 @@ afterEach(() => {
   provider = undefined;
 });
 
-async function setup() {
+function physicalPanel() {
+  let disposed = false;
+  let onDispose: (() => void) | undefined;
+  let receive: ((message: unknown) => void) | undefined;
+  const panel = {
+    active: true,
+    visible: true,
+    reveal: vi.fn(),
+    dispose: vi.fn(() => {
+      if (disposed) return;
+      disposed = true;
+      onDispose?.();
+    }),
+    onDidDispose: (listener: () => void) => {
+      onDispose = listener;
+    },
+    onDidChangeViewState: vi.fn(),
+    webview: {
+      postMessage: api.post,
+      onDidReceiveMessage: (listener: (message: unknown) => void) => {
+        receive = listener;
+      }
+    },
+    dispatch: (message: unknown) => receive!(message)
+  };
+  return panel;
+}
+
+async function setup(first: 'show' | 'restore' = 'restore') {
   const requests: Record<string, unknown>[] = [];
   const wire: SavedQueryClient = {
     ready: Promise.resolve({ ...reply(), items: [] }),
@@ -110,27 +144,17 @@ async function setup() {
     savedAnalysisState: (id) =>
       id === saved.analysisId ? saved.analysisState('fixture') : undefined,
     prepareSavedExport: (request) => saved.prepareSavedExportFor(request),
-    onDispose: () => saved.dispose()
+    onDispose: vi.fn(() => saved.dispose())
   };
-  const panel = CodeMapPanel.restore(
-    {
-      active: true,
-      visible: true,
-      dispose: vi.fn(),
-      onDidDispose: vi.fn(),
-      onDidChangeViewState: vi.fn(),
-      webview: {
-        postMessage: api.post,
-        onDidReceiveMessage: (listener: (message: unknown) => void) => {
-          api.receive = listener;
-        }
-      }
-    } as unknown as vscode.WebviewPanel,
-    vscode.Uri.file('D:/fixture/extension'),
-    host
-  );
+  const physical = physicalPanel();
+  const uri = vscode.Uri.file('D:/fixture/extension');
+  if (first === 'show') api.createPanel.mockReturnValueOnce(physical);
+  const panel =
+    first === 'show'
+      ? CodeMapPanel.show(uri, host)
+      : CodeMapPanel.restore(physical as unknown as vscode.WebviewPanel, uri, host);
   const send = (changes: Record<string, unknown> = {}) =>
-    api.receive!({
+    physical.dispatch({
       type: 'export',
       requestId,
       analysisId: saved.analysisId,
@@ -148,6 +172,8 @@ async function setup() {
     projection,
     requests,
     panel,
+    physical,
+    host,
     send,
     switchCurrent: (id: string) => {
       currentId = id;
@@ -276,4 +302,34 @@ describe('saved output through validated panel messages (stubbed local APIs)', (
     await vi.waitFor(() => expect(api.writeFile).toHaveBeenCalledOnce());
     expect(Buffer.from(api.writeFile.mock.calls[0][1]).toString('utf8')).toBe('<svg>legacy</svg>');
   });
+});
+
+describe('panel ownership with a delayed serializer (stubbed VSCode panel events)', () => {
+  it.each(['show', 'restore'] as const)(
+    'keeps one owner and a usable saved export when %s arrives first',
+    async (first) => {
+      const { panel, physical, host, send, requests } = await setup(first);
+      const uri = vscode.Uri.file('D:/fixture/extension');
+      if (first === 'show') {
+        const oldRestoredTab = physicalPanel();
+        CodeMapPanel.restore(oldRestoredTab as unknown as vscode.WebviewPanel, uri, host);
+        // A tab restored late from the previous session must not own this live provider.
+        oldRestoredTab.dispose();
+        expect(oldRestoredTab.dispose).toHaveBeenCalled();
+      } else {
+        expect(CodeMapPanel.show(uri, host)).toBe(panel);
+      }
+      expect(host.onDispose).not.toHaveBeenCalled();
+      expect(CodeMapPanel.currentPanel).toBe(panel);
+      expect(physical.dispose).not.toHaveBeenCalled();
+      send({ type: 'copyContext', format: undefined });
+      await vi.waitFor(() => expect(api.clipboard).toHaveBeenCalledOnce());
+      expect(api.clipboard.mock.calls[0][0]).toContain('sharpdeps.saved-query-export');
+      expect(requests).toHaveLength(1);
+      expect(api.getReport).not.toHaveBeenCalled();
+      panel.dispose();
+      expect(host.onDispose).toHaveBeenCalledOnce();
+      expect(CodeMapPanel.currentPanel).toBeUndefined();
+    }
+  );
 });
