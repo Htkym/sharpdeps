@@ -44,7 +44,7 @@ describe('toViewActions', () => {
       let state = receive(INITIAL_STATE, {
         type: 'analysisComplete',
         analysisId,
-        target: { name: 'Saved workspace', relativePath: '' },
+        target: { name: 'Saved workspace', relativePath: 'src/Legacy.csproj' },
         queryMetadata: savedMetadata
       });
       state = receive(state, {
@@ -141,25 +141,42 @@ describe('toViewActions', () => {
 
   it('returns from cancelled legacy to a new saved provider and keeps its pinned cancellation state', () => {
     const legacyId = 'an_1111111111111111';
+    const nextSavedId = 'an_2222222222222222';
     const receive = (state: ViewState, message: unknown) =>
       toViewActions(message, queries, state).reduce(viewReducer, state);
     let state = receive(INITIAL_STATE, {
+      type: 'analysisComplete',
+      analysisId,
+      target: { name: 'Saved workspace', relativePath: '' },
+      queryMetadata: savedMetadata
+    });
+    const legacyTarget = { name: 'Legacy.csproj', relativePath: 'src/Legacy.csproj' };
+    state = receive(state, {
       type: 'analysisStarted',
       analysisId: legacyId,
-      mode: 'semantic'
+      mode: 'semantic',
+      target: legacyTarget
     });
+    expect(state.target).toEqual(legacyTarget);
+    expect(selectPrimaryAction(state).intent).toBe('cancel');
     state = receive(state, {
       type: 'analysisFailed',
       analysisId: legacyId,
       message: 'Analysis stopped for saved Query.',
       cancelled: true
     });
-    state = receive(state, { type: 'analysisComplete', analysisId, queryMetadata: savedMetadata });
+    state = receive(state, {
+      type: 'analysisComplete',
+      analysisId: nextSavedId,
+      target: { name: 'New saved workspace', relativePath: '' },
+      queryMetadata: savedMetadata
+    });
+    expect(state.target).toEqual({ name: 'New saved workspace', relativePath: '' });
     expect(state.runningAnalysisId).toBeUndefined();
     expect(state.queryMetadata).toEqual(savedMetadata);
     state = receive(state, {
       type: 'savedUpdateState',
-      analysisId,
+      analysisId: nextSavedId,
       phase: 'idle',
       canUpdate: true
     });
@@ -171,7 +188,7 @@ describe('toViewActions', () => {
     for (const phase of ['updating', 'cancelling', 'cancelled'] as const) {
       state = receive(state, {
         type: 'savedUpdateState',
-        analysisId,
+        analysisId: nextSavedId,
         phase,
         canUpdate: phase === 'cancelled'
       });
