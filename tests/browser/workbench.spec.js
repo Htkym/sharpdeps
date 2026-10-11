@@ -374,6 +374,10 @@ for (const [width, theme] of [
     await expectPopover(page, 'profile', profileMapBounds, profileToolbarBounds);
     await page.getByLabel('Configuration', { exact: true }).fill('Release');
     await page.getByLabel('Configuration', { exact: true }).press('Tab');
+    expect((await page.locator('#sd-profile-panel').boundingBox()).y).toBeGreaterThanOrEqual(
+      (await page.locator('.sd-topbar').boundingBox()).y +
+        (await page.locator('.sd-topbar').boundingBox()).height
+    );
     await page.locator('#sd-analyze').click();
     await expect(page.locator('#sd-profile-panel')).toBeHidden();
     expect(
@@ -434,7 +438,7 @@ for (const [width, theme] of [
     expect((await messages()).filter((message) => message.type === 'analyze')).toHaveLength(
       beforeAnalysisRequests
     );
-    await expect(page.locator('#sd-analyze')).toHaveText('解析');
+    await expect(page.locator('#sd-analyze')).toHaveText('解析を更新');
     await expect(page.locator('.sd-table th').first()).toHaveText(/名前/);
     await expect(page.locator('.sd-table-footer')).toContainText('ページ');
     await page.getByRole('button', { name: 'フィルター', exact: true }).click();

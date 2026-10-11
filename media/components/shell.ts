@@ -655,7 +655,9 @@ function toolbarPopover(
     if (!open) return;
     const anchor = trigger.getBoundingClientRect();
     const width = Math.min(320, window.innerWidth - 16);
-    const top = Math.min(anchor.bottom + 4, window.innerHeight - 80);
+    // A wrapped top bar can put actions below the trigger. Keep them clickable.
+    const toolbarBottom = trigger.closest('.sd-topbar')?.getBoundingClientRect().bottom;
+    const top = Math.min((toolbarBottom ?? anchor.bottom) + 4, window.innerHeight - 80);
     panel.style.width = `${width}px`;
     panel.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8))}px`;
     panel.style.top = placement === 'above' ? 'auto' : `${Math.max(8, top)}px`;
