@@ -385,14 +385,36 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
     case 'analyzeStarted':
       return {
         ...state,
+        // The host closes the saved provider before starting legacy analysis.
+        // Its result and IDs cannot remain the current query session, even if
+        // the legacy operation is subsequently cancelled or fails.
+        ...(state.queryMetadata
+          ? {
+              analysisId: undefined,
+              queryMetadata: undefined,
+              projection: null,
+              projectionTruncated: false,
+              details: null,
+              evidence: null,
+              selection: {},
+              scope: INITIAL_STATE.scope,
+              history: [],
+              temporaryDisplayIds: [],
+              camera: null,
+              searchResults: INITIAL_STATE.searchResults,
+              tree: {},
+              cycles: [],
+              tableSort: DEFAULT_SORT,
+              tablePage: 0
+            }
+          : {}),
         savedUpdate: undefined,
         mode: action.mode,
         runningAnalysisId: action.analysisId,
         status: 'analyzing',
         statusMessage: 'Analyzing…',
         progress: undefined,
-        // The previous projection stays visible until a new one arrives; it is marked
-        // as stale rather than cleared, so the map does not blink out.
+        // A previous legacy projection stays visible until a new one arrives.
         error: undefined
       };
 

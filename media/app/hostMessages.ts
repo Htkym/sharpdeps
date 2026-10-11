@@ -99,7 +99,7 @@ export function toViewActions(
     case 'analysisStarted':
       return typeof message.analysisId === 'string'
         ? [
-            ...(!currentState?.analysisId &&
+            ...((!currentState?.analysisId || currentState.queryMetadata) &&
             isRecord(message.target) &&
             typeof message.target.name === 'string' &&
             typeof message.target.relativePath === 'string'

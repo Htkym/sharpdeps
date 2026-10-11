@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { toViewActions } from '../../media/app/hostMessages';
-import { INITIAL_STATE, viewReducer } from '../../media/app/state';
+import {
+  INITIAL_STATE,
+  selectPrimaryAction,
+  viewReducer,
+  type ViewState
+} from '../../media/app/state';
 import type { QueryResultMetadata } from '../../src/view/protocolV2';
 
 const analysisId = 'an_0123456789abcdef';
@@ -30,6 +35,155 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it.each(['cancelled', 'failed', 'complete'] as const)(
+    'keeps the primary legacy operation after saved → legacy → %s',
+    (terminal) => {
+      const legacyId = 'an_1111111111111111';
+      const receive = (state: ViewState, message: unknown) =>
+        toViewActions(message, queries, state).reduce(viewReducer, state);
+      let state = receive(INITIAL_STATE, {
+        type: 'analysisComplete',
+        analysisId,
+        target: { name: 'Saved workspace', relativePath: '' },
+        queryMetadata: savedMetadata
+      });
+      state = receive(state, {
+        type: 'projection',
+        analysisId,
+        projection: {
+          scope: { kind: 'root' },
+          granularity: 'type',
+          nodes: [],
+          edges: [],
+          queryMetadata: savedMetadata
+        }
+      });
+      state = receive(state, {
+        type: 'savedUpdateState',
+        analysisId,
+        phase: 'idle',
+        canUpdate: true
+      });
+      expect(selectPrimaryAction(state).intent).toBe('updateSavedIndex');
+      const target = { name: 'Legacy.csproj', relativePath: 'src/Legacy.csproj' };
+      state = receive(state, {
+        type: 'analysisStarted',
+        analysisId: legacyId,
+        mode: 'quick',
+        target
+      });
+      expect(state.target).toEqual(target);
+      expect(selectPrimaryAction(state)).toEqual({
+        intent: 'cancel',
+        label: 'Cancel',
+        disabled: false
+      });
+      expect(state.runningAnalysisId).toBe(legacyId);
+      expect(state.queryMetadata).toBeUndefined();
+      expect(state.savedUpdate).toBeUndefined();
+      expect(state.analysisId).toBeUndefined();
+      expect(state.projection).toBeNull();
+      expect(
+        toViewActions(
+          { type: 'savedUpdateState', analysisId, phase: 'updating', canUpdate: false },
+          queries,
+          state
+        )
+      ).toEqual([]);
+      expect(
+        toViewActions(
+          { type: 'projection', analysisId, projection: { queryMetadata: savedMetadata } },
+          queries,
+          state
+        )
+      ).toEqual([]);
+      state = receive(
+        state,
+        terminal === 'complete'
+          ? {
+              type: 'analysisComplete',
+              analysisId: legacyId,
+              mode: 'quick',
+              completeness: 'completeWithinScope'
+            }
+          : {
+              type: 'analysisFailed',
+              analysisId: legacyId,
+              message: 'Legacy stopped.',
+              cancelled: terminal === 'cancelled'
+            }
+      );
+      expect(state.runningAnalysisId).toBeUndefined();
+      expect(state.queryMetadata).toBeUndefined();
+      expect(state.status).toBe(terminal === 'complete' ? 'complete' : terminal);
+      expect(state.target).toEqual(target);
+      if (terminal === 'complete') {
+        state = receive(state, {
+          type: 'projection',
+          analysisId: legacyId,
+          projection: {
+            scope: { kind: 'root' },
+            granularity: 'project',
+            nodes: [{ id: 'prj_1111111111111111', name: 'Legacy', granularity: 'project' }],
+            edges: []
+          }
+        });
+        expect(state.projection?.nodes[0].name).toBe('Legacy');
+        expect(state.projection?.queryMetadata).toBeUndefined();
+      }
+      expect(selectPrimaryAction(state)).toEqual({
+        intent: 'analyze',
+        label: terminal === 'failed' ? 'Retry analysis' : 'Analyze',
+        disabled: false
+      });
+    }
+  );
+
+  it('returns from cancelled legacy to a new saved provider and keeps its pinned cancellation state', () => {
+    const legacyId = 'an_1111111111111111';
+    const receive = (state: ViewState, message: unknown) =>
+      toViewActions(message, queries, state).reduce(viewReducer, state);
+    let state = receive(INITIAL_STATE, {
+      type: 'analysisStarted',
+      analysisId: legacyId,
+      mode: 'semantic'
+    });
+    state = receive(state, {
+      type: 'analysisFailed',
+      analysisId: legacyId,
+      message: 'Analysis stopped for saved Query.',
+      cancelled: true
+    });
+    state = receive(state, { type: 'analysisComplete', analysisId, queryMetadata: savedMetadata });
+    expect(state.runningAnalysisId).toBeUndefined();
+    expect(state.queryMetadata).toEqual(savedMetadata);
+    state = receive(state, {
+      type: 'savedUpdateState',
+      analysisId,
+      phase: 'idle',
+      canUpdate: true
+    });
+    expect(selectPrimaryAction(state)).toEqual({
+      intent: 'updateSavedIndex',
+      label: 'Update saved index',
+      disabled: false
+    });
+    for (const phase of ['updating', 'cancelling', 'cancelled'] as const) {
+      state = receive(state, {
+        type: 'savedUpdateState',
+        analysisId,
+        phase,
+        canUpdate: phase === 'cancelled'
+      });
+      expect(state.queryMetadata).toEqual(savedMetadata);
+      expect(selectPrimaryAction(state)).toMatchObject(
+        phase === 'cancelled'
+          ? { intent: 'updateSavedIndex', disabled: false }
+          : { intent: 'cancel', disabled: phase === 'cancelling' }
+      );
+    }
+  });
+
   it('ignores stale, malformed and legacy saved-update notifications', () => {
     const state = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };
     const message = { type: 'savedUpdateState', analysisId, phase: 'cancelling', canUpdate: false };
