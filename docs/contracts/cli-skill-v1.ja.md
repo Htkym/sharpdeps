@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-SD2-07のCLI候補はnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、版は`0.2.0-preview.2`、ToolCommandNameは`sharpdeps`である。package名と版は未公開の候補であり、NuGet取得成功、出荷、実pack済みの判定をこの文書だけで行わない。旧Quick/Semantic、report v1/v2、extension版、固定Markdown runtime/source pairを変更する契約ではない。
+SD2-07のCLI候補はnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、版は`0.2.0-preview.3`、ToolCommandNameは`sharpdeps`である。package名と版は未公開の候補であり、NuGet取得成功、出荷、実pack済みの判定をこの文書だけで行わない。旧Quick/Semantic、report v1/v2、extension版、固定Markdown runtime/source pairを変更する契約ではない。
 
 ## 起動と取得
 
@@ -9,7 +9,7 @@ SD2-07のCLI候補はnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、版は
 公開後に使う予定のexact版指定例は次のとおり。現在の公開状態を確認せず実行しない。
 
 ```powershell
-dnx SharpDeps.Cli@0.2.0-preview.2 -- status --root 'D:\work\repo' --quiet
+dnx SharpDeps.Cli@0.2.0-preview.3 -- status --root 'D:\work\repo' --quiet
 ```
 
 ローカル候補の例は、利用者が選んだ新しいtool作業directoryと、正確なnupkg・local-only NuGet.Configを置いたfeedを使う。以下のinstallとmanifest作成は例であり、query依頼から自動実行しない。
@@ -17,7 +17,7 @@ dnx SharpDeps.Cli@0.2.0-preview.2 -- status --root 'D:\work\repo' --quiet
 ```powershell
 Set-Location 'D:\work\sharpdeps-tool'
 dotnet new tool-manifest
-dotnet tool install SharpDeps.Cli --local --version 0.2.0-preview.2 --configfile 'D:\work\cli-feed\NuGet.Config'
+dotnet tool install SharpDeps.Cli --local --version 0.2.0-preview.3 --configfile 'D:\work\cli-feed\NuGet.Config'
 dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 ```
 
@@ -29,7 +29,7 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 
 | command | 対象と実行境界 |
 |---|---|
-| `index`, `update` | root内の`sln`/`slnx`/`csproj`を`--target`で指定し、`--trusted`を明示する。解析・書込み。updateは現段階でfull rebuildで、SD2-08のincremental updateは未実装 |
+| `index`, `update` | root内の`sln`/`slnx`/`csproj`を`--target`で指定し、`--trusted`を明示する。解析・書込み。updateは[差分更新契約](incremental-update-v1.ja.md)で閉じた入力を照合できる場合にMarkdown差分を処理し、それ以外はfull rebuildへ戻す |
 | `status`, `search`, `symbol`, `callers`, `callees`, `impact`, `context` | committed indexのQuery。untrustedでも保存値の読取りは可能。`--trusted`を指定したcontextだけが検証済みsource snippetを読める |
 | `query --kind search\|symbol\|callers\|callees\|impact\|context\|status` | 同じQueryへのalias |
 | `doctor` | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す |

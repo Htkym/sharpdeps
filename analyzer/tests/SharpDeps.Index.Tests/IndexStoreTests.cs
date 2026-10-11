@@ -16,6 +16,12 @@ public sealed class IndexStoreTests
     {
         using var fixture = new StoreFixture();
         var snapshot = fixture.Snapshot(1, "Before");
+        var inputManifestHash = IndexStage.Create(snapshot).ManifestHash;
+        var reuseCatalog = new[] { new IndexReuseSymbol(fixture.MemberId, "App.Service.Before", "Before",
+            "M:App.Service.Before", "src/App.csproj", null, snapshot.Graph.Variants[0].Id, fixture.CodeLocation.SourceId) };
+        var reuse = new IndexReuseProof("test-owner/1", new string('a', 64), new string('b', 64),
+            new string('c', 64), new string('d', 64), "unused-sdk-path", reuseCatalog);
+        snapshot = snapshot with { Files = snapshot.Files.Select((file, i) => i == 0 ? file with { Reuse = reuse } : file).ToArray() };
         var mutableNodes = snapshot.Graph.Nodes.ToArray();
         var mutableSections = snapshot.Documents[0].Sections.ToArray();
         var mutableSearch = snapshot.SearchText.ToArray();
@@ -26,6 +32,8 @@ public sealed class IndexStoreTests
             SearchText = mutableSearch
         };
         var stage = IndexStage.Create(snapshot);
+        Assert.Equal(inputManifestHash, stage.ManifestHash); // Optional optimization metadata does not change schema-1 input hashes.
+        reuseCatalog[0] = reuseCatalog[0] with { FullName = "mutated-after-staging" };
         mutableNodes[0] = mutableNodes[0] with { Name = "mutated-after-staging" };
         mutableSections[0] = mutableSections[0] with { Token = "mutated-token" };
         mutableSearch[0] = mutableSearch[0] with { Name = "mutated-search" };
@@ -40,6 +48,7 @@ public sealed class IndexStoreTests
         var saved = reader.Snapshot();
         Assert.Equal(HarnessIdentity.WorkspaceId(fixture.Workspace), saved.Graph.WorkspaceId);
         Assert.Equal(stage.ManifestHash, reader.ManifestHash);
+        Assert.Equal("App.Service.Before", Assert.Single(Assert.Single(saved.Files, f => f.Reuse is not null).Reuse!.Catalog).FullName);
         Assert.Equal("Workspace", Assert.Single(saved.Graph.Nodes, n => n.Kind == HarnessNodeKind.Workspace).Name);
         var document = Assert.Single(saved.Documents);
         Assert.Equal(fixture.Document, document.DocumentUuid);
@@ -101,6 +110,18 @@ public sealed class IndexStoreTests
         AssertBaseline();
         writer.BeforePublish = null;
         File.WriteAllText(fixture.CodePath, StoreFixture.Code, StoreFixture.Utf8);
+        // Added inputs are not in the staged manifest. The extraction owner's selection guard must
+        // still roll back the already-inserted rows/FTS before a new generation becomes visible.
+        var lateInput = Path.Combine(fixture.Root, "Late.cs");
+        writer.BeforePublish = () => File.WriteAllText(lateInput, "public class Late {}", StoreFixture.Utf8);
+        AssertCode("SOURCE_CHANGED_SINCE_STAGING", () => writer.Commit(pending, verifySelection: () =>
+        {
+            if (File.Exists(lateInput))
+                throw new IndexStoreException("SOURCE_CHANGED_SINCE_STAGING", "Input membership changed.");
+        }));
+        AssertBaseline();
+        writer.BeforePublish = null;
+        File.Delete(lateInput);
         writer.Commit(pending); // Failed publication does not poison the writer or reserve generation 2.
         using var committed = fixture.Reader();
         Assert.Equal(2, committed.Snapshot().Graph.Generation);

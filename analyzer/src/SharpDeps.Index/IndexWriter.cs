@@ -64,7 +64,7 @@ public sealed class IndexWriter : IDisposable
         catch { connection?.Dispose();lease.Dispose();throw; }
     }
 
-    public void Commit(IndexStage stage, CancellationToken cancellationToken=default)
+    public void Commit(IndexStage stage, CancellationToken cancellationToken=default, Action? verifySelection=null)
     {
         ArgumentNullException.ThrowIfNull(stage);
         if (!Monitor.TryEnter(gate)) throw new IndexStoreException("INDEX_BUSY", "This writer already has an operation in progress.");
@@ -107,6 +107,13 @@ public sealed class IndexWriter : IDisposable
             // Test fault injection uses the real boundary after all rows and FTS, before manifest/active publication.
             BeforePublish?.Invoke();
             IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken);
+            // The extraction owner can also verify negative inventory and non-root dependencies.
+            // Failures roll back rows/FTS before the active generation changes.
+            if (verifySelection is not null)
+            {
+                verifySelection();
+                IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken);
+            }
             Execute("UPDATE metadata SET active_generation=$g,canonical_root=$root,writer_version='sharpdeps-index/1' WHERE singleton=1",("$root",CanonicalRoot));
             cancellationToken.ThrowIfCancellationRequested();
             transaction.Commit();

@@ -124,6 +124,46 @@ public static class IndexSnapshotValidator
                     "The primary occurrence location must be one of its declared locations.");
             }
         }
+        var catalogOccurrences = files.Values.Any(f => f.Reuse is not null)
+            ? occurrences.Values.GroupBy(o => o.LogicalSymbolId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal) : null;
+        foreach (var file in files.Values.Where(f => f.Reuse is not null))
+        {
+            var reuse = file.Reuse!;
+            Require(!file.Deleted, "Reuse proof must belong to a live target input.");
+            Identifier(reuse.OwnerVersion, "Reuse owner version", 128);
+            ValidateHash(reuse.OptionsHash); ValidateHash(reuse.InputHash);
+            ValidateHash(reuse.EnvironmentHash); ValidateHash(reuse.DependencyHash);
+            Identifier(reuse.SdkPath, "Reuse SDK path", MaximumPathUtf16);
+            Count(reuse.Catalog, "Reuse catalog");
+            long catalogLength = 0;
+            foreach (var symbol in reuse.Catalog)
+            {
+                Require(symbol is not null, "Reuse catalog symbol cannot be null.");
+                Require(nodes.TryGetValue(symbol.NodeId, out var node)
+                    && node.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol,
+                    "Reuse catalog must identify a real symbol node.");
+                foreach (var value in new[] { symbol.FullName, symbol.ShortName, symbol.DocumentationId,
+                    symbol.Project, symbol.Namespace, symbol.VariantId, symbol.SourceId })
+                {
+                    if (value is null) continue;
+                    Text(value, "Reuse catalog field", MaximumSearchFieldUtf16);
+                    catalogLength = checked(catalogLength + value.Length);
+                    Require(catalogLength <= MaximumSearchTextUtf16, "Reuse catalog exceeds its text budget.");
+                }
+                Require(!string.IsNullOrWhiteSpace(symbol.FullName) && !string.IsNullOrWhiteSpace(symbol.ShortName),
+                    "Reuse catalog needs exact symbol names.");
+                var symbolOccurrences = catalogOccurrences!.GetValueOrDefault(symbol.NodeId) ?? [];
+                if (symbol.VariantId is not null)
+                    Require(variants.ContainsKey(symbol.VariantId) && symbolOccurrences.Any(o => o.VariantId == symbol.VariantId),
+                        "Reuse catalog variant must identify an actual occurrence.");
+                if (symbol.SourceId is not null)
+                    Require(files.ContainsKey(symbol.SourceId) && (node.Location?.SourceId == symbol.SourceId
+                        || symbolOccurrences.Any(o => (symbol.VariantId is null || o.VariantId == symbol.VariantId)
+                            && (o.Location?.SourceId == symbol.SourceId || o.Declarations?.Any(d => d.SourceId == symbol.SourceId) == true))),
+                        "Reuse catalog source must identify an actual declaration.");
+            }
+        }
         foreach (var edge in graph.Edges)
         {
             Require(nodes.ContainsKey(edge.SourceNodeId) && nodes.ContainsKey(edge.TargetNodeId), "Edge endpoints do not exist.");

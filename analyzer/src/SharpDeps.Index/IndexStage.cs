@@ -20,7 +20,9 @@ public sealed class IndexStage
         return new IndexStage(serialized, ComputeManifestHash(frozen.Files));
     }
     internal IndexSnapshot Materialize() => JsonSerializer.Deserialize<IndexSnapshot>(serialized, Json)!;
+    // Reuse is optional extraction metadata. Hash only the schema-1 input fields so older readers
+    // that ignore the additive JSON property can still verify a newly published input manifest.
     internal static string ComputeManifestHash(IReadOnlyList<IndexFile> files)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(
-            files.OrderBy(f => f.SourceId, StringComparer.Ordinal).ToArray(), Json)))).ToLowerInvariant();
+            files.OrderBy(f => f.SourceId, StringComparer.Ordinal).Select(f => f with { Reuse = null }).ToArray(), Json)))).ToLowerInvariant();
 }

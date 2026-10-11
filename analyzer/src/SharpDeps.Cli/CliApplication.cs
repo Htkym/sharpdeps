@@ -17,13 +17,13 @@ public static class CliApplication
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
                 return await Reply(stdout, options, new { commands = new[] { "index", "update", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
-                    root = "--root absolute-directory", index = "--target root-contained.slnx|.sln|.csproj --trusted", updateMode = "full-rebuild",
+                    root = "--root absolute-directory", index = "--target root-contained.slnx|.sln|.csproj --trusted", updateMode = "closed-input-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
-                    helpContract = "docs/contracts/cli-skill-v1.ja.md", package = "SharpDeps.Cli@0.2.0-preview.2 (provisional, unpublished)" });
+                    helpContract = "docs/contracts/cli-skill-v1.ja.md", package = "SharpDeps.Cli@0.2.0-preview.3 (provisional, unpublished)" });
             if (options.Command == "doctor")
                 return await Reply(stdout, options, new { runtime = RuntimeInformation.FrameworkDescription, sdkProbe = "not-run",
                     toolTargetFramework = "net10.0", indexing = "trusted target SDK/MSBuild required", savedQuery = "runtime-only; no restore/build/network",
-                    configurationProof = "not-connected", updateMode = "full-rebuild" });
+                    configurationProof = "not-connected", updateMode = "closed-input-markdown-or-full-rebuild" });
             // Validate request syntax before opening any stored data.
             var request = options.Command is "index" or "update" ? null : options.QueryRequest();
             if (options.Command is "index" or "update" && !options.Has("trusted")) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
@@ -84,14 +84,20 @@ public static class CliApplication
                 catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && options.Command == "index")
                 { /* A failed first extraction has no published generation; retry under this lease. */ }
             }
-            if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: full rebuild started (no automatic restore)");
-            var snapshot = await CliIndexer.BuildAsync(new(root, target, indexPath, state.WorkspaceUuid,
-                options.Get("configuration") ?? "Debug", options.Get("platform"), projects, options.Get("tfm"), timeout), previous, operation.Token);
+            if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: extraction started (no automatic restore)");
+            var extraction = new CliIndexOptions(root, target, indexPath, state.WorkspaceUuid,
+                options.Get("configuration") ?? "Debug", options.Get("platform"), projects, options.Get("tfm"), timeout,
+                AllowSemanticReuse: options.Command == "update");
+            var build = await CliIndexer.BuildForPublicationAsync(extraction, previous, operation.Token);
+            var snapshot = build.Snapshot;
             operation.Token.ThrowIfCancellationRequested();
-            writer.Commit(IndexStage.Create(snapshot), operation.Token);
-            if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: full rebuild committed");
+            writer.Commit(IndexStage.Create(snapshot), operation.Token,
+                build.VerifySelection);
+            var updateMode = snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.semanticGraphReused" && d.Count == 1) == true
+                ? "markdown-incremental" : "full-rebuild";
+            if (!options.Has("quiet")) await stderr.WriteLineAsync($"sharpdeps: {updateMode} committed");
             return await Reply(stdout, options, new { workspaceId = snapshot.Graph.WorkspaceId, snapshotId = snapshot.Graph.SnapshotId,
-                generation = snapshot.Graph.Generation, coverage = snapshot.Graph.Coverage, updateMode = "full-rebuild",
+                generation = snapshot.Graph.Generation, coverage = snapshot.Graph.Coverage, updateMode,
                 configurationProof = "unverified", coordinatorState = "not-connected", files = snapshot.Files.Count,
                 nodes = snapshot.Graph.Nodes.Count, edges = snapshot.Graph.Edges.Count });
         }

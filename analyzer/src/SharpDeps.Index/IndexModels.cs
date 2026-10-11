@@ -1,10 +1,18 @@
 namespace SharpDeps.Index;
 
 using SharpDeps.Analysis.Contracts.Harness;
+using System.Text.Json.Serialization;
 
 /// <summary>The owner supplies a complete, bounded input manifest, including analysis configuration files.</summary>
 public sealed record IndexFile(string SourceId, string RelativePath, string Kind, string ContentHash,
-    long ByteLength, int? Utf16Length, bool Deleted = false);
+    long ByteLength, int? Utf16Length, bool Deleted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IndexReuseProof? Reuse = null);
+/// <summary>Exact catalog values selected by the analysis owner; never inferred from display signatures.</summary>
+public sealed record IndexReuseSymbol(string NodeId, string FullName, string ShortName,
+    string? DocumentationId, string? Project, string? Namespace, string? VariantId, string? SourceId);
+/// <summary>Optional owner proof for a closed semantic input set. Missing proof requires a full rebuild.</summary>
+public sealed record IndexReuseProof(string OwnerVersion, string OptionsHash, string InputHash,
+    string EnvironmentHash, string DependencyHash, string SdkPath, IReadOnlyList<IndexReuseSymbol> Catalog);
 public sealed record IndexSectionIdentity(string LocalKey, string Token, string? HeadingKey, string? BodyHash);
 public sealed record IndexDocumentIdentity(Guid DocumentUuid, string RelativePath, string? ExplicitId,
     string ContentHash, string ScopeId, string ParserVersion, string ContractVersion, string ProfileId,
