@@ -368,7 +368,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     const selectedEdgeId = state.selection.relationId;
     const selectedEntityId = state.selection.entityId;
     if (state.queryMetadata) {
-      renderSavedQueryInspector(elements, state, dispatch);
+      renderSavedQueryInspector(elements, state, dispatch, options);
       return;
     }
 
@@ -1346,7 +1346,8 @@ function renderSavedQueryTable(
 function renderSavedQueryInspector(
   elements: ShellElements,
   state: ViewState,
-  dispatch: (action: ViewAction) => void
+  dispatch: (action: ViewAction) => void,
+  options: ViewerAppOptions
 ): void {
   const tr = translator(state.language);
   const body = elements.inspectorBody;
@@ -1387,6 +1388,14 @@ function renderSavedQueryInspector(
         heading.textContent = tr('Saved evidence location');
         body.append(heading);
         for (const item of savedEvidence.items) {
+          if (typeof item.id === 'string' && item.location) {
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'sd-button';
+            open.textContent = tr('Open in editor');
+            open.addEventListener('click', () => options.onOpenEvidence?.(item.id as string));
+            body.append(open);
+          }
           const location =
             item.location && typeof item.location === 'object' && !Array.isArray(item.location)
               ? (item.location as Record<string, unknown>)
@@ -1432,6 +1441,14 @@ function renderSavedQueryInspector(
       )
     );
     if (!details) body.append(message(tr('Loading details...'), 'sd-note'));
+    if (entity?.kind === 'Type' || entity?.kind === 'Member') {
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'sd-button';
+      open.textContent = tr('Open declaration');
+      open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
+      body.append(open);
+    }
     for (const [kind, label, entries] of [
       ['dependencies', 'Dependencies (returned entries)', details?.dependencies ?? []],
       ['dependents', 'Dependents (returned entries)', details?.dependents ?? []]
@@ -1488,7 +1505,7 @@ function renderSavedQueryInspector(
   body.append(
     message(
       tr(
-        'Source opening, legacy evidence aggregation/paging, context copy and exports are unavailable for saved index.'
+        'Legacy evidence aggregation/paging, context copy and exports are unavailable for saved index.'
       ),
       'sd-note'
     )

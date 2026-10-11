@@ -130,7 +130,7 @@ if (root) {
     onOpenDeclaration: (entityId) => {
       const analysisId = app.getState().analysisId;
       if (analysisId)
-        host.post({ type: 'openDeclaration', requestId: nextRequestId(), analysisId, entityId });
+        sendRequest({ type: 'openDeclaration', requestId: nextRequestId(), analysisId, entityId });
     },
     onOpenEvidence: (evidenceId) => {
       const state = app.getState();
@@ -138,7 +138,7 @@ if (root) {
         return;
       }
 
-      host.post({
+      sendRequest({
         type: 'openEvidence',
         requestId: nextRequestId(),
         analysisId: state.analysisId,

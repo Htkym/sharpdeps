@@ -44,6 +44,12 @@ export function toViewActions(
   if (metadataValue !== undefined && !queryMetadata) return [];
   if (currentState) {
     if (
+      message.type === 'error' &&
+      message.analysisId !== undefined &&
+      message.analysisId !== currentState.analysisId
+    )
+      return [];
+    if (
       ['projection', 'details', 'evidencePage', 'searchResults', 'stale', 'reveal'].includes(
         message.type
       ) &&

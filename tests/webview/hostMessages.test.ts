@@ -30,6 +30,22 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('shows a current source refusal and ignores an error from a replaced saved session', () => {
+    const state = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };
+    const refusal = {
+      type: 'error',
+      analysisId,
+      requestId: 'req_0000000000000001',
+      code: 'QUERY_SOURCE_OPEN_FAILED',
+      message: 'QUERY_SOURCE_DIRTY'
+    };
+    expect(toViewActions(refusal, queries, state)).toEqual([
+      { type: 'errorRaised', code: refusal.code, message: refusal.message }
+    ]);
+    expect(
+      toViewActions({ ...refusal, analysisId: 'an_1111111111111111' }, queries, state)
+    ).toEqual([]);
+  });
   it('asks to update the saved index after an input change without claiming freshness', () => {
     const state = viewReducer(INITIAL_STATE, {
       type: 'analysisComplete',

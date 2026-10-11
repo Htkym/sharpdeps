@@ -43,8 +43,8 @@ const savedQueryJapanese: Record<string, string> = {
   'Raw UTF-16 span': '元UTF-16 span',
   'Content hash': 'content hash',
   'Source id': 'source ID',
-  'Source opening, legacy evidence aggregation/paging, context copy and exports are unavailable for saved index.':
-    '保存済み索引ではsourceを開く操作、従来evidenceの集約・ページング、contextコピー、exportは未対応です。'
+  'Legacy evidence aggregation/paging, context copy and exports are unavailable for saved index.':
+    '保存済み索引では従来evidenceの集約・ページング、contextコピー、exportは未対応です。'
 };
 
 export type Language = 'en' | 'ja';

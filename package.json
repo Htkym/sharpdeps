@@ -42,13 +42,19 @@
       "supported": "limited",
       "description": "Viewing data is available; analysis, project evaluation, generators and runtime execution require workspace trust.",
       "restrictedConfigurations": [
-        "sharpdeps.dotnetPath"
+        "sharpdeps.dotnetPath",
+        "sharpdeps.savedIndexCliPath"
       ]
     }
   },
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "sharpdeps.updateSavedIndex",
+        "title": "Update Saved Index",
+        "category": "SharpDeps"
+      },
       {
         "command": "sharpdeps.showDependencyMap",
         "title": "Show Dependency Map",
@@ -155,6 +161,11 @@
           "default": 180,
           "minimum": 10,
           "markdownDescription": "Time limit for one analysis run, in seconds. When exceeded, the run is stopped and the process tree it started is terminated."
+        },
+        "sharpdeps.savedIndexCliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to a compatible installed SharpDeps.Cli.dll for the explicit Update Saved Index command. Requires workspace trust and a target SDK. Refresh remains read-only; no automatic restore is performed."
         },
         "sharpdeps.dotnetPath": {
           "type": "string",
