@@ -252,12 +252,12 @@ exports.run = async function () {
         const samples = [];
         for (let i = 0; i < 20; i++) {
           await frame.locator('#sd-analyze').press('Enter');
-          await expect(frame.locator('#sd-stop')).toBeEnabled();
+          await expect(frame.locator('#sd-analyze')).toHaveText('Cancel');
           // Measure the DOM event through receipt of the host cancellation message.
           samples.push(
             await frame.evaluate(async () => {
               const start = performance.now();
-              document.querySelector('#sd-stop').click();
+              document.querySelector('#sd-analyze').click();
               while (window.sharpdepsApp.getState().status !== 'cancelled') {
                 await new Promise(requestAnimationFrame);
                 if (performance.now() - start > 5000) throw new Error('Stop timeout');

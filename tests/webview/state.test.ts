@@ -11,6 +11,8 @@ import {
   selectBreadcrumbs,
   selectStatusFooter,
   selectVisibleData,
+  selectPrimaryAction,
+  selectStatusMessage,
   viewReducer,
   type ViewState
 } from '../../media/app/state';
@@ -409,5 +411,86 @@ describe('inspector close action', () => {
 
   it('ignores a close when the pane is already closed', () => {
     expect(viewReducer(INITIAL_STATE, { type: 'inspectorClosed' })).toBe(INITIAL_STATE);
+  });
+});
+
+describe('primary action for a pinned saved reader', () => {
+  it('keeps the old result through cancellation and requires host permission to retry', () => {
+    const analysisId = 'an_0123456789abcdef';
+    let state = viewReducer(INITIAL_STATE, {
+      type: 'analysisComplete',
+      analysisId,
+      completeness: 'partial',
+      coverage: undefined,
+      queryMetadata: savedMetadata
+    });
+    state = viewReducer(state, {
+      type: 'projectionReceived',
+      projection: projection({ queryMetadata: savedMetadata })
+    });
+    state = viewReducer(state, { type: 'analysisStale', message: 'Saved input changed.' });
+    const oldProjection = state.projection,
+      oldMetadata = state.queryMetadata;
+    expect(selectPrimaryAction(state).disabled).toBe(true);
+    state = viewReducer(state, {
+      type: 'savedUpdateState',
+      analysisId,
+      phase: 'idle',
+      canUpdate: true
+    });
+    expect(selectPrimaryAction(state)).toMatchObject({
+      intent: 'updateSavedIndex',
+      disabled: false
+    });
+    for (const phase of ['selecting', 'updating', 'cancelling', 'cancelled', 'failed'] as const) {
+      state = viewReducer(state, {
+        type: 'savedUpdateState',
+        analysisId,
+        phase,
+        canUpdate: phase === 'failed'
+      });
+      expect(state.projection).toBe(oldProjection);
+      expect(state.queryMetadata).toBe(oldMetadata);
+      expect(state.status).toBe('stale');
+      if (phase === 'cancelling')
+        expect(selectPrimaryAction(state)).toMatchObject({ intent: 'cancel', disabled: true });
+    }
+    expect(selectPrimaryAction(state)).toEqual({
+      intent: 'updateSavedIndex',
+      label: 'Retry update',
+      disabled: false
+    });
+    expect(selectStatusMessage(state)).toContain('Refresh');
+    const restored = viewReducer(state, {
+      type: 'stateRestored',
+      state: { savedUpdate: { phase: 'updating', canUpdate: false } }
+    });
+    expect(restored.savedUpdate).toEqual(state.savedUpdate);
+    expect(
+      viewReducer(state, {
+        type: 'savedUpdateState',
+        analysisId: 'an_1111111111111111',
+        phase: 'updating',
+        canUpdate: false
+      })
+    ).toBe(state);
+    const legacy = viewReducer(state, {
+      type: 'analysisComplete',
+      analysisId: 'an_2222222222222222',
+      completeness: 'completeWithinScope',
+      coverage: undefined
+    });
+    expect(legacy.savedUpdate).toBeUndefined();
+    expect(selectPrimaryAction(legacy).intent).toBe('analyze');
+  });
+
+  it('uses the same legacy button for analyze, update, retry and cancel', () => {
+    expect(selectPrimaryAction(INITIAL_STATE).label).toBe('Analyze');
+    for (const [status, label] of [
+      ['stale', 'Update analysis'],
+      ['failed', 'Retry analysis'],
+      ['analyzing', 'Cancel']
+    ] as const)
+      expect(selectPrimaryAction({ ...INITIAL_STATE, status }).label).toBe(label);
   });
 });

@@ -5,6 +5,28 @@ const requestId = 'req_0123456789abcdef';
 const analysisId = 'an_0123456789abcdef';
 
 describe('validateWebviewMessage', () => {
+  it('requires an exact saved session for primary updates and a bounded host phase', () => {
+    expect(validateWebviewMessage({ type: 'updateSavedIndex', requestId, analysisId }).ok).toBe(
+      true
+    );
+    expect(validateWebviewMessage({ type: 'updateSavedIndex', requestId }).ok).toBe(false);
+    expect(
+      validateHostMessage({
+        type: 'savedUpdateState',
+        analysisId,
+        phase: 'cancelling',
+        canUpdate: false
+      }).ok
+    ).toBe(true);
+    expect(
+      validateHostMessage({
+        type: 'savedUpdateState',
+        analysisId,
+        phase: 'rolledBack',
+        canUpdate: true
+      }).ok
+    ).toBe(false);
+  });
   it('accepts a version 2 ready message', () => {
     const result = validateWebviewMessage({ type: 'ready', protocolVersion: PROTOCOL_VERSION });
 

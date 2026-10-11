@@ -14,7 +14,7 @@ import type {
   QueryResultMetadata,
   Scope
 } from '../../src/view/protocolV2';
-import type { Capabilities, ProfileRequest } from '../../src/view/protocolV2';
+import type { Capabilities, ProfileRequest, SavedUpdatePhase } from '../../src/view/protocolV2';
 import { matchesEntity } from '../../src/analyzer/graphProjection';
 import {
   DEFAULT_SORT,
@@ -72,6 +72,8 @@ export interface ViewState {
   analysisId?: string;
   /** Metadata of the current saved-index session; never restored from persisted view state. */
   queryMetadata?: QueryResultMetadata;
+  /** Host-owned caller state. Never persisted or inferred from saved query freshness. */
+  savedUpdate?: { phase: SavedUpdatePhase; canUpdate: boolean };
   progress?: { stage: AnalysisStage; loaded?: number; analyzed?: number; elapsedMs: number };
   coverage?: {
     discovered: number;
@@ -175,6 +177,8 @@ export const INITIAL_STATE: ViewState = {
 };
 
 export type ViewAction =
+  | { type: 'savedUpdateRequested' }
+  | { type: 'savedUpdateState'; analysisId: string; phase: SavedUpdatePhase; canUpdate: boolean }
   | { type: 'languageChanged'; language: Language }
   | { type: 'targetSelected'; name: string; relativePath: string }
   | { type: 'analyzeStarted'; analysisId: string; mode: 'quick' | 'semantic' }
@@ -305,6 +309,10 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       }
     };
   switch (action.type) {
+    case 'savedUpdateState':
+      return state.queryMetadata && action.analysisId === state.analysisId
+        ? { ...state, savedUpdate: { phase: action.phase, canUpdate: action.canUpdate } }
+        : state;
     case 'treeRequested':
       return state;
     case 'treeReceived':
@@ -353,6 +361,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
               temporaryDisplayIds: [],
               camera: null,
               queryMetadata: undefined,
+              savedUpdate: undefined,
               ...(state.queryMetadata
                 ? {
                     analysisId: undefined,
@@ -376,6 +385,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
     case 'analyzeStarted':
       return {
         ...state,
+        savedUpdate: undefined,
         mode: action.mode,
         runningAnalysisId: action.analysisId,
         status: 'analyzing',
@@ -404,6 +414,10 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         ...state,
         analysisId: action.analysisId,
         queryMetadata: action.queryMetadata,
+        savedUpdate:
+          action.queryMetadata && action.analysisId === state.analysisId
+            ? state.savedUpdate
+            : undefined,
         ...((action.queryMetadata || state.queryMetadata) && action.analysisId !== state.analysisId
           ? {
               projection: null,
@@ -662,7 +676,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return sanitizeRestoredState({
         ...state,
         ...action.state,
-        queryMetadata: state.queryMetadata
+        queryMetadata: state.queryMetadata,
+        savedUpdate: state.savedUpdate
       });
 
     default:
@@ -925,6 +940,17 @@ export function queryResultSummary(
 /** Translate generated status text when rendering, without restarting analysis. */
 export function selectStatusMessage(state: ViewState): string {
   const tr = translator(state.language);
+  if (state.queryMetadata) {
+    const phase = state.savedUpdate?.phase;
+    if (phase === 'selecting') return tr('Select the target and update scope.');
+    if (phase === 'updating') return tr('Updating saved index; the saved view remains available.');
+    if (phase === 'cancelling')
+      return tr('Cancelling this request; waiting for shared work to finish…');
+    if (phase === 'cancelled')
+      return tr('Request cancelled. Refresh to check the saved generation.');
+    if (phase === 'failed')
+      return tr('Update not confirmed. Refresh to check the saved generation.');
+  }
   if (state.progress && state.status === 'analyzing') {
     const parts = [tr(stageLabel(state.progress.stage))];
     if (state.progress.loaded !== undefined) parts.push(tr('loaded {0}', state.progress.loaded));
@@ -940,6 +966,39 @@ export function selectStatusMessage(state: ViewState): string {
     return `${tr(completion[1])} · ${tr('{0}/{1} project(s) analyzed', completion[2], completion[3])}`;
   if (state.status === 'cancelled') return tr('The analysis was stopped.');
   return tr(state.statusMessage);
+}
+
+/** One primary intent for both providers; cancellation never adopts a writer result. */
+export function selectPrimaryAction(state: ViewState): {
+  intent: 'analyze' | 'updateSavedIndex' | 'cancel';
+  label: string;
+  disabled: boolean;
+} {
+  if (state.queryMetadata) {
+    const phase = state.savedUpdate?.phase;
+    if (phase === 'selecting' || phase === 'updating' || phase === 'cancelling')
+      return {
+        intent: 'cancel',
+        label: phase === 'cancelling' ? 'Cancelling…' : 'Cancel update',
+        disabled: phase === 'cancelling'
+      };
+    return {
+      intent: 'updateSavedIndex',
+      label: phase === 'failed' ? 'Retry update' : 'Update saved index',
+      disabled: !state.savedUpdate?.canUpdate
+    };
+  }
+  if (state.status === 'analyzing') return { intent: 'cancel', label: 'Cancel', disabled: false };
+  return {
+    intent: 'analyze',
+    label:
+      state.status === 'failed'
+        ? 'Retry analysis'
+        : state.status === 'stale'
+          ? 'Update analysis'
+          : 'Analyze',
+    disabled: false
+  };
 }
 
 /**

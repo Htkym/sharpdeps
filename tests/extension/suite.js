@@ -316,8 +316,8 @@ async function run() {
     frame = await mapFrame();
     const beforeCancel = api.getCurrentAnalysisId();
     await frame.locator('#sd-analyze').click();
-    await expect(frame.locator('#sd-stop')).toBeEnabled();
-    await frame.locator('#sd-stop').click();
+    await expect(frame.locator('#sd-analyze')).toHaveText('Cancel');
+    await frame.locator('#sd-analyze').click();
     await expect.poll(async () => (await state()).status).toBe('cancelled');
     record(
       'stop preserves the previous registered result',

@@ -15,6 +15,7 @@ import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
 import type { ViewState } from './state';
 import { restoreViewState } from './serializer';
+import { validateHostMessage } from '../../src/view/protocolV2';
 
 export interface RequestContext {
   treeParentId?: string;
@@ -84,6 +85,17 @@ export function toViewActions(
   }
 
   switch (message.type) {
+    case 'savedUpdateState': {
+      const checked = validateHostMessage(message);
+      if (
+        !checked.ok ||
+        checked.value.type !== 'savedUpdateState' ||
+        !currentState?.queryMetadata ||
+        checked.value.analysisId !== currentState.analysisId
+      )
+        return [];
+      return [{ ...checked.value }];
+    }
     case 'analysisStarted':
       return typeof message.analysisId === 'string'
         ? [

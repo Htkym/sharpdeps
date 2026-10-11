@@ -30,6 +30,18 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('ignores stale, malformed and legacy saved-update notifications', () => {
+    const state = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };
+    const message = { type: 'savedUpdateState', analysisId, phase: 'cancelling', canUpdate: false };
+    expect(toViewActions(message, queries, state)).toEqual([message]);
+    for (const malformed of [
+      { ...message, analysisId: 'an_1111111111111111' },
+      { ...message, phase: 'rolledBack' },
+      { ...message, canUpdate: 'true' }
+    ])
+      expect(toViewActions(malformed, queries, state)).toEqual([]);
+    expect(toViewActions(message, queries, { ...INITIAL_STATE, analysisId })).toEqual([]);
+  });
   it('shows a current source refusal and ignores an error from a replaced saved session', () => {
     const state = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };
     const refusal = {

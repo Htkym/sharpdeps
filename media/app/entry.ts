@@ -302,6 +302,10 @@ if (root) {
 
 function toHostMessage(action: ViewAction, state: ViewState): Record<string, unknown> | undefined {
   switch (action.type) {
+    case 'savedUpdateRequested':
+      return state.queryMetadata && state.analysisId
+        ? { type: 'updateSavedIndex', requestId: nextRequestId(), analysisId: state.analysisId }
+        : undefined;
     case 'analyzeStarted':
       return {
         type: 'analyze',

@@ -30,6 +30,7 @@ import {
   selectSearchPresentation,
   selectStatusFooter,
   selectStatusMessage,
+  selectPrimaryAction,
   selectTableRows,
   selectVisibleData,
   viewReducer,
@@ -99,14 +100,17 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       if (state.camera) graphRuntime.view?.applyCamera(state.camera);
     },
     onDepth: (depth) => dispatch({ type: 'scopeChanged', scope: { ...state.scope, depth } }),
-    onAnalyze: () =>
-      options.onHostAction?.({ type: 'analyzeStarted', analysisId: '', mode: state.mode }),
-    onStop: () =>
-      options.onHostAction?.({
-        type: 'analysisFailed',
-        message: 'stop requested',
-        cancelled: true
-      }),
+    onAnalyze: () => {
+      const action = selectPrimaryAction(state);
+      if (action.disabled) return;
+      options.onHostAction?.(
+        action.intent === 'cancel'
+          ? { type: 'analysisFailed', message: 'stop requested', cancelled: true }
+          : action.intent === 'updateSavedIndex'
+            ? { type: 'savedUpdateRequested' }
+            : { type: 'analyzeStarted', analysisId: '', mode: state.mode }
+      );
+    },
     onGranularity: (granularity) => dispatch({ type: 'granularityChanged', granularity }),
     onViewKind: (viewKind) => dispatch({ type: 'viewKindChanged', viewKind }),
     onSearch: (search) => {
@@ -531,6 +535,7 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
   elements.targetPath.hidden =
     !state.target?.relativePath || state.target.relativePath === state.target.name;
   elements.modeSelect.value = state.mode;
+  elements.modeSelect.hidden = elements.profileButton.hidden = !!state.queryMetadata;
   elements.modeSelect.disabled = state.status === 'analyzing';
   elements.configuration.value = state.profile.configuration ?? 'Debug';
   elements.platform.value = state.profile.platform ?? '';
@@ -565,9 +570,17 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     for (const option of input.querySelectorAll<HTMLInputElement>('input'))
       option.checked = selected?.includes(option.value as never) === true;
 
-  const analyzing = state.status === 'analyzing';
-  elements.analyzeButton.disabled = analyzing;
-  elements.stopButton.disabled = !analyzing;
+  const primary = selectPrimaryAction(state);
+  elements.analyzeButton.disabled = primary.disabled;
+  elements.analyzeButton.textContent = tr(primary.label);
+  elements.analyzeButton.setAttribute('aria-label', tr(primary.label));
+  elements.analyzeButton.title =
+    state.queryMetadata && primary.disabled && primary.intent !== 'cancel'
+      ? tr('Updating requires workspace trust and no other active saved update.')
+      : '';
+  elements.modeSelect.disabled ||= !!state.queryMetadata;
+  elements.configuration.disabled ||= !!state.queryMetadata;
+  elements.platform.disabled ||= !!state.queryMetadata;
 
   elements.breadcrumbs.replaceChildren(
     ...selectBreadcrumbs(state).map((crumb) => {

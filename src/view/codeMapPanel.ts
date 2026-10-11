@@ -35,7 +35,9 @@ export interface CodeMapPanelHost {
   /** Starts an analysis for the current target in the requested mode. */
   onAnalyze: (mode: 'quick' | 'semantic', profile?: ProfileRequest) => void;
   /** Stops the running analysis. */
-  onCancel: () => void;
+  onCancel: (analysisId?: string) => void;
+  onUpdateSavedIndex?: (analysisId: string) => void;
+  savedUpdateState?: () => Extract<HostToWebviewMessage, { type: 'savedUpdateState' }> | undefined;
   onDispose?: () => void;
   projectionLimits?: (granularity: Granularity) => { maxNodes: number; maxEdges: number };
   currentAnalysisId?: () => string | undefined;
@@ -159,6 +161,11 @@ export class CodeMapPanel {
     this.runningMessage = undefined;
     this.post({ type: 'analysisFailed', analysisId, message, cancelled });
   }
+  notifySavedUpdateState(
+    message: Extract<HostToWebviewMessage, { type: 'savedUpdateState' }>
+  ): void {
+    if (this.ready) this.post(message);
+  }
   requestExport(format: ExportFormat, copy?: boolean): void {
     this.post({ type: 'requestExport', format, copy });
   }
@@ -271,7 +278,10 @@ export class CodeMapPanel {
         return;
       }
       case 'cancelAnalysis':
-        this.host.onCancel();
+        this.host.onCancel(request.analysisId);
+        return;
+      case 'updateSavedIndex':
+        this.host.onUpdateSavedIndex?.(request.analysisId);
         return;
       case 'openEvidence':
         // Resolved host-side from the opaque id: the webview never sends a path.
@@ -556,6 +566,8 @@ export class CodeMapPanel {
         this.post(saved);
         const reason = this.host.savedStaleReason?.(analysisId);
         if (reason) this.notifyStale(analysisId, reason);
+        const updateState = this.host.savedUpdateState?.();
+        if (updateState?.analysisId === analysisId) this.post(updateState);
         return;
       }
       const report = this.host.store.getReport(analysisId);

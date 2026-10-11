@@ -16,6 +16,8 @@ export async function updateSavedIndex(options: {
   current: () => boolean;
   stop: AbortController;
   output: vscode.OutputChannel;
+  onUpdating?: () => void;
+  onCancelling?: () => void;
 }): Promise<SavedUpdateResult | undefined> {
   const check = () => {
     if (!vscode.workspace.isTrusted || !options.current() || options.stop.signal.aborted)
@@ -98,6 +100,7 @@ export async function updateSavedIndex(options: {
   check();
   const dotnet = await ensureSemanticDotnet(path.dirname(selection.target));
   check();
+  options.onUpdating?.();
   return vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -107,9 +110,13 @@ export async function updateSavedIndex(options: {
     async (progress, token) => {
       const cancellation = token.onCancellationRequested(() => {
         options.stop.abort();
+        options.onCancelling?.();
         progress.report({ message: 'Cancelling this request; waiting for shared work to finish…' });
       });
-      if (token.isCancellationRequested) options.stop.abort();
+      if (token.isCancellationRequested) {
+        options.stop.abort();
+        options.onCancelling?.();
+      }
       try {
         check();
         const result = await runSavedUpdate({

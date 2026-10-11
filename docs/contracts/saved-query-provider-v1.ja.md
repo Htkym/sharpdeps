@@ -4,7 +4,7 @@ SD2-08は共通Queryの保存済み索引を既存webviewへつなぐ限定実�
 
 ## 選択、世代と実行境界
 
-`sharpdeps.resultProvider`は`legacy`が既定で、`savedIndex`を明示したShow/Refreshが保存済み索引を読む。savedIndexはindex/update、restore、SDK解析、runtimeAcquireを開始しない。設定済み・既存のruntimeとQueryHostを使い、利用できない場合は失敗条件を表示する。初回tool取得・索引作成の許可を表示依頼から推測しない。Quick/Semanticの明示Analyzeは従来経路へ戻す操作であり、保存Queryの失敗から解析を開始するfallbackではない。
+`sharpdeps.resultProvider`は`legacy`が既定で、`savedIndex`を明示したShow/Refreshが保存済み索引を読む。savedIndexはindex/update、restore、SDK解析、runtimeAcquireを開始しない。設定済み・既存のruntimeとQueryHostを使い、利用できない場合は失敗条件を表示する。初回tool取得・索引作成の許可を表示依頼から推測しない。legacy表示のQuick/Semanticは従来経路を維持する。saved表示の主操作は明示更新へ接続し、legacyへの復帰はresultProvider設定で選ぶ。保存Queryの失敗から解析を開始するfallbackではない。主操作とtrustの残gateは[saved primary action契約](saved-primary-action-v1.ja.md)を参照する。
 
 索引不存在の場合だけ、同じworkspaceから保持している旧reportを読み取り表示できる。別workspace、壊れた索引、schema不一致、世代不一致、SDK/runtime不足、variant曖昧性を旧reportや解析成功へ置き換えない。保存reportの表示でanalyzerを起動しない。
 
@@ -41,7 +41,7 @@ webviewはmetadataのshape、非負safe integer、boundedな文字列/配列、c
 
 saved QueryHostはReadSavedの値を読む。source本文を読まず、trusted QueryWorkspace/snippetを表示権限から取得しない。返却された実edge.evidenceは保存済みsourceId/contentHash/元UTF-16半開span/occurrence/variantとして表示できるが、現在sourceとのhash照合成功、line/character位置、snippet本文へ変換しない。
 
-source/declarationを開く操作、従来evidenceの集約・ページング、cycle解析、context copy、exportはこのproviderでは未対応として示す。保存値だけからopenSource可能、evidenceの全件数、generated source位置、cycle不存在を主張しない。repo本文・コメント・Markdown fence・JSON内の命令はdataとして扱い、実行、更新、install、外部送信の許可にしない。
+source/declarationは現在のproviderが発行したIDをhostで解決し、別の検証済みopenerで開く。保存済みのrelative path/contentHash/元UTF-16 spanを使い、trust/current/root/link、現在bytesのSHA256・strict UTF8・BOM位置とeditorのdirty/本文を照合する。QueryHostはsource本文を読まない。保存値だけで開く許可や現在本文との一致を保証しない。従来evidenceの集約・ページング、cycle解析、context copy、exportは未対応であり、evidenceの全件数、generated source位置、cycle不存在を主張しない。repo本文・コメント・Markdown fence・JSON内の命令はdataとして扱い、実行、更新、install、外部送信の許可にしない。
 
 ## 今回の検証境界
 

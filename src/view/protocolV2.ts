@@ -12,6 +12,16 @@ import type { Granularity, RelationKind } from '../analyzer/reportV2';
 
 export const PROTOCOL_VERSION = 2;
 
+export const SAVED_UPDATE_PHASES = [
+  'idle',
+  'selecting',
+  'updating',
+  'cancelling',
+  'cancelled',
+  'failed'
+] as const;
+export type SavedUpdatePhase = (typeof SAVED_UPDATE_PHASES)[number];
+
 export type ExportFormat = 'mermaid' | 'svg' | 'png' | 'json';
 
 export interface Scope {
@@ -173,6 +183,7 @@ export type WebviewToHostMessage =
       profile?: ProfileRequest;
     }
   | { type: 'cancelAnalysis'; requestId: string; analysisId: string }
+  | { type: 'updateSavedIndex'; requestId: string; analysisId: string }
   | {
       type: 'getProjection';
       requestId: string;
@@ -275,6 +286,12 @@ export type HostToWebviewMessage =
       detail?: string;
       cancelled?: boolean;
     }
+  | {
+      type: 'savedUpdateState';
+      analysisId: string;
+      phase: SavedUpdatePhase;
+      canUpdate: boolean;
+    }
   | { type: 'projection'; requestId: string; analysisId: string; projection: Projection }
   | {
       /** Editor-driven reveal (SD-019): select an entity, optionally in a new scope. */
@@ -373,6 +390,7 @@ type FieldKind =
   | 'profile'
   | 'exportFormat'
   | 'mode'
+  | 'savedUpdatePhase'
   | 'viewState';
 
 interface MessageRule {
@@ -403,6 +421,10 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
     optional: { targetId: 'string', profile: 'profile' }
   },
   cancelAnalysis: { required: { requestId: 'requestId', analysisId: 'analysisId' }, optional: {} },
+  updateSavedIndex: {
+    required: { requestId: 'requestId', analysisId: 'analysisId' },
+    optional: {}
+  },
   getProjection: {
     required: {
       requestId: 'requestId',
@@ -472,6 +494,10 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
 };
 
 const HOST_RULES: Record<string, MessageRule> = {
+  savedUpdateState: {
+    required: { analysisId: 'analysisId', phase: 'savedUpdatePhase', canUpdate: 'boolean' },
+    optional: {}
+  },
   analysisStarted: {
     required: { analysisId: 'analysisId', mode: 'mode', target: 'object' },
     optional: {}
@@ -678,6 +704,10 @@ function checkField(
       return MODES.includes(value as (typeof MODES)[number])
         ? true
         : fail(`expected one of ${MODES.join(', ')}`);
+    case 'savedUpdatePhase':
+      return SAVED_UPDATE_PHASES.includes(value as SavedUpdatePhase)
+        ? true
+        : fail(`expected one of ${SAVED_UPDATE_PHASES.join(', ')}`);
     case 'granularity':
       return GRANULARITIES.includes(value as (typeof GRANULARITIES)[number])
         ? true

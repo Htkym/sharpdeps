@@ -57,6 +57,25 @@
     },
     {
       "type": "object",
+      "required": ["type", "requestId", "analysisId"],
+      "properties": {
+        "type": { "const": "updateSavedIndex" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "analysisId", "phase", "canUpdate"],
+      "properties": {
+        "type": { "const": "savedUpdateState" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "phase": { "enum": ["idle", "selecting", "updating", "cancelling", "cancelled", "failed"] },
+        "canUpdate": { "type": "boolean" }
+      }
+    },
+    {
+      "type": "object",
       "required": ["type", "requestId", "analysisId", "scope", "granularity"],
       "properties": {
         "type": {

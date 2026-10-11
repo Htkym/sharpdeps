@@ -11,7 +11,6 @@ export type NavTab = 'structure' | 'cycles' | 'analysis';
 export interface ShellHandlers {
   onLanguageToggled: () => void;
   onAnalyze: () => void;
-  onStop: () => void;
   onCancelLayout: () => void;
   onRetryLayout: () => void;
   onZoom: (zoom: number | 'in' | 'out' | 'fit') => void;
@@ -44,6 +43,7 @@ export interface ShellElements {
   targetName: HTMLElement;
   targetPath: HTMLElement;
   modeSelect: HTMLSelectElement;
+  profileButton: HTMLButtonElement;
   configuration: HTMLInputElement;
   platform: HTMLInputElement;
   backButton: HTMLButtonElement;
@@ -68,7 +68,6 @@ export interface ShellElements {
     relations: HTMLFieldSetElement;
   };
   analyzeButton: HTMLButtonElement;
-  stopButton: HTMLButtonElement;
   exportButton: HTMLButtonElement;
   exportMenu: HTMLElement;
   copyButton: HTMLButtonElement;
@@ -138,8 +137,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
       })
     );
   }
-  const stopButton = button('sd-stop', 'Stop', 'danger');
-  stopButton.disabled = true;
 
   const { trigger: exportButton, panel: exportMenu } = toolbarPopover('export', 'Export ▾');
   exportMenu.classList.add('sd-menu');
@@ -176,7 +173,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     profileSummary,
     profilePicker,
     analyzeButton,
-    stopButton,
     overflow,
     languageToggle,
     topBarMeta
@@ -500,7 +496,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   topBar.append(inspectorToggle);
 
   analyzeButton.addEventListener('click', () => handlers.onAnalyze());
-  stopButton.addEventListener('click', () => handlers.onStop());
   modeSelect.addEventListener('change', () =>
     handlers.onMode(modeSelect.value as 'quick' | 'semantic')
   );
@@ -526,12 +521,12 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     targetPath,
     modeSelect,
     configuration,
+    profileButton: profileSummary,
     platform,
     backButton,
     depthSelect,
     filterControls,
     analyzeButton,
-    stopButton,
     exportButton,
     exportMenu,
     copyButton,

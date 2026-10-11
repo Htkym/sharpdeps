@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomBytes } from 'node:crypto';
-import type { ProfileRequest } from './view/protocolV2';
+import type { ProfileRequest, HostToWebviewMessage, SavedUpdatePhase } from './view/protocolV2';
 import * as vscode from 'vscode';
 import { resolveAnalysisTarget } from './solution/resolveTarget';
 import {
@@ -78,6 +78,8 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   const legacyBridge = createReportBridge(store, { projectionLimits });
   let savedProvider: SavedQueryProvider | undefined;
   let savedUpdateStop: AbortController | undefined;
+  let savedUpdateAnalysisId: string | undefined;
+  let savedUpdatePhase: SavedUpdatePhase = 'idle';
   const savedWatchers: vscode.Disposable[] = [];
   let pendingSavedClient: QueryClient | undefined;
   const bridge = { handle: (message: unknown) => (savedProvider ?? legacyBridge).handle(message) };
@@ -194,7 +196,35 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     return false;
   }
 
-  function cancelAnalysis(): void {
+  function savedUpdateState():
+    Extract<HostToWebviewMessage, { type: 'savedUpdateState' }> | undefined {
+    if (!savedProvider) return;
+    return {
+      type: 'savedUpdateState',
+      analysisId: savedProvider.analysisId,
+      phase: savedUpdateAnalysisId === savedProvider.analysisId ? savedUpdatePhase : 'idle',
+      canUpdate: vscode.workspace.isTrusted && !savedUpdateStop
+    };
+  }
+
+  function notifySavedUpdateState(): void {
+    const state = savedUpdateState();
+    if (state) CodeMapPanel.currentPanel?.notifySavedUpdateState(state);
+  }
+
+  function cancelAnalysis(analysisId?: string): void {
+    if (analysisId) {
+      if (savedProvider?.analysisId === analysisId) {
+        if (savedUpdateStop && savedUpdateAnalysisId === analysisId) {
+          savedUpdatePhase = 'cancelling';
+          savedUpdateStop.abort();
+          notifySavedUpdateState();
+        }
+        // Keep the pinned reader while this caller waits for cooperative drain.
+        return;
+      }
+      if (activeAnalysisId !== analysisId) return;
+    }
     requestGeneration++;
     controller.cancel('user');
     closePendingSavedClient();
@@ -209,6 +239,78 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     if (activeAnalysisId)
       CodeMapPanel.currentPanel?.notifyFailure(activeAnalysisId, 'Analysis stopped.', true);
     activeAnalysisId = undefined;
+  }
+
+  /** Both the palette and primary action enter the same explicitly selected update. */
+  async function updateCurrentSavedIndex(analysisId?: string): Promise<void> {
+    const provider = savedProvider;
+    if (analysisId && provider?.analysisId !== analysisId) return;
+    if (!requireTrustedWorkspace()) {
+      notifySavedUpdateState();
+      return;
+    }
+    if (!provider) {
+      void vscode.window.showInformationMessage(
+        'SharpDeps: Open a saved index before updating it.'
+      );
+      return;
+    }
+    if (savedUpdateStop) {
+      void vscode.window.showInformationMessage(
+        'SharpDeps: A saved index update is still running.'
+      );
+      notifySavedUpdateState();
+      return;
+    }
+    const stop = new AbortController();
+    savedUpdateStop = stop;
+    savedUpdateAnalysisId = provider.analysisId;
+    savedUpdatePhase = 'selecting';
+    notifySavedUpdateState();
+    const ticket = requestGeneration,
+      version = inputVersion;
+    const current = () =>
+      savedProvider === provider &&
+      requestGeneration === ticket &&
+      (vscode.workspace.workspaceFolders ?? []).some(
+        (folder) => folder.uri.scheme === 'file' && folder.uri.fsPath === provider.root
+      );
+    try {
+      const result = await updateSavedIndex({
+        root: provider.root,
+        current,
+        stop,
+        output,
+        onUpdating: () => {
+          savedUpdatePhase = 'updating';
+          notifySavedUpdateState();
+        },
+        onCancelling: () => {
+          savedUpdatePhase = 'cancelling';
+          notifySavedUpdateState();
+        }
+      });
+      if (result && current() && vscode.workspace.isTrusted && !stop.signal.aborted) {
+        // The helper has exited/drained; read back the exact committed tuple before swapping.
+        await showSavedIndex(vscode.Uri.file(provider.root), result, version);
+      }
+      savedUpdatePhase = stop.signal.aborted ? 'cancelled' : 'idle';
+    } catch (error) {
+      savedUpdatePhase = stop.signal.aborted ? 'cancelled' : 'failed';
+      output.appendLine(
+        error instanceof SavedUpdateError
+          ? error.code
+          : error instanceof Error
+            ? error.message
+            : 'Saved update failed.'
+      );
+      void vscode.window.showWarningMessage(
+        'SharpDeps: The saved update could not be confirmed. Refresh the saved view to check its generation; no automatic restore was attempted.'
+      );
+    } finally {
+      if (savedUpdateStop === stop) savedUpdateStop = undefined;
+      notifySavedUpdateState();
+    }
   }
 
   function closeSavedProvider(): void {
@@ -231,6 +333,8 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
       rootDirectory,
       projectionLimits,
       currentAnalysisId: () => savedProvider?.analysisId ?? store.currentAnalysisId,
+      savedUpdateState,
+      onUpdateSavedIndex: (analysisId) => void updateCurrentSavedIndex(analysisId),
       savedAnalysisState: (analysisId) =>
         savedProvider?.analysisId === analysisId
           ? savedProvider.analysisState(path.basename(savedProvider.root))
@@ -265,6 +369,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     };
   }
   context.subscriptions.push(
+    vscode.workspace.onDidGrantWorkspaceTrust(notifySavedUpdateState),
     vscode.window.registerWebviewPanelSerializer(CodeMapPanel.viewType, {
       async deserializeWebviewPanel(panel, state) {
         if (state && typeof state === 'object')
@@ -718,52 +823,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         closeSavedProvider();
       }
     }),
-    vscode.commands.registerCommand('sharpdeps.updateSavedIndex', async () => {
-      if (!requireTrustedWorkspace()) return;
-      const provider = savedProvider;
-      if (!provider) {
-        void vscode.window.showInformationMessage(
-          'SharpDeps: Open a saved index before updating it.'
-        );
-        return;
-      }
-      if (savedUpdateStop) {
-        void vscode.window.showInformationMessage(
-          'SharpDeps: A saved index update is still running. Cancel it from the progress notification.'
-        );
-        return;
-      }
-      const stop = new AbortController();
-      savedUpdateStop = stop;
-      const ticket = requestGeneration,
-        version = inputVersion;
-      const current = () =>
-        savedProvider === provider &&
-        requestGeneration === ticket &&
-        (vscode.workspace.workspaceFolders ?? []).some(
-          (folder) => folder.uri.scheme === 'file' && folder.uri.fsPath === provider.root
-        );
-      try {
-        const result = await updateSavedIndex({ root: provider.root, current, stop, output });
-        if (result && current() && vscode.workspace.isTrusted && !stop.signal.aborted) {
-          // The helper has exited/drained; read back the exact committed tuple before swapping.
-          await showSavedIndex(vscode.Uri.file(provider.root), result, version);
-        }
-      } catch (error) {
-        output.appendLine(
-          error instanceof SavedUpdateError
-            ? error.code
-            : error instanceof Error
-              ? error.message
-              : 'Saved update failed.'
-        );
-        void vscode.window.showWarningMessage(
-          'SharpDeps: The saved update could not be confirmed. Refresh the saved view to check its generation; no automatic restore was attempted.'
-        );
-      } finally {
-        if (savedUpdateStop === stop) savedUpdateStop = undefined;
-      }
-    }),
+    vscode.commands.registerCommand('sharpdeps.updateSavedIndex', () => updateCurrentSavedIndex()),
     vscode.commands.registerCommand('sharpdeps.showDependencyMap', (uri?: vscode.Uri) =>
       runAndShow(uri)
     ),

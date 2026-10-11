@@ -1,6 +1,24 @@
 import japanese from './ja.json';
 
 const savedQueryJapanese: Record<string, string> = {
+  'Update saved index': '保存済み索引を更新',
+  'Retry update': '更新を再試行',
+  'Cancel update': '更新要求を取り消す',
+  'Cancelling…': '取消を待機中…',
+  Cancel: '取り消す',
+  'Retry analysis': '解析を再試行',
+  'Update analysis': '解析を更新',
+  'Select the target and update scope.': '更新対象と範囲を選択してください。',
+  'Updating saved index; the saved view remains available.':
+    '保存済み索引を更新しています。保存済み表示は引き続き利用できます。',
+  'Cancelling this request; waiting for shared work to finish…':
+    'この要求を取り消しています。共有処理の終了を待っています…',
+  'Request cancelled. Refresh to check the saved generation.':
+    '要求を取り消しました。Refreshで保存世代を確認してください。',
+  'Update not confirmed. Refresh to check the saved generation.':
+    '更新を確認できませんでした。Refreshで保存世代を確認してください。',
+  'Updating requires workspace trust and no other active saved update.':
+    '更新にはworkspaceの信頼と、実行中の別の保存更新がないことが必要です。',
   'Saved index': '保存済み索引',
   'Saved index loaded (display subset)': '保存済み索引を読み込みました（表示は一部）',
   'Generation {0}': '世代 {0}',
