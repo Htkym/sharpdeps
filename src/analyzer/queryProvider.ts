@@ -40,6 +40,26 @@ export class SavedQueryProvider implements ReportBridge {
   >();
   private readonly cursors = new Map<string, { cursor: string; key: string }>();
   private sequence = 0;
+  private inputStaleReason?: Extract<HostToWebviewMessage, { type: 'stale' }>['reason'];
+
+  get staleReason(): Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined {
+    return this.inputStaleReason;
+  }
+
+  markStale(reason: Extract<HostToWebviewMessage, { type: 'stale' }>['reason']): void {
+    this.inputStaleReason = reason;
+  }
+
+  /** Rereading the same saved generation does not resolve an observed input change. */
+  inheritStaleness(previous: SavedQueryProvider | undefined): void {
+    if (
+      previous &&
+      previous.readyReply.snapshot.workspaceId === this.readyReply.snapshot.workspaceId &&
+      previous.readyReply.snapshot.id === this.readyReply.snapshot.id &&
+      previous.readyReply.snapshot.generation === this.readyReply.snapshot.generation
+    )
+      this.inputStaleReason = previous.staleReason;
+  }
 
   private constructor(
     private readonly client: SavedQueryClient,

@@ -194,7 +194,10 @@ export function toViewActions(
       return [
         {
           type: 'analysisStale',
-          message: 'This result is out of date. Analyze again to refresh.'
+          message:
+            currentState?.queryMetadata?.provider === 'savedIndex'
+              ? 'Saved inputs changed. Update the saved index, then refresh this view.'
+              : 'This result is out of date. Analyze again to refresh.'
         }
       ];
 

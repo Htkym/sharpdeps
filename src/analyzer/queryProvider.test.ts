@@ -54,6 +54,21 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it('retains observed input changes when rereading the same pinned snapshot', async () => {
+    const original = await SavedQueryProvider.create(client([]), 'D:/fixture');
+    original.markStale('savedChange');
+    const reread = await SavedQueryProvider.create(client([]), 'D:/fixture');
+    reread.inheritStaleness(original);
+    expect(reread.staleReason).toBe('savedChange');
+    expect(reread.analysisState('fixture').queryMetadata?.freshness).toBe('unverified');
+    const newer = reply();
+    newer.snapshot = { ...newer.snapshot, id: 'snapshot-b', generation: 4 };
+    const updated = await SavedQueryProvider.create(client([], newer), 'D:/fixture');
+    updated.inheritStaleness(original);
+    expect(updated.staleReason).toBeUndefined();
+    for (const provider of [original, reread, updated]) provider.dispose();
+  });
+
   it('proves an exact variant omitted from the bounded ready header by scoped Status', async () => {
     const ready = reply();
     ready.snapshot = {

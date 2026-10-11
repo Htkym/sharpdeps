@@ -30,6 +30,30 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('asks to update the saved index after an input change without claiming freshness', () => {
+    const state = viewReducer(INITIAL_STATE, {
+      type: 'analysisComplete',
+      analysisId,
+      completeness: 'partial',
+      coverage: undefined,
+      queryMetadata: savedMetadata
+    });
+    const actions = toViewActions(
+      { type: 'stale', analysisId, reason: 'savedChange' },
+      queries,
+      state
+    );
+    expect(actions).toEqual([
+      {
+        type: 'analysisStale',
+        message: 'Saved inputs changed. Update the saved index, then refresh this view.'
+      }
+    ]);
+    const stale = viewReducer(state, actions[0]);
+    expect(stale.queryMetadata).toEqual(savedMetadata);
+    expect(stale.status).toBe('stale');
+  });
+
   it('keeps saved metadata and actual symbol/edge certainty without legacy completion', () => {
     const actions = toViewActions(
       {

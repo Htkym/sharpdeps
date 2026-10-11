@@ -17,6 +17,7 @@ import { ReportStore, ReportStoreError } from './analyzer/reportStore';
 import { createReportBridge } from './analyzer/reportBridge';
 import { QueryClient, QueryClientError } from './analyzer/queryClient';
 import { SavedQueryProvider } from './analyzer/queryProvider';
+import { affectsSavedInput } from './analyzer/savedInputChanges';
 import type { CodeMapReport } from './analyzer/types';
 import { CodeMapPanel } from './view/codeMapPanel';
 import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
@@ -73,6 +74,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   };
   const legacyBridge = createReportBridge(store, { projectionLimits });
   let savedProvider: SavedQueryProvider | undefined;
+  const savedWatchers: vscode.Disposable[] = [];
   let pendingSavedClient: QueryClient | undefined;
   const bridge = { handle: (message: unknown) => (savedProvider ?? legacyBridge).handle(message) };
   context.subscriptions.push(output, diagnostics);
@@ -154,7 +156,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   context.subscriptions.push({
     dispose: () => {
       requestGeneration++;
-      savedProvider?.dispose();
+      closeSavedProvider();
       pendingSavedClient?.dispose();
       void controller.dispose();
     }
@@ -206,6 +208,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   }
 
   function closeSavedProvider(): void {
+    savedWatchers.splice(0).forEach((watcher) => watcher.dispose());
     savedProvider?.dispose();
     savedProvider = undefined;
   }
@@ -227,6 +230,8 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         savedProvider?.analysisId === analysisId
           ? savedProvider.analysisState(path.basename(savedProvider.root))
           : undefined,
+      savedStaleReason: (analysisId) =>
+        savedProvider?.analysisId === analysisId ? savedProvider.staleReason : undefined,
       targetName: () =>
         store.currentAnalysisId
           ? path.basename(store.getTargetPath(store.currentAnalysisId) ?? '')
@@ -271,15 +276,56 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   };
   const changed = (uri: vscode.Uri, reason: 'savedChange' | 'unsavedChange') => {
     if (uri.scheme !== 'file') return;
-    if (/[\\/](bin|obj|node_modules|\.git)[\\/]/.test(uri.fsPath)) return;
+    const ignoredLegacy = /[\\/](bin|obj|node_modules|\.git)[\\/]/.test(uri.fsPath);
+    const saved = savedProvider;
+    const savedAffected = saved && affectsSavedInput(saved.root, uri.fsPath);
+    if (ignoredLegacy && !savedAffected) return;
     inputVersion++;
-    for (const id of store.analysisIds) {
+    if (savedAffected) {
+      saved.markStale(reason);
+      CodeMapPanel.currentPanel?.notifyStale(saved.analysisId, reason);
+    }
+    for (const id of ignoredLegacy ? [] : store.analysisIds) {
       if (affectsInput(uri.fsPath, id)) {
         store.markStale(id);
         CodeMapPanel.currentPanel?.notifyStale(id, reason);
       }
     }
   };
+  function watchSavedResult(provider: SavedQueryProvider): vscode.Disposable[] {
+    const watchers: vscode.Disposable[] = [];
+    const watch = (directory: string, pattern: string) => {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(directory, pattern)
+      );
+      const notify = (uri: vscode.Uri) => {
+        if (savedProvider === provider && affectsSavedInput(provider.root, uri.fsPath))
+          changed(uri, 'savedChange');
+      };
+      watchers.push(watcher);
+      watchers.push(
+        watcher.onDidCreate(notify),
+        watcher.onDidChange(notify),
+        watcher.onDidDelete(notify)
+      );
+    };
+    try {
+      watch(provider.root, '**/*');
+      for (let ancestor = path.dirname(provider.root); ; ancestor = path.dirname(ancestor)) {
+        watch(
+          ancestor,
+          process.platform === 'win32'
+            ? '*'
+            : '{global.json,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,NuGet.Config,nuget.config}'
+        );
+        if (path.dirname(ancestor) === ancestor) break;
+      }
+      return watchers;
+    } catch (error) {
+      watchers.forEach((watcher) => watcher.dispose());
+      throw error;
+    }
+  }
   function watchResult(analysisId: string): void {
     targetWatchers.splice(0).forEach((watcher) => watcher.dispose());
     const root = rootDirectory(analysisId)!;
@@ -333,11 +379,16 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
     }),
     vscode.workspace.onDidSaveTextDocument((document) => changed(document.uri, 'savedChange')),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('sharpdeps'))
-        for (const id of store.analysisIds) {
-          store.markStale(id);
-          CodeMapPanel.currentPanel?.notifyStale(id, 'profileChange');
-        }
+      if (!event.affectsConfiguration('sharpdeps')) return;
+      inputVersion++;
+      for (const id of store.analysisIds) {
+        store.markStale(id);
+        CodeMapPanel.currentPanel?.notifyStale(id, 'profileChange');
+      }
+      if (savedProvider) {
+        savedProvider.markStale('profileChange');
+        CodeMapPanel.currentPanel?.notifyStale(savedProvider.analysisId, 'profileChange');
+      }
     })
   );
 
@@ -499,6 +550,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   }
 
   async function showSavedIndex(requestedTarget?: vscode.Uri): Promise<void> {
+    const savedStartVersion = inputVersion;
     const ticket = ++requestGeneration;
     controller.cancel('superseded');
     if (activeAnalysisId) {
@@ -562,15 +614,30 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         candidate.dispose();
         return;
       }
+      candidate.inheritStaleness(savedProvider);
+      const candidateRoot = candidate.root;
+      if (
+        inputVersion !== savedStartVersion ||
+        vscode.workspace.textDocuments.some(
+          (document) =>
+            document.isDirty &&
+            document.uri.scheme === 'file' &&
+            affectsSavedInput(candidateRoot, document.uri.fsPath)
+        )
+      )
+        candidate.markStale('unknown');
+      const candidateWatchers = watchSavedResult(candidate);
       closeSavedProvider();
       savedProvider = candidate;
+      savedWatchers.push(...candidateWatchers);
       diagnostics.clear();
       CodeMapPanel.show(context.extensionUri, panelHost()).notifyAnalysis(candidate.analysisId);
       output.appendLine(
         `Read-only saved index: ${candidate.analysisId}. Refresh rereads the saved generation; no analysis is started.`
       );
     } catch (error) {
-      candidate?.dispose();
+      if (candidate && savedProvider === candidate) closeSavedProvider();
+      else candidate?.dispose();
       if (ticket !== requestGeneration) return;
       const previousId = store.currentAnalysisId;
       const previousTarget = previousId ? store.getTargetPath(previousId) : undefined;

@@ -42,6 +42,9 @@ export interface CodeMapPanelHost {
   savedAnalysisState?: (
     analysisId: string
   ) => Extract<HostToWebviewMessage, { type: 'analysisComplete' }> | undefined;
+  savedStaleReason?: (
+    analysisId: string
+  ) => Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined;
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -532,6 +535,8 @@ export class CodeMapPanel {
       const saved = this.host.savedAnalysisState?.(analysisId);
       if (saved) {
         this.post(saved);
+        const reason = this.host.savedStaleReason?.(analysisId);
+        if (reason) this.notifyStale(analysisId, reason);
         return;
       }
       const report = this.host.store.getReport(analysisId);
