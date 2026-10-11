@@ -314,8 +314,8 @@ describe('panel ownership with a delayed serializer (stubbed VSCode panel events
         const oldRestoredTab = physicalPanel();
         CodeMapPanel.restore(oldRestoredTab as unknown as vscode.WebviewPanel, uri, host);
         // A tab restored late from the previous session must not own this live provider.
+        expect(oldRestoredTab.dispose).toHaveBeenCalledOnce();
         oldRestoredTab.dispose();
-        expect(oldRestoredTab.dispose).toHaveBeenCalled();
       } else {
         expect(CodeMapPanel.show(uri, host)).toBe(panel);
       }
