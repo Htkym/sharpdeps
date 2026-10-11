@@ -54,6 +54,121 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it.each(['complete', 'failed'] as const)(
+    'ignores a late old projection when the latest export projection is %s',
+    async (latest) => {
+      const wire = client([]);
+      const pending: ((reply: QueryWireReply) => void)[] = [];
+      wire.request = (request) => {
+        wire.requests.push(request);
+        return new Promise<QueryWireReply>((resolve) => {
+          pending.push((value) => resolve({ ...value, requestId: String(request.requestId) }));
+        });
+      };
+      const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+      const request = {
+        type: 'getProjection',
+        requestId,
+        analysisId: provider.analysisId,
+        granularity: 'type',
+        scope: { kind: 'root' }
+      };
+      const older = provider.handle(request);
+      const newer = provider.handle({ ...request, requestId: 'req_1111111111111111' });
+      expect(pending).toHaveLength(2);
+      pending[1](
+        latest === 'complete'
+          ? reply({ items: [node('newer')] })
+          : reply({ snapshot: { ...reply().snapshot, generation: 4 } })
+      );
+      expect((await newer).type).toBe(latest === 'complete' ? 'projection' : 'error');
+      pending[0](reply({ items: [node('older')] }));
+      expect((await older).type).toBe('projection');
+      if (latest === 'complete')
+        expect(provider.prepareSavedExport(provider.analysisId).display.nodeIds).toEqual(['newer']);
+      else
+        expect(() => provider.prepareSavedExport(provider.analysisId)).toThrow(
+          'QUERY_EXPORT_UNAVAILABLE'
+        );
+      provider.dispose();
+    }
+  );
+
+  it('prepares detached export data from the pinned projection without another Query', async () => {
+    const wire = client([reply({ items: [node('member-a'), node('member-b')] })]);
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture', undefined, {
+      maxNodes: 1,
+      maxEdges: 1
+    });
+    expect(() => provider.prepareSavedExport(provider.analysisId)).toThrow(
+      'QUERY_EXPORT_UNAVAILABLE'
+    );
+    const result = await provider.handle({
+      type: 'getProjection',
+      requestId,
+      analysisId: provider.analysisId,
+      granularity: 'type',
+      scope: { kind: 'root' }
+    });
+    if (result.type !== 'projection') throw new Error('projection failed');
+    const data = provider.prepareSavedExport(provider.analysisId);
+    expect(data.analysisId).toBe(provider.analysisId);
+    expect(data.snapshot).toEqual(reply().snapshot);
+    expect(data.responses[0].items.map((item) => item.id)).toEqual(['member-a', 'member-b']);
+    expect(data.display).toMatchObject({ nodeIds: ['member-a'], edgeIds: [], truncated: true });
+    expect(data.responses[0].truncated).toBe(false);
+    expect(result.projection.nodes[0].id).not.toBe(data.display.nodeIds[0]);
+    data.display.nodeIds[0] = 'mutated';
+    data.responses[0].items[0].node!.name = 'mutated';
+    provider.markStale('savedChange');
+    const again = provider.prepareSavedExport(provider.analysisId);
+    expect(again.display.nodeIds).toEqual(['member-a']);
+    expect(again.responses[0].items[0].node?.name).toBe('member-a');
+    expect(again.observedInputChange).toBe('savedChange');
+    expect(again.snapshot.freshness).toBe('unverified');
+    expect(wire.requests).toHaveLength(1);
+    expect(() => provider.prepareSavedExport('an_0000000000000000')).toThrow(
+      'QUERY_ANALYSIS_EXPIRED'
+    );
+    provider.dispose();
+    expect(() => provider.prepareSavedExport(provider.analysisId)).toThrow(
+      'QUERY_ANALYSIS_EXPIRED'
+    );
+  });
+
+  it('refuses to reuse export data after a failed projection or provider replacement', async () => {
+    const wire = client([
+      reply({ items: [node('member-a')] }),
+      reply({ snapshot: { ...reply().snapshot, generation: 4 } })
+    ]);
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const request = {
+      type: 'getProjection',
+      requestId,
+      analysisId: provider.analysisId,
+      granularity: 'type',
+      scope: { kind: 'root' }
+    };
+    expect((await provider.handle(request)).type).toBe('projection');
+    expect(provider.prepareSavedExport(provider.analysisId).responses).toHaveLength(1);
+    expect(await provider.handle(request)).toMatchObject({
+      type: 'error',
+      code: 'QUERY_GENERATION_CHANGED'
+    });
+    expect(() => provider.prepareSavedExport(provider.analysisId)).toThrow(
+      'QUERY_EXPORT_UNAVAILABLE'
+    );
+    const replacement = await SavedQueryProvider.create(client([]), 'D:/fixture');
+    expect(() => replacement.prepareSavedExport(provider.analysisId)).toThrow(
+      'QUERY_ANALYSIS_EXPIRED'
+    );
+    expect(() => replacement.prepareSavedExport(replacement.analysisId)).toThrow(
+      'QUERY_EXPORT_UNAVAILABLE'
+    );
+    provider.dispose();
+    replacement.dispose();
+  });
+
   it('opens only host-issued source IDs from the pinned session and one available declaration', async () => {
     const location = {
       sourceId: 'source-a',
