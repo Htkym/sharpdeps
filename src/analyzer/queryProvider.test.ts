@@ -54,6 +54,98 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it('binds saved export to the received projection and invalidates a lease on new work', async () => {
+    const wire = client([
+      reply({ items: [node('member-a')] }),
+      reply({ items: [node('member-b')] })
+    ]);
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const projection = {
+      type: 'getProjection' as const,
+      requestId,
+      analysisId: provider.analysisId,
+      granularity: 'type' as const,
+      scope: { kind: 'root' as const },
+      filters: {},
+      search: '',
+      includeIds: []
+    };
+    await provider.handle(projection);
+    const request = {
+      ...projection,
+      type: 'export' as const,
+      format: 'json' as const,
+      requestId: 'req_2222222222222222',
+      projectionRequestId: requestId
+    };
+    for (const changed of [
+      { projectionRequestId: undefined },
+      { projectionRequestId: 'req_1111111111111111' },
+      { scope: { kind: 'dependencies' as const, id: 'ty_1111111111111111' } },
+      { filters: { includeTests: false } },
+      { search: 'other' },
+      { includeIds: ['ty_1111111111111111'] },
+      { granularity: 'project' as const }
+    ])
+      expect(() => provider.prepareSavedExportFor({ ...request, ...changed })).toThrow(
+        'QUERY_EXPORT_SELECTION_CHANGED'
+      );
+    const prepared = provider.prepareSavedExportFor(request);
+    prepared.assertCurrent();
+    expect(prepared.data.display.nodeIds).toEqual(['member-a']);
+    expect(wire.requests).toHaveLength(1);
+    const next = provider.handle({ ...projection, requestId: 'req_1111111111111111' });
+    expect(() => prepared.assertCurrent()).toThrow('QUERY_EXPORT_SELECTION_CHANGED');
+    await next;
+    expect(() => prepared.assertCurrent()).toThrow('QUERY_EXPORT_SELECTION_CHANGED');
+    expect(() => provider.prepareSavedExportFor(request)).toThrow('QUERY_EXPORT_SELECTION_CHANGED');
+    provider.dispose();
+  });
+
+  it('refuses unsupported payloads and rechecks pin, input changes and disposal at output', async () => {
+    const ready = reply();
+    const wire = client([reply({ items: [node('member-a')] })], ready);
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    await provider.handle({
+      type: 'getProjection',
+      requestId,
+      analysisId: provider.analysisId,
+      granularity: 'type',
+      scope: { kind: 'root' }
+    });
+    const request = {
+      type: 'export' as const,
+      requestId,
+      analysisId: provider.analysisId,
+      projectionRequestId: requestId,
+      granularity: 'type' as const,
+      scope: { kind: 'root' as const },
+      format: 'json' as const
+    };
+    expect(() => provider.prepareSavedExportFor({ ...request, format: 'svg' })).toThrow(
+      'QUERY_EXPORT_FORMAT_UNSUPPORTED'
+    );
+    expect(() => provider.prepareSavedExportFor({ ...request, data: '{}' })).toThrow(
+      'QUERY_EXPORT_FORMAT_UNSUPPORTED'
+    );
+    expect(() =>
+      provider.prepareSavedExportFor({ ...request, type: 'copyContext', includeSnippets: true })
+    ).toThrow('QUERY_EXPORT_SNIPPETS_UNSUPPORTED');
+    const prepared = provider.prepareSavedExportFor(request);
+    ready.snapshot.generation++;
+    expect(() => prepared.assertCurrent()).toThrow('QUERY_EXPORT_PIN_CHANGED');
+    ready.snapshot.generation--;
+    provider.markStale('savedChange');
+    expect(() => prepared.assertCurrent()).toThrow('QUERY_EXPORT_INPUT_CHANGED');
+    const stale = provider.prepareSavedExportFor(request);
+    expect(stale.data.observedInputChange).toBe('savedChange');
+    expect(stale.data.snapshot.freshness).toBe('unverified');
+    stale.assertCurrent();
+    provider.dispose();
+    expect(() => stale.assertCurrent()).toThrow('QUERY_ANALYSIS_EXPIRED');
+    expect(wire.requests).toHaveLength(1);
+  });
+
   it.each(['complete', 'failed'] as const)(
     'ignores a late old projection when the latest export projection is %s',
     async (latest) => {

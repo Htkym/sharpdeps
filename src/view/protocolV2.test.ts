@@ -5,6 +5,22 @@ const requestId = 'req_0123456789abcdef';
 const analysisId = 'an_0123456789abcdef';
 
 describe('validateWebviewMessage', () => {
+  it('validates saved projection provenance without requiring it from legacy exports', () => {
+    for (const type of ['copyContext', 'export'] as const) {
+      const request = {
+        type,
+        requestId,
+        analysisId,
+        scope: { kind: 'root' },
+        ...(type === 'export' ? { format: 'json' } : {})
+      };
+      expect(validateWebviewMessage(request).ok).toBe(true);
+      expect(validateWebviewMessage({ ...request, projectionRequestId: requestId }).ok).toBe(true);
+      expect(validateWebviewMessage({ ...request, projectionRequestId: 'raw-saved-id' }).ok).toBe(
+        false
+      );
+    }
+  });
   it('requires an exact saved session for primary updates and a bounded host phase', () => {
     expect(validateWebviewMessage({ type: 'updateSavedIndex', requestId, analysisId }).ok).toBe(
       true

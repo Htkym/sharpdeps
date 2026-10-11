@@ -35,6 +35,39 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('keeps received saved projection provenance only until the next projection or session', () => {
+    const requestId = 'req_3333333333333333';
+    let state: ViewState = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };
+    const message = {
+      type: 'projection',
+      requestId,
+      analysisId,
+      projection: {
+        scope: { kind: 'root' },
+        granularity: 'type',
+        nodes: [],
+        edges: [],
+        queryMetadata: savedMetadata
+      }
+    };
+    state = toViewActions(message, new Map(), state).reduce(viewReducer, state);
+    expect(state.projectionRequestId).toBe(requestId);
+    state = viewReducer(state, { type: 'projectionRequested' });
+    expect(state.projectionRequestId).toBeUndefined();
+    expect(state.projection).not.toBeNull();
+    const rejected = {
+      ...message,
+      projection: { ...message.projection, queryMetadata: { ...savedMetadata, generation: 4 } }
+    };
+    expect(toViewActions(rejected, new Map(), state)).toEqual([]);
+    state = toViewActions(message, new Map(), state).reduce(viewReducer, state);
+    state = viewReducer(state, {
+      type: 'analyzeStarted',
+      analysisId: 'an_1111111111111111',
+      mode: 'quick'
+    });
+    expect(state.projectionRequestId).toBeUndefined();
+  });
   it.each(['cancelled', 'failed', 'complete'] as const)(
     'keeps the primary legacy operation after saved → legacy → %s',
     (terminal) => {

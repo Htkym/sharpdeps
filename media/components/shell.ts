@@ -58,6 +58,7 @@ export interface ShellElements {
     omissions: HTMLInputElement;
     legend: HTMLInputElement;
   };
+  imageTools: HTMLElement;
   filterControls: {
     tests: HTMLInputElement;
     external: HTMLInputElement;
@@ -529,6 +530,7 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     analyzeButton,
     exportButton,
     exportMenu,
+    imageTools,
     copyButton,
     breadcrumbs,
     navTabs,

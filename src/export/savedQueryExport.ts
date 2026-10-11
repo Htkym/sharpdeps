@@ -5,7 +5,14 @@ import {
   type QueryWireReply
 } from '../analyzer/queryClient';
 import type { Granularity } from '../analyzer/reportV2';
-import type { Scope } from '../view/protocolV2';
+import type { Scope, WebviewToHostMessage } from '../view/protocolV2';
+
+export type SavedExportRequest = Extract<WebviewToHostMessage, { type: 'copyContext' | 'export' }>;
+export interface PreparedSavedExport {
+  data: SavedQueryExport;
+  /** Rechecks the host provider and projection immediately before a local output. */
+  assertCurrent: () => void;
+}
 
 type QueryOperation = 'Browse' | 'Search' | 'Impact' | 'Symbol';
 

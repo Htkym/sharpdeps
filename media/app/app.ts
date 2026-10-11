@@ -121,7 +121,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     },
     onExport: (format) => void exportCurrent(format),
     onCopyContext: () =>
-      state.queryMetadata
+      state.queryMetadata && (!state.projection || !state.projectionRequestId)
         ? dispatch({
             type: 'errorRaised',
             code: 'query.unsupportedOperation',
@@ -223,11 +223,14 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     copy?: boolean
   ): Promise<void> {
     if (state.queryMetadata) {
-      dispatch({
-        type: 'errorRaised',
-        code: 'query.unsupportedOperation',
-        message: tr('This operation is unavailable for saved index.')
-      });
+      if (format === 'json' && state.projection && state.projectionRequestId)
+        options.onExport?.(format, undefined, copy);
+      else
+        dispatch({
+          type: 'errorRaised',
+          code: 'query.unsupportedOperation',
+          message: tr('This operation is unavailable for saved index.')
+        });
       return;
     }
     try {
@@ -553,10 +556,15 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
   }
   for (const option of elements.granularitySelect.querySelectorAll<HTMLOptionElement>('option'))
     if (option.value !== 'type') option.disabled = !!state.queryMetadata;
-  elements.exportButton.disabled = elements.copyButton.disabled = !!state.queryMetadata;
-  elements.exportButton.title = elements.copyButton.title = state.queryMetadata
+  const savedExportPending =
+    !!state.queryMetadata && (!state.projection || !state.projectionRequestId);
+  elements.exportButton.disabled = elements.copyButton.disabled = savedExportPending;
+  elements.exportButton.title = elements.copyButton.title = savedExportPending
     ? tr('This operation is unavailable for saved index.')
     : '';
+  for (const item of elements.exportMenu.querySelectorAll<HTMLButtonElement>('button'))
+    item.hidden = !!state.queryMetadata && item.id !== 'sd-export-json';
+  elements.imageTools.hidden = !!state.queryMetadata;
   const controls = elements.filterControls;
   controls.tests.checked = state.filters.includeTests !== false;
   controls.external.checked = state.filters.includeExternal !== false;

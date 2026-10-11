@@ -341,6 +341,23 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
           : undefined,
       savedStaleReason: (analysisId) =>
         savedProvider?.analysisId === analysisId ? savedProvider.staleReason : undefined,
+      prepareSavedExport: (request) => {
+        const provider = savedProvider;
+        if (!provider) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        const prepared = provider.prepareSavedExportFor(request);
+        const assertCurrent = (): void => {
+          if (
+            savedProvider !== provider ||
+            !(vscode.workspace.workspaceFolders ?? []).some(
+              (folder) => folder.uri.scheme === 'file' && folder.uri.fsPath === provider.root
+            )
+          )
+            throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+          prepared.assertCurrent();
+        };
+        assertCurrent();
+        return { data: prepared.data, assertCurrent };
+      },
       openSavedSource: async (request) => {
         const provider = savedProvider;
         if (!provider) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');

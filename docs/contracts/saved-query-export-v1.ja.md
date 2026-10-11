@@ -1,6 +1,6 @@
 # Saved Query context / JSON export v1
 
-この段階はhostのpinned SavedQueryProviderからのデータ準備と純粋な文字列変換を定義する。UI・protocol・clipboard・save dialog・file書込みには接続しない。saved向けの実Copy/Export操作は引き続き未対応であり、legacy ContextExportInput/report JSONへ保存結果を詰めない。
+hostのpinned SavedQueryProviderから準備した結果を、context copy・JSON copy・ローカルJSON Saveへ接続する。legacy ContextExportInput/report JSONへ保存結果を詰めず、SVG/PNG/Mermaidはsaved向けに提供しない。実clipboard/file/UIの検証と受入れは、純粋変換・stubbed host検証とは区別する。
 
 ## 情報源とsession
 
@@ -29,6 +29,8 @@ kindは`sharpdeps.saved-query-export`、versionは`1`。TypeScript定義は`src/
 
 許可したfieldだけを組み立て、source path・location/rawSpan/hash・source本文/snippet・opaque page cursor・未知fieldは出力しない。cursorはhasMoreにだけ変換する。返却データのlabel/signature等は保存済みmetadataであり、実行指示として解釈しない。
 
+このallowlistはlabel/signature等の自由文字列に含まれる秘密を自動除去する機能ではない。
+
 ## 純粋な文字列変換
 
 `serializeSavedQueryExport`はindent 2のJSONと末尾LFを返す。field値を切り詰めたりcertainty/coverage/freshnessを置き換えたりしない。JSON parseで文字列値が復元できるため、Unicode・astral・引用符・CR/LFを保持する。UTF8 bytes化と実書込みは後続gateで行う。
@@ -37,6 +39,10 @@ kindは`sharpdeps.saved-query-export`、versionは`1`。TypeScript定義は`src/
 
 ## 後続の出力gate
 
-実Copy/JSON Saveは別実装・別受入れとする。hostのcurrent provider identity、analysis ID、pinned workspace/snapshot/generation/variant、準備したprojection provenance/scope/subsetを、dialog後とclipboard/file出力直前に再照合する。切替・dispose・新projection・対象差異なら古い準備値を出力しない。webviewから結果本体/path/argvを受け取らず、hostがpinned providerから組み立てる。
+webviewのcopyContext/exportは受信済みprojectionのrequest IDをprojectionRequestIdとして送る。これはephemeralで永続化しない。新projectionを要求した時点で表示側tokenを消し、到着後だけcopy/JSON操作を有効にする。scope/granularity/filter/search/includeIdsも準備元の要求と照合する。UIではsavedのJSON以外の形式を隠し、hostでも形式・data・includeSnippetsを拒否する。
 
-実clipboard/file、保存取消とsession切替、UIボタン、installed VSIX、trust設定を維持した実操作は未検証である。同hosttrust revokeのlistener gapやpublic visibility制約を、この純粋変換から解消したとは扱わない。
+`prepareSavedExportFor`はデータとassertCurrentを返す。hostのcurrent provider identity、root membership、analysis ID、pinned workspace/snapshot/generation/variant、準備したprojection identity/subset、観測変更理由を、clipboard直前またはsave dialog後のfile出力直前に再照合する。切替・dispose・新projection・対象差異なら古い準備値を出力しない。webviewから結果本体/path/argvを採用せず、hostがpinned providerから組み立てる。JSONはUTF8で保存する。保存取消は書込みを行わず、宛先はfile schemeのローカルURIだけとし、remote authority/UNCは拒否する。
+
+照合は出力API呼出し直前までの保証であり、非同期clipboard/file APIの開始後に起きた切替を遡って取消・復元する保証ではない。入力変更理由を保持しても、保存済みsnapshot freshnessを再検証したとは扱わない。clipboard/fileはユーザーのlocal操作としてのみ行い、外部共有やAI送信を行わない。
+
+実clipboard/file、UIボタン、installed VSIX、trust設定を維持した実操作は未検証である。host回帰のsave dialog/clipboard/file APIはstubであり、実出力ではない。同hosttrust revokeのlistener gapやpublic visibility制約を、この接続から解消したとは扱わない。

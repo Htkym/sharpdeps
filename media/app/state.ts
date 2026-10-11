@@ -83,6 +83,8 @@ export interface ViewState {
     skipped: number;
   };
   projection: Projection | null;
+  /** Ephemeral received projection provenance; never restored or persisted. */
+  projectionRequestId?: string;
   /** True when the projection only contains part of the analysis. */
   projectionTruncated: boolean;
   /** SCC groups and their verified cycles, from the current projection. */
@@ -208,7 +210,8 @@ export type ViewAction =
     }
   | { type: 'analysisFailed'; analysisId?: string; message: string; cancelled?: boolean }
   | { type: 'analysisStale'; message: string }
-  | { type: 'projectionReceived'; projection: Projection }
+  | { type: 'projectionRequested' }
+  | { type: 'projectionReceived'; projection: Projection; requestId?: string }
   | {
       type: 'detailsReceived';
       entityId: string;
@@ -361,6 +364,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
               temporaryDisplayIds: [],
               camera: null,
               queryMetadata: undefined,
+              projectionRequestId: undefined,
               savedUpdate: undefined,
               ...(state.queryMetadata
                 ? {
@@ -392,6 +396,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
           ? {
               analysisId: undefined,
               queryMetadata: undefined,
+              projectionRequestId: undefined,
               projection: null,
               projectionTruncated: false,
               details: null,
@@ -505,10 +510,13 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
     case 'analysisStale':
       return { ...state, status: 'stale', statusMessage: action.message };
 
+    case 'projectionRequested':
+      return state.projectionRequestId ? { ...state, projectionRequestId: undefined } : state;
     case 'projectionReceived':
       return {
         ...state,
         projection: action.projection,
+        projectionRequestId: action.projection.queryMetadata ? action.requestId : undefined,
         queryMetadata: action.projection.queryMetadata ?? state.queryMetadata,
         projectionTruncated: action.projection.truncated,
         cycles: action.projection.queryMetadata ? [] : (action.projection.cycleGroups ?? []),

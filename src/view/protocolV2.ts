@@ -228,6 +228,8 @@ export type WebviewToHostMessage =
       requestId: string;
       analysisId: string;
       scope: Scope;
+      /** Saved exports must identify the projection received by the webview. */
+      projectionRequestId?: string;
       includeSnippets?: boolean;
       granularity?: Granularity;
       filters?: Filters;
@@ -241,6 +243,7 @@ export type WebviewToHostMessage =
       format: ExportFormat;
       copy?: boolean;
       scope: Scope;
+      projectionRequestId?: string;
       /** Rendered SVG text or PNG data URL, when the webview produced it (SD-022). */
       data?: string;
       granularity?: Granularity;
@@ -467,6 +470,7 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   copyContext: {
     required: { requestId: 'requestId', analysisId: 'analysisId', scope: 'scope' },
     optional: {
+      projectionRequestId: 'requestId',
       includeSnippets: 'boolean',
       granularity: 'granularity',
       filters: 'filters',
@@ -482,6 +486,7 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
       scope: 'scope'
     },
     optional: {
+      projectionRequestId: 'requestId',
       data: 'string',
       copy: 'boolean',
       granularity: 'granularity',

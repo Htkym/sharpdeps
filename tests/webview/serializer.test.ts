@@ -13,6 +13,7 @@ describe('view state serialization', () => {
   it('round-trips the small state and the camera', () => {
     const state = {
       ...INITIAL_STATE,
+      projectionRequestId: 'req_0000000000001234',
       target: { name: 'Sample.sln', relativePath: 'src/Sample.sln' },
       selection: { entityId: 'ty_1111111111111111' },
       filters: { includeGenerated: false, kinds: ['class'] },
@@ -27,6 +28,9 @@ describe('view state serialization', () => {
 
     const stored = serializeViewState(state, { zoom: 1.4, scrollLeft: 30, scrollTop: 12 });
     const restored = deserializeViewState(stored);
+
+    expect(stored).not.toHaveProperty('projectionRequestId');
+    expect(restored.state).not.toHaveProperty('projectionRequestId');
 
     expect(restored.versionMismatch).toBe(false);
     expect(restored.state).toMatchObject({

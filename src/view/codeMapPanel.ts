@@ -11,6 +11,13 @@ import type { ReportStore } from '../analyzer/reportStore';
 import { openDeclarationLocation, openEvidenceLocation } from '../commands/openLocation';
 import { buildContextExport, buildExportJson, buildMermaid } from '../export/contextExport';
 import type { ContextEvidence, ContextExportInput } from '../export/contextExport';
+import {
+  buildSavedContextExport,
+  serializeSavedQueryExport,
+  type PreparedSavedExport,
+  type SavedExportRequest
+} from '../export/savedQueryExport';
+import { QueryClientError } from '../analyzer/queryClient';
 import { getWebviewHtml } from './html';
 import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
 import type { ExportFormat, HostToWebviewMessage, Scope, WebviewToHostMessage } from './protocolV2';
@@ -50,6 +57,7 @@ export interface CodeMapPanelHost {
   openSavedSource?: (
     request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>
   ) => Promise<void>;
+  prepareSavedExport?: (request: SavedExportRequest) => PreparedSavedExport;
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -103,6 +111,7 @@ export class CodeMapPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
   private ready = false;
+  private disposed = false;
   private pendingAnalysisId: string | undefined;
   private runningMessage: Extract<HostToWebviewMessage, { type: 'analysisStarted' }> | undefined;
   private viewState: Record<string, unknown> | undefined;
@@ -219,12 +228,33 @@ export class CodeMapPanel {
     }
 
     const request = validation.value;
+    if (
+      (request.type === 'copyContext' || request.type === 'export') &&
+      this.host.currentAnalysisId &&
+      request.analysisId !== this.host.currentAnalysisId()
+    ) {
+      this.post({
+        type: 'error',
+        requestId: request.requestId,
+        analysisId: request.analysisId,
+        code: 'QUERY_ANALYSIS_EXPIRED',
+        message: 'The displayed result is no longer current.'
+      });
+      return;
+    }
     // Saved data never falls through to legacy source/export handlers or their store.
     if (
       'analysisId' in request &&
       this.host.savedAnalysisState?.(request.analysisId) &&
       ['openEvidence', 'openDeclaration', 'copyContext', 'export'].includes(request.type)
     ) {
+      if (
+        (request.type === 'copyContext' || request.type === 'export') &&
+        this.host.prepareSavedExport
+      ) {
+        void this.outputSavedExport(request);
+        return;
+      }
       if (
         (request.type === 'openEvidence' || request.type === 'openDeclaration') &&
         this.host.openSavedSource
@@ -335,6 +365,57 @@ export class CodeMapPanel {
     relativePaths?: string[]
   ): void {
     this.post({ type: 'stale', analysisId, reason, relativePaths });
+  }
+
+  /** Saved metadata only; never delegates to legacy store/source/image handlers. */
+  private async outputSavedExport(request: SavedExportRequest): Promise<void> {
+    try {
+      const prepared = this.host.prepareSavedExport!(request);
+      const assertCurrent = (): void => {
+        if (
+          this.disposed ||
+          (this.host.currentAnalysisId && this.host.currentAnalysisId() !== request.analysisId)
+        )
+          throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        prepared.assertCurrent();
+      };
+      const text =
+        request.type === 'copyContext'
+          ? buildSavedContextExport(prepared.data)
+          : serializeSavedQueryExport(prepared.data);
+      if (request.type === 'copyContext' || request.copy) {
+        assertCurrent();
+        await vscode.env.clipboard.writeText(text);
+        void vscode.window.showInformationMessage(
+          'SharpDeps: 保存済みの取得結果をコピーしました。'
+        );
+        return;
+      }
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file('sharpdeps-saved-query.json'),
+        filters: { 'SharpDeps saved Query': ['json'] }
+      });
+      if (!uri) return;
+      if (uri.scheme !== 'file' || uri.authority || /^[/\\]{2}/.test(uri.fsPath))
+        throw new QueryClientError('QUERY_EXPORT_LOCAL_FILE_REQUIRED');
+      const bytes = Buffer.from(text, 'utf8');
+      assertCurrent();
+      await vscode.workspace.fs.writeFile(uri, bytes);
+      void vscode.window.showInformationMessage(
+        'SharpDeps: 保存済みの取得結果をJSONで保存しました。'
+      );
+    } catch (error) {
+      this.post({
+        type: 'error',
+        requestId: request.requestId,
+        analysisId: request.analysisId,
+        code: error instanceof QueryClientError ? error.code : 'QUERY_EXPORT_FAILED',
+        message:
+          error instanceof QueryClientError
+            ? error.message
+            : 'The saved result could not be exported.'
+      });
+    }
   }
 
   /** Builds the export input for the webview's current selection (SD-022). */
@@ -618,6 +699,8 @@ export class CodeMapPanel {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.host.onDispose?.();
     CodeMapPanel.current = undefined;
     setPanelActiveContext(false);

@@ -96,13 +96,14 @@ if (root) {
         return;
       }
 
-      host.post({
+      sendRequest({
         type: 'export',
         requestId: nextRequestId(),
         analysisId: state.analysisId,
         format,
         copy,
         scope: state.scope,
+        projectionRequestId: state.projectionRequestId,
         granularity: state.granularity,
         filters: state.filters,
         search: state.search,
@@ -116,11 +117,12 @@ if (root) {
         return;
       }
 
-      host.post({
+      sendRequest({
         type: 'copyContext',
         requestId: nextRequestId(),
         analysisId: state.analysisId,
         scope: state.scope,
+        projectionRequestId: state.projectionRequestId,
         granularity: state.granularity,
         filters: state.filters,
         search: state.search,
@@ -237,6 +239,7 @@ if (root) {
     ].join('|');
     if (requested.projection !== projectionKey) {
       requested.projection = projectionKey;
+      if (state.queryMetadata) app.dispatch({ type: 'projectionRequested' });
       sendRequest({
         type: 'getProjection',
         requestId: nextRequestId(),

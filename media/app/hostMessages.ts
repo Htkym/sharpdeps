@@ -221,7 +221,15 @@ export function toViewActions(
 
     case 'projection': {
       const projection = readProjection(message.projection);
-      return projection ? [{ type: 'projectionReceived', projection }] : [];
+      return projection
+        ? [
+            {
+              type: 'projectionReceived',
+              projection,
+              requestId: typeof message.requestId === 'string' ? message.requestId : undefined
+            }
+          ]
+        : [];
     }
 
     case 'details': {

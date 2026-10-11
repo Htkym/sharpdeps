@@ -1,8 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { Granularity } from './reportV2';
 import type { ReportBridge } from './reportBridge';
 import type { SavedSourceLocation } from '../security/savedSource';
-import { buildSavedQueryExport, type SavedQueryExport } from '../export/savedQueryExport';
+import {
+  buildSavedQueryExport,
+  type SavedQueryExport,
+  type SavedExportRequest,
+  type PreparedSavedExport
+} from '../export/savedQueryExport';
 import {
   QueryClientError,
   type SavedQueryClient,
@@ -47,6 +53,7 @@ export class SavedQueryProvider implements ReportBridge {
   private readonly evidenceLocations = new Map<string, SavedSourceLocation>();
   private inputStaleReason?: Extract<HostToWebviewMessage, { type: 'stale' }>['reason'];
   private preparedExport?: SavedQueryExport;
+  private preparedProjection?: Extract<WebviewToHostMessage, { type: 'getProjection' }>;
   private projectionRevision = 0;
 
   get staleReason(): Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined {
@@ -161,6 +168,51 @@ export class SavedQueryProvider implements ReportBridge {
       ...structuredClone(this.preparedExport),
       observedInputChange: this.staleReason
     };
+  }
+
+  /** Binds a validated output request to the projection actually received by the view. */
+  prepareSavedExportFor(request: SavedExportRequest): PreparedSavedExport {
+    const data = this.prepareSavedExport(request.analysisId);
+    const prepared = this.preparedExport;
+    const projection = this.preparedProjection;
+    if (request.type === 'copyContext' && request.includeSnippets)
+      throw new QueryClientError('QUERY_EXPORT_SNIPPETS_UNSUPPORTED');
+    if (request.type === 'export' && (request.format !== 'json' || request.data !== undefined))
+      throw new QueryClientError('QUERY_EXPORT_FORMAT_UNSUPPORTED');
+    const selection = (value: typeof projection | SavedExportRequest) =>
+      value && {
+        scope: value.scope,
+        granularity: value.granularity,
+        filters: value.filters ?? {},
+        search: value.search ?? '',
+        includeIds: value.includeIds ?? []
+      };
+    if (
+      !projection ||
+      request.projectionRequestId !== projection.requestId ||
+      !isDeepStrictEqual(selection(request), selection(projection))
+    )
+      throw new QueryClientError('QUERY_EXPORT_SELECTION_CHANGED');
+    const assertCurrent = (): void => {
+      if (this.disposed || request.analysisId !== this.analysisId)
+        throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+      if (this.preparedExport !== prepared || this.preparedProjection !== projection)
+        throw new QueryClientError('QUERY_EXPORT_SELECTION_CHANGED');
+      const snapshot = this.readyReply.snapshot;
+      if (
+        snapshot.workspaceId !== data.snapshot.workspaceId ||
+        snapshot.id !== data.snapshot.id ||
+        snapshot.generation !== data.snapshot.generation ||
+        snapshot.variantCount !== 1 ||
+        snapshot.variantIds.length !== 1 ||
+        snapshot.variantIds[0] !== data.selectedVariantId
+      )
+        throw new QueryClientError('QUERY_EXPORT_PIN_CHANGED');
+      if (this.staleReason !== data.observedInputChange)
+        throw new QueryClientError('QUERY_EXPORT_INPUT_CHANGED');
+    };
+    assertCurrent();
+    return { data, assertCurrent };
   }
 
   async handle(message: unknown): Promise<HostToWebviewMessage> {
@@ -395,6 +447,7 @@ export class SavedQueryProvider implements ReportBridge {
   ): Promise<HostToWebviewMessage> {
     const projectionRevision = ++this.projectionRevision;
     this.preparedExport = undefined;
+    this.preparedProjection = undefined;
     this.filters(request.filters);
     const scope = request.scope;
     if (scope.kind === 'cycle') throw new QueryClientError('QUERY_OPERATION_UNSUPPORTED');
@@ -518,7 +571,7 @@ export class SavedQueryProvider implements ReportBridge {
       truncated: metadata.truncated,
       queryMetadata: metadata
     };
-    if (projectionRevision === this.projectionRevision && !this.disposed)
+    if (projectionRevision === this.projectionRevision && !this.disposed) {
       this.preparedExport = buildSavedQueryExport({
         analysisId: this.analysisId,
         pinned: this.readyReply.snapshot,
@@ -536,6 +589,8 @@ export class SavedQueryProvider implements ReportBridge {
           reply
         }))
       });
+      this.preparedProjection = structuredClone(request);
+    }
     return {
       type: 'projection',
       requestId: request.requestId,
@@ -693,6 +748,7 @@ export class SavedQueryProvider implements ReportBridge {
   dispose(): void {
     this.disposed = true;
     this.preparedExport = undefined;
+    this.preparedProjection = undefined;
     this.client.dispose();
     this.nodes.clear();
     this.edges.clear();
