@@ -74,7 +74,7 @@ public static class CliIndexer
 
         // Capture selected documentation/configuration before evaluation. The configuration inventory is
         // deliberately not claimed complete: SDK imports and generator inputs are not exposed by the loader.
-        foreach (var path in WalkInputs(root, token))
+        foreach (var path in WalkInputs(root, options.IndexPath, token))
             await Capture(path, IsMarkdown(path) ? "markdown" : "configuration");
         await Capture(target, "configuration");
         foreach (var path in selectedPaths) await Capture(path, "configuration");
@@ -350,7 +350,7 @@ public static class CliIndexer
         CancellationToken token)
     {
         var root = CliPaths.Root(options.Root);
-        var markdownPaths = WalkInputs(root, token).Where(IsMarkdown)
+        var markdownPaths = WalkInputs(root, options.IndexPath, token).Where(IsMarkdown)
             .Select(p => Path.GetRelativePath(root, p).Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (!markdownPaths.SetEquals(snapshot.Files.Where(f => !f.Deleted && f.Kind == "markdown").Select(f => f.RelativePath)))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
@@ -408,7 +408,31 @@ public static class CliIndexer
     // This hash covers the complete non-Markdown path set and bytes, including ignored obj/bin inputs.
     // This transient publication guard is independent of reuse eligibility and is not Query source material.
     // Unknown/big inputs cannot be published without a content guard.
-    private static async Task<string?> FingerprintInputs(string root, string indexPath, bool includeOutputs, CancellationToken token)
+    internal static Task<string?> CaptureWatchInputsAsync(string root, string indexPath, CancellationToken token)
+        => FingerprintInputs(root, indexPath, includeOutputs: false, token, includeMarkdown: true);
+
+    internal static bool IsIndexOutput(string path, string indexPath)
+        => PathComparer.Equals(path, indexPath)
+            || new[] { "-wal", "-shm", "-journal", ".writer.lock", ".owner.json" }
+                .Any(suffix => PathComparer.Equals(path, indexPath + suffix))
+            || IsOwnerTemporary(path, indexPath);
+
+    private static bool IsOwnerTemporary(string path, string indexPath)
+    {
+        var prefix = indexPath + ".owner.json.";
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return path.Length == prefix.Length + 36 && path.StartsWith(prefix, comparison) && path.EndsWith(".tmp", comparison)
+            && Guid.TryParseExact(path.Substring(prefix.Length, 32), "N", out _);
+    }
+
+    internal static bool IsWatchExcluded(string root, string path, string indexPath)
+        => IsIndexOutput(path, indexPath) || Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar).Any(name => name.Equals(".git", StringComparison.OrdinalIgnoreCase)
+                || name.Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("obj", StringComparison.OrdinalIgnoreCase) || name.Equals("bin", StringComparison.OrdinalIgnoreCase));
+
+    private static async Task<string?> FingerprintInputs(string root, string indexPath, bool includeOutputs, CancellationToken token,
+        bool includeMarkdown = false)
     {
         try
         {
@@ -438,10 +462,9 @@ public static class CliIndexer
                     }
                     else
                     {
-                        if (PathComparer.Equals(path, absoluteIndex) || new[] { "-wal", "-shm", ".writer.lock", ".owner.json" }
-                            .Any(s => PathComparer.Equals(path, absoluteIndex + s))) continue;
+                        if (IsIndexOutput(path, absoluteIndex)) continue;
                         if ((attributes & FileAttributes.ReparsePoint) != 0) return null;
-                        if (!IsMarkdown(path)) paths.Add(path);
+                        if (includeMarkdown || !IsMarkdown(path)) paths.Add(path);
                     }
                 }
             }
@@ -485,7 +508,7 @@ public static class CliIndexer
     private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasUtf8Bom);
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    private static IEnumerable<string> WalkInputs(string root, CancellationToken token)
+    private static IEnumerable<string> WalkInputs(string root, string indexPath, CancellationToken token)
     {
         var directories = new Stack<string>(); directories.Push(root);
         var count = 0;
@@ -496,6 +519,7 @@ public static class CliIndexer
             {
                 token.ThrowIfCancellationRequested();
                 if (++count > MaximumWalkEntries) throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                if (IsIndexOutput(path, indexPath)) continue;
                 var attributes = File.GetAttributes(path);
                 if ((attributes & FileAttributes.Directory) != 0 && ExcludedDirectories.Contains(Path.GetFileName(path))) continue;
                 if ((attributes & FileAttributes.ReparsePoint) != 0) throw new CliIndexException("CLI_LINK_INPUT_REJECTED");
@@ -506,10 +530,11 @@ public static class CliIndexer
     }
 
     private static bool IsMarkdown(string path) => Path.GetExtension(path).Equals(".md", StringComparison.OrdinalIgnoreCase)
-        || Path.GetExtension(path).Equals(".markdown", StringComparison.OrdinalIgnoreCase);
+        || Path.GetExtension(path).Equals(".markdown", StringComparison.OrdinalIgnoreCase)
+        || Path.GetExtension(path).Equals(".mdx", StringComparison.OrdinalIgnoreCase);
     private static bool IsConfiguration(string path) => Path.GetExtension(path).ToLowerInvariant() is
         ".csproj" or ".fsproj" or ".vbproj" or ".sln" or ".slnx" or ".props" or ".targets" or ".editorconfig"
-        || Path.GetFileName(path).ToLowerInvariant() is "global.json" or "nuget.config" or "packages.lock.json";
+        || Path.GetFileName(path).ToLowerInvariant() is "global.json" or "nuget.config" or "packages.lock.json" or ".editorconfig";
 
     private static async Task<(string Text, string Hash, long Bytes, bool HasUtf8Bom)> ReadInput(string path, CancellationToken token)
     {

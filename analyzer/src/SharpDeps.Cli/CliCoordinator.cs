@@ -25,6 +25,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
     private bool stopping;
     private bool accepting = true;
     private bool disposed;
+    private CoordinatorWatch? watch;
+    private string? watchError;
     internal CoordinatorOwner Owner { get; }
     internal Task Stopped => Task.WhenAll(listener, runner);
     // A test observer controls admission interleavings while exercising the actual IPC and writer.
@@ -36,9 +38,10 @@ internal sealed class CliCoordinator : IAsyncDisposable
         internal CancellationToken Token { get; } = token;
         internal TaskCompletionSource<CoordinatorReply> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
-    private sealed class Batch(CoordinatorUpdate update)
+    private sealed class Batch(CoordinatorUpdate update, Action<CancellationToken>? verifyWatchInputs)
     {
         internal CoordinatorUpdate Update { get; } = update;
+        internal Action<CancellationToken>? VerifyWatchInputs { get; } = verifyWatchInputs;
         internal List<Waiter> Waiters { get; } = [];
         internal int Attempts { get; set; }
     }
@@ -63,10 +66,63 @@ internal sealed class CliCoordinator : IAsyncDisposable
     internal CoordinatorReply Status(string requestId)
     {
         lock (gate) return new(CoordinatorProtocol.Version, Owner.Instance, requestId, committedRevision,
-            desiredRevision, state, committed, null);
+            desiredRevision, state == "idle" && watch is { NativeAvailable: false } ? "degraded" : state,
+            committed, watchError);
     }
 
-    internal async Task<CoordinatorReply> UpdateAsync(CoordinatorUpdate update, string requestId, CancellationToken clientToken)
+    internal void StartWatch(CoordinatorUpdate selection, TimeSpan resyncPeriod)
+    {
+        lock (gate)
+        {
+            if (!accepting || stopping || watch is not null) throw new CliFailure("COORDINATOR_BUSY", 6);
+            watch = new(this, selection, resyncPeriod);
+            desiredRevision = checked(desiredRevision + 1);
+            state = "dirty";
+            watch.Start();
+        }
+    }
+
+    internal CoordinatorWatch? Watch { get { lock (gate) return watch; } }
+
+    internal void WatchDirty(CoordinatorWatch source)
+    {
+        lock (gate)
+        {
+            if (stopping || !ReferenceEquals(watch, source)) return;
+            desiredRevision = checked(desiredRevision + 1);
+            if (state != "updating") state = "dirty";
+        }
+    }
+
+    internal void WatchFailed(CoordinatorWatch source, string code)
+    {
+        lock (gate)
+        {
+            if (stopping || !ReferenceEquals(watch, source)) return;
+            watchError = code;
+            if (state != "updating") state = "degraded";
+        }
+    }
+
+    internal async Task StopWatchAsync()
+    {
+        CoordinatorWatch? stoppedWatch;
+        lock (gate)
+        {
+            stoppedWatch = watch;
+            watch = null;
+            if (stoppedWatch is not null)
+            {
+                desiredRevision = checked(desiredRevision + 1);
+                if (!stopping && state != "updating") state = "dirty";
+                watchError = null;
+            }
+        }
+        if (stoppedWatch is not null) await stoppedWatch.DisposeAsync();
+    }
+
+    internal async Task<CoordinatorReply> UpdateAsync(CoordinatorUpdate update, string requestId, CancellationToken clientToken,
+        Action<CancellationToken>? verifyWatchInputs = null)
     {
         var waiter = new Waiter(requestId, clientToken);
         lock (gate)
@@ -77,9 +133,9 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 throw new CliFailure("COORDINATOR_BUSY", 6);
             // A running build is never joined by a request whose input has not been captured.
             var batch = pending.LastOrDefault();
-            if (batch is null || batch.Update.Key != update.Key)
+            if (batch is null || batch.Update.Key != update.Key || !ReferenceEquals(batch.VerifyWatchInputs, verifyWatchInputs))
             {
-                batch = new(update);
+                batch = new(update, verifyWatchInputs);
                 pending.Add(batch);
                 desiredRevision = checked(desiredRevision + 1);
                 signal.Release();
@@ -131,7 +187,12 @@ internal sealed class CliCoordinator : IAsyncDisposable
                         if (captured != desiredRevision) throw new CliFailure("COORDINATOR_SUPERSEDED", 3);
                         operation.Token.ThrowIfCancellationRequested();
                         // Keep revision admission locked through the entire transaction/publication.
-                        writer.Commit(IndexStage.Create(built.Snapshot), operation.Token, built.VerifySelection);
+                        writer.Commit(IndexStage.Create(built.Snapshot), operation.Token, () =>
+                        {
+                            batch.VerifyWatchInputs?.Invoke(operation.Token);
+                            built.VerifySelection();
+                            batch.VerifyWatchInputs?.Invoke(operation.Token);
+                        });
                         var snapshot = built.Snapshot;
                         result = new(snapshot.Graph.WorkspaceId, snapshot.Graph.SnapshotId, snapshot.Graph.Generation,
                             snapshot.Graph.Coverage.ToString(), snapshot.Graph.Diagnostics?.Any(d =>
@@ -139,6 +200,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
                             snapshot.Files.Count, snapshot.Graph.Nodes.Count, snapshot.Graph.Edges.Count);
                         committed = result;
                         committedRevision = captured;
+                        if (batch.VerifyWatchInputs is not null) watchError = null;
                         state = pending.Count == 0 ? "idle" : "dirty";
                         Complete(batch, captured, result, null);
                     }
@@ -149,11 +211,13 @@ internal sealed class CliCoordinator : IAsyncDisposable
                     lock (gate)
                     {
                         // Guard failures and known newer input get one bounded fresh extraction.
-                        if (!stopping && (code is "COORDINATOR_SUPERSEDED" or "SOURCE_CHANGED_SINCE_STAGING")
+                        if (!stopping && batch.VerifyWatchInputs is null
+                            && (code is "COORDINATOR_SUPERSEDED" or "SOURCE_CHANGED_SINCE_STAGING")
                             && batch.Attempts++ == 0 && batch.Waiters.Any(waiter => !waiter.Token.IsCancellationRequested)
                             && pending.Count < 16)
                         {
-                            var matching = pending.FirstOrDefault(queued => queued.Update.Key == batch.Update.Key);
+                            var matching = pending.FirstOrDefault(queued => queued.Update.Key == batch.Update.Key
+                                && ReferenceEquals(queued.VerifyWatchInputs, batch.VerifyWatchInputs));
                             if (matching is null)
                             {
                                 pending.Add(batch);
@@ -309,6 +373,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
 
     internal async Task DrainAsync()
     {
+        await StopWatchAsync();
         // Close admission while preserving already admitted work, including other clients.
         lock (gate) accepting = false;
         admission.Cancel();
@@ -338,6 +403,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
         }
         lifetime.Cancel();
         admission.Cancel();
+        await StopWatchAsync();
         await listener;
         await runner;
         Task[] admitted;

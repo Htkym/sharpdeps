@@ -38,6 +38,15 @@ public sealed class CliTests
         var outside = await Run("status", "--root", fixture.Root, "--index", "../outside.sqlite");
         Assert.Equal(5, outside.Exit);
         Assert.Equal("PATH_OUTSIDE_ROOT", Code(outside.Json));
+        var missingWatchTarget = await Run("serve", "--root", fixture.Root, "--trusted", "--watch");
+        Assert.Equal(2, missingWatchTarget.Exit);
+        var invalidWatchTarget = await Run("serve", "--root", fixture.Root, "--trusted", "--watch", "--target", "absent.csproj");
+        Assert.Equal("TARGET_INVALID", Code(invalidWatchTarget.Json));
+        var invalidWatchPeriod = await Run("serve", "--root", fixture.Root, "--trusted", "--watch", "--target", "absent.csproj",
+            "--watch-resync-seconds", "0");
+        Assert.Equal(2, invalidWatchPeriod.Exit);
+        var selectionWithoutWatch = await Run("serve", "--root", fixture.Root, "--trusted", "--target", "absent.csproj");
+        Assert.Equal("ARGUMENT_UNSUPPORTED", Code(selectionWithoutWatch.Json));
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".sharpdeps")));
     }
 
@@ -264,6 +273,130 @@ public sealed class CliTests
                 IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
         }
         finally { foreach (var connection in connections) connection.Dispose(); }
+    }
+
+    [Fact]
+    public async Task NativeWatchUsesTheExistingLeaseAndPeriodicFullRecoversLostNotifications()
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project />");
+        var markdown = Path.Combine(fixture.Root, "guide.markdown");
+        File.WriteAllText(markdown, "# Before\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "view.mdx"), "# Static MDX text\n");
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var original = pinned.Snapshot();
+        // A custom index with an input-like suffix must never become a Markdown input or an event loop.
+        var customIndex = Path.Combine(fixture.Root, "state", "index.mdx");
+        using var writer = IndexWriter.Open(fixture.Root, customIndex, fixture.Uuid, true);
+        writer.Commit(IndexStage.Create(original));
+        var neighbor = customIndex + ".owner.json.notes.md";
+        File.WriteAllText(neighbor, "# User source\n");
+        Assert.False(CliIndexer.IsIndexOutput(neighbor, customIndex));
+        Assert.True(CliIndexer.IsIndexOutput(customIndex + ".owner.json." + Guid.NewGuid().ToString("N") + ".tmp", customIndex));
+        var beforeOwner = await CliIndexer.CaptureWatchInputsAsync(fixture.Root, customIndex, deadline.Token);
+        var fullBuilds = 0;
+        var incrementalBuilds = 0;
+        await using var owner = new CliCoordinator(writer, (update, token) =>
+        {
+            if (update.Full) Interlocked.Increment(ref fullBuilds); else Interlocked.Increment(ref incrementalBuilds);
+            using var reader = IndexReader.Open(customIndex, fixture.Uuid);
+            var prior = reader.Snapshot();
+            return Task.FromResult(new CliIndexBuild(prior with { Graph = prior.Graph with {
+                Generation = prior.Graph.Generation + 1, SnapshotId = Guid.NewGuid().ToString("N") } }, () => { }));
+        });
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root, "--index", customIndex,
+            "--trusted", "--target", "App.csproj"]), fixture.Root, customIndex, fixture.Uuid);
+        owner.StartWatch(update, TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => owner.Status("initial").Result?.Generation >= 2, deadline.Token);
+        Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+            IndexWriter.Open(fixture.Root, customIndex, fixture.Uuid, true)).Code);
+        Assert.Equal(beforeOwner, await CliIndexer.CaptureWatchInputsAsync(fixture.Root, customIndex, deadline.Token));
+        // Prove the real native notification path by observing a non-full extraction, rather than timing a sleep.
+        File.WriteAllText(markdown, "# Native edit\n");
+        await WaitUntilAsync(() => Volatile.Read(ref incrementalBuilds) != 0
+            && owner.Status("native").State == "idle", deadline.Token);
+        await Task.Delay(250, deadline.Token); // settle duplicate OS hints from the one real input save
+        var generation = owner.Status("saved").Result!.Generation;
+        var temporary = customIndex + ".owner.json." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(temporary, "{}");
+        File.Delete(temporary);
+        await Task.Delay(200, deadline.Token);
+        Assert.Equal(generation, owner.Status("no-self-loop").Result!.Generation);
+        var oldFullBuilds = Volatile.Read(ref fullBuilds);
+        owner.Watch!.SetNotificationsEnabled(false);
+        File.WriteAllBytes(Path.Combine(fixture.Root, "additional.dat"), [1, 0, 2, 0]);
+        await WaitUntilAsync(() => Volatile.Read(ref fullBuilds) > oldFullBuilds
+            && owner.Status("periodic").Result?.Generation > generation, deadline.Token);
+        // Lost events use full extraction even when the selected Markdown manifest alone would be unchanged.
+        using var current = IndexReader.Open(customIndex, fixture.Uuid);
+        Assert.Equal(original.Graph.Nodes.Select(node => node.Id), current.Snapshot().Graph.Nodes.Select(node => node.Id));
+        Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), current.Search("Service").Select(hit => hit.NodeId));
+        Assert.Equal(1, pinned.Snapshot().Graph.Generation);
+        await owner.StopWatchAsync();
+        using var stoppedReader = IndexReader.Open(customIndex, fixture.Uuid);
+        var stoppedGeneration = stoppedReader.Snapshot().Graph.Generation;
+        File.WriteAllText(markdown, "# After stop\n");
+        await Task.Delay(200, deadline.Token);
+        using var afterStop = IndexReader.Open(customIndex, fixture.Uuid);
+        Assert.Equal(stoppedGeneration, afterStop.Snapshot().Graph.Generation);
+        var saved = await Run("search", "--root", fixture.Root, "--index", customIndex, "--term", "Service");
+        Assert.Equal(0, saved.Exit);
+        Assert.Contains("unverified", saved.Json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WatchHashGuardRollsBackLostEventAndStoppedStageCannotPublish()
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project />");
+        var markdown = Path.Combine(fixture.Root, "guide.md");
+        File.WriteAllText(markdown, "# Before\n");
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var original = pinned.Snapshot();
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var owner = new CliCoordinator(writer, async (_, token) =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+            return new(original with { Graph = original.Graph with { Generation = 2, SnapshotId = "watch-staged" } }, () => { });
+        });
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root,
+            "--trusted", "--target", "App.csproj"]), fixture.Root, fixture.IndexPath, fixture.Uuid);
+        owner.StartWatch(update, TimeSpan.FromSeconds(30));
+        await entered.Task.WaitAsync(deadline.Token);
+        owner.Watch!.SetNotificationsEnabled(false);
+        File.WriteAllText(markdown, "# Changed without notification\n");
+        release.TrySetResult();
+        await WaitUntilAsync(() => owner.Status("guard").ErrorCode == "WATCH_INPUT_CHANGED", deadline.Token);
+        using (var unchanged = IndexReader.Open(fixture.IndexPath, fixture.Uuid))
+        {
+            Assert.Equal(original.Graph.Generation, unchanged.Snapshot().Graph.Generation);
+            Assert.Equal(original.Graph.SnapshotId, unchanged.Snapshot().Graph.SnapshotId);
+            Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), unchanged.Search("Service").Select(hit => hit.NodeId));
+        }
+        await owner.StopWatchAsync();
+        entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        owner.StartWatch(update, TimeSpan.FromSeconds(30));
+        await entered.Task.WaitAsync(deadline.Token);
+        await owner.StopWatchAsync(); // cancels only the watch waiter, invalidating its eventual publication
+        release.TrySetResult();
+        await owner.DrainAsync();
+        await owner.DisposeAsync();
+        using var reacquired = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        using var final = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(original.Graph.Generation, final.Snapshot().Graph.Generation);
+        Assert.Equal(original.Graph.Nodes.Select(node => node.Id), final.Snapshot().Graph.Nodes.Select(node => node.Id));
+        Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), final.Search("Service").Select(hit => hit.NodeId));
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> ready, CancellationToken token)
+    {
+        while (!ready()) await Task.Delay(20, token);
     }
 
     private static string Code(string json)

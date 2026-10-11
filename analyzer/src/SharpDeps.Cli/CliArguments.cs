@@ -8,7 +8,7 @@ internal sealed class CliArguments
 {
     private readonly Dictionary<string, List<string>> values = new(StringComparer.Ordinal);
     private static readonly HashSet<string> Switches = new(StringComparer.Ordinal)
-    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete" };
+    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch" };
     private static readonly HashSet<string> Repeated = new(StringComparer.Ordinal) { "project", "variant", "edge-kind" };
     private static readonly HashSet<string> Common = new(StringComparer.Ordinal) { "root", "index", "trusted", "quiet", "request-id" };
     private static readonly HashSet<string> Index = new(StringComparer.Ordinal)
@@ -41,6 +41,11 @@ internal sealed class CliArguments
             && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
         if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
+        else if (parsed.Command == "serve")
+        {
+            allowed.UnionWith(Index);
+            allowed.UnionWith(["watch", "watch-resync-seconds"]);
+        }
         else if (parsed.Command is not ("help" or "doctor" or "serve" or "coordinator-status")) allowed.UnionWith(Query);
         for (var i = 1; i < args.Length; i++)
         {
@@ -62,6 +67,14 @@ internal sealed class CliArguments
         if (parsed.RequestId.Length > 64 || string.IsNullOrWhiteSpace(parsed.RequestId)) throw new CliFailure("ARGUMENT_INVALID", 2);
         if (parsed.Has("kind") && parsed.Command != "query") throw new CliFailure("ARGUMENT_INVALID", 2);
         if (parsed.Has("tfm") && !parsed.Has("project")) throw new CliFailure("PROJECT_SELECTION_REQUIRED", 2);
+        if (parsed.Command == "serve" && !parsed.Has("watch")
+            && (Index.Any(parsed.Has) || parsed.Has("watch-resync-seconds")))
+            throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
+        if (parsed.Has("watch"))
+        {
+            _ = parsed.Require("target");
+            _ = parsed.Number("watch-resync-seconds", 30, 1, 3600);
+        }
         return parsed;
     }
 

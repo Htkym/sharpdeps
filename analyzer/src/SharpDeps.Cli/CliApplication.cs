@@ -19,6 +19,7 @@ public static class CliApplication
                 return await Reply(stdout, options, new { commands = new[] { "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
                     root = "--root absolute-directory", index = "--target root-contained.slnx|.sln|.csproj --trusted", updateMode = "closed-input-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
+                    watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = "SharpDeps.Cli@0.2.0-preview.3 (provisional, unpublished)" });
             if (options.Command == "doctor")
                 return await Reply(stdout, options, new { runtime = RuntimeInformation.FrameworkDescription, sdkProbe = "not-run",
@@ -101,13 +102,20 @@ public static class CliApplication
     private static async Task<int> ServeAsync(CliArguments options, string root, string indexPath,
         TextWriter stdout, TextWriter stderr, CancellationToken token)
     {
+        // Validate target and budgets before creating workspace state or taking ownership.
+        var watchUpdate = options.Has("watch") ? CoordinatorUpdate.Parse(options, root, indexPath, Guid.Empty) : null;
         var state = CliWorkspaceState.Open(root, create: !File.Exists(indexPath));
         using var writer = IndexWriter.Open(root, indexPath, state.WorkspaceUuid, isTrusted: true);
         Guid instance;
         await using (var owner = new CliCoordinator(writer))
         {
             instance = owner.Owner.Instance;
-            if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: coordinator ready (local IPC; no automatic restore)");
+            if (watchUpdate is not null)
+                owner.StartWatch(watchUpdate with { Options = watchUpdate.Options with { WorkspaceUuid = state.WorkspaceUuid } },
+                    TimeSpan.FromSeconds(options.Number("watch-resync-seconds", 30, 1, 3600)));
+            if (!options.Has("quiet")) await stderr.WriteLineAsync(watchUpdate is null
+                ? "sharpdeps: coordinator ready (local IPC; no automatic restore)"
+                : "sharpdeps: coordinator ready (saved-input watch; periodic full resync; no automatic restore)");
             var ownerStopped = owner.Stopped;
             var stopped = await Task.WhenAny(Task.Delay(Timeout.InfiniteTimeSpan, token), ownerStopped);
             if (!token.IsCancellationRequested && stopped == ownerStopped)

@@ -10,7 +10,8 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
 {
     internal static CoordinatorUpdate Parse(CliArguments arguments, string root, string indexPath, Guid uuid)
     {
-        if (arguments.Command is not ("index" or "update") || !arguments.Has("trusted"))
+        if (!(arguments.Command is "index" or "update" || arguments.Command == "serve" && arguments.Has("watch"))
+            || !arguments.Has("trusted"))
             throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
         var target = CliPaths.InRoot(root, arguments.Require("target"));
         if (!File.Exists(target) || Path.GetExtension(target).ToLowerInvariant() is not (".sln" or ".slnx" or ".csproj"))

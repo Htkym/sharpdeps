@@ -30,7 +30,7 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 | command | 対象と実行境界 |
 |---|---|
 | `index`, `update` | root内の`sln`/`slnx`/`csproj`を`--target`で指定し、`--trusted`を明示する。解析・書込み。updateは[差分更新契約](incremental-update-v1.ja.md)で閉じた入力を照合できる場合にMarkdown差分を処理し、それ以外はfull rebuildへ戻す |
-| `serve` | `--trusted`を明示し、root/indexのownerを起動する。更新は専用local IPCで受理する |
+| `serve` | `--trusted`を明示し、root/indexのownerを起動する。更新は専用local IPCで受理する。`--watch --target TARGET`で同ownerに保存入力の監視を接続し、`--watch-resync-seconds`（1〜3600、既定30）で周期full抽出を行う |
 | `coordinator-status` | ownerの状態を専用IPCで読む。保存Queryのstatusやfreshnessとは別 |
 | `status`, `search`, `symbol`, `callers`, `callees`, `impact`, `context` | committed indexのQuery。untrustedでも保存値の読取りは可能。`--trusted`を指定したcontextだけが検証済みsource snippetを読める |
 | `query --kind search\|symbol\|callers\|callees\|impact\|context\|status` | 同じQueryへのalias |
@@ -38,6 +38,8 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 | `help` | commandと引数の案内 |
 
 解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定180、最大300。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
+
+watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの300秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
 
 Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids`を同時指定しない。
 
