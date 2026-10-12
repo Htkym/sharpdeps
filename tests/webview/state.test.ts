@@ -91,6 +91,106 @@ function withProjection(state: ViewState = INITIAL_STATE): ViewState {
 }
 
 describe('viewReducer status transitions', () => {
+  it('restores source navigation without adding history or reusing old projection, details and cursors', () => {
+    const relationId = 'rel_1111111111111111';
+    const before: ViewState = {
+      ...INITIAL_STATE,
+      analysisId: 'an_0123456789abcdef',
+      status: 'partial',
+      queryMetadata: savedMetadata,
+      savedUpdate: { phase: 'idle', canUpdate: true },
+      projection: projection({ queryMetadata: savedMetadata }),
+      projectionRequestId: 'req_1111111111111111',
+      projectionTruncated: true,
+      details: { entityId: 'ty_1111111111111111', dependencies: [], dependents: [] },
+      evidence: {
+        relationId,
+        items: [{ id: 'ev_1111111111111111' }],
+        total: 3,
+        nextCursor: 'cur_1111111111111111',
+        pending: true
+      },
+      tree: { root: { items: [], total: 2, nextCursor: 'cur_1111111111111111' } },
+      searchResults: {
+        query: 'old',
+        items: [],
+        total: 20,
+        pending: true,
+        nextCursor: 'cur_1111111111111111'
+      },
+      history: [{ scope: { kind: 'root' }, granularity: 'project' }]
+    };
+    const history: ViewState['history'] = [
+      { scope: { kind: 'root' }, granularity: 'type', search: 'earlier' },
+      {
+        scope: { kind: 'type', id: 'ty_1111111111111111' },
+        granularity: 'type',
+        selectionId: 'ty_1111111111111111',
+        search: 'Compute'
+      }
+    ];
+    const next = viewReducer(before, {
+      type: 'sourceReturned',
+      state: {
+        scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
+        granularity: 'type',
+        selection: { relationId },
+        history,
+        search: 'Compute',
+        filters: { resultKinds: ['code'], includeExternal: false },
+        viewKind: 'table',
+        camera: { zoom: 1.2, scrollLeft: 60, scrollTop: 250 },
+        tablePage: 2,
+        paneWidths: { navigation: 250, inspector: 400 }
+      },
+      ui: {
+        navTab: 'cycles',
+        focus: 'evidence',
+        id: 'ev_1111111111111111',
+        scroll: { navigation: 140, inspector: 680, map: 250 },
+        searchCount: 40
+      }
+    });
+    expect(next).toMatchObject({
+      analysisId: before.analysisId,
+      status: 'partial',
+      queryMetadata: savedMetadata,
+      savedUpdate: before.savedUpdate,
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
+      granularity: 'type',
+      selection: { relationId },
+      history,
+      search: 'Compute',
+      filters: { resultKinds: ['code'], includeExternal: false },
+      viewKind: 'table',
+      camera: { zoom: 1.2, scrollLeft: 60, scrollTop: 250 },
+      tablePage: 2,
+      paneWidths: { navigation: 250, inspector: 400 },
+      inspectorOpen: true,
+      projection: null,
+      details: null,
+      evidence: null,
+      tree: {},
+      cycles: [],
+      searchResults: { query: 'Compute', items: [], total: 0, pending: false }
+    });
+    expect(next.projectionRequestId).toBeUndefined();
+    expect(next.searchResults.nextCursor).toBeUndefined();
+    expect(next.history).toHaveLength(history.length);
+    const refreshed = viewReducer(next, {
+      type: 'projectionReceived',
+      projection: projection({
+        scope: next.scope,
+        granularity: next.granularity,
+        queryMetadata: savedMetadata
+      }),
+      requestId: 'req_2222222222222222'
+    });
+    expect(refreshed.selection).toEqual(next.selection);
+    expect(refreshed.history).toEqual(next.history);
+    expect(refreshed.projectionRequestId).toBe('req_2222222222222222');
+  });
+
   it('accumulates saved search pages without losing non-page limits, then invalidates filtered display data', () => {
     const first = {
       id: 'ty_1111111111111111',

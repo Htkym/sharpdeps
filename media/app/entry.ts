@@ -30,6 +30,7 @@ if (root) {
   const requested = { projection: '', details: '', evidence: '', evidencePage: '' };
   let persistTimer: number | undefined;
   let lastPersisted = '';
+  let latestSourceOperation: { analysisId: string; requestId: string } | undefined;
 
   function sendRequest(message: Record<string, unknown>, context: RequestContext = {}): void {
     const type = context.type ?? String(message.type);
@@ -154,8 +155,27 @@ if (root) {
     },
     onOpenDeclaration: (entityId) => {
       const analysisId = app.getState().analysisId;
-      if (analysisId)
-        sendRequest({ type: 'openDeclaration', requestId: nextRequestId(), analysisId, entityId });
+      if (analysisId) {
+        const returnUi = app.captureSourceReturn('declaration', entityId);
+        const requestId = nextRequestId();
+        latestSourceOperation = { analysisId, requestId };
+        persistNow(app.getState());
+        sendRequest({
+          type: 'openDeclaration',
+          requestId,
+          analysisId,
+          entityId,
+          returnUi
+        });
+      }
+    },
+    onSourceReturnDismissed: () => {
+      const state = app.getState();
+      const previous = latestSourceOperation;
+      latestSourceOperation = undefined;
+      persistNow(state);
+      const analysisId = state.queryMetadata ? state.analysisId : previous?.analysisId;
+      if (analysisId) host.post({ type: 'sourceReturnDismissed', analysisId });
     },
     onOpenEvidence: (evidenceId) => {
       const state = app.getState();
@@ -163,11 +183,17 @@ if (root) {
         return;
       }
 
+      const returnUi = app.captureSourceReturn('evidence', evidenceId);
+      const requestId = nextRequestId();
+      latestSourceOperation = { analysisId: state.analysisId, requestId };
+      persistNow(app.getState());
+
       sendRequest({
         type: 'openEvidence',
-        requestId: nextRequestId(),
+        requestId,
         analysisId: state.analysisId,
-        evidenceId
+        evidenceId,
+        returnUi
       });
     }
   });
@@ -178,7 +204,15 @@ if (root) {
       requestId?: string;
       format?: 'mermaid' | 'svg' | 'png' | 'json';
       copy?: boolean;
+      analysisId?: string;
     };
+    if (
+      payload.type === 'sourceReturn' &&
+      (!latestSourceOperation ||
+        payload.requestId !== latestSourceOperation.requestId ||
+        payload.analysisId !== latestSourceOperation.analysisId)
+    )
+      return;
     if (payload?.type === 'requestExport' && payload.format) {
       void app.export(payload.format, payload.copy);
       return;
@@ -191,8 +225,55 @@ if (root) {
       (!payload.requestId || !requestContext.has(payload.requestId))
     )
       return;
-    for (const action of toViewActions(message, requestContext, app.getState())) {
+    const actions = toViewActions(message, requestContext, app.getState());
+    const sourceReturn = actions.some((action) => action.type === 'sourceReturned');
+    if (sourceReturn) {
+      if (!app.acceptsSourceReturn()) return;
+      latestSourceOperation = undefined;
+      requestContext.clear();
+      requested.projection = requested.details = requested.evidence = requested.evidencePage = '';
+    }
+    for (const action of actions) {
       app.dispatch(action);
+    }
+    if (sourceReturn) persistNow(app.getState());
+    if (sourceReturn && app.getState().search) {
+      const state = app.getState();
+      app.dispatch({ type: 'searchStarted', query: state.search });
+      sendRequest(
+        {
+          type: 'searchEntities',
+          requestId: nextRequestId(),
+          analysisId: state.analysisId,
+          query: state.search,
+          filters: state.filters,
+          limit: 20
+        },
+        { query: state.search }
+      );
+    }
+    const state = app.getState(),
+      target = app.sourceReturnSearchTarget();
+    if (
+      payload.type === 'searchResults' &&
+      target !== undefined &&
+      state.searchResults.items.length < target &&
+      !state.searchResults.pending &&
+      state.searchResults.nextCursor
+    ) {
+      app.dispatch({ type: 'searchPageRequested' });
+      sendRequest(
+        {
+          type: 'searchEntities',
+          requestId: nextRequestId(),
+          analysisId: state.analysisId,
+          query: state.search,
+          filters: state.filters,
+          limit: 20,
+          cursor: state.searchResults.nextCursor
+        },
+        { query: state.search, appendSearch: true }
+      );
     }
     if (payload?.requestId) requestContext.delete(payload.requestId);
   });
@@ -202,6 +283,16 @@ if (root) {
   // and the host's `viewState` message covers a window reload. Neither starts an analysis.
   const stored = host.getState();
   if (stored !== undefined && stored !== null) {
+    const operation = (
+      stored as { sourceOperation?: { analysisId?: unknown; requestId?: unknown } }
+    ).sourceOperation;
+    if (
+      typeof operation?.analysisId === 'string' &&
+      typeof operation.requestId === 'string' &&
+      operation.analysisId.length <= 64 &&
+      operation.requestId.length <= 64
+    )
+      latestSourceOperation = { analysisId: operation.analysisId, requestId: operation.requestId };
     for (const action of toViewActions({ type: 'viewState', state: stored }, requestContext)) {
       app.dispatch(action);
     }
@@ -218,13 +309,31 @@ if (root) {
 
     persistTimer = window.setTimeout(() => {
       persistTimer = undefined;
-      const snapshot = serializeViewState(state, state.camera ?? undefined);
+      const snapshot = navigationSnapshot(state);
       const serialized = JSON.stringify(snapshot);
       if (serialized === lastPersisted) return;
       lastPersisted = serialized;
       host.setState(snapshot);
       host.post({ type: 'persistViewState', viewState: snapshot });
     }, 300);
+  }
+
+  function persistNow(state: ViewState): void {
+    if (persistTimer !== undefined) window.clearTimeout(persistTimer);
+    persistTimer = undefined;
+    const snapshot = navigationSnapshot(state);
+    lastPersisted = JSON.stringify(snapshot);
+    host.setState(snapshot);
+    // This ordered message reaches the panel before its source-open request; the
+    // in-memory capture does not wait for workspace storage's asynchronous write.
+    host.post({ type: 'persistViewState', viewState: snapshot });
+  }
+
+  function navigationSnapshot(state: ViewState) {
+    return {
+      ...serializeViewState(state, state.camera ?? undefined),
+      ...(latestSourceOperation ? { sourceOperation: latestSourceOperation } : {})
+    };
   }
 
   function requestForState(state: ViewState): void {

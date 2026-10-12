@@ -5,6 +5,56 @@ const requestId = 'req_0123456789abcdef';
 const analysisId = 'an_0123456789abcdef';
 
 describe('validateWebviewMessage', () => {
+  it('accepts bounded source-return anchors and rejects paths or unbounded UI data', () => {
+    const ui = {
+      navTab: 'structure',
+      focus: 'declaration',
+      id: 'ty_1111111111111111',
+      scroll: { navigation: 12, inspector: 340, map: 56 },
+      searchCount: 40
+    };
+    const request = {
+      type: 'openDeclaration',
+      requestId,
+      analysisId,
+      entityId: ui.id,
+      returnUi: ui
+    };
+    expect(validateWebviewMessage(request).ok).toBe(true);
+    expect(validateWebviewMessage({ ...request, returnUi: undefined }).ok).toBe(true);
+    expect(
+      validateWebviewMessage({
+        type: 'openEvidence',
+        requestId,
+        analysisId,
+        evidenceId: 'ev_1111111111111111',
+        returnUi: { ...ui, focus: 'evidence', id: 'ev_1111111111111111' }
+      }).ok
+    ).toBe(true);
+    for (const returnUi of [
+      { ...ui, id: 'docs/調査.md' },
+      { ...ui, focus: 'evidence' },
+      { ...ui, navTab: 'arbitrary-tab' },
+      { ...ui, scroll: { ...ui.scroll, inspector: -1 } },
+      { ...ui, scroll: { ...ui.scroll, navigation: Infinity } },
+      { ...ui, scroll: { ...ui.scroll, map: 10000001 } },
+      { ...ui, searchCount: 501 },
+      { ...ui, searchCount: 1.5 }
+    ])
+      expect(validateWebviewMessage({ ...request, returnUi }).ok).toBe(false);
+    const response = {
+      type: 'sourceReturn',
+      requestId,
+      analysisId,
+      state: { version: 1, granularity: 'type' },
+      ui
+    };
+    expect(validateHostMessage(response).ok).toBe(true);
+    expect(validateHostMessage({ ...response, ui: { ...ui, id: '#arbitrary-selector' } }).ok).toBe(
+      false
+    );
+  });
+
   it('restricts result classification filters and keeps display paths out of source-open requests', () => {
     const request = { type: 'searchEntities', requestId, analysisId, query: '調査' };
     for (const resultKinds of [undefined, ['docs'], ['code', 'docs']])

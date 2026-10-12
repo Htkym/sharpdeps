@@ -35,6 +35,63 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('accepts source return only for the current saved session and strips transient payload fields', () => {
+    const relationId = 'rel_1111111111111111';
+    const ui = {
+      navTab: 'cycles',
+      focus: 'evidence',
+      id: 'ev_1111111111111111',
+      scroll: { navigation: 140, inspector: 680, map: 250 },
+      searchCount: 40
+    };
+    const state: ViewState = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };
+    const message = {
+      type: 'sourceReturn',
+      requestId: 'req_1111111111111111',
+      analysisId,
+      ui,
+      state: {
+        version: 1,
+        scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
+        granularity: 'type',
+        selection: { relationId },
+        search: 'Compute',
+        filters: { resultKinds: ['code'], includeExternal: false },
+        history: [{ scope: { kind: 'root' }, granularity: 'type', search: 'earlier' }],
+        analysisId: 'an_ffffffffffffffff',
+        queryMetadata: { ...savedMetadata, generation: 99 },
+        projectionRequestId: 'req_1111111111111111',
+        evidence: { nextCursor: 'old' }
+      }
+    };
+    const actions = toViewActions(message, new Map(), state);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      type: 'sourceReturned',
+      ui,
+      state: {
+        granularity: 'type',
+        selection: { relationId },
+        search: 'Compute',
+        scope: message.state.scope,
+        filters: message.state.filters,
+        history: [expect.objectContaining({ search: 'earlier' })]
+      }
+    });
+    const restored = actions[0].type === 'sourceReturned' ? actions[0].state : {};
+    expect(restored).not.toHaveProperty('analysisId');
+    expect(restored).not.toHaveProperty('queryMetadata');
+    expect(restored).not.toHaveProperty('projectionRequestId');
+    expect(restored).not.toHaveProperty('evidence');
+    for (const rejected of [
+      { ...message, analysisId: 'an_1111111111111111' },
+      { ...message, state: { ...message.state, version: 2 } },
+      { ...message, ui: { ...ui, id: 'D:/source.cs' } }
+    ])
+      expect(toViewActions(rejected, new Map(), state)).toEqual([]);
+    expect(toViewActions(message, new Map(), { ...INITIAL_STATE, analysisId })).toEqual([]);
+  });
+
   it('ends a failed current search page while keeping its prior items and retry cursor', () => {
     const filters = { resultKinds: ['docs' as const], includeExternal: false };
     const item = {

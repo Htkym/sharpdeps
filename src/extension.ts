@@ -358,13 +358,14 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         assertCurrent();
         return { data: prepared.data, assertCurrent };
       },
-      openSavedSource: async (request) => {
+      openSavedSource: async (request, current = () => true) => {
         const provider = savedProvider;
         if (!provider) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
         const location = provider.resolveSource(request);
         await openSavedLocation(
           location,
           () =>
+            current() &&
             savedProvider === provider &&
             (vscode.workspace.workspaceFolders ?? []).some(
               (folder) => folder.uri.scheme === 'file' && folder.uri.fsPath === provider.root

@@ -14,6 +14,7 @@ import type {
   QueryResultMetadata,
   Scope
 } from '../../src/view/protocolV2';
+import type { SourceReturnUi } from '../../src/view/protocolV2';
 import type { Capabilities, ProfileRequest, SavedUpdatePhase } from '../../src/view/protocolV2';
 import { matchesEntity } from '../../src/analyzer/graphProjection';
 import {
@@ -180,6 +181,7 @@ export const INITIAL_STATE: ViewState = {
 };
 
 export type ViewAction =
+  | { type: 'sourceReturned'; state: Partial<ViewState>; ui: SourceReturnUi }
   | { type: 'savedUpdateRequested' }
   | { type: 'savedUpdateState'; analysisId: string; phase: SavedUpdatePhase; canUpdate: boolean }
   | { type: 'languageChanged'; language: Language }
@@ -317,6 +319,26 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       }
     };
   switch (action.type) {
+    case 'sourceReturned': {
+      const restored = sanitizeRestoredState({
+        ...state,
+        ...action.state,
+        analysisId: state.analysisId,
+        queryMetadata: state.queryMetadata,
+        savedUpdate: state.savedUpdate
+      });
+      return {
+        ...restored,
+        projection: null,
+        projectionRequestId: undefined,
+        details: null,
+        evidence: null,
+        tree: {},
+        cycles: [],
+        inspectorOpen: !!(restored.selection.entityId || restored.selection.relationId),
+        searchResults: { query: restored.search, items: [], total: 0, pending: false }
+      };
+    }
     case 'savedUpdateState':
       return state.queryMetadata && action.analysisId === state.analysisId
         ? { ...state, savedUpdate: { phase: action.phase, canUpdate: action.canUpdate } }

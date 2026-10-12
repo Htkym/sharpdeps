@@ -4,6 +4,7 @@ import { CodeMapPanel, type CodeMapPanelHost } from './codeMapPanel';
 import { SavedQueryProvider } from '../analyzer/queryProvider';
 import type { QueryWireReply, SavedQueryClient } from '../analyzer/queryClient';
 import type { ReportStore } from '../analyzer/reportStore';
+import type { SourceReturnUi } from './protocolV2';
 
 const api = vi.hoisted(() => ({
   post: vi.fn(),
@@ -174,6 +175,190 @@ it('does not queue a source return after a failed saved source open', async () =
   fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
   expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
 });
+
+function deferredOpen() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+it('returns an evidence source to its saved relation context even when ready precedes completion', async () => {
+  const fixture = await setup('show');
+  const open = deferredOpen();
+  fixture.host.openSavedSource = vi.fn().mockReturnValue(open.promise);
+  const relationId = 'rel_1111111111111111';
+  const evidenceId = 'ev_1111111111111111';
+  const ui: SourceReturnUi = {
+    navTab: 'cycles',
+    focus: 'evidence',
+    id: evidenceId,
+    scroll: { navigation: 140, inspector: 680, map: 250 },
+    searchCount: 40
+  };
+  fixture.physical.dispatch({
+    type: 'persistViewState',
+    viewState: {
+      version: 1,
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
+      granularity: 'type',
+      selection: { relationId },
+      search: 'Compute',
+      filters: { resultKinds: ['code'], includeExternal: false },
+      history: [{ scope: { kind: 'root' }, granularity: 'type', search: 'earlier' }],
+      camera: { zoom: 1.5, scrollLeft: 55, scrollTop: 250 }
+    }
+  });
+  fixture.physical.dispatch({
+    type: 'openEvidence',
+    requestId,
+    analysisId: fixture.saved.analysisId,
+    evidenceId,
+    returnUi: ui
+  });
+  expect(fixture.host.openSavedSource).toHaveBeenCalledOnce();
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post.mock.calls.some(([message]) => message.type === 'sourceReturn')).toBe(false);
+  open.resolve();
+  await vi.waitFor(() =>
+    expect(api.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'sourceReturn',
+        requestId,
+        analysisId: fixture.saved.analysisId,
+        ui,
+        state: expect.objectContaining({
+          scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
+          granularity: 'type',
+          selection: { relationId },
+          search: 'Compute',
+          filters: { resultKinds: ['code'], includeExternal: false },
+          history: [expect.objectContaining({ search: 'earlier' })],
+          camera: { zoom: 1.5, scrollLeft: 55, scrollTop: 250 }
+        })
+      })
+    )
+  );
+  const types = api.post.mock.calls.map(([message]) => message.type);
+  expect(types.indexOf('analysisComplete')).toBeLessThan(types.indexOf('sourceReturn'));
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post.mock.calls.filter(([message]) => message.type === 'sourceReturn')).toHaveLength(
+    1
+  );
+  expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+});
+
+it('serializes editor opens, drops the middle waiting request, and returns only the newest selection', async () => {
+  const fixture = await setup('show');
+  const first = deferredOpen(),
+    latest = deferredOpen();
+  const opener = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise);
+  fixture.host.openSavedSource = opener;
+  const send = (digit: string) =>
+    fixture.physical.dispatch({
+      type: 'openDeclaration',
+      requestId: `req_${digit.repeat(16)}`,
+      analysisId: fixture.saved.analysisId,
+      entityId: `ty_${digit.repeat(16)}`
+    });
+  send('1');
+  const firstCurrent = opener.mock.calls[0][1] as () => boolean;
+  expect(firstCurrent()).toBe(true);
+  send('2');
+  send('3');
+  expect(firstCurrent()).toBe(false);
+  expect(opener).toHaveBeenCalledOnce();
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  first.resolve();
+  await vi.waitFor(() => expect(opener).toHaveBeenCalledTimes(2));
+  expect(opener.mock.calls.map(([request]) => request.entityId)).toEqual([
+    'ty_1111111111111111',
+    'ty_3333333333333333'
+  ]);
+  expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+  latest.resolve();
+  await vi.waitFor(() =>
+    expect(api.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'reveal',
+        entityId: 'ty_3333333333333333'
+      })
+    )
+  );
+  expect(api.post.mock.calls.filter(([message]) => message.type === 'reveal')).toHaveLength(1);
+});
+
+it('does not resurrect an older successful open when the newest open fails', async () => {
+  const fixture = await setup('show');
+  const first = deferredOpen(),
+    latest = deferredOpen();
+  const opener = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise);
+  fixture.host.openSavedSource = opener;
+  const send = (digit: string) =>
+    fixture.physical.dispatch({
+      type: 'openDeclaration',
+      requestId: `req_${digit.repeat(16)}`,
+      analysisId: fixture.saved.analysisId,
+      entityId: `ty_${digit.repeat(16)}`
+    });
+  send('1');
+  send('2');
+  first.resolve();
+  await vi.waitFor(() => expect(opener).toHaveBeenCalledTimes(2));
+  latest.reject(new Error('missing source'));
+  await vi.waitFor(() =>
+    expect(api.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'QUERY_SOURCE_OPEN_FAILED',
+        requestId: 'req_2222222222222222'
+      })
+    )
+  );
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(
+    api.post.mock.calls.some(([message]) => ['reveal', 'sourceReturn'].includes(message.type))
+  ).toBe(false);
+});
+
+it.each(['analysis replacement', 'disposal', 'navigation dismissal'] as const)(
+  'invalidates an in-flight source open on %s',
+  async (change) => {
+    const fixture = await setup('show');
+    const open = deferredOpen();
+    const opener = vi.fn().mockReturnValue(open.promise);
+    fixture.host.openSavedSource = opener;
+    fixture.physical.dispatch({
+      type: 'openDeclaration',
+      requestId,
+      analysisId: fixture.saved.analysisId,
+      entityId: 'ty_1111111111111111'
+    });
+    const current = opener.mock.calls[0][1] as () => boolean;
+    if (change === 'analysis replacement') fixture.switchCurrent('an_1111111111111111');
+    else if (change === 'navigation dismissal')
+      fixture.physical.dispatch({
+        type: 'sourceReturnDismissed',
+        analysisId: fixture.saved.analysisId
+      });
+    else fixture.panel.dispose();
+    expect(current()).toBe(false);
+    api.post.mockClear();
+    if (change === 'analysis replacement') open.reject(new Error('old request failed'));
+    else open.resolve();
+    await open.promise.catch(() => undefined);
+    await Promise.resolve();
+    fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+    expect(
+      api.post.mock.calls.some(([message]) => ['reveal', 'sourceReturn'].includes(message.type))
+    ).toBe(false);
+    expect(
+      api.post.mock.calls.some(([message]) => message.code === 'QUERY_SOURCE_OPEN_FAILED')
+    ).toBe(false);
+  }
+);
 
 async function setup(first: 'show' | 'restore' = 'restore') {
   const requests: Record<string, unknown>[] = [];

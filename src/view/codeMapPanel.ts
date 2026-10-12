@@ -55,9 +55,17 @@ export interface CodeMapPanelHost {
     analysisId: string
   ) => Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined;
   openSavedSource?: (
-    request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>
+    request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>,
+    current?: () => boolean
   ) => Promise<void>;
   prepareSavedExport?: (request: SavedExportRequest) => PreparedSavedExport;
+}
+
+interface SavedSourceOpen {
+  request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>;
+  revision: number;
+  readyEpoch: number;
+  state?: Record<string, unknown>;
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -121,7 +129,11 @@ export class CodeMapPanel {
   private pendingAnalysisId: string | undefined;
   private runningMessage: Extract<HostToWebviewMessage, { type: 'analysisStarted' }> | undefined;
   private viewState: Record<string, unknown> | undefined;
-  private savedSourceReturn: { analysisId: string; entityId: string } | undefined;
+  private savedSourceReturn: SavedSourceOpen | undefined;
+  private pendingSourceOpen: SavedSourceOpen | undefined;
+  private sourceOpenRunning = false;
+  private sourceOpenRevision = 0;
+  private readyEpoch = 0;
   private pendingReveal:
     { analysisId: string; entityId: string; scope: Scope; granularity?: Granularity } | undefined;
 
@@ -223,17 +235,85 @@ export class CodeMapPanel {
   }
 
   private flushSavedSourceReturn(): void {
+    if (!this.ready) return;
     const selection = this.savedSourceReturn;
     this.savedSourceReturn = undefined;
-    const current = this.host.currentAnalysisId?.() ?? this.pendingAnalysisId;
-    if (!selection || selection.analysisId !== current) return;
+    if (!selection || !this.sourceOpenCurrent(selection)) return;
+    const request = selection.request;
+    if (selection.state && request.returnUi) {
+      this.post({
+        type: 'sourceReturn',
+        requestId: request.requestId,
+        analysisId: request.analysisId,
+        state: selection.state,
+        ui: request.returnUi
+      });
+      return;
+    }
+    // Keep the declaration-only fallback for older webviews without navigation context.
+    if (request.type !== 'openDeclaration') return;
     this.post({
       type: 'reveal',
-      analysisId: selection.analysisId,
-      entityId: selection.entityId,
+      analysisId: request.analysisId,
+      entityId: request.entityId,
       scope: { kind: 'root' },
       granularity: 'type'
     });
+  }
+
+  private sourceOpenCurrent(open: SavedSourceOpen): boolean {
+    return (
+      !this.disposed &&
+      open.revision === this.sourceOpenRevision &&
+      open.request.analysisId === (this.host.currentAnalysisId?.() ?? this.pendingAnalysisId)
+    );
+  }
+
+  private queueSavedSourceOpen(request: SavedSourceOpen['request']): void {
+    this.savedSourceReturn = undefined;
+    const open: SavedSourceOpen = {
+      request: structuredClone(request),
+      revision: ++this.sourceOpenRevision,
+      readyEpoch: this.readyEpoch,
+      ...(request.returnUi && this.viewState ? { state: structuredClone(this.viewState) } : {})
+    };
+    // Only the latest waiting request is retained. Serial editor operations ensure
+    // an already-started showTextDocument cannot finish after the newer editor open.
+    this.pendingSourceOpen = open;
+    void this.drainSavedSourceOpens();
+  }
+
+  private async drainSavedSourceOpens(): Promise<void> {
+    if (this.sourceOpenRunning) return;
+    this.sourceOpenRunning = true;
+    try {
+      while (this.pendingSourceOpen && !this.disposed) {
+        const open = this.pendingSourceOpen;
+        this.pendingSourceOpen = undefined;
+        if (!this.sourceOpenCurrent(open)) continue;
+        try {
+          await this.host.openSavedSource!(open.request, () => this.sourceOpenCurrent(open));
+          if (this.sourceOpenCurrent(open)) {
+            this.savedSourceReturn = open;
+            // A recreated webview may handshake before the asynchronous opener completes.
+            if (this.ready && this.panel.visible && this.readyEpoch > open.readyEpoch)
+              this.flushSavedSourceReturn();
+          }
+        } catch (error: unknown) {
+          if (this.sourceOpenCurrent(open))
+            this.post({
+              type: 'error',
+              analysisId: open.request.analysisId,
+              requestId: open.request.requestId,
+              code: 'QUERY_SOURCE_OPEN_FAILED',
+              message:
+                error instanceof Error ? error.message : 'The saved source could not be opened.'
+            });
+        }
+      }
+    } finally {
+      this.sourceOpenRunning = false;
+    }
   }
 
   private onMessage(message: unknown): void {
@@ -249,6 +329,14 @@ export class CodeMapPanel {
     }
 
     const request = validation.value;
+    if (request.type === 'sourceReturnDismissed') {
+      if (request.analysisId === (this.host.currentAnalysisId?.() ?? this.pendingAnalysisId)) {
+        this.sourceOpenRevision++;
+        this.savedSourceReturn = undefined;
+        this.pendingSourceOpen = undefined;
+      }
+      return;
+    }
     if (
       (request.type === 'copyContext' || request.type === 'export') &&
       this.host.currentAnalysisId &&
@@ -280,30 +368,7 @@ export class CodeMapPanel {
         (request.type === 'openEvidence' || request.type === 'openDeclaration') &&
         this.host.openSavedSource
       ) {
-        void this.host
-          .openSavedSource(request)
-          .then(() => {
-            const current = this.host.currentAnalysisId?.() ?? this.pendingAnalysisId;
-            if (
-              !this.disposed &&
-              request.type === 'openDeclaration' &&
-              request.analysisId === current
-            )
-              this.savedSourceReturn = {
-                analysisId: request.analysisId,
-                entityId: request.entityId
-              };
-          })
-          .catch((error: unknown) => {
-            this.post({
-              type: 'error',
-              analysisId: request.analysisId,
-              requestId: request.requestId,
-              code: 'QUERY_SOURCE_OPEN_FAILED',
-              message:
-                error instanceof Error ? error.message : 'The saved source could not be opened.'
-            });
-          });
+        this.queueSavedSourceOpen(request);
         return;
       }
       void this.host.bridge.handle(request).then((response) => this.post(response));
@@ -312,6 +377,7 @@ export class CodeMapPanel {
     switch (request.type) {
       case 'ready':
         this.ready = true;
+        this.readyEpoch++;
         this.postViewState();
         void this.host.bridge
           .handle({ type: 'ready', protocolVersion: PROTOCOL_VERSION })
@@ -336,10 +402,13 @@ export class CodeMapPanel {
         return;
       case 'persistViewState': {
         const restored = restoreViewState(request.viewState);
-        this.viewState = serializeViewState({
-          ...INITIAL_STATE,
-          ...restored.state
-        }) as unknown as Record<string, unknown>;
+        this.viewState = serializeViewState(
+          {
+            ...INITIAL_STATE,
+            ...restored.state
+          },
+          restored.state.camera ?? undefined
+        ) as unknown as Record<string, unknown>;
         this.host.saveViewState(this.viewState);
         return;
       }
@@ -666,7 +735,7 @@ export class CodeMapPanel {
 
   /** Restores the last small state when the webview asks (SD-021). */
   private postViewState(): void {
-    const state = this.host.loadViewState();
+    const state = this.viewState ?? this.host.loadViewState();
     if (state) {
       this.post({ type: 'viewState', state });
     }
@@ -737,6 +806,9 @@ export class CodeMapPanel {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.sourceOpenRevision++;
+    this.savedSourceReturn = undefined;
+    this.pendingSourceOpen = undefined;
     const ownsCurrent = CodeMapPanel.current === this;
     if (ownsCurrent) {
       CodeMapPanel.current = undefined;

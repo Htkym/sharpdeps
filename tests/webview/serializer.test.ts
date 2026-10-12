@@ -1,7 +1,7 @@
 // View state persistence (SD-021): round trip, version guard, and clamped restore.
 
 import { describe, expect, it } from 'vitest';
-import { INITIAL_STATE } from '../../media/app/state';
+import { INITIAL_STATE, viewReducer } from '../../media/app/state';
 import {
   VIEW_STATE_VERSION,
   deserializeViewState,
@@ -10,6 +10,33 @@ import {
 } from '../../media/app/serializer';
 
 describe('view state serialization', () => {
+  it('keeps empty source-return searches and history when replacing a nonempty search', () => {
+    const stored = serializeViewState({
+      ...INITIAL_STATE,
+      history: [{ scope: { kind: 'root' }, granularity: 'type', search: '' }]
+    });
+    const restored = restoreViewState(JSON.parse(JSON.stringify(stored))).state;
+    const next = viewReducer(
+      { ...INITIAL_STATE, search: 'previous query' },
+      {
+        type: 'sourceReturned',
+        state: restored,
+        ui: {
+          navTab: 'structure',
+          focus: 'declaration',
+          id: 'ty_1111111111111111',
+          scroll: { navigation: 0, inspector: 0, map: 0 }
+        }
+      }
+    );
+    expect(next.search).toBe('');
+    expect(next.history).toHaveLength(1);
+    expect(next.history[0].search).toBe('');
+    expect(
+      deserializeViewState({ version: VIEW_STATE_VERSION, search: 'x'.repeat(201) }).state.search
+    ).toBeUndefined();
+  });
+
   it('restores only finite saved result groups and keeps display metadata out of persisted state', () => {
     const state = {
       ...INITIAL_STATE,

@@ -18,6 +18,7 @@ import { resolveShortcut } from './shortcuts';
 import { translate, translator, type Translator } from './i18n';
 import type { SortState } from './query';
 import type { EntitySummary, Projection, QueryResultMetadata } from '../../src/view/protocolV2';
+import type { SourceReturnUi } from '../../src/view/protocolV2';
 import {
   buildNavigationTree,
   renderNavigationTree,
@@ -42,6 +43,9 @@ export interface ViewerApp {
   dispatch(action: ViewAction): void;
   getState(): ViewState;
   elements: ShellElements;
+  captureSourceReturn(focus: SourceReturnUi['focus'], id: string): SourceReturnUi;
+  acceptsSourceReturn(): boolean;
+  sourceReturnSearchTarget(): number | undefined;
   export(format: 'mermaid' | 'svg' | 'png' | 'json', copy?: boolean): Promise<void>;
 }
 
@@ -57,6 +61,7 @@ export interface ViewerAppOptions {
   /** Opens one evidence record in the editor (SD-019/SD-024). */
   onOpenEvidence?: (evidenceId: string) => void;
   onOpenDeclaration?: (entityId: string) => void;
+  onSourceReturnDismissed?: () => void;
   /**
    * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
    * table stays available and the graph shows why it is missing.
@@ -74,6 +79,15 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   /** Focus returns here when the inspector drawer closes (SD-024). */
   let inspectorReturnFocus: HTMLElement | SVGElement | undefined;
   let inspectorWasOpen = false;
+  let pendingSourceUi: { pin: string; ui: SourceReturnUi } | undefined;
+  let sourceReturnInteracted = false;
+  const interruptSourceReturn = () => {
+    sourceReturnInteracted = true;
+    pendingSourceUi = undefined;
+    options.onSourceReturnDismissed?.();
+  };
+  for (const event of ['pointerdown', 'keydown', 'wheel'])
+    root.addEventListener(event, interruptSourceReturn, { capture: true, passive: true });
 
   const elements = buildShell(root, {
     onLanguageToggled: () =>
@@ -277,15 +291,27 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   }
 
   function dispatch(action: ViewAction): void {
+    if (action.type === 'analyzeStarted' || action.type === 'analysisComplete')
+      pendingSourceUi = undefined;
+    if (action.type === 'sourceReturned') {
+      const pin = sourceReturnPin();
+      if (sourceReturnInteracted || !pin) return;
+      pendingSourceUi = { pin, ui: action.ui };
+      activeTab = action.ui.navTab;
+    }
     const next = viewReducer(state, action);
     if (next === state) {
       return;
     }
 
     state = next;
-    if (action.type === 'paneResized') {
+    if (pendingSourceUi && pendingSourceUi.pin !== sourceReturnPin()) pendingSourceUi = undefined;
+    if (action.type === 'sourceReturned' && state.camera)
+      graphRuntime.view?.applyCamera(state.camera);
+    if (action.type === 'paneResized' || action.type === 'cameraChanged') {
       // Only pane CSS widths and persistence change; keep the inspector's DOM,
       // scroll position and expanded sections intact throughout the drag.
+      if (action.type === 'cameraChanged') renderTopBar(elements, state);
       options.onStateChanged?.(state);
       return;
     }
@@ -364,6 +390,66 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     renderDetails();
     elements.footer.textContent = selectStatusFooter(state);
     options.onStateChanged?.(state);
+    restoreSourceUiWhenReady();
+  }
+
+  function sourceReturnPin(): string | undefined {
+    const metadata = state.queryMetadata;
+    return state.analysisId && metadata && !state.runningAnalysisId
+      ? JSON.stringify([
+          state.analysisId,
+          metadata.workspaceId,
+          metadata.snapshotId,
+          metadata.generation,
+          [...metadata.variantIds].sort()
+        ])
+      : undefined;
+  }
+
+  function currentSourceUi(): SourceReturnUi | undefined {
+    return pendingSourceUi && pendingSourceUi.pin === sourceReturnPin()
+      ? pendingSourceUi.ui
+      : undefined;
+  }
+
+  function restoreSourceUiWhenReady(): void {
+    const ticket = pendingSourceUi;
+    const ui = currentSourceUi();
+    if (
+      !ui ||
+      sourceReturnInteracted ||
+      !state.projection ||
+      !state.tree.root ||
+      (state.selection.entityId && state.details?.entityId !== state.selection.entityId) ||
+      (state.selection.relationId && state.evidence?.relationId !== state.selection.relationId) ||
+      (state.search &&
+        (state.searchResults.pending ||
+          state.searchResults.query !== state.search ||
+          (state.searchResults.items.length < (ui.searchCount ?? 0) &&
+            state.searchResults.nextCursor)))
+    )
+      return;
+    const button = [
+      ...elements.inspectorBody.querySelectorAll<HTMLButtonElement>('button[data-source-return]')
+    ].find(
+      (item) =>
+        item.dataset.sourceReturn === ui.focus && item.dataset.sourceId === ui.id && !item.disabled
+    );
+    if (!button) return;
+    requestAnimationFrame(() => {
+      if (
+        pendingSourceUi !== ticket ||
+        currentSourceUi() !== ui ||
+        sourceReturnInteracted ||
+        !button.isConnected
+      )
+        return;
+      pendingSourceUi = undefined;
+      button.focus({ preventScroll: true });
+      elements.navPaneBody.scrollTop = ui.scroll.navigation;
+      elements.inspectorBody.scrollTop = ui.scroll.inspector;
+      elements.mapHost.scrollTop = ui.scroll.map;
+    });
   }
 
   function renderDetails(): void {
@@ -463,7 +549,31 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     }
   }
 
-  const app: ViewerApp = { dispatch, getState: () => state, elements, export: exportCurrent };
+  const app: ViewerApp = {
+    dispatch,
+    getState: () => state,
+    elements,
+    export: exportCurrent,
+    acceptsSourceReturn: () => !sourceReturnInteracted,
+    sourceReturnSearchTarget: () => currentSourceUi()?.searchCount,
+    captureSourceReturn: (focus, id) => {
+      if (graphRuntime.view)
+        dispatch({ type: 'cameraChanged', camera: graphRuntime.view.cameraState() });
+      sourceReturnInteracted = false;
+      pendingSourceUi = undefined;
+      return {
+        navTab: activeTab,
+        focus,
+        id,
+        scroll: {
+          navigation: elements.navPaneBody.scrollTop,
+          inspector: elements.inspectorBody.scrollTop,
+          map: elements.mapHost.scrollTop
+        },
+        searchCount: state.searchResults.items.length
+      };
+    }
+  };
   render();
   return app;
 
@@ -1470,6 +1580,8 @@ function renderSavedQueryInspector(
             open.type = 'button';
             open.className = 'sd-button';
             open.textContent = tr('Open in editor');
+            open.dataset.sourceReturn = 'evidence';
+            open.dataset.sourceId = item.id as string;
             open.addEventListener('click', () => options.onOpenEvidence?.(item.id as string));
             body.append(open);
           }
@@ -1539,6 +1651,8 @@ function renderSavedQueryInspector(
         body.append(message(tr('Source location unavailable'), 'sd-note'));
       }
       open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
+      open.dataset.sourceReturn = 'declaration';
+      open.dataset.sourceId = entity.id;
       body.append(open);
     }
     for (const [kind, label, entries] of [

@@ -229,13 +229,21 @@ export type WebviewToHostMessage =
       cursor?: string;
     }
   | { type: 'getCycleWitness'; requestId: string; analysisId: string; cycleGroupId: string }
-  | { type: 'openEvidence'; requestId: string; analysisId: string; evidenceId: string }
+  | { type: 'sourceReturnDismissed'; analysisId: string }
+  | {
+      type: 'openEvidence';
+      requestId: string;
+      analysisId: string;
+      evidenceId: string;
+      returnUi?: SourceReturnUi;
+    }
   | {
       type: 'openDeclaration';
       requestId: string;
       analysisId: string;
       entityId: string;
       declarationIndex?: number;
+      returnUi?: SourceReturnUi;
     }
   | {
       type: 'copyContext';
@@ -269,6 +277,13 @@ export type WebviewToHostMessage =
 
 // Extension host -> webview
 export type HostToWebviewMessage =
+  | {
+      type: 'sourceReturn';
+      requestId: string;
+      analysisId: string;
+      state: Record<string, unknown>;
+      ui: SourceReturnUi;
+    }
   | {
       type: 'capabilities';
       protocolVersion: number;
@@ -383,6 +398,15 @@ export type ProtocolValidationResult<T> = { ok: true; value: T } | ProtocolValid
 /** Query text is echoed back to the UI; it must not be an unbounded payload. */
 export const MAX_QUERY_LENGTH = 200;
 
+/** One transient source-button anchor; never a path or an arbitrary DOM selector. */
+export interface SourceReturnUi {
+  navTab: 'structure' | 'cycles' | 'analysis';
+  focus: 'declaration' | 'evidence';
+  id: string;
+  scroll: { navigation: number; inspector: number; map: number };
+  searchCount?: number;
+}
+
 const PATTERNS = {
   requestId: /^req_[0-9a-f]{16}$/,
   analysisId: /^an_[0-9a-f]{16}$/,
@@ -408,7 +432,8 @@ type FieldKind =
   | 'exportFormat'
   | 'mode'
   | 'savedUpdatePhase'
-  | 'viewState';
+  | 'viewState'
+  | 'sourceReturnUi';
 
 interface MessageRule {
   required: Record<string, FieldKind>;
@@ -475,11 +500,15 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   },
   openEvidence: {
     required: { requestId: 'requestId', analysisId: 'analysisId', evidenceId: 'evidenceId' },
+    optional: { returnUi: 'sourceReturnUi' }
+  },
+  sourceReturnDismissed: {
+    required: { analysisId: 'analysisId' },
     optional: {}
   },
   openDeclaration: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
-    optional: { declarationIndex: 'positiveInteger' }
+    optional: { declarationIndex: 'positiveInteger', returnUi: 'sourceReturnUi' }
   },
   copyContext: {
     required: { requestId: 'requestId', analysisId: 'analysisId', scope: 'scope' },
@@ -532,6 +561,15 @@ const HOST_RULES: Record<string, MessageRule> = {
   },
   viewState: {
     required: { state: 'object' },
+    optional: {}
+  },
+  sourceReturn: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      state: 'viewState',
+      ui: 'sourceReturnUi'
+    },
     optional: {}
   },
   analysisProgress: {
@@ -813,6 +851,32 @@ function checkField(
     }
     case 'viewState':
       return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
+    case 'sourceReturnUi': {
+      if (typeof value !== 'object' || Array.isArray(value))
+        return fail('expected source return UI');
+      const ui = value as Record<string, unknown>;
+      const scroll = ui.scroll as Record<string, unknown> | undefined;
+      return ['structure', 'cycles', 'analysis'].includes(String(ui.navTab)) &&
+        (ui.focus === 'declaration' || ui.focus === 'evidence') &&
+        typeof ui.id === 'string' &&
+        (ui.focus === 'declaration' ? PATTERNS.entityId : PATTERNS.evidenceId).test(ui.id) &&
+        !!scroll &&
+        typeof scroll === 'object' &&
+        !Array.isArray(scroll) &&
+        ['navigation', 'inspector', 'map'].every(
+          (key) =>
+            typeof scroll[key] === 'number' &&
+            Number.isFinite(scroll[key]) &&
+            (scroll[key] as number) >= 0 &&
+            (scroll[key] as number) <= 10000000
+        ) &&
+        (ui.searchCount === undefined ||
+          (Number.isSafeInteger(ui.searchCount) &&
+            (ui.searchCount as number) >= 0 &&
+            (ui.searchCount as number) <= 500))
+        ? true
+        : fail('expected a bounded source button anchor and scroll position');
+    }
     default:
       return PATTERNS[kind].test(String(value))
         ? true

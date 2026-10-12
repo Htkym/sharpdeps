@@ -62,9 +62,15 @@ export function toViewActions(
     )
       return [];
     if (
-      ['projection', 'details', 'evidencePage', 'searchResults', 'stale', 'reveal'].includes(
-        message.type
-      ) &&
+      [
+        'projection',
+        'details',
+        'evidencePage',
+        'searchResults',
+        'stale',
+        'reveal',
+        'sourceReturn'
+      ].includes(message.type) &&
       message.analysisId !== currentState.analysisId
     )
       return [];
@@ -96,6 +102,20 @@ export function toViewActions(
   }
 
   switch (message.type) {
+    case 'sourceReturn': {
+      const checked = validateHostMessage(message);
+      if (
+        !checked.ok ||
+        checked.value.type !== 'sourceReturn' ||
+        !currentState?.queryMetadata ||
+        checked.value.analysisId !== currentState.analysisId
+      )
+        return [];
+      const restored = restoreViewState(checked.value.state);
+      return restored.versionMismatch || !Object.keys(restored.state).length
+        ? []
+        : [{ type: 'sourceReturned', state: restored.state, ui: checked.value.ui }];
+    }
     case 'savedUpdateState': {
       const checked = validateHostMessage(message);
       if (

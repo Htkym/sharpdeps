@@ -142,7 +142,7 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
           granularity: record.granularity as Granularity,
           selectionId: stringOf(record.selectionId, 64),
           camera: deserializeCamera(record.camera) ?? null,
-          search: stringOf(record.search, MAX_SEARCH_LENGTH),
+          search: searchOf(record.search),
           filters: sanitizeFilters(recordOf(record.filters) ?? {})
         }
       ];
@@ -183,7 +183,7 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
     state.scope = scope;
   }
 
-  const search = stringOf(value.search, MAX_SEARCH_LENGTH);
+  const search = searchOf(value.search);
   if (search !== undefined) {
     state.search = search;
   }
@@ -317,6 +317,10 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   }
 
   return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function searchOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= MAX_SEARCH_LENGTH ? value : undefined;
 }
 
 function stringOf(value: unknown, maxLength: number): string | undefined {
