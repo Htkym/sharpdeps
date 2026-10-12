@@ -6,12 +6,113 @@ using System.Text;
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Markdown;
 using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
 
 public sealed class CliTests
 {
+    [Fact]
+    public void MarkdownContainmentReachesCandidatesWithoutExpandingThemOrBridgingVariants()
+    {
+        using var fixture = new Fixture();
+        using var original = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var saved = original.Snapshot();
+        var primary = Assert.Single(saved.Graph.Variants);
+        var alternate = HarnessIdentity.VariantId(fixture.Uuid, primary.ProjectId, "net9.0", "Debug");
+        var parent = saved.Graph.Nodes.Single(n => n.Name == "Service");
+        var target = HarnessIdentity.LogicalSymbolId(fixture.Uuid, primary.ProjectId, "method", "M:Service.Run");
+        var tail = HarnessIdentity.LogicalSymbolId(fixture.Uuid, primary.ProjectId, "method", "M:Service.Other");
+        string Occurrence(string node, string variant) => HarnessIdentity.SymbolOccurrenceId(fixture.Uuid, node, variant);
+        var graph = saved.Graph with { SnapshotId = "markdown-connectivity", Generation = 2,
+            Variants = [.. saved.Graph.Variants, new(alternate, primary.ProjectId, "net9.0", "Debug", null, null, null)],
+            Nodes = [.. saved.Graph.Nodes, new(target, HarnessNodeKind.Member, "Run", parent.Id, parent.Location),
+                new(tail, HarnessNodeKind.Member, "Other", parent.Id, parent.Location)],
+            SymbolOccurrences = [.. saved.Graph.SymbolOccurrences, .. new[] { target, tail }.SelectMany(node =>
+                new[] { primary.Id, alternate }.Select(variant => new HarnessSymbolOccurrence(
+                    Occurrence(node, variant), node, variant, parent.Location, [parent.Location!])))],
+            Edges = new[] { primary.Id, alternate }.Select(variant => new HarnessEdge("calls-" + variant,
+                target, tail, Occurrence(target, variant), Occurrence(tail, variant), variant,
+                "calls", HarnessCertainty.Resolved, "fixture-semantic", parent.Location)).ToArray() };
+        const string raw = "---\nsharpdeps:\n  symbols:\n    - documentationId: M:Service.Run\n---\n# Guide\n\nService.Run\n";
+        File.WriteAllText(Path.Combine(fixture.Root, "readme.md"), raw, new UTF8Encoding(false));
+        var documentUuid = Guid.NewGuid();
+        var request = new MarkdownGraphRequest(raw, fixture.Uuid, documentUuid, graph.WorkspaceId,
+            "readme.md", "v1", graph.SnapshotId, graph.Generation);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var parsed = adapter.Analyze(request, true);
+        var tokens = parsed.Facts.Sections.ToDictionary(s => s.LocalKey, s => "regression:" + s.LocalKey);
+        var projection = adapter.Analyze(request with { SectionTokens = tokens,
+            SectionIdentityTextHash = parsed.Facts.TextHash }, true);
+        graph = graph with { Nodes = graph.Nodes.Concat(projection.Graph.Nodes).DistinctBy(n => n.Id).ToArray(),
+            Edges = graph.Edges.Concat(projection.Graph.Edges).ToArray(), Markdown = projection.Graph.Markdown };
+        var catalog = new MarkdownSymbolCatalog(graph, new[] { primary.Id, alternate }.Select(variant =>
+            new MarkdownSymbolCandidate(target, "Service.Run", "Run", "M:Service.Run", VariantId: variant)).ToArray());
+        var resolution = MarkdownSymbolResolver.Resolve(projection, raw, catalog);
+        var projected = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
+        var stamp = projected.Markdown!;
+        var snapshot = saved with { Graph = projected,
+            Files = [.. saved.Files, new("readme.md", "readme.md", "markdown", parsed.Facts.TextHash,
+                Encoding.UTF8.GetByteCount(raw), raw.Length)],
+            Documents = [new(documentUuid, "readme.md", null, parsed.Facts.TextHash, graph.WorkspaceId,
+                stamp.ParserVersion, stamp.ContractVersion, stamp.ProfileId, stamp.OptionsHash,
+                projection.Sections.Select(s => new IndexSectionIdentity(s.Source.LocalKey,
+                    tokens[s.Source.LocalKey], null, null)).ToArray())] };
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var query = new QueryService(new PinnedQueryIndex(reader));
+        var document = HarnessIdentity.DocumentId(fixture.Uuid, documentUuid);
+        var section = Assert.Single(resolution.Mentions, m => m.Origin == MarkdownMentionOrigin.BodyText
+            && m.Token == "Service.Run").OwnerNodeId;
+        var budget = new QueryBudget(100, 100, 8, 10000, 100000, 400000);
+        foreach (var seed in new[] { document, section })
+        {
+            var queryRequest = new QueryRequest("candidate", QueryKind.Impact, NodeId: seed,
+                Scope: new(VariantIds: [primary.Id, alternate]), Dependents: false,
+                IncludeCandidates: true, Budget: budget);
+            var reply = query.Execute(queryRequest).Envelope;
+            Assert.Empty(reply.Errors);
+            Assert.False(reply.Truncated);
+            Assert.Contains(reply.Items, i => i.Node?.Kind == HarnessNodeKind.SymbolMention);
+            Assert.Contains(reply.Candidates, i => i.Node?.Id == target);
+            var bindings = reply.Candidates.Where(i => i.Edge?.TargetNodeId == target).ToArray();
+            Assert.Equal(seed == document ? 2 : 1, bindings.Length);
+            Assert.Equal(resolution.Mentions.Where(m => m.CandidateNodeIds.Contains(target)
+                && (seed == document || m.OwnerNodeId == seed)).Select(m => m.Id).Order(),
+                bindings.Select(i => i.Edge!.SourceNodeId).Order());
+            var binding = Assert.Single(reply.Candidates, i => i.Edge?.TargetNodeId == target
+                && i.Edge.Kind == (seed == document ? "documents_symbol" : "mentions_symbol"));
+            Assert.Equal(HarnessCertainty.Candidate, binding.Edge!.Certainty);
+            Assert.Null(binding.Edge.VariantId);
+            Assert.Null(binding.Edge.SourceOccurrenceId);
+            Assert.Null(binding.Edge.TargetOccurrenceId);
+            Assert.DoesNotContain(reply.Items.Concat(reply.Candidates), i => i.Edge?.Kind == "calls" || i.Node?.Id == tail);
+            var strict = query.Execute(queryRequest with { IncludeCandidates = false }).Envelope;
+            Assert.Contains(strict.Items, i => i.Node?.Kind == HarnessNodeKind.SymbolMention);
+            Assert.Empty(strict.Candidates);
+            Assert.DoesNotContain(strict.Items, i => i.Node?.Id == target);
+        }
+        // Only a separately complete catalog and an explicit variant may bind an occurrence.
+        var scoped = MarkdownSymbolResolver.Resolve(projection, raw,
+            catalog with { Graph = graph with { Coverage = HarnessCoverage.CompleteWithinScope } },
+            new(VariantId: primary.Id));
+        var scopedGraph = MarkdownSymbolResolver.ProjectGraph(graph, scoped);
+        writer.Commit(IndexStage.Create(snapshot with { Graph = scopedGraph with { Generation = 3, SnapshotId = "scoped" } }));
+        using var scopedReader = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var scopedQuery = new QueryService(new PinnedQueryIndex(scopedReader));
+        var selected = new QueryRequest("selected", QueryKind.Impact, NodeId: document, Dependents: false,
+            IncludeCandidates: true, Scope: new(VariantIds: [primary.Id, alternate]), Budget: budget);
+        var selectedReply = scopedQuery.Execute(selected).Envelope;
+        Assert.Empty(selectedReply.Errors);
+        Assert.Contains(selectedReply.Items, i => i.Edge?.Id == "calls-" + primary.Id);
+        Assert.DoesNotContain(selectedReply.Items.Concat(selectedReply.Candidates), i => i.Edge?.Id == "calls-" + alternate);
+        var other = scopedQuery.Execute(selected with { Scope = new(VariantIds: [alternate]) }).Envelope;
+        Assert.Empty(other.Errors);
+        Assert.DoesNotContain(other.Items.Concat(other.Candidates), i => i.Node?.Id == target || i.Node?.Id == tail);
+    }
+
     [Fact]
     public async Task TrustAndArgumentFailuresHappenBeforeAnyWorkspaceCreation()
     {

@@ -251,7 +251,12 @@ public static class MarkdownSymbolResolver
         var oldIds = resolution.Mentions.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
         var nodes = graph.Nodes.Where(n => !oldIds.Contains(n.Id)).Concat(resolution.Mentions.Select(m =>
             new HarnessNode(m.Id, HarnessNodeKind.SymbolMention, m.Token, m.OwnerNodeId, m.Location))).ToArray();
-        var edges = graph.Edges.Where(e => !oldIds.Contains(e.SourceNodeId)).Concat(resolution.Mentions.SelectMany(m =>
+        var edges = graph.Edges.Where(e => !oldIds.Contains(e.SourceNodeId)
+            && !(oldIds.Contains(e.TargetNodeId) && e.Kind == "contains" && e.Producer == "markdown-symbol-resolver"))
+            .Concat(resolution.Mentions.Select(m => new HarnessEdge(LocalId(m.OwnerNodeId, m.Id, "contains"),
+                m.OwnerNodeId, m.Id, null, null, null, "contains", HarnessCertainty.Resolved,
+                "markdown-symbol-resolver", m.Location, m.Origin.ToString())))
+            .Concat(resolution.Mentions.SelectMany(m =>
             m.CandidateNodeIds.Select(target => new HarnessEdge(LocalId(m.Id, target, m.Relation), m.Id, target,
                 null, m.Scope.VariantId is null ? null : graph.SymbolOccurrences.First(o =>
                     o.LogicalSymbolId == target && o.VariantId == m.Scope.VariantId).Id,

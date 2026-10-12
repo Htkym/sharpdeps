@@ -230,7 +230,30 @@ public sealed class MarkdownSymbolResolverTests
                 Assert.Equal("catalog-incomplete", candidate.Reason);
             });
             Assert.Contains("catalog-incomplete", downgraded.Reasons);
-            Assert.Equal(HarnessCoverage.Partial, MarkdownSymbolResolver.ProjectGraph(merged, downgraded).Coverage);
+            var projected = MarkdownSymbolResolver.ProjectGraph(merged, downgraded);
+            Assert.Equal(HarnessCoverage.Partial, projected.Coverage);
+            foreach (var mention in downgraded.Mentions)
+            {
+                var containment = Assert.Single(projected.Edges, e => e.SourceNodeId == mention.OwnerNodeId
+                    && e.TargetNodeId == mention.Id && e.Kind == "contains");
+                Assert.Equal(HarnessCertainty.Resolved, containment.Certainty);
+                Assert.Equal(mention.Location, containment.Evidence);
+                var binding = Assert.Single(projected.Edges, e => e.SourceNodeId == mention.Id);
+                Assert.Equal(HarnessCertainty.Candidate, binding.Certainty);
+                Assert.Null(binding.VariantId);
+                Assert.Null(binding.TargetOccurrenceId);
+            }
+            var repeated = MarkdownSymbolResolver.ProjectGraph(projected, downgraded);
+            Assert.Equal(projected.Edges.OrderBy(e => e.Id), repeated.Edges.OrderBy(e => e.Id));
+            var foreign = new HarnessEdge("foreign-containment", metadata.OwnerNodeId, metadata.Id,
+                null, null, null, "contains", HarnessCertainty.Resolved, "other-producer", metadata.Location);
+            Assert.Contains(foreign, MarkdownSymbolResolver.ProjectGraph(
+                projected with { Edges = projected.Edges.Append(foreign).ToArray() }, downgraded).Edges);
+            var deleted = MarkdownSymbolResolver.ReResolve(downgraded, Catalog(projection));
+            var cleared = MarkdownSymbolResolver.ProjectGraph(projected, deleted);
+            Assert.DoesNotContain(cleared.Edges, e => deleted.Mentions.Any(m => m.Id == e.SourceNodeId));
+            Assert.Equal(projected.Edges.Where(e => e.Kind == "contains").OrderBy(e => e.Id),
+                cleared.Edges.OrderBy(e => e.Id));
             var restored = MarkdownSymbolResolver.ReResolve(downgraded, catalog, noSymbolChanges);
             Assert.Equal(HarnessCoverage.CompleteWithinScope, restored.CatalogCoverage);
             Assert.Equal(2, restored.Mentions.Count);
