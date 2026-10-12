@@ -35,6 +35,125 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('toViewActions', () => {
+  it('ends a failed current search page while keeping its prior items and retry cursor', () => {
+    const filters = { resultKinds: ['docs' as const], includeExternal: false };
+    const item = {
+      id: 'ty_1111111111111111',
+      name: '調査',
+      kind: 'Document',
+      granularity: 'type' as const
+    };
+    const requestId = 'req_1111111111111111';
+    const state: ViewState = {
+      ...INITIAL_STATE,
+      analysisId,
+      filters,
+      search: '調査',
+      queryMetadata: savedMetadata,
+      searchResults: {
+        query: '調査',
+        items: [item],
+        total: 1,
+        pending: true,
+        nextCursor: 'cur_1111111111111111'
+      }
+    };
+    const context = new Map([
+      [
+        requestId,
+        {
+          type: 'searchEntities',
+          query: '調査',
+          appendSearch: true,
+          filtersKey: JSON.stringify(filters),
+          analysisId
+        }
+      ]
+    ]);
+    const error = {
+      type: 'error',
+      requestId,
+      analysisId,
+      code: 'QUERY_BUDGET_EXCEEDED',
+      message: 'Page did not complete.'
+    };
+    const next = toViewActions(error, context, state).reduce(viewReducer, state);
+    expect(next.searchResults).toEqual({ ...state.searchResults, pending: false });
+    expect(next.error).toEqual({ code: error.code, message: error.message });
+    const replaced = { ...state, filters: { resultKinds: ['code' as const] } };
+    const staleActions = toViewActions(error, context, replaced);
+    expect(staleActions).toEqual([]);
+    expect(staleActions.reduce(viewReducer, replaced).searchResults.pending).toBe(true);
+  });
+
+  it('drops a late result from the previous filter and carries the current page display fields', () => {
+    const filters = { resultKinds: ['docs' as const], includeExternal: false };
+    const state: ViewState = {
+      ...INITIAL_STATE,
+      analysisId,
+      filters,
+      search: '調査',
+      queryMetadata: savedMetadata
+    };
+    const requestId = 'req_1111111111111111';
+    const context = new Map([
+      [requestId, { query: '調査', appendSearch: true, filtersKey: JSON.stringify(filters) }]
+    ]);
+    const message = {
+      type: 'searchResults',
+      requestId,
+      analysisId,
+      nextCursor: 'cur_1111111111111111',
+      total: 1,
+      queryMetadata: { ...savedMetadata, resultFilterVersion: 1 },
+      items: [
+        {
+          id: 'ty_1111111111111111',
+          name: 'Compute',
+          kind: 'SymbolMention',
+          path: 'docs/<img>.md',
+          reason: '文書への参照',
+          resultKind: 'docs',
+          sourceLocationAvailable: false
+        }
+      ]
+    };
+    expect(toViewActions(message, context, state)[0]).toMatchObject({
+      type: 'searchResultsReceived',
+      append: true,
+      nextCursor: message.nextCursor,
+      queryMetadata: { resultFilterVersion: 1 },
+      items: [
+        {
+          path: 'docs/<img>.md',
+          reason: '文書への参照',
+          resultKind: 'docs',
+          sourceLocationAvailable: false
+        }
+      ]
+    });
+    const changed = { ...state, filters: { resultKinds: ['code' as const] } };
+    expect(toViewActions(message, context, changed)).toEqual([]);
+    expect(
+      toViewActions(
+        {
+          type: 'projection',
+          requestId,
+          analysisId,
+          projection: {
+            scope: { kind: 'root' },
+            granularity: 'type',
+            nodes: [],
+            edges: [],
+            queryMetadata: savedMetadata
+          }
+        },
+        context,
+        changed
+      )
+    ).toEqual([]);
+  });
+
   it('keeps received saved projection provenance only until the next projection or session', () => {
     const requestId = 'req_3333333333333333';
     let state: ViewState = { ...INITIAL_STATE, analysisId, queryMetadata: savedMetadata };

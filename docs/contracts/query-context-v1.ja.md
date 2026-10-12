@@ -18,6 +18,10 @@ Resolved、Candidate、Unresolvedはそれぞれ`items`、`candidates`、`unreso
 
 ## 世代、鮮度とtrust
 
+`scope.resultKinds`はCode/Docs/Otherの返却分類、`scope.includeExternal=false`はExternalSymbolの除外を指定する。Document、Section、FrontMatter、CodeFence、LinkTarget、SymbolMentionはDocsである。SourceFileは保存manifestのkindからcode/sourceをCode、markdownをDocs、それ以外をOtherへ分類する。Project、Namespace、Type、Member、ExternalSymbolはCode、WorkspaceはOtherであり、文書kindの補集合をCodeとは扱わない。
+
+Search/Browseでは分類をページング前に適用する。探索では非表示の文書構造を経由でき、返却時にnode/occurrenceを絞る。返却edgeは両端が表示条件に合う場合だけ残し、非表示区間を短絡する辺は作らない。探索予算、候補leaf、variant/occurrence接続条件は従来どおりで、非表示nodeを含む探索の打切りも記録する。分類集合は重複除去・整列してcursorへ結び付ける。応答のnode/occurrenceにはresultKind、snapshotにはresultFilterVersion=1を付ける。この機能は同markerを持つQueryHostでのみ利用でき、index schemaやsource読取り権限を変更しない。
+
 全応答はapiVersion、requestId、workspace/snapshot/generation/variant/coverage、freshness、budget、truncated/reasons、nextCursor、diagnostics、errorsを持つ。Partial/FailedをCompleteへ補完しない。空結果、coverage不足、打切りを区別する。requireCompleteはcoverage不足やtruncationで`INCOMPLETE_RESULT`となり、QueryReply.Succeededはfalseになる。CLIのexit番号はこのtaskで固定しない。
 
 Cursorはworkspace、snapshot IDのSHA、generation、operation/filter/scope/variant/budget/freshnessと位置へ結び付け、HMACで検査する。process内の既定keyは再起動で変わる。hostは32byteのcursorKeyを明示供給できる。cursorは認証credentialではなく、opaque paging tokenである。別世代は`CURSOR_SNAPSHOT_EXPIRED`、別filterは`CURSOR_FILTER_CHANGED`、改変は`INVALID_CURSOR`を返して再検索を促す。同じreaderを続けて使う場合はその旧世代を表示し、新readerへ黙って接ぎ替えない。

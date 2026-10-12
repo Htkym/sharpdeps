@@ -7,10 +7,12 @@ using SharpDeps.Index;
 
 public enum QueryKind { Search, Symbol, Callers, Callees, Impact, Context, Status, Browse }
 public enum QueryFreshnessPolicy { AllowStale, RequireFresh, Refresh }
+public enum QueryResultKind { Code, Docs, Other }
 public sealed record QueryBudget(int MaxNodes = 60, int MaxEdges = 120, int MaxDepth = 2,
     int MaxMilliseconds = 1000, int MaxChars = 18000, int MaxBytes = 64000);
 public sealed record QueryScope(HarnessNodeKind? Kind = null, string? ProjectId = null,
-    string? PathPrefix = null, IReadOnlyList<string>? VariantIds = null);
+    string? PathPrefix = null, IReadOnlyList<string>? VariantIds = null,
+    IReadOnlyList<QueryResultKind>? ResultKinds = null, bool IncludeExternal = true);
 public sealed record QueryRequest(string RequestId, QueryKind Kind, string? Term = null,
     string? NodeId = null, IReadOnlyList<string>? Ids = null, QueryScope? Scope = null,
     IReadOnlyList<string>? EdgeKinds = null, bool IncludeCandidates = false, bool IncludeDocuments = true,
@@ -26,6 +28,7 @@ public sealed record QuerySnapshot(string WorkspaceId, string Id, long Generatio
     public string IdentityVersion => HarnessGraphContract.IdentityVersion;
     public int IndexSchemaVersion => 1; // The current storage contract accepted by PinnedQueryIndex.
     public string CoordinatorState => "not-connected";
+    public int ResultFilterVersion => 1;
 }
 public sealed record QuerySnippet(string SourceId, string ContentHash, HarnessRawSpan Span,
     string Text, bool OmittedBefore, bool OmittedAfter);
@@ -33,7 +36,7 @@ public sealed record QueryItem(string Id, string Kind, string Label, string Reas
     HarnessCertainty Certainty, string? Path, HarnessLocation? Evidence,
     IReadOnlyList<string> ViaEdgeIds, HarnessNode? Node = null, HarnessEdge? Edge = null,
     HarnessSymbolOccurrence? Occurrence = null, QuerySnippet? Snippet = null, double? Rank = null,
-    string? MatchMethod = null);
+    string? MatchMethod = null, QueryResultKind? ResultKind = null);
 public sealed record QueryUsage(QueryBudget Limits, int UsedNodes, int UsedEdges,
     int UsedChars, int UsedBytes, int EstimatedTokens, string TokenCountKind = "estimate");
 public sealed record QueryEnvelope(string ApiVersion, string RequestId, QuerySnapshot Snapshot,

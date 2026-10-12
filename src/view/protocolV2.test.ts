@@ -5,6 +5,22 @@ const requestId = 'req_0123456789abcdef';
 const analysisId = 'an_0123456789abcdef';
 
 describe('validateWebviewMessage', () => {
+  it('restricts result classification filters and keeps display paths out of source-open requests', () => {
+    const request = { type: 'searchEntities', requestId, analysisId, query: '調査' };
+    for (const resultKinds of [undefined, ['docs'], ['code', 'docs']])
+      expect(validateWebviewMessage({ ...request, filters: { resultKinds } }).ok).toBe(true);
+    for (const resultKinds of [[], ['Other'], ['Document'], 'docs', ['code', 'docs', 'docs'], [1]])
+      expect(validateWebviewMessage({ ...request, filters: { resultKinds } }).ok).toBe(false);
+    expect(
+      validateWebviewMessage({
+        type: 'openDeclaration',
+        requestId,
+        analysisId,
+        path: 'docs/調査.md'
+      }).ok
+    ).toBe(false);
+  });
+
   it('validates saved projection provenance without requiring it from legacy exports', () => {
     for (const type of ['copyContext', 'export'] as const) {
       const request = {

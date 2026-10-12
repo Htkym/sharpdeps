@@ -60,6 +60,7 @@ export interface ShellElements {
   };
   imageTools: HTMLElement;
   filterControls: {
+    resultKinds: HTMLSelectElement;
     tests: HTMLInputElement;
     external: HTMLInputElement;
     generated: HTMLInputElement;
@@ -299,7 +300,25 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     filterPicker.append(category);
     return group;
   };
+  const resultKindLabel = element('label', 'sd-result-kinds');
+  resultKindLabel.textContent = 'Results';
+  const resultKinds = document.createElement('select');
+  resultKinds.setAttribute('aria-label', 'Result kinds');
+  for (const [value, text] of [
+    ['all', 'All results'],
+    ['code', 'Code'],
+    ['docs', 'Documents']
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    resultKinds.append(option);
+  }
+  resultKindLabel.append(resultKinds);
+  filterPicker.append(resultKindLabel);
+  resultKindLabel.hidden = true;
   const filterControls = {
+    resultKinds,
     tests: checkbox('Include tests'),
     external: checkbox('Include external'),
     generated: checkbox('Include generated'),
@@ -338,7 +357,15 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   };
   const values = (group: HTMLFieldSetElement) =>
     [...group.querySelectorAll<HTMLInputElement>('input:checked')].map((input) => input.value);
-  for (const input of Object.values(filterControls))
+  resultKinds.addEventListener('change', () =>
+    handlers.onFilters({
+      ...(resultKinds.value === 'all'
+        ? {}
+        : { resultKinds: [resultKinds.value as 'code' | 'docs'] }),
+      includeExternal: filterControls.external.checked
+    })
+  );
+  for (const input of Object.values(filterControls).filter((input) => input !== resultKinds))
     input.addEventListener('change', () =>
       handlers.onFilters({
         includeTests: filterControls.tests.checked,
@@ -347,7 +374,10 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
         basis: values(filterControls.basis),
         kinds: values(filterControls.kinds),
         projectKinds: values(filterControls.projectKinds),
-        relationKinds: values(filterControls.relations) as Filters['relationKinds']
+        relationKinds: values(filterControls.relations) as Filters['relationKinds'],
+        ...(!resultKindLabel.hidden && resultKinds.value !== 'all'
+          ? { resultKinds: [resultKinds.value as 'code' | 'docs'] }
+          : {})
       })
     );
   mapToolbar.append(backButton, depthSelect, filterSummary, filterPicker);

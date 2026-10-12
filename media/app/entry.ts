@@ -38,7 +38,10 @@ if (root) {
     requestContext.set(String(message.requestId), {
       ...context,
       type,
-      analysisId: String(message.analysisId)
+      analysisId: String(message.analysisId),
+      ...(['searchEntities', 'getProjection', 'getEntityDetails'].includes(String(message.type))
+        ? { filtersKey: JSON.stringify(message.filters ?? {}) }
+        : {})
     });
     host.post(message);
   }
@@ -61,7 +64,8 @@ if (root) {
             granularity: action.granularity,
             parentId: action.parentId === 'root' ? undefined : action.parentId,
             cursor: action.cursor,
-            limit: 100
+            limit: 100,
+            filters: app.getState().filters
           },
           {
             type: `tree:${action.parentId}`,
@@ -78,10 +82,29 @@ if (root) {
             type: 'searchEntities',
             requestId,
             analysisId: app.getState().analysisId ?? '',
-            query: action.query
+            query: action.query,
+            filters: app.getState().filters,
+            ...(app.getState().queryMetadata ? { limit: 20 } : {})
           },
           { query: action.query }
         );
+        return;
+      }
+      if (action.type === 'searchPageRequested') {
+        const state = app.getState();
+        if (state.queryMetadata && state.searchResults.nextCursor)
+          sendRequest(
+            {
+              type: 'searchEntities',
+              requestId: nextRequestId(),
+              analysisId: state.analysisId,
+              query: state.search,
+              filters: state.filters,
+              cursor: state.searchResults.nextCursor,
+              limit: 20
+            },
+            { query: state.search, appendSearch: true }
+          );
         return;
       }
 
@@ -212,7 +235,11 @@ if (root) {
     const treeKey = `tree:${analysisId}`;
     if (
       !state.tree.root &&
-      ![...requestContext.values()].some((context) => context.type === treeKey)
+      ![...requestContext.values()].some(
+        (context) =>
+          context.type === treeKey &&
+          (!state.queryMetadata || context.filtersKey === JSON.stringify(state.filters))
+      )
     ) {
       sendRequest(
         {
@@ -221,7 +248,8 @@ if (root) {
           analysisId,
           query: '',
           granularity: 'project',
-          limit: 100
+          limit: 100,
+          filters: state.filters
         },
         { type: treeKey, treeParentId: 'root' }
       );
@@ -260,7 +288,8 @@ if (root) {
         type: 'getEntityDetails',
         requestId: nextRequestId(),
         analysisId,
-        entityId
+        entityId,
+        ...(state.queryMetadata ? { filters: state.filters } : {})
       });
     }
 

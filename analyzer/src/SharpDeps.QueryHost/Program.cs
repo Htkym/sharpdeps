@@ -172,6 +172,9 @@ internal static class Program
             if (scope.TryGetProperty("kind", out var nodeKind) && nodeKind.ValueKind != JsonValueKind.Null
                 && !NamedEnum<HarnessNodeKind>(nodeKind))
                 throw new JsonException();
+            if (scope.TryGetProperty("resultKinds", out var resultKinds) && resultKinds.ValueKind != JsonValueKind.Null
+                && (resultKinds.ValueKind != JsonValueKind.Array || resultKinds.EnumerateArray().Any(v => !NamedEnum<QueryResultKind>(v))))
+                throw new JsonException();
         }
     }
 

@@ -1,6 +1,15 @@
 import japanese from './ja.json';
 
 const savedQueryJapanese: Record<string, string> = {
+  'Filtering is unavailable in this saved reader.':
+    'この保存結果では分類による絞り込みを利用できません。',
+  'Location unavailable': '場所が返却されていません',
+  'Source location unavailable': '移動できるソース位置がありません',
+  'Not returned': '返却されていません',
+  Location: '場所',
+  Reason: '理由',
+  unclassified: '未分類',
+  'More results': '続きを表示',
   'Update saved index': '保存済み索引を更新',
   'Retry update': '更新を再試行',
   'Cancel update': '更新要求を取り消す',

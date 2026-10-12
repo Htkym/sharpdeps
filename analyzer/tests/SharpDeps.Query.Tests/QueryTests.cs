@@ -14,6 +14,95 @@ public sealed class QueryTests
         MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
     [Fact]
+    public void ResultClassificationPrecedesPagingAndUsesSourceManifestKinds()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1);
+        var document = snapshot.Graph.Nodes.Single(n => n.Kind == HarnessNodeKind.Document);
+        var code = snapshot.Graph.Nodes.Single(n => n.Id == fixture.A);
+        var config = new HarnessLocation("config.props", "config-v1", StoreFixture.Hash("<Project />\n"), new(0, 1));
+        var added = new[] {
+            new HarnessNode("file-code", HarnessNodeKind.SourceFile, "result", null, code.Location),
+            new HarnessNode("file-docs", HarnessNodeKind.SourceFile, "result", null, document.Location),
+            new HarnessNode("file-config", HarnessNodeKind.SourceFile, "result", null, config),
+            new HarnessNode("mention-docs", HarnessNodeKind.SymbolMention, "result", document.Id, document.Location),
+            new HarnessNode(HarnessIdentity.ExternalSymbolId(fixture.Workspace, "External, Version=1.0.0.0", "type", "T:External"),
+                HarnessNodeKind.ExternalSymbol, "result", null, null) };
+        snapshot = snapshot with { Graph = snapshot.Graph with { Nodes = [.. snapshot.Graph.Nodes, .. added] } };
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        foreach (var kind in new[] { QueryKind.Search, QueryKind.Browse })
+        {
+            var request = FilterRequest(new("filtered", kind, Term: kind == QueryKind.Search ? "result" : null,
+                PageSize: 1, Budget: Generous), "Docs");
+            var ids = new List<string>();
+            string? cursor = null;
+            do
+            {
+                var page = query.Execute(request with { Cursor = cursor });
+                Assert.True(page.Succeeded);
+                var item = Assert.Single(page.Envelope.Items);
+                ids.Add(item.Id);
+                using var json = JsonDocument.Parse(page.Json);
+                Assert.Equal("Docs", json.RootElement.GetProperty("items")[0].GetProperty("resultKind").GetString());
+                Assert.Equal(1, json.RootElement.GetProperty("snapshot").GetProperty("resultFilterVersion").GetInt32());
+                cursor = page.Envelope.NextCursor;
+                if (cursor is not null)
+                    Error(query.Execute(FilterRequest(request with { Cursor = cursor }, "Code")), "CURSOR_FILTER_CHANGED");
+            } while (cursor is not null && ids.Count < 10);
+            Assert.Null(cursor);
+            var expected = kind == QueryKind.Search ? new[] { "file-docs", "mention-docs" }
+                : new[] { document.Id, fixture.SectionId, "file-docs", "mention-docs" };
+            Assert.Equal(expected.Order(StringComparer.Ordinal), ids.Order(StringComparer.Ordinal));
+        }
+        var other = query.Execute(FilterRequest(new("other", QueryKind.Search, Term: "result", Budget: Generous), "Other"));
+        Assert.Equal("file-config", Assert.Single(other.Envelope.Items).Id);
+        var internalCode = query.Execute(FilterRequest(new("internal", QueryKind.Search, Term: "result", Budget: Generous), "Code", false));
+        Assert.Equal("file-code", Assert.Single(internalCode.Envelope.Items).Id);
+    }
+
+    [Fact]
+    public void CodeOutputFilterTraversesHiddenDocumentMentionsWithoutInventingEdgesOrOccurrences()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1);
+        var document = snapshot.Graph.Nodes.Single(n => n.Kind == HarnessNodeKind.Document);
+        var mention = new HarnessNode("doc-mention", HarnessNodeKind.SymbolMention, "Service", document.Id, document.Location);
+        snapshot = snapshot with { Graph = snapshot.Graph with {
+            Nodes = [.. snapshot.Graph.Nodes, mention],
+            Edges = [.. snapshot.Graph.Edges,
+                new("doc-contains", document.Id, mention.Id, null, null, null, "contains", HarnessCertainty.Resolved, "document structure", document.Location),
+                new("doc-candidate", mention.Id, fixture.A, null, null, fixture.Variant, "references_symbol", HarnessCertainty.Candidate, "symbol mention", document.Location)] } };
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var result = fixture.Query(reader).Execute(FilterRequest(new("impact", QueryKind.Impact,
+            NodeId: document.Id, Scope: new(VariantIds: [fixture.Variant]), IncludeCandidates: true,
+            Dependents: false, Budget: Generous), "Code"));
+        Assert.True(result.Succeeded);
+        Assert.Empty(result.Envelope.Items);
+        Assert.Empty(result.Envelope.Unresolved);
+        var candidate = Assert.Single(result.Envelope.Candidates);
+        Assert.Equal(fixture.A, candidate.Id);
+        Assert.Null(candidate.Node!.Location);
+        Assert.Null(candidate.Occurrence);
+        Assert.Equal(new[] { "doc-contains", "doc-candidate" }, candidate.ViaEdgeIds);
+    }
+
+    // Construct through the wire so these exact regression bytes also compile
+    // against the pre-filter API when recording the expected baseline failure.
+    private static QueryRequest FilterRequest(QueryRequest request, string kind, bool includeExternal = true)
+    {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(request, QueryJson.Options))!;
+        json["scope"] ??= new System.Text.Json.Nodes.JsonObject();
+        json["scope"]!["resultKinds"] = new System.Text.Json.Nodes.JsonArray(kind);
+        json["scope"]!["includeExternal"] = includeExternal;
+        return json.Deserialize<QueryRequest>(QueryJson.Options)!;
+    }
+
+    [Fact]
     public void CursorPinsRealReaderGenerationAndRejectsChangedFiltersAndTampering()
     {
         using var fixture = new StoreFixture();

@@ -31,6 +31,8 @@ export interface Scope {
 }
 
 export interface Filters {
+  /** Saved Query display classification; independent of legacy code kinds. */
+  resultKinds?: ('code' | 'docs')[];
   kinds?: string[];
   projectKinds?: string[];
   relationKinds?: RelationKind[];
@@ -84,6 +86,11 @@ export interface EntitySummary {
   dependencyCount?: number;
   dependentCount?: number;
   certainty?: 'Resolved' | 'Candidate' | 'Unresolved';
+  /** Display-only snapshot attributes; source requests still carry only opaque IDs. */
+  path?: string;
+  reason?: string;
+  resultKind?: 'code' | 'docs' | 'other';
+  sourceLocationAvailable?: boolean;
 }
 
 /** Saved Query bounds describe the returned page, never a complete legacy report. */
@@ -102,6 +109,7 @@ export interface QueryResultMetadata {
   totalKind: 'returned';
   candidateCount: number;
   unresolvedCount: number;
+  resultFilterVersion?: number;
 }
 
 export interface ProjectionEdge {
@@ -205,7 +213,13 @@ export type WebviewToHostMessage =
       limit?: number;
       cursor?: string;
     }
-  | { type: 'getEntityDetails'; requestId: string; analysisId: string; entityId: string }
+  | {
+      type: 'getEntityDetails';
+      requestId: string;
+      analysisId: string;
+      entityId: string;
+      filters?: Filters;
+    }
   | {
       type: 'getEvidencePage';
       requestId: string;
@@ -449,7 +463,7 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   },
   getEntityDetails: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
-    optional: {}
+    optional: { filters: 'filters' }
   },
   getEvidencePage: {
     required: { requestId: 'requestId', analysisId: 'analysisId', relationId: 'relationId' },
@@ -748,6 +762,14 @@ function checkField(
     case 'filters': {
       if (typeof value !== 'object' || Array.isArray(value)) return fail('expected an object');
       const filters = value as Record<string, unknown>;
+      if (
+        filters.resultKinds !== undefined &&
+        (!Array.isArray(filters.resultKinds) ||
+          filters.resultKinds.length < 1 ||
+          filters.resultKinds.length > 2 ||
+          filters.resultKinds.some((item) => item !== 'code' && item !== 'docs'))
+      )
+        return fail('resultKinds must contain code and/or docs');
       for (const key of ['includeGenerated', 'includeExternal', 'includeTests'])
         if (filters[key] !== undefined && typeof filters[key] !== 'boolean')
           return fail(`${key} must be a boolean`);

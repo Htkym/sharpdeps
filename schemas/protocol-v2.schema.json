@@ -173,6 +173,9 @@
         },
         "entityId": {
           "$ref": "#/$defs/entityId"
+        },
+        "filters": {
+          "$ref": "#/$defs/filters"
         }
       }
     },
@@ -833,6 +836,15 @@
         },
         "includeTests": {
           "type": "boolean"
+        },
+        "resultKinds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "enum": ["code", "docs"]
+          },
+          "description": "Saved Query output classification, applied before pagination. Legacy classification filters remain separate."
         }
       }
     },
@@ -976,6 +988,20 @@
         },
         "certainty": {
           "enum": ["Resolved", "Candidate", "Unresolved"]
+        },
+        "path": {
+          "type": "string",
+          "description": "Display-only relative snapshot path. Never accepted by a source-opening request."
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resultKind": {
+          "enum": ["code", "docs", "other"]
+        },
+        "sourceLocationAvailable": {
+          "type": "boolean",
+          "description": "A valid saved source location is present; current source/trust checks still run on opening."
         }
       }
     },
@@ -1305,6 +1331,11 @@
         "unresolvedCount": {
           "type": "integer",
           "minimum": 0
+        },
+        "resultFilterVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional reader capability; result classification filtering requires version 1."
         }
       }
     }

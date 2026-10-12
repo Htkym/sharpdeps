@@ -94,7 +94,22 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     onMode: (mode) => dispatch({ type: 'modeChanged', mode }),
     onProfile: (profile) =>
       dispatch({ type: 'profileChanged', profile: { ...state.profile, ...profile } }),
-    onFilters: (filters) => dispatch({ type: 'filtersChanged', filters }),
+    onFilters: (filters) => {
+      const saved = !!state.queryMetadata;
+      dispatch({
+        type: 'filtersChanged',
+        filters: saved
+          ? {
+              ...(filters.resultKinds ? { resultKinds: filters.resultKinds } : {}),
+              includeExternal: filters.includeExternal !== false
+            }
+          : filters
+      });
+      if (saved) {
+        dispatch({ type: 'searchStarted', query: state.search });
+        options.onHostAction?.({ type: 'searchStarted', query: state.search });
+      }
+    },
     onBack: () => {
       dispatch({ type: 'historyBack' });
       if (state.camera) graphRuntime.view?.applyCamera(state.camera);
@@ -143,6 +158,12 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     if (detail?.entityId) {
       dispatch({ type: 'entitySelected', entityId: detail.entityId });
     }
+  });
+  elements.navPaneBody.addEventListener('sd-search-more', () => {
+    if (!state.queryMetadata || !state.searchResults.nextCursor || state.searchResults.pending)
+      return;
+    dispatch({ type: 'searchPageRequested' });
+    options.onHostAction?.({ type: 'searchPageRequested' });
   });
 
   elements.navPaneBody.addEventListener('sd-show-temporary', (event) => {
@@ -566,6 +587,18 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     item.hidden = !!state.queryMetadata && item.id !== 'sd-export-json';
   elements.imageTools.hidden = !!state.queryMetadata;
   const controls = elements.filterControls;
+  const saved = !!state.queryMetadata;
+  controls.resultKinds.parentElement!.hidden = !saved;
+  controls.resultKinds.disabled = state.queryMetadata?.resultFilterVersion !== 1;
+  controls.resultKinds.title = controls.resultKinds.disabled
+    ? tr('Filtering is unavailable in this saved reader.')
+    : '';
+  controls.resultKinds.value =
+    state.filters.resultKinds?.length === 1 ? state.filters.resultKinds[0] : 'all';
+  for (const control of [controls.tests, controls.generated]) control.parentElement!.hidden = saved;
+  for (const control of [controls.basis, controls.kinds, controls.projectKinds, controls.relations])
+    control.hidden = saved;
+  controls.external.disabled = saved && state.queryMetadata?.resultFilterVersion !== 1;
   controls.tests.checked = state.filters.includeTests !== false;
   controls.external.checked = state.filters.includeExternal !== false;
   controls.generated.checked = state.filters.includeGenerated !== false;
@@ -769,12 +802,13 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   }
 
   const list = document.createElement('ul');
-  for (const result of results.slice(0, 20)) {
+  for (const result of results.slice(0, metadata ? 500 : 20)) {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'sd-node-item';
-    button.textContent = metadata ? savedEntityLabel(result.entity) : result.entity.name;
+    if (metadata) renderSavedEntityLabel(button, result.entity, tr);
+    else button.textContent = result.entity.name;
     button.addEventListener('click', () =>
       elements.navPaneBody.dispatchEvent(
         new CustomEvent('sd-select', { detail: { entityId: result.entity.id }, bubbles: true })
@@ -805,6 +839,17 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   }
 
   block.append(list);
+  if (metadata && state.searchResults.nextCursor) {
+    const more = document.createElement('button');
+    more.className = 'sd-button';
+    more.type = 'button';
+    more.textContent = tr('More results');
+    more.disabled = state.searchResults.pending;
+    more.addEventListener('click', () =>
+      elements.navPaneBody.dispatchEvent(new CustomEvent('sd-search-more'))
+    );
+    block.append(more);
+  }
 
   if (state.temporaryDisplayIds.length > 0) {
     const reset = document.createElement('button');
@@ -1253,6 +1298,17 @@ function savedEntityLabel(entity: EntitySummary): string {
   return `[${entity.kind ?? 'unknown'} · ${entity.certainty ?? 'unknown'}] ${entity.name}`;
 }
 
+function renderSavedEntityLabel(button: HTMLElement, entity: EntitySummary, tr: Translator): void {
+  button.textContent = savedEntityLabel(entity);
+  const location = document.createElement('span');
+  location.className = 'sd-node-meta';
+  location.textContent = `${entity.resultKind ?? tr('unclassified')} · ${entity.path ?? tr('Location unavailable')}`;
+  const reason = document.createElement('span');
+  reason.className = 'sd-node-meta';
+  reason.textContent = `${tr('Reason')}: ${entity.reason ?? tr('Not returned')}`;
+  button.append(location, reason);
+}
+
 function renderQueryMetadata(
   container: HTMLElement,
   metadata: QueryResultMetadata,
@@ -1462,6 +1518,12 @@ function renderSavedQueryInspector(
       )
     );
     if (!details) body.append(message(tr('Loading details...'), 'sd-note'));
+    if (entity) {
+      body.append(
+        message(`${tr('Location')}: ${entity.path ?? tr('Location unavailable')}`, 'sd-note')
+      );
+      body.append(message(`${tr('Reason')}: ${entity.reason ?? tr('Not returned')}`, 'sd-note'));
+    }
     if (entity && ['Type', 'Member', 'Document', 'Section'].includes(entity.kind ?? '')) {
       const open = document.createElement('button');
       open.type = 'button';
@@ -1471,6 +1533,11 @@ function renderSavedQueryInspector(
           ? 'Open document'
           : 'Open declaration'
       );
+      open.disabled = entity.sourceLocationAvailable === false;
+      if (open.disabled) {
+        open.title = tr('Source location unavailable');
+        body.append(message(tr('Source location unavailable'), 'sd-note'));
+      }
       open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
       body.append(open);
     }
@@ -1485,7 +1552,7 @@ function renderSavedQueryInspector(
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'sd-node-item';
-        button.textContent = savedEntityLabel(entry);
+        renderSavedEntityLabel(button, entry, tr);
         button.disabled = entry.certainty !== 'Resolved';
         if (button.disabled)
           button.title = tr(

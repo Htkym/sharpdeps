@@ -10,6 +10,45 @@ import {
 } from '../../media/app/serializer';
 
 describe('view state serialization', () => {
+  it('restores only finite saved result groups and keeps display metadata out of persisted state', () => {
+    const state = {
+      ...INITIAL_STATE,
+      filters: { resultKinds: ['docs' as const], includeExternal: false },
+      searchResults: {
+        query: '調査',
+        total: 1,
+        pending: false,
+        items: [
+          {
+            id: 'ty_1111111111111111',
+            name: '調査',
+            granularity: 'type' as const,
+            path: 'SECRET_PATH',
+            reason: 'SECRET_REASON',
+            resultKind: 'docs' as const,
+            sourceLocationAvailable: false
+          }
+        ]
+      }
+    };
+    const serialized = serializeViewState(state);
+    expect(restoreViewState(serialized).state.filters).toEqual({
+      resultKinds: ['docs'],
+      includeExternal: false
+    });
+    expect(JSON.stringify(serialized)).not.toContain('SECRET_');
+    expect(
+      deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        filters: { resultKinds: ['docs', 'Document'], includeExternal: false }
+      }).state.filters
+    ).toEqual({ resultKinds: ['docs'], includeExternal: false });
+    expect(
+      deserializeViewState({ version: VIEW_STATE_VERSION, filters: { resultKinds: ['Other'] } })
+        .state.filters
+    ).toEqual({});
+  });
+
   it('round-trips the small state and the camera', () => {
     const state = {
       ...INITIAL_STATE,

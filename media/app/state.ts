@@ -121,6 +121,7 @@ export interface ViewState {
     items: EntitySummary[];
     total: number;
     pending: boolean;
+    nextCursor?: string | null;
     queryMetadata?: QueryResultMetadata;
   };
   tree: Record<
@@ -243,6 +244,8 @@ export type ViewAction =
   | { type: 'scopeChanged'; scope: Scope; granularity?: Granularity }
   | { type: 'searchChanged'; search: string }
   | { type: 'searchStarted'; query: string }
+  | { type: 'searchPageRequested' }
+  | { type: 'searchFailed'; query: string }
   | { type: 'treeRequested'; parentId: string; granularity: Granularity; cursor?: string }
   | {
       type: 'treeReceived';
@@ -258,6 +261,8 @@ export type ViewAction =
       query: string;
       items: EntitySummary[];
       total: number;
+      nextCursor?: string | null;
+      append?: boolean;
       queryMetadata?: QueryResultMetadata;
     }
   | { type: 'searchCleared' }
@@ -620,28 +625,91 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         ...state,
         search: action.search,
         tablePage: 0,
-        searchResults: { ...state.searchResults, query: action.search, pending: true }
+        searchResults: {
+          ...state.searchResults,
+          query: action.search,
+          pending: true,
+          nextCursor: undefined,
+          queryMetadata: undefined
+        }
       };
 
     case 'searchStarted':
       return {
         ...state,
-        searchResults: { ...state.searchResults, query: action.query, pending: true }
+        searchResults: {
+          ...state.searchResults,
+          query: action.query,
+          pending: true,
+          nextCursor: undefined,
+          queryMetadata: undefined
+        }
       };
 
-    case 'searchResultsReceived':
+    case 'searchPageRequested':
+      return state.searchResults.nextCursor && !state.searchResults.pending
+        ? { ...state, searchResults: { ...state.searchResults, pending: true } }
+        : state;
+
+    case 'searchFailed':
+      return action.query === state.search && state.searchResults.pending
+        ? { ...state, searchResults: { ...state.searchResults, pending: false } }
+        : state;
+
+    case 'searchResultsReceived': {
       if (action.query !== state.search) return state;
+      const allItems = action.append
+        ? [
+            ...new Map(
+              [...state.searchResults.items, ...action.items].map((item) => [item.id, item])
+            ).values()
+          ]
+        : action.items;
+      const capped = !!action.queryMetadata && allItems.length > 500;
+      const items = capped ? allItems.slice(0, 500) : allItems;
+      let metadata = action.queryMetadata;
+      if (metadata && action.append && state.searchResults.queryMetadata) {
+        const old = state.searchResults.queryMetadata;
+        const reasons = [
+          ...new Set([
+            ...old.truncationReasons.filter((reason) => reason !== 'PAGE_LIMIT'),
+            ...metadata.truncationReasons
+          ])
+        ];
+        metadata = {
+          ...metadata,
+          returnedCount: items.length,
+          candidateCount: old.candidateCount + metadata.candidateCount,
+          unresolvedCount: old.unresolvedCount + metadata.unresolvedCount,
+          truncated:
+            metadata.truncated ||
+            reasons.length > 0 ||
+            (old.truncated && !old.truncationReasons.length),
+          truncationReasons: reasons
+        };
+      }
+      if (metadata && capped)
+        metadata = {
+          ...metadata,
+          returnedCount: items.length,
+          truncated: true,
+          truncationReasons: [...new Set([...metadata.truncationReasons, 'DISPLAY_SEARCH_LIMIT'])]
+        };
       return {
         ...state,
         searchResults: {
           query: action.query,
-          items: action.items,
-          total: action.total,
+          items,
+          total: action.queryMetadata ? items.length : action.total,
           pending: false,
-          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
+          ...(action.nextCursor !== undefined
+            ? { nextCursor: capped ? null : action.nextCursor }
+            : {}),
+          ...(metadata ? { queryMetadata: metadata } : {})
         },
         queryMetadata: action.queryMetadata ?? state.queryMetadata
       };
+    }
 
     case 'searchCleared':
       return {
@@ -667,7 +735,23 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return state.temporaryDisplayIds.length === 0 ? state : { ...state, temporaryDisplayIds: [] };
 
     case 'filtersChanged':
-      return { ...state, filters: action.filters, tablePage: 0 };
+      return {
+        ...state,
+        filters: action.filters,
+        tablePage: 0,
+        ...(state.queryMetadata
+          ? {
+              tree: {},
+              projection: null,
+              projectionRequestId: undefined,
+              selection: {},
+              details: null,
+              evidence: null,
+              temporaryDisplayIds: [],
+              searchResults: INITIAL_STATE.searchResults
+            }
+          : {})
+      };
 
     case 'entitySelected':
       // Selecting something opens the details pane right away; the content arrives with

@@ -91,6 +91,98 @@ function withProjection(state: ViewState = INITIAL_STATE): ViewState {
 }
 
 describe('viewReducer status transitions', () => {
+  it('accumulates saved search pages without losing non-page limits, then invalidates filtered display data', () => {
+    const first = {
+      id: 'ty_1111111111111111',
+      name: '調査',
+      kind: 'Document',
+      granularity: 'type' as const,
+      certainty: 'Resolved' as const
+    };
+    const second = {
+      id: 'ty_2222222222222222',
+      name: 'Compute',
+      kind: 'SymbolMention',
+      granularity: 'type' as const,
+      certainty: 'Candidate' as const
+    };
+    let state: ViewState = {
+      ...INITIAL_STATE,
+      analysisId: 'an_0123456789abcdef',
+      search: '調査',
+      queryMetadata: savedMetadata
+    };
+    state = viewReducer(state, {
+      type: 'searchResultsReceived',
+      query: '調査',
+      items: [first],
+      total: 1,
+      nextCursor: 'cur_1111111111111111',
+      queryMetadata: {
+        ...savedMetadata,
+        returnedCount: 1,
+        candidateCount: 0,
+        truncationReasons: ['PAGE_LIMIT', 'DEPTH_LIMIT']
+      }
+    });
+    state = viewReducer(state, { type: 'searchPageRequested' });
+    expect(state.searchResults).toMatchObject({
+      pending: true,
+      nextCursor: 'cur_1111111111111111',
+      items: [first]
+    });
+    state = viewReducer(state, {
+      type: 'searchResultsReceived',
+      query: '調査',
+      items: [first, second],
+      total: 2,
+      append: true,
+      nextCursor: null,
+      queryMetadata: {
+        ...savedMetadata,
+        returnedCount: 2,
+        candidateCount: 1,
+        truncated: false,
+        truncationReasons: []
+      }
+    });
+    expect(state.searchResults).toMatchObject({
+      items: [first, second],
+      total: 2,
+      pending: false,
+      nextCursor: null,
+      queryMetadata: {
+        returnedCount: 2,
+        candidateCount: 1,
+        truncated: true,
+        truncationReasons: ['DEPTH_LIMIT']
+      }
+    });
+    state = {
+      ...state,
+      projection: projection(),
+      projectionRequestId: 'req_1111111111111111',
+      selection: { entityId: first.id },
+      temporaryDisplayIds: [first.id],
+      tree: { root: { items: [first], total: 1 } }
+    };
+    state = viewReducer(state, {
+      type: 'filtersChanged',
+      filters: { resultKinds: ['code'], includeExternal: false }
+    });
+    expect(state).toMatchObject({
+      filters: { resultKinds: ['code'], includeExternal: false },
+      tree: {},
+      projection: null,
+      selection: {},
+      details: null,
+      evidence: null,
+      temporaryDisplayIds: [],
+      searchResults: INITIAL_STATE.searchResults
+    });
+    expect(state.projectionRequestId).toBeUndefined();
+  });
+
   it('shows a saved display subset separately from complete engine coverage and returned totals', () => {
     let state = viewReducer(INITIAL_STATE, {
       type: 'analysisComplete',

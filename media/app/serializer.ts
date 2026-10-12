@@ -240,6 +240,10 @@ export function deserializeCamera(
 
 function sanitizeFilters(filters: Record<string, unknown>): Filters {
   const sanitized: Filters = {};
+  const resultKinds = stringArray(filters.resultKinds, 2)?.filter(
+    (kind): kind is 'code' | 'docs' => kind === 'code' || kind === 'docs'
+  );
+  if (resultKinds?.length) sanitized.resultKinds = [...new Set(resultKinds)];
   const kinds = stringArray(filters.kinds, 50);
   if (kinds) {
     sanitized.kinds = kinds;

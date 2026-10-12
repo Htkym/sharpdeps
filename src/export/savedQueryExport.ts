@@ -5,7 +5,7 @@ import {
   type QueryWireReply
 } from '../analyzer/queryClient';
 import type { Granularity } from '../analyzer/reportV2';
-import type { Scope, WebviewToHostMessage } from '../view/protocolV2';
+import type { Filters, Scope, WebviewToHostMessage } from '../view/protocolV2';
 
 export type SavedExportRequest = Extract<WebviewToHostMessage, { type: 'copyContext' | 'export' }>;
 export interface PreparedSavedExport {
@@ -51,6 +51,7 @@ export interface SavedQueryExport {
   selectedVariantId: string;
   /** IDs are original saved IDs, never the webview's session-local aliases. */
   scope: Scope;
+  filters?: Pick<Filters, 'resultKinds' | 'includeExternal'>;
   includedNodeIds: string[];
   display: {
     granularity: Granularity;
@@ -82,6 +83,7 @@ export interface SavedQueryExportInput {
   pinned: QuerySnapshot;
   selectedVariantId: string;
   scope: Scope;
+  filters?: Pick<Filters, 'resultKinds' | 'includeExternal'>;
   includedNodeIds: string[];
   display: SavedQueryExport['display'];
   responses: { operation: QueryOperation; reply: QueryWireReply }[];
@@ -128,6 +130,16 @@ export function buildSavedQueryExport(input: SavedQueryExportInput): SavedQueryE
     snapshot: copySnapshot(input.pinned),
     selectedVariantId: input.selectedVariantId,
     scope: { kind: input.scope.kind, id: input.scope.id, depth: input.scope.depth },
+    ...(input.filters
+      ? {
+          filters: {
+            ...(input.filters.resultKinds ? { resultKinds: [...input.filters.resultKinds] } : {}),
+            ...(input.filters.includeExternal !== undefined
+              ? { includeExternal: input.filters.includeExternal }
+              : {})
+          }
+        }
+      : {}),
     includedNodeIds: [...input.includedNodeIds],
     display: {
       granularity: input.display.granularity,
@@ -163,7 +175,10 @@ function copySnapshot(value: QuerySnapshot): QuerySnapshot {
     variantIds: [...value.variantIds],
     variantCount: value.variantCount,
     coverage: value.coverage,
-    freshness: value.freshness
+    freshness: value.freshness,
+    ...(value.resultFilterVersion !== undefined
+      ? { resultFilterVersion: value.resultFilterVersion }
+      : {})
   };
 }
 

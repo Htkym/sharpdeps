@@ -562,6 +562,7 @@ body.vscode-high-contrast-light {
 }
 
 .sd-node-item {
+  overflow-wrap: anywhere;
   color: inherit;
   background: none;
   border: none;
@@ -569,6 +570,13 @@ body.vscode-high-contrast-light {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.sd-node-meta {
+  display: block;
+  font-size: 0.85em;
+  font-weight: normal;
+  opacity: 0.85;
 }
 
 .sd-node-item:hover {

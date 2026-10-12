@@ -24,8 +24,10 @@ export interface RequestContext {
   query?: string;
   /** True when the request asked for the next evidence page. */
   appendEvidence?: boolean;
+  appendSearch?: boolean;
   analysisId?: string;
   type?: string;
+  filtersKey?: string;
 }
 
 export function toViewActions(
@@ -36,6 +38,8 @@ export function toViewActions(
   if (!isRecord(message) || typeof message.type !== 'string') {
     return [];
   }
+  const context =
+    typeof message.requestId === 'string' ? requestContext.get(message.requestId) : undefined;
   const metadataValue =
     message.type === 'projection' && isRecord(message.projection)
       ? message.projection.queryMetadata
@@ -44,6 +48,13 @@ export function toViewActions(
   // A malformed saved result must not silently acquire the legacy display semantics.
   if (metadataValue !== undefined && !queryMetadata) return [];
   if (currentState) {
+    if (
+      currentState.queryMetadata &&
+      ['projection', 'searchResults', 'details', 'error'].includes(message.type) &&
+      context?.filtersKey !== undefined &&
+      context.filtersKey !== JSON.stringify(currentState.filters)
+    )
+      return [];
     if (
       message.type === 'error' &&
       message.analysisId !== undefined &&
@@ -310,6 +321,10 @@ export function toViewActions(
           query,
           total: numberOrUndefined(message.total) ?? 0,
           items: readEntities(message.items),
+          ...('nextCursor' in message
+            ? { nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : null }
+            : {}),
+          ...(context?.appendSearch ? { append: true } : {}),
           ...(queryMetadata ? { queryMetadata } : {})
         }
       ];
@@ -317,6 +332,12 @@ export function toViewActions(
 
     case 'error':
       return [
+        ...(currentState &&
+        context?.type === 'searchEntities' &&
+        context.analysisId === currentState.analysisId &&
+        context.query === currentState.search
+          ? [{ type: 'searchFailed' as const, query: context.query }]
+          : []),
         {
           type: 'errorRaised',
           code: typeof message.code === 'string' ? message.code : 'host.error',
@@ -583,6 +604,18 @@ function readEntities(value: unknown): EntitySummary[] {
           : 'type',
       kind: typeof entity.kind === 'string' ? entity.kind : undefined,
       certainty: readCertainty(entity.certainty),
+      path: typeof entity.path === 'string' ? entity.path : undefined,
+      reason: typeof entity.reason === 'string' ? entity.reason : undefined,
+      resultKind:
+        entity.resultKind === 'code' ||
+        entity.resultKind === 'docs' ||
+        entity.resultKind === 'other'
+          ? entity.resultKind
+          : undefined,
+      sourceLocationAvailable:
+        typeof entity.sourceLocationAvailable === 'boolean'
+          ? entity.sourceLocationAvailable
+          : undefined,
       projectName: typeof entity.projectName === 'string' ? entity.projectName : undefined,
       inCycle: entity.inCycle === true,
       isExternal: entity.isExternal === true,
@@ -659,6 +692,8 @@ function readQueryMetadata(value: unknown): QueryResultMetadata | undefined {
     !count(value.returnedCount) ||
     !count(value.candidateCount) ||
     !count(value.unresolvedCount) ||
+    (value.resultFilterVersion !== undefined &&
+      (!count(value.resultFilterVersion) || value.resultFilterVersion < 1)) ||
     !Array.isArray(value.diagnostics) ||
     value.diagnostics.length > 64 ||
     !value.diagnostics.every((item) => isRecord(item) && text(item.code, 128) && text(item.message))
@@ -681,7 +716,10 @@ function readQueryMetadata(value: unknown): QueryResultMetadata | undefined {
     returnedCount: value.returnedCount,
     totalKind: 'returned',
     candidateCount: value.candidateCount,
-    unresolvedCount: value.unresolvedCount
+    unresolvedCount: value.unresolvedCount,
+    ...(value.resultFilterVersion !== undefined
+      ? { resultFilterVersion: value.resultFilterVersion }
+      : {})
   };
 }
 

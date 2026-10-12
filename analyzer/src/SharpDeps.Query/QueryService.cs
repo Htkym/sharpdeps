@@ -44,7 +44,8 @@ public sealed class QueryService
         Validate(request);
         // Clone input collections as well: cursor filters and selection use the same immutable request.
         request = request with { Budget = request.Budget ?? new QueryBudget(), Scope = request.Scope is null ? null :
-            request.Scope with { VariantIds = request.Scope.VariantIds?.ToArray() }, Ids = request.Ids?.ToArray(),
+            request.Scope with { VariantIds = request.Scope.VariantIds?.ToArray(),
+                ResultKinds = request.Scope.ResultKinds?.Distinct().Order().ToArray() }, Ids = request.Ids?.ToArray(),
             EdgeKinds = request.EdgeKinds?.ToArray() };
         ValidateMinimumBudget(request);
         var work = new Work(request, cancellationToken);
@@ -81,6 +82,9 @@ public sealed class QueryService
                 {
                     Select(work, request.Kind == QueryKind.Browse ? offset : 0);
                     work.Check();
+                    // Classification is an output filter, not an adjacency barrier. Hidden
+                    // document/mention structure still participates in bounded traversal.
+                    work.Items.RemoveAll(item => !ResultAllowed(item, request.Scope));
                     if (request.Kind != QueryKind.Browse && offset > work.Items.Count) work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
                     else
                     {
@@ -139,7 +143,8 @@ public sealed class QueryService
             foreach (var node in saved.Graph.Nodes.OrderBy(n => n.Id, StringComparer.Ordinal))
             {
                 work.Check();
-                if (!BrowseInScope(node, work) || (!request.IncludeDocuments && IsDocument(node.Kind))) continue;
+                if (!BrowseInScope(node, work) || !ResultAllowed(node, request.Scope)
+                    || (!request.IncludeDocuments && IsDocument(node.Kind))) continue;
                 if (matched++ < browseOffset) continue;
                 if (work.Items.Count == request.PageSize || !work.Add(NodeItem(node, "browse", [], request.Scope)))
                 { work.BrowseHasMore = true; return; }
@@ -225,7 +230,7 @@ public sealed class QueryService
         foreach (var node in saved.Graph.Nodes)
         {
             work.Check();
-            if (!InScope(node, work.Request.Scope)) continue;
+            if (!InScope(node, work.Request.Scope) || !ResultAllowed(node, work.Request.Scope)) continue;
             var exactPath = LocationsFor(node, work.Request.Scope).Any(l => LocationInScope(l, work.Request.Scope) && PathOf(l) == term);
             var exactId = node.Id == term;
             var exactName = node.Name.Equals(term, StringComparison.Ordinal) || node.Signature == term;
@@ -409,6 +414,31 @@ public sealed class QueryService
         => variant is null || scope?.VariantIds is null || scope.VariantIds.Contains(variant);
     private static bool IsDocument(HarnessNodeKind kind) => kind is HarnessNodeKind.Document or HarnessNodeKind.Section
         or HarnessNodeKind.FrontMatter or HarnessNodeKind.CodeFence or HarnessNodeKind.LinkTarget or HarnessNodeKind.SymbolMention;
+    private QueryResultKind ResultKind(HarnessNode node)
+    {
+        if (IsDocument(node.Kind)) return QueryResultKind.Docs;
+        if (node.Kind == HarnessNodeKind.SourceFile)
+            return files.GetValueOrDefault(node.Location?.SourceId ?? "")?.Kind switch
+            {
+                "markdown" => QueryResultKind.Docs,
+                "source" or "code" => QueryResultKind.Code,
+                _ => QueryResultKind.Other
+            };
+        return node.Kind is HarnessNodeKind.Project or HarnessNodeKind.Namespace or HarnessNodeKind.Type
+            or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol ? QueryResultKind.Code : QueryResultKind.Other;
+    }
+    private bool ResultAllowed(HarnessNode node, QueryScope? scope)
+        => (scope?.IncludeExternal != false || node.Kind != HarnessNodeKind.ExternalSymbol)
+            && (scope?.ResultKinds is null || scope.ResultKinds.Contains(ResultKind(node)));
+    private bool ResultAllowed(QueryItem item, QueryScope? scope)
+    {
+        if (item.Node is { } node) return ResultAllowed(node, scope);
+        if (item.Occurrence is { } occurrence) return ResultAllowed(nodes[occurrence.LogicalSymbolId], scope);
+        // Never emit an edge with an endpoint excluded by this display condition.
+        if (item.Edge is { } edge) return ResultAllowed(nodes[edge.SourceNodeId], scope)
+            && ResultAllowed(nodes[edge.TargetNodeId], scope);
+        return true;
+    }
     private string? PathOf(HarnessLocation? location) => location is null ? null : files.GetValueOrDefault(location.SourceId)?.RelativePath;
     private bool LocationInScope(HarnessLocation? location, QueryScope? scope)
     {
@@ -501,6 +531,8 @@ public sealed class QueryService
 
     private QueryReply Finish(Work work, QuerySnapshot snapshot, List<QueryItem> page, int offset, string filter, bool hasMore, bool errorOnly = false)
     {
+        page = page.Select(item => item with { ResultKind = item.Node is { } node ? ResultKind(node)
+            : item.Occurrence is { } occurrence ? ResultKind(nodes[occurrence.LogicalSymbolId]) : null }).ToList();
         if (snapshot.VariantCount > snapshot.VariantIds.Count) work.Reasons.Add("VARIANT_METADATA_LIMIT");
         if (snapshot.DirtyPathCount > snapshot.DirtyPaths.Count || snapshot.UnverifiedCount > snapshot.Unverified.Count)
             work.Reasons.Add("FRESHNESS_METADATA_LIMIT");
@@ -578,6 +610,7 @@ public sealed class QueryService
             || (r.Scope?.Kind is { } kind && !Enum.IsDefined(kind))
             || (r.Ids is { } ids && (ids.Count > 64 || ids.Any(s => !Short(s, 128) || string.IsNullOrWhiteSpace(s))))
             || (r.Scope?.VariantIds is { } variants && (variants.Count is < 1 or > 64 || variants.Any(s => !Short(s, 128))))
+            || (r.Scope?.ResultKinds is { } resultKinds && (resultKinds.Count is < 1 or > 3 || resultKinds.Any(k => !Enum.IsDefined(k))))
             || (r.EdgeKinds is { } edges && (edges.Count is < 1 or > 32 || edges.Any(s => !Short(s, 64))))
             || (r.Kind == QueryKind.Browse && (r.Term is not null || r.NodeId is not null || r.Ids is not null || r.EdgeKinds is not null))
             || (r.Kind == QueryKind.Search && string.IsNullOrWhiteSpace(r.Term))

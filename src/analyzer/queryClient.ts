@@ -33,6 +33,8 @@ export interface QueryItem {
   label: string;
   certainty: QueryCertainty;
   path?: string;
+  reason?: string;
+  resultKind?: 'Code' | 'Docs' | 'Other';
   node?: QueryNode;
   edge?: QueryEdge;
   evidence?: QueryLocation;
@@ -45,6 +47,7 @@ export interface QuerySnapshot {
   variantCount: number;
   coverage: 'CompleteWithinScope' | 'Partial' | 'Failed';
   freshness: string;
+  resultFilterVersion?: number;
 }
 export interface QueryWireReply {
   apiVersion: '1';
@@ -249,6 +252,9 @@ function validateReply(value: Record<string, unknown>): QueryWireReply {
     !isText(snapshot.id) ||
     !Number.isSafeInteger(snapshot.generation) ||
     (snapshot.generation as number) < 0 ||
+    (snapshot.resultFilterVersion !== undefined &&
+      (!Number.isSafeInteger(snapshot.resultFilterVersion) ||
+        (snapshot.resultFilterVersion as number) < 1)) ||
     !Number.isSafeInteger(snapshot.variantCount) ||
     !Array.isArray(snapshot.variantIds) ||
     snapshot.variantIds.length > 64 ||
@@ -281,6 +287,9 @@ function validateReply(value: Record<string, unknown>): QueryWireReply {
       typeof item.kind !== 'string' ||
       !['Resolved', 'Candidate', 'Unresolved'].includes(String(item.certainty)) ||
       !optionalText(item.path) ||
+      !optionalText(item.reason) ||
+      (item.resultKind !== undefined &&
+        !['Code', 'Docs', 'Other'].includes(String(item.resultKind))) ||
       !location(item.evidence) ||
       (item.node !== undefined &&
         (!isRecord(item.node) ||

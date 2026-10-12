@@ -18,6 +18,7 @@ kindは`sharpdeps.saved-query-export`、versionは`1`。TypeScript定義は`src/
 | snapshot | workspaceId、id（saved snapshot ID）、generation、variantIds/variantCount、coverage、freshnessをpinned headerのまま保持 |
 | selectedVariantId | 明示選択済みの単一variant。variantIdsは選択scopeであり全variant inventoryとは称さない |
 | scope | projectionの要求scope。idはopaque aliasから解決した元saved ID。要求depthは範囲の完全性を証明しない |
+| filters | 任意のresultKinds/code/docsとincludeExternal。主Query・追加Symbol・表示・export準備の同じ条件を保持 |
 | includedNodeIds | 明示表示要求を元saved node IDへ解決したもの |
 | display | granularity、実表示node/edgeの元ID、local node表示制限のtruncated |
 | observedInputChange | host watcherが観測した変更理由。snapshot freshnessを更新した証拠ではない |

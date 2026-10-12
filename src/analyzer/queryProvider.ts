@@ -219,7 +219,7 @@ export class SavedQueryProvider implements ReportBridge {
     const checked = validateWebviewMessage(message);
     if (!checked.ok)
       return { type: 'error', code: 'protocol.invalidMessage', message: checked.errors.join('; ') };
-    const request = checked.value;
+    const request = structuredClone(checked.value);
     const requestId = 'requestId' in request ? request.requestId : undefined;
     try {
       if (this.disposed) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
@@ -279,6 +279,22 @@ export class SavedQueryProvider implements ReportBridge {
       },
       ...fields
     });
+    const requestedScope = fields.scope as
+      { resultKinds?: string[]; includeExternal?: boolean } | undefined;
+    if (requestedScope?.resultKinds || requestedScope?.includeExternal === false) {
+      if (reply.snapshot.resultFilterVersion !== 1)
+        throw new QueryClientError('QUERY_FILTER_UNSUPPORTED');
+      if (
+        [...reply.items, ...reply.candidates, ...reply.unresolved].some(
+          (item) =>
+            item.node &&
+            ((requestedScope.resultKinds &&
+              (!item.resultKind || !requestedScope.resultKinds.includes(item.resultKind))) ||
+              (requestedScope.includeExternal === false && item.node.kind === 'ExternalSymbol'))
+        )
+      )
+        throw new QueryClientError('QUERY_FILTER_RESULT_INVALID');
+    }
     if (this.disposed) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
     if (
       reply.snapshot.workspaceId !== this.readyReply.snapshot.workspaceId ||
@@ -346,7 +362,18 @@ export class SavedQueryProvider implements ReportBridge {
       granularity,
       kind: entry.node.kind,
       certainty: certainty ?? entry.item.certainty,
-      isExternal: entry.node.kind === 'ExternalSymbol'
+      isExternal: entry.node.kind === 'ExternalSymbol',
+      path: entry.item.path,
+      reason: entry.item.reason,
+      resultKind:
+        entry.item.resultKind === 'Code'
+          ? 'code'
+          : entry.item.resultKind === 'Docs'
+            ? 'docs'
+            : entry.item.resultKind === 'Other'
+              ? 'other'
+              : undefined,
+      sourceLocationAvailable: Boolean(source)
     };
   }
 
@@ -356,9 +383,27 @@ export class SavedQueryProvider implements ReportBridge {
     return id;
   }
 
-  private scope(granularity?: Granularity, parentId?: string): Record<string, unknown> {
-    const scope: Record<string, unknown> = { variantIds: [this.variant] };
-    if (granularity)
+  private resultScope(filters?: Filters): Record<string, unknown> {
+    return {
+      variantIds: [this.variant],
+      ...(filters?.resultKinds?.length
+        ? {
+            resultKinds: [...new Set(filters.resultKinds)]
+              .sort()
+              .map((kind) => (kind === 'code' ? 'Code' : 'Docs'))
+          }
+        : {}),
+      ...(filters?.includeExternal === false ? { includeExternal: false } : {})
+    };
+  }
+
+  private scope(
+    granularity?: Granularity,
+    parentId?: string,
+    filters?: Filters
+  ): Record<string, unknown> {
+    const scope = this.resultScope(filters);
+    if (granularity && !(granularity === 'type' && filters?.resultKinds?.length))
       scope.kind =
         granularity === 'project' ? 'Project' : granularity === 'namespace' ? 'Namespace' : 'Type';
     if (parentId) {
@@ -370,6 +415,11 @@ export class SavedQueryProvider implements ReportBridge {
   }
 
   private filters(filters?: Filters): void {
+    if (
+      (filters?.resultKinds?.length || filters?.includeExternal === false) &&
+      this.readyReply.snapshot.resultFilterVersion !== 1
+    )
+      throw new QueryClientError('QUERY_FILTER_UNSUPPORTED');
     // These are report-v2 classifications; the Harness contract cannot prove them.
     if (
       filters?.kinds?.length ||
@@ -417,7 +467,8 @@ export class SavedQueryProvider implements ReportBridge {
       ...(request.query.trim() ? { term: request.query } : {}),
       scope: this.scope(
         request.query.trim() && request.granularity === 'type' ? undefined : request.granularity,
-        request.parentId
+        request.parentId,
+        request.filters
       ),
       pageSize: Math.min(500, request.limit ?? 100),
       ...(prior ? { cursor: prior.cursor } : {})
@@ -468,6 +519,7 @@ export class SavedQueryProvider implements ReportBridge {
       walking
         ? {
             nodeId: origin,
+            scope: this.resultScope(request.filters),
             dependents: scope.kind === 'dependents',
             includeCandidates: true,
             includeDocuments: true,
@@ -485,7 +537,8 @@ export class SavedQueryProvider implements ReportBridge {
               request.search?.trim() && request.granularity === 'type'
                 ? undefined
                 : request.granularity,
-              scope.id ?? undefined
+              scope.id ?? undefined,
+              request.filters
             ),
             ...(request.search?.trim() ? { term: request.search } : {})
           }
@@ -498,7 +551,10 @@ export class SavedQueryProvider implements ReportBridge {
     const replies = [reply];
     // Explicitly revealed search hits stay visible, with their real kind and certainty.
     if (request.includeIds?.length) {
-      const extra = await this.execute('Symbol', { ids: included });
+      const extra = await this.execute('Symbol', {
+        ids: included,
+        scope: this.resultScope(request.filters)
+      });
       replies.push(extra);
       const combined = new Map(nodes.map((node) => [node.id, node]));
       for (const entity of this.entities(extra)) {
@@ -578,6 +634,7 @@ export class SavedQueryProvider implements ReportBridge {
         pinned: this.readyReply.snapshot,
         selectedVariantId: this.variant,
         scope: { ...scope, id: origin ?? null },
+        filters: request.filters,
         includedNodeIds: included ?? [],
         display: {
           granularity: request.granularity,
@@ -603,18 +660,23 @@ export class SavedQueryProvider implements ReportBridge {
   private async details(
     request: Extract<WebviewToHostMessage, { type: 'getEntityDetails' }>
   ): Promise<HostToWebviewMessage> {
+    this.filters(request.filters);
     const nodeId = this.selected(request.entityId);
     const selected = this.nodes.get(nodeId)!;
-    const symbol = await this.execute('Symbol', { nodeId });
+    const scope = this.resultScope(request.filters);
+    const symbol = await this.execute('Symbol', { nodeId, scope });
     const entity = this.entities(symbol).find((item) => item.id === request.entityId);
     if (!entity) throw new QueryClientError('QUERY_ENTITY_NOT_RETURNED');
     if (selected.item.certainty !== 'Resolved') {
       this.nodes.set(nodeId, selected);
+      // Symbol may provide a resolved declaration that the original candidate did
+      // not have. Do not invent its occurrence/source capability for that leaf.
+      const candidate = this.entity(nodeId, selected.item.certainty);
       return {
         type: 'details',
         requestId: request.requestId,
         analysisId: this.analysisId,
-        entity: { ...entity, certainty: selected.item.certainty },
+        entity: { ...candidate },
         dependencies: [],
         dependents: [],
         queryMetadata: this.metadata(symbol, 1)
@@ -627,6 +689,7 @@ export class SavedQueryProvider implements ReportBridge {
       'Impact',
       {
         nodeId,
+        scope,
         dependents: false,
         includeCandidates: true,
         ...(isDocument ? { includeDocuments: true } : {})
@@ -635,6 +698,7 @@ export class SavedQueryProvider implements ReportBridge {
     );
     const incoming = await this.execute('Impact', {
       nodeId,
+      scope,
       dependents: true,
       includeCandidates: true
     });
@@ -734,7 +798,10 @@ export class SavedQueryProvider implements ReportBridge {
       returnedCount,
       totalKind: 'returned',
       candidateCount: reply.candidates.length,
-      unresolvedCount: reply.unresolved.length
+      unresolvedCount: reply.unresolved.length,
+      ...(reply.snapshot.resultFilterVersion !== undefined
+        ? { resultFilterVersion: reply.snapshot.resultFilterVersion }
+        : {})
     };
   }
 

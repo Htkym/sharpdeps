@@ -54,6 +54,307 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it('applies the current result conditions to detail Symbol and both Impact directions', async () => {
+    const document: QueryItem = {
+      ...node('document-a'),
+      kind: 'Document',
+      resultKind: 'Docs',
+      node: { id: 'document-a', kind: 'Document', name: '調査' }
+    };
+    const mention: QueryItem = {
+      ...node('mention-a'),
+      kind: 'SymbolMention',
+      resultKind: 'Docs',
+      node: { id: 'mention-a', kind: 'SymbolMention', name: 'Compute' }
+    };
+    const filtered = (items: QueryItem[]) =>
+      reply({
+        items,
+        snapshot: { ...reply().snapshot, resultFilterVersion: 1 }
+      });
+    const wire = client(
+      [
+        filtered([document]),
+        filtered([document]),
+        filtered([document, mention]),
+        filtered([document])
+      ],
+      filtered([])
+    );
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const filters = { resultKinds: ['docs' as const], includeExternal: false };
+    const search = await provider.handle({
+      type: 'searchEntities',
+      requestId,
+      analysisId: provider.analysisId,
+      query: '調査',
+      filters
+    });
+    if (search.type !== 'searchResults') throw new Error('search failed');
+    const details = await provider.handle({
+      type: 'getEntityDetails',
+      requestId,
+      analysisId: provider.analysisId,
+      entityId: search.items[0].id,
+      filters
+    });
+    expect(details).toMatchObject({
+      type: 'details',
+      dependencies: [{ kind: 'SymbolMention', resultKind: 'docs' }],
+      dependents: []
+    });
+    expect(wire.requests.map((request) => request.kind)).toEqual([
+      'Search',
+      'Symbol',
+      'Impact',
+      'Impact'
+    ]);
+    for (const request of wire.requests.slice(1))
+      expect(request.scope).toEqual({
+        variantIds: [variant],
+        resultKinds: ['Docs'],
+        includeExternal: false
+      });
+    provider.dispose();
+  });
+
+  it('keeps result conditions on search pages, revealed symbols and detached exports', async () => {
+    const document: QueryItem = {
+      ...node('document-a'),
+      kind: 'Document',
+      resultKind: 'Docs',
+      path: 'docs/調査.md',
+      reason: 'Matched document name',
+      node: { id: 'document-a', kind: 'Document', name: '調査' }
+    };
+    const filtered = (fields: Partial<QueryWireReply> = {}) =>
+      reply({ ...fields, snapshot: { ...reply().snapshot, resultFilterVersion: 1 } });
+    const wire = client(
+      [
+        filtered({ items: [document], nextCursor: 'backend-page-2' }),
+        filtered({
+          items: [
+            {
+              ...document,
+              id: 'mention-a',
+              node: { id: 'mention-a', kind: 'SymbolMention', name: 'Compute' }
+            }
+          ]
+        }),
+        filtered(),
+        filtered({ items: [document] })
+      ],
+      filtered()
+    );
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const filters = { resultKinds: ['docs' as const], includeExternal: false };
+    const searchRequest = {
+      type: 'searchEntities' as const,
+      requestId,
+      analysisId: provider.analysisId,
+      query: '調査',
+      filters,
+      limit: 1
+    };
+    const search = await provider.handle(searchRequest);
+    if (search.type !== 'searchResults' || !search.nextCursor)
+      throw new Error('search did not page');
+    expect(search.items[0]).toMatchObject({
+      path: document.path,
+      reason: document.reason,
+      resultKind: 'docs',
+      sourceLocationAvailable: false
+    });
+    const beforeChangedCursor = wire.requests.length;
+    expect(
+      await provider.handle({
+        ...searchRequest,
+        cursor: search.nextCursor,
+        filters: { resultKinds: ['code'] }
+      })
+    ).toMatchObject({ type: 'error', code: 'QUERY_CURSOR_INVALID' });
+    expect(wire.requests).toHaveLength(beforeChangedCursor);
+    const second = await provider.handle({ ...searchRequest, cursor: search.nextCursor });
+    expect(second).toMatchObject({
+      type: 'searchResults',
+      nextCursor: null,
+      items: [{ kind: 'SymbolMention', resultKind: 'docs' }]
+    });
+    expect(wire.requests[1]).toMatchObject({ cursor: 'backend-page-2', pageSize: 1 });
+    const projectionRequest = {
+      type: 'getProjection' as const,
+      requestId: 'req_2222222222222222',
+      analysisId: provider.analysisId,
+      granularity: 'type' as const,
+      scope: { kind: 'root' as const },
+      filters,
+      includeIds: [search.items[0].id]
+    };
+    const projection = await provider.handle(projectionRequest);
+    expect(projection).toMatchObject({
+      type: 'projection',
+      projection: { nodes: [{ kind: 'Document' }] }
+    });
+    expect(wire.requests.map((request) => request.kind)).toEqual([
+      'Search',
+      'Search',
+      'Browse',
+      'Symbol'
+    ]);
+    for (const request of wire.requests)
+      expect(request.scope).toEqual({
+        variantIds: [variant],
+        resultKinds: ['Docs'],
+        includeExternal: false
+      });
+    const exportRequest = {
+      ...projectionRequest,
+      type: 'export' as const,
+      format: 'json' as const,
+      projectionRequestId: projectionRequest.requestId
+    };
+    const prepared = provider.prepareSavedExportFor(exportRequest);
+    expect(prepared.data.filters).toEqual(filters);
+    expect(prepared.data.responses.map((response) => response.operation)).toEqual([
+      'Browse',
+      'Symbol'
+    ]);
+    expect(prepared.data.snapshot.resultFilterVersion).toBe(1);
+    expect(() =>
+      provider.prepareSavedExportFor({
+        ...exportRequest,
+        filters: { includeExternal: true, resultKinds: ['docs'] }
+      })
+    ).toThrow('QUERY_EXPORT_SELECTION_CHANGED');
+    filters.resultKinds.length = 0;
+    expect(prepared.data.filters).toEqual({ resultKinds: ['docs'], includeExternal: false });
+    expect(wire.requests).toHaveLength(4);
+    provider.dispose();
+  });
+
+  it('rejects unsupported or ignored result filters without presenting an unfiltered page', async () => {
+    const request = {
+      type: 'searchEntities' as const,
+      requestId,
+      query: 'Compute',
+      filters: { resultKinds: ['docs' as const] }
+    };
+    const oldWire = client([]);
+    const oldProvider = await SavedQueryProvider.create(oldWire, 'D:/fixture');
+    expect(
+      await oldProvider.handle({ ...request, analysisId: oldProvider.analysisId })
+    ).toMatchObject({ type: 'error', code: 'QUERY_FILTER_UNSUPPORTED' });
+    expect(oldWire.requests).toHaveLength(0);
+    oldProvider.dispose();
+    const ready = reply({ snapshot: { ...reply().snapshot, resultFilterVersion: 1 } });
+    const wire = client(
+      [
+        reply({ items: [node('unmarked')] }),
+        reply({ snapshot: ready.snapshot, items: [{ ...node('code-a'), resultKind: 'Code' }] })
+      ],
+      ready
+    );
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    expect(await provider.handle({ ...request, analysisId: provider.analysisId })).toMatchObject({
+      type: 'error',
+      code: 'QUERY_FILTER_UNSUPPORTED'
+    });
+    expect(await provider.handle({ ...request, analysisId: provider.analysisId })).toMatchObject({
+      type: 'error',
+      code: 'QUERY_FILTER_RESULT_INVALID'
+    });
+    provider.dispose();
+  });
+
+  it('freezes an in-flight filter selection before the caller mutates it', async () => {
+    const ready = reply({ snapshot: { ...reply().snapshot, resultFilterVersion: 1 } });
+    const wire = client([], ready);
+    let complete!: (value: QueryWireReply) => void;
+    wire.request = (request) => {
+      wire.requests.push(request);
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    };
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const filters = { resultKinds: ['docs' as const], includeExternal: false };
+    const request = {
+      type: 'getProjection' as const,
+      requestId,
+      analysisId: provider.analysisId,
+      granularity: 'type' as const,
+      scope: { kind: 'root' as const },
+      filters
+    };
+    const pending = provider.handle(request);
+    filters.resultKinds.length = 0;
+    filters.includeExternal = true;
+    complete({ ...ready, requestId: String(wire.requests[0].requestId) });
+    expect((await pending).type).toBe('projection');
+    expect(provider.prepareSavedExport(provider.analysisId).filters).toEqual({
+      resultKinds: ['docs'],
+      includeExternal: false
+    });
+    expect(() =>
+      provider.prepareSavedExportFor({
+        ...request,
+        type: 'export',
+        format: 'json',
+        projectionRequestId: requestId
+      })
+    ).toThrow('QUERY_EXPORT_SELECTION_CHANGED');
+    provider.dispose();
+  });
+
+  it('keeps a logical-only candidate unavailable when Symbol supplies another resolved occurrence', async () => {
+    const candidate = node('Compute', 'Candidate');
+    const resolved: QueryItem = {
+      ...node('Compute'),
+      path: 'Another.cs',
+      node: {
+        ...node('Compute').node!,
+        location: {
+          sourceId: 'other-occurrence',
+          contentHash: 'a'.repeat(64),
+          rawSpan: { start: 10, length: 5, end: 15 }
+        }
+      }
+    };
+    const wire = client([reply({ candidates: [candidate] }), reply({ items: [resolved] })]);
+    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+    const search = await provider.handle({
+      type: 'searchEntities',
+      requestId,
+      analysisId: provider.analysisId,
+      query: 'Compute'
+    });
+    if (search.type !== 'searchResults') throw new Error('search failed');
+    const entityId = search.items[0].id;
+    expect(
+      await provider.handle({
+        type: 'getEntityDetails',
+        requestId,
+        analysisId: provider.analysisId,
+        entityId
+      })
+    ).toMatchObject({
+      type: 'details',
+      entity: { certainty: 'Candidate', sourceLocationAvailable: false },
+      dependencies: [],
+      dependents: []
+    });
+    expect(() =>
+      provider.resolveSource({
+        type: 'openDeclaration',
+        requestId,
+        analysisId: provider.analysisId,
+        entityId
+      })
+    ).toThrow('QUERY_SOURCE_NOT_RETURNED');
+    expect(wire.requests.map((request) => request.kind)).toEqual(['Search', 'Symbol']);
+    provider.dispose();
+  });
+
   it.each(['Document', 'Section'])(
     'returns candidate code across %s containment while keeping it a leaf',
     async (kind) => {
