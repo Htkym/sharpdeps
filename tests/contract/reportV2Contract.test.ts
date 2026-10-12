@@ -94,6 +94,39 @@ describe('report v2 schema', () => {
     expect(validateReport(snapshot)).toBe(false);
     expect(validateSnapshot(snapshot).ok).toBe(false);
   });
+
+  it('keeps Quick type references inferred in the schema and runtime contract', () => {
+    const snapshot = makeSnapshot();
+    snapshot.types = snapshot.types.map((type) => ({ ...type, memberCount: null }));
+    const relation = {
+      ...snapshot.relations[0],
+      basis: 'typeReferenceInferred' as const,
+      kinds: ['typeReferenceInferred' as const],
+      confidence: 'inferred' as const
+    };
+    snapshot.relations[0] = relation;
+    expect(validateReport(snapshot), describeAjvErrors()).toBe(true);
+    expect(validateSnapshot(snapshot).ok).toBe(true);
+
+    for (const invalid of [
+      { ...relation, confidence: 'resolved' as const },
+      { ...relation, confidence: undefined },
+      { ...relation, kinds: ['calls' as const] },
+      { ...relation, basis: 'symbolResolved' as const },
+      { ...relation, kinds: ['typeReferenceInferred' as const, 'calls' as const] }
+    ]) {
+      snapshot.relations[0] = invalid;
+      expect(validateReport(snapshot)).toBe(false);
+      expect(validateSnapshot(snapshot).ok).toBe(false);
+    }
+
+    const evidence = makeEvidence({ kind: 'typeReferenceInferred', confidence: 'inferred' });
+    expect(validateEvidence(evidence)).toBe(true);
+    expect(validateEvidenceRecord(evidence).ok).toBe(true);
+    evidence.confidence = 'resolved';
+    expect(validateEvidence(evidence)).toBe(false);
+    expect(validateEvidenceRecord(evidence).ok).toBe(false);
+  });
 });
 
 describe('evidence v2 schema', () => {

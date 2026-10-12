@@ -106,6 +106,14 @@ export function describeBasis(basis: string, language: Language = 'en'): BasisDe
         detail: tr('Dependencies inferred from using directives; actual use is not guaranteed.'),
         resolved: false
       };
+    case 'typeReferenceInferred':
+      return {
+        label: tr('Quick (syntax type references)'),
+        detail: tr(
+          'References written in type base lists; symbol binding and inheritance are unverified.'
+        ),
+        resolved: false
+      };
     default:
       return {
         label: basis,

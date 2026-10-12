@@ -17,7 +17,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { AnalysisSnapshot, EvidenceRecord } from '../../src/analyzer/reportV2';
 import { validateEvidenceRecord, validateSnapshot } from '../../src/analyzer/reportV2Validation';
 import { buildStructureSnapshot } from '../helpers/quickV2Snapshot';
@@ -44,6 +44,9 @@ const validateEvidenceSchema = ajv.compile(
 /** Locates the published Quick analyzer, in the order the extension looks for it. */
 function locateAnalyzerDll(): string | undefined {
   const candidates = [
+    ...(process.env.SHARPDEPS_QUICK_HOST_OUTPUT
+      ? [path.join(process.env.SHARPDEPS_QUICK_HOST_OUTPUT, 'code-map.dll')]
+      : []),
     path.join(repoRoot, 'analyzer', 'bin', 'quick', 'code-map.dll'),
     path.join(repoRoot, 'analyzer', 'bin', 'code-map.dll')
   ];
@@ -75,7 +78,7 @@ function runAnalyzer(): AnalyzerOutput {
         '--max-edges',
         '200'
       ],
-      { cwd: repoRoot, encoding: 'utf8' }
+      { cwd: repoRoot, encoding: 'utf8', timeout: 60000 }
     );
     expect(
       run.status,
@@ -99,8 +102,13 @@ function runAnalyzer(): AnalyzerOutput {
 describe.skipIf(!analyzerDll)(
   'Quick analyzer report v2',
   () => {
+    let first: AnalyzerOutput;
+    beforeAll(() => {
+      first = runAnalyzer();
+    }, 120000);
+
     it('satisfies the v2 contract and matches the structural snapshot', async () => {
-      const { report, evidence } = runAnalyzer();
+      const { report, evidence } = first;
 
       const runtimeResult = validateSnapshot(report);
       expect(runtimeResult.ok, runtimeResult.ok ? '' : runtimeResult.errors.join('\n')).toBe(true);
@@ -133,7 +141,7 @@ describe.skipIf(!analyzerDll)(
     });
 
     it('keeps host paths out of the report', () => {
-      const { report, evidenceNdjson } = runAnalyzer();
+      const { report, evidenceNdjson } = first;
       const serialized = `${JSON.stringify(report)}\n${evidenceNdjson}`;
 
       expect(serialized).not.toContain(fixtureRoot);
@@ -143,7 +151,6 @@ describe.skipIf(!analyzerDll)(
     });
 
     it('uses the documented id shapes and stays deterministic', () => {
-      const first = runAnalyzer();
       const second = runAnalyzer();
 
       for (const relation of first.report.relations) {
@@ -168,10 +175,10 @@ describe.skipIf(!analyzerDll)(
     });
 
     it('never presents inferred cycles as verified paths', () => {
-      const { report } = runAnalyzer();
+      const { report } = first;
 
       expect(report.capabilities.cycleWitness).toBe(false);
-      expect(report.capabilities.typeGraph).toBe(false);
+      expect(report.capabilities.typeGraph).toBe(true);
       expect(report.completeness).toBe('partial');
       expect(report.cycleGroups.length).toBeGreaterThan(0);
       for (const group of report.cycleGroups) {

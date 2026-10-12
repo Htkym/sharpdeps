@@ -9,7 +9,11 @@ export type AnalysisMode = 'quick' | 'semantic';
 export type Completeness = 'completeWithinScope' | 'partial' | 'failed';
 
 export type RelationBasis =
-  'projectDeclared' | 'projectEvaluated' | 'usingInferred' | 'symbolResolved';
+  | 'projectDeclared'
+  | 'projectEvaluated'
+  | 'usingInferred'
+  | 'typeReferenceInferred'
+  | 'symbolResolved';
 
 export type UsageRelationKind =
   | 'inherits'
@@ -27,7 +31,8 @@ export type UsageRelationKind =
  * Declaration-level kinds. They describe a declared reference rather than a
  * resolved usage and are only produced with the matching basis.
  */
-export type DeclaredRelationKind = 'projectDeclared' | 'projectEvaluated' | 'usingInferred';
+export type DeclaredRelationKind =
+  'projectDeclared' | 'projectEvaluated' | 'usingInferred' | 'typeReferenceInferred';
 
 export type RelationKind = UsageRelationKind | DeclaredRelationKind;
 
@@ -120,7 +125,7 @@ export interface AnalysisType {
   accessibility: 'public' | 'internal' | 'protected' | 'private' | 'file' | 'unknown';
   isPartial: boolean;
   declarationCount: number;
-  memberCount?: number;
+  memberCount?: number | null;
   isExternal?: boolean;
   isGenerated?: boolean;
 }

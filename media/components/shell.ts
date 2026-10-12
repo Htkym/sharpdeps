@@ -326,6 +326,7 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
       'projectDeclared',
       'projectEvaluated',
       'usingInferred',
+      'typeReferenceInferred',
       'symbolResolved'
     ]),
     projectKinds: multiple('Project kinds', ['app', 'web', 'library', 'test', 'desktop']),

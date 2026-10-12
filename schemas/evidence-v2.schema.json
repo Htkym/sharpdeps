@@ -47,7 +47,8 @@
         "compileTimeName",
         "projectDeclared",
         "projectEvaluated",
-        "usingInferred"
+        "usingInferred",
+        "typeReferenceInferred"
       ]
     },
     "origin": { "enum": ["userSource", "generatedSource"] },
@@ -81,6 +82,15 @@
       "description": "Optional short code excerpt. Hosts must not send whole files to the webview."
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["kind"],
+        "properties": { "kind": { "const": "typeReferenceInferred" } }
+      },
+      "then": { "properties": { "confidence": { "const": "inferred" } } }
+    }
+  ],
   "$defs": {
     "span": {
       "type": "object",

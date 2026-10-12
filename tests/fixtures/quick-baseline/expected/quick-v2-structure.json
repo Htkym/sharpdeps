@@ -6,7 +6,7 @@
   "mode": "quick",
   "completeness": "partial",
   "capabilities": {
-    "typeGraph": false,
+    "typeGraph": true,
     "evidence": true,
     "generatedDocuments": false,
     "cycleWitness": false,
@@ -109,40 +109,50 @@
     {
       "name": "App.Services",
       "project": "App",
-      "typeCount": 0
+      "typeCount": 1
     },
     {
       "name": "App",
       "project": "App",
-      "typeCount": 0
+      "typeCount": 1
     },
     {
       "name": "Core.Legacy",
       "project": "Core",
-      "typeCount": 0
+      "typeCount": 1
     },
     {
       "name": "Core.Tests",
       "project": "Core.Tests",
-      "typeCount": 0
+      "typeCount": 1
     },
     {
       "name": "Core",
       "project": "Core",
-      "typeCount": 0
+      "typeCount": 2
     },
     {
       "name": "Extras",
       "project": "Extras",
-      "typeCount": 0
+      "typeCount": 1
     },
     {
       "name": "Util",
       "project": "Util",
-      "typeCount": 0
+      "typeCount": 2
     }
   ],
-  "types": [],
+  "types": [
+    "App.Program",
+    "App.Services.OrderService",
+    "Core.Legacy.LegacyStore",
+    "Core.Order",
+    "Core.Tests.OrderTests",
+    "Core.UtilBridge",
+    "Extras.Extra",
+    "Util.Helpers",
+    "Util.Names"
+  ],
   "relations": [
     {
       "source": "namespace:App.Services@App",
@@ -642,12 +652,12 @@
     {
       "code": "quick.evidenceIsDeclarationOnly",
       "count": null,
-      "message": "Evidence positions point at the declaration site (using directive or ProjectReference item), not at code that uses the dependency."
+      "message": "Evidence positions point at a syntax declaration (using, ProjectReference or BaseList), not at resolved symbol usage."
     },
     {
-      "code": "quick.typeGraphUnavailable",
+      "code": "quick.typeReferenceInferred",
       "count": null,
-      "message": "Quick analysis reads project files and C# syntax only; it cannot resolve symbol usage, so the model has no types and no type-level relations."
+      "message": "Types are syntax groups. BaseList references match only supported same-variant names; no compiler binding, build file inclusion, calls or legal partial/inheritance proof is supplied."
     },
     {
       "code": "quick.usingInferred",
