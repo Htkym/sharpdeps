@@ -268,6 +268,57 @@ describe('viewReducer status transitions', () => {
 });
 
 describe('viewReducer navigation and selection', () => {
+  it('retains saved details only while navigating the same entity in the same analysis', () => {
+    const entityId = 'ty_1111111111111111';
+    const selected = viewReducer(
+      { ...withProjection(), queryMetadata: savedMetadata },
+      { type: 'entitySelected', entityId }
+    );
+    const state = viewReducer(selected, {
+      type: 'detailsReceived',
+      entityId,
+      dependencies: [],
+      dependents: [],
+      queryMetadata: savedMetadata
+    });
+    const reveal = {
+      type: 'revealRequested' as const,
+      entityId,
+      scope: { kind: 'dependencies' as const, id: entityId, depth: 1 }
+    };
+    const scoped = viewReducer(state, reveal);
+    expect(scoped.details).toBe(state.details);
+    expect(viewReducer(scoped, { type: 'historyBack' }).details).toBe(state.details);
+
+    const other = viewReducer(scoped, { ...reveal, entityId: 'ty_2222222222222222' });
+    expect(other.details).toBeNull();
+    const otherSelected = viewReducer(scoped, {
+      type: 'entitySelected',
+      entityId: 'ty_2222222222222222'
+    });
+    const otherDetails = viewReducer(otherSelected, {
+      type: 'detailsReceived',
+      entityId: 'ty_2222222222222222',
+      dependencies: [],
+      dependents: [],
+      queryMetadata: savedMetadata
+    });
+    expect(viewReducer(otherDetails, { type: 'historyBack' }).details).toBeNull();
+    expect(
+      viewReducer(scoped, {
+        type: 'analysisComplete',
+        analysisId: 'an_ffffffffffffffff',
+        completeness: 'partial',
+        coverage: undefined,
+        queryMetadata: savedMetadata
+      }).details
+    ).toBeNull();
+    expect(viewReducer({ ...state, queryMetadata: undefined }, reveal).details).toBeNull();
+    expect(
+      viewReducer({ ...scoped, queryMetadata: undefined }, { type: 'historyBack' }).details
+    ).toBeNull();
+  });
+
   it('keeps scope, search, filters, and selection when switching graph/table', () => {
     let state = withProjection();
     state = viewReducer(state, { type: 'searchChanged', search: 'order' });

@@ -566,7 +566,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
         ...state,
         selection: { entityId: action.entityId },
         inspectorOpen: true,
-        details: null,
+        details:
+          state.queryMetadata && state.details?.entityId === action.entityId ? state.details : null,
         evidence: null,
         granularity: action.granularity ?? state.granularity,
         scope: action.scope ?? state.scope,
@@ -746,7 +747,10 @@ function back(state: ViewState): ViewState {
     filters: previous.filters ?? {},
     selection: previous.selectionId ? { entityId: previous.selectionId } : {},
     projection: null,
-    details: null,
+    details:
+      state.queryMetadata && state.details?.entityId === previous.selectionId
+        ? state.details
+        : null,
     evidence: null
   };
 }
