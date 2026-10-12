@@ -54,6 +54,83 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it.each(['Document', 'Section'])(
+    'returns candidate code across %s containment while keeping it a leaf',
+    async (kind) => {
+      const owner: QueryItem = {
+        ...node('document-a'),
+        node: { ...node('document-a').node!, kind }
+      };
+      const candidate = node('Compute', 'Candidate');
+      const wire: SavedQueryClient & { requests: Record<string, unknown>[] } = {
+        ready: Promise.resolve(reply()),
+        requests: [],
+        async request(request) {
+          this.requests.push(request);
+          if (request.kind === 'Impact') {
+            const budget = request.budget as { maxDepth: number };
+            return reply({
+              requestId: String(request.requestId),
+              items: [owner],
+              candidates:
+                !request.dependents && request.includeDocuments && budget.maxDepth >= 4
+                  ? [candidate]
+                  : []
+            });
+          }
+          return reply({ items: request.nodeId === 'Compute' ? [node('Compute')] : [owner] });
+        },
+        dispose() {}
+      };
+      const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+      const search = await provider.handle({
+        type: 'searchEntities',
+        requestId,
+        analysisId: provider.analysisId,
+        query: 'document-a'
+      });
+      if (search.type !== 'searchResults') throw new Error('search failed');
+      const details = await provider.handle({
+        type: 'getEntityDetails',
+        requestId,
+        analysisId: provider.analysisId,
+        entityId: search.items[0].id
+      });
+      if (details.type !== 'details') throw new Error('details failed');
+      const dependencies = details.dependencies ?? [];
+      expect(dependencies).toEqual([
+        expect.objectContaining({ name: 'Compute', certainty: 'Candidate' })
+      ]);
+      expect(details.queryMetadata).toMatchObject({ coverage: 'Partial', generation: 3 });
+      const before = wire.requests.length;
+      const candidateDetails = await provider.handle({
+        type: 'getEntityDetails',
+        requestId,
+        analysisId: provider.analysisId,
+        entityId: dependencies[0].id
+      });
+      expect(candidateDetails).toMatchObject({
+        type: 'details',
+        entity: { certainty: 'Candidate' },
+        dependencies: [],
+        dependents: []
+      });
+      expect(wire.requests.slice(before).map((request) => request.kind)).toEqual(['Symbol']);
+      expect(
+        wire.requests.filter((request) => request.kind === 'Impact' && request.dependents)
+      ).toHaveLength(1);
+      expect(
+        wire.requests.find((request) => request.kind === 'Impact' && request.dependents)?.budget
+      ).toMatchObject({ maxDepth: 1 });
+      expect(
+        wire.requests.every(
+          (request) => (request.scope as { variantIds: string[] }).variantIds[0] === variant
+        )
+      ).toBe(true);
+      provider.dispose();
+    }
+  );
+
   it('binds saved export to the received projection and invalidates a lease on new work', async () => {
     const wire = client([
       reply({ items: [node('member-a')] }),

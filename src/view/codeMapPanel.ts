@@ -121,6 +121,7 @@ export class CodeMapPanel {
   private pendingAnalysisId: string | undefined;
   private runningMessage: Extract<HostToWebviewMessage, { type: 'analysisStarted' }> | undefined;
   private viewState: Record<string, unknown> | undefined;
+  private savedSourceReturn: { analysisId: string; entityId: string } | undefined;
   private pendingReveal:
     { analysisId: string; entityId: string; scope: Scope; granularity?: Granularity } | undefined;
 
@@ -221,6 +222,20 @@ export class CodeMapPanel {
     });
   }
 
+  private flushSavedSourceReturn(): void {
+    const selection = this.savedSourceReturn;
+    this.savedSourceReturn = undefined;
+    const current = this.host.currentAnalysisId?.() ?? this.pendingAnalysisId;
+    if (!selection || selection.analysisId !== current) return;
+    this.post({
+      type: 'reveal',
+      analysisId: selection.analysisId,
+      entityId: selection.entityId,
+      scope: { kind: 'root' },
+      granularity: 'type'
+    });
+  }
+
   private onMessage(message: unknown): void {
     const validation = validateWebviewMessage(message);
     if (!validation.ok) {
@@ -265,16 +280,30 @@ export class CodeMapPanel {
         (request.type === 'openEvidence' || request.type === 'openDeclaration') &&
         this.host.openSavedSource
       ) {
-        void this.host.openSavedSource(request).catch((error: unknown) => {
-          this.post({
-            type: 'error',
-            analysisId: request.analysisId,
-            requestId: request.requestId,
-            code: 'QUERY_SOURCE_OPEN_FAILED',
-            message:
-              error instanceof Error ? error.message : 'The saved source could not be opened.'
+        void this.host
+          .openSavedSource(request)
+          .then(() => {
+            const current = this.host.currentAnalysisId?.() ?? this.pendingAnalysisId;
+            if (
+              !this.disposed &&
+              request.type === 'openDeclaration' &&
+              request.analysisId === current
+            )
+              this.savedSourceReturn = {
+                analysisId: request.analysisId,
+                entityId: request.entityId
+              };
+          })
+          .catch((error: unknown) => {
+            this.post({
+              type: 'error',
+              analysisId: request.analysisId,
+              requestId: request.requestId,
+              code: 'QUERY_SOURCE_OPEN_FAILED',
+              message:
+                error instanceof Error ? error.message : 'The saved source could not be opened.'
+            });
           });
-        });
         return;
       }
       void this.host.bridge.handle(request).then((response) => this.post(response));
@@ -299,6 +328,7 @@ export class CodeMapPanel {
           );
         }
         if (this.runningMessage) this.post(this.runningMessage);
+        this.flushSavedSourceReturn();
         this.flushReveal();
         return;
       case 'analyze':

@@ -106,6 +106,75 @@ function physicalPanel() {
   return panel;
 }
 
+it('restores a saved source selection only on return to the same live analysis', async () => {
+  const fixture = await setup('show');
+  fixture.host.openSavedSource = vi.fn().mockResolvedValue(undefined);
+  const result = await fixture.saved.handle(fixture.projection);
+  if (result.type !== 'projection') throw new Error('projection failed');
+  const entityId = result.projection.nodes[0].id;
+  fixture.physical.dispatch({
+    type: 'openDeclaration',
+    requestId,
+    analysisId: fixture.saved.analysisId,
+    entityId
+  });
+  await vi.waitFor(() => expect(fixture.host.openSavedSource).toHaveBeenCalledOnce());
+  await Promise.resolve();
+  expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  await vi.waitFor(() =>
+    expect(
+      api.post.mock.calls.some(
+        ([message]) =>
+          message.type === 'reveal' &&
+          message.entityId === entityId &&
+          message.analysisId === fixture.saved.analysisId
+      )
+    ).toBe(true)
+  );
+  const messages = api.post.mock.calls.map(([message]) => message);
+  expect(messages.findIndex((message) => message.type === 'analysisComplete')).toBeLessThan(
+    messages.findIndex((message) => message.type === 'reveal')
+  );
+  api.post.mockClear();
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+
+  fixture.physical.dispatch({
+    type: 'openDeclaration',
+    requestId,
+    analysisId: fixture.saved.analysisId,
+    entityId
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  fixture.switchCurrent('an_1111111111111111');
+  api.post.mockClear();
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+});
+
+it('does not queue a source return after a failed saved source open', async () => {
+  const fixture = await setup('show');
+  fixture.host.openSavedSource = vi.fn().mockRejectedValue(new Error('missing source'));
+  const result = await fixture.saved.handle(fixture.projection);
+  if (result.type !== 'projection') throw new Error('projection failed');
+  fixture.physical.dispatch({
+    type: 'openDeclaration',
+    requestId,
+    analysisId: fixture.saved.analysisId,
+    entityId: result.projection.nodes[0].id
+  });
+  await vi.waitFor(() =>
+    expect(
+      api.post.mock.calls.some(([message]) => message.code === 'QUERY_SOURCE_OPEN_FAILED')
+    ).toBe(true)
+  );
+  api.post.mockClear();
+  fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+});
+
 async function setup(first: 'show' | 'restore' = 'restore') {
   const requests: Record<string, unknown>[] = [];
   const wire: SavedQueryClient = {

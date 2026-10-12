@@ -260,7 +260,8 @@ export class SavedQueryProvider implements ReportBridge {
 
   private async execute(
     kind: string,
-    fields: Record<string, unknown> = {}
+    fields: Record<string, unknown> = {},
+    maxDepth = 1
   ): Promise<QueryWireReply> {
     if (this.disposed) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
     const reply = await this.client.request({
@@ -271,7 +272,7 @@ export class SavedQueryProvider implements ReportBridge {
       budget: {
         maxNodes: Math.max(1, Math.min(500, this.limits.maxNodes)),
         maxEdges: Math.max(1, Math.min(1000, this.limits.maxEdges)),
-        maxDepth: 1,
+        maxDepth,
         maxMilliseconds: 3000,
         maxChars: 500000,
         maxBytes: 1000000
@@ -619,11 +620,19 @@ export class SavedQueryProvider implements ReportBridge {
         queryMetadata: this.metadata(symbol, 1)
       };
     }
-    const outgoing = await this.execute('Impact', {
-      nodeId,
-      dependents: false,
-      includeCandidates: true
-    });
+    const isDocument = selected.node.kind === 'Document' || selected.node.kind === 'Section';
+    // Documentation reaches code through section/mention structure. Candidates remain
+    // leaves in Query; ordinary code details and reverse exploration stay one hop.
+    const outgoing = await this.execute(
+      'Impact',
+      {
+        nodeId,
+        dependents: false,
+        includeCandidates: true,
+        ...(isDocument ? { includeDocuments: true } : {})
+      },
+      isDocument ? 4 : 1
+    );
     const incoming = await this.execute('Impact', {
       nodeId,
       dependents: true,
