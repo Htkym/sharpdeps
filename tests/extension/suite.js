@@ -314,6 +314,9 @@ async function run() {
     record('generated evidence opens the read-only document provider', true);
     await vscode.commands.executeCommand('workbench.action.previousEditor');
     frame = await mapFrame();
+    // The restored evidence inspector can overlay the top bar at narrow widths.
+    await frame.locator('#sd-inspector-close').click();
+    await expect(frame.locator('.sd-inspector')).toBeHidden();
     const beforeCancel = api.getCurrentAnalysisId();
     await frame.locator('#sd-analyze').click();
     await expect(frame.locator('#sd-analyze')).toHaveText('Cancel');
