@@ -1462,11 +1462,15 @@ function renderSavedQueryInspector(
       )
     );
     if (!details) body.append(message(tr('Loading details...'), 'sd-note'));
-    if (entity?.kind === 'Type' || entity?.kind === 'Member') {
+    if (entity && ['Type', 'Member', 'Document', 'Section'].includes(entity.kind ?? '')) {
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'sd-button';
-      open.textContent = tr('Open declaration');
+      open.textContent = tr(
+        entity.kind === 'Document' || entity.kind === 'Section'
+          ? 'Open document'
+          : 'Open declaration'
+      );
       open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
       body.append(open);
     }

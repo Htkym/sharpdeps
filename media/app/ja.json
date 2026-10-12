@@ -209,6 +209,7 @@
   "Incoming occurrences": "依存元からの参照回数",
   "{0} ({1} relation(s))": "{0} 回（依存関係 {1} 件）",
   "Open declaration": "宣言を開く",
+  "Open document": "文書を開く",
   "Drill down": "内訳を表示",
   "Dependencies": "依存先",
   "Dependents": "依存元",

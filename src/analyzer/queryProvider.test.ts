@@ -261,55 +261,59 @@ describe('saved Query provider boundary', () => {
     replacement.dispose();
   });
 
-  it('opens only host-issued source IDs from the pinned session and one available declaration', async () => {
-    const location = {
-      sourceId: 'source-a',
-      contentHash: 'a'.repeat(64),
-      rawSpan: { start: 5, length: 3, end: 8 }
-    };
-    const input = {
-      ...node('member-a'),
-      path: 'Input.cs',
-      node: { ...node('member-a').node!, location }
-    };
-    const wire = client([reply({ items: [input] })]);
-    const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
-    const search = await provider.handle({
-      type: 'searchEntities',
-      requestId,
-      analysisId: provider.analysisId,
-      query: 'member-a'
-    });
-    if (search.type !== 'searchResults') throw new Error('search failed');
-    const request = {
-      type: 'openDeclaration' as const,
-      requestId,
-      analysisId: provider.analysisId,
-      entityId: search.items[0].id
-    };
-    expect(provider.resolveSource(request)).toMatchObject({
-      root: 'D:/fixture',
-      relativePath: 'Input.cs',
-      contentHash: location.contentHash,
-      span: location.rawSpan
-    });
-    expect(() => provider.resolveSource({ ...request, declarationIndex: 1 })).toThrow(
-      'QUERY_DECLARATION_UNAVAILABLE'
-    );
-    expect(() => provider.resolveSource({ ...request, entityId: 'ty_0000000000000000' })).toThrow(
-      'QUERY_SOURCE_NOT_RETURNED'
-    );
-    const other = await SavedQueryProvider.create(client([]), 'D:/fixture');
-    expect(() => other.resolveSource({ ...request, analysisId: other.analysisId })).toThrow(
-      'QUERY_SOURCE_NOT_RETURNED'
-    );
-    const returned = provider.resolveSource(request);
-    returned.span.start = 0;
-    expect(provider.resolveSource(request).span.start).toBe(5);
-    provider.dispose();
-    expect(() => provider.resolveSource(request)).toThrow('QUERY_ANALYSIS_EXPIRED');
-    other.dispose();
-  });
+  it.each(['Member', 'Document', 'Section'])(
+    'opens only host-issued %s source IDs from the pinned session',
+    async (kind) => {
+      const location = {
+        sourceId: 'source-a',
+        contentHash: 'a'.repeat(64),
+        rawSpan: { start: 5, length: 3, end: 8 }
+      };
+      const input = {
+        ...node('member-a'),
+        kind,
+        path: kind === 'Member' ? 'Input.cs' : 'docs/注文.md',
+        node: { ...node('member-a').node!, kind, location }
+      };
+      const wire = client([reply({ items: [input] })]);
+      const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+      const search = await provider.handle({
+        type: 'searchEntities',
+        requestId,
+        analysisId: provider.analysisId,
+        query: 'member-a'
+      });
+      if (search.type !== 'searchResults') throw new Error('search failed');
+      const request = {
+        type: 'openDeclaration' as const,
+        requestId,
+        analysisId: provider.analysisId,
+        entityId: search.items[0].id
+      };
+      expect(provider.resolveSource(request)).toMatchObject({
+        root: 'D:/fixture',
+        relativePath: input.path,
+        contentHash: location.contentHash,
+        span: location.rawSpan
+      });
+      expect(() => provider.resolveSource({ ...request, declarationIndex: 1 })).toThrow(
+        'QUERY_DECLARATION_UNAVAILABLE'
+      );
+      expect(() => provider.resolveSource({ ...request, entityId: 'ty_0000000000000000' })).toThrow(
+        'QUERY_SOURCE_NOT_RETURNED'
+      );
+      const other = await SavedQueryProvider.create(client([]), 'D:/fixture');
+      expect(() => other.resolveSource({ ...request, analysisId: other.analysisId })).toThrow(
+        'QUERY_SOURCE_NOT_RETURNED'
+      );
+      const returned = provider.resolveSource(request);
+      returned.span.start = 0;
+      expect(provider.resolveSource(request).span.start).toBe(5);
+      provider.dispose();
+      expect(() => provider.resolveSource(request)).toThrow('QUERY_ANALYSIS_EXPIRED');
+      other.dispose();
+    }
+  );
 
   it('issues evidence source IDs only with their evidence page and preserves real edge counts', async () => {
     const location = {

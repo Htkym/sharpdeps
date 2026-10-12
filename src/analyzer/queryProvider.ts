@@ -335,7 +335,7 @@ export class SavedQueryProvider implements ReportBridge {
       granularity === 'project' ? 'prj' : granularity === 'namespace' ? 'ns' : 'ty'
     );
     const source = this.source(entry.item.path, entry.node.location);
-    if (source && (entry.node.kind === 'Type' || entry.node.kind === 'Member'))
+    if (source && ['Type', 'Member', 'Document', 'Section'].includes(entry.node.kind))
       this.declarations.set(id, source);
     else this.declarations.delete(id);
     return {
