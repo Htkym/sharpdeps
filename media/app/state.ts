@@ -579,7 +579,7 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
         capabilities: action.capabilities ?? state.capabilities,
         granularity: action.queryMetadata
           ? 'type'
-          : action.mode === 'quick' && state.granularity === 'type'
+          : !(action.capabilities ?? state.capabilities).typeGraph && state.granularity === 'type'
             ? 'project'
             : state.granularity,
         status: action.queryMetadata

@@ -405,7 +405,9 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
 
   function sourceReturnPin(): string | undefined {
     const metadata = state.queryMetadata;
-    return state.analysisId && metadata && !state.runningAnalysisId
+    if (!state.analysisId || state.runningAnalysisId || state.status === 'analyzing')
+      return undefined;
+    return metadata
       ? JSON.stringify([
           state.analysisId,
           metadata.workspaceId,
@@ -413,7 +415,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
           metadata.generation,
           [...metadata.variantIds].sort()
         ])
-      : undefined;
+      : JSON.stringify(['report-v2', state.analysisId]);
   }
 
   function currentSourceUi(): SourceReturnUi | undefined {

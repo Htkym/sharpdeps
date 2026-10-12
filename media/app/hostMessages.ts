@@ -140,7 +140,9 @@ export function toViewActions(
       if (
         !checked.ok ||
         checked.value.type !== 'sourceReturn' ||
-        !currentState?.queryMetadata ||
+        !currentState?.analysisId ||
+        currentState.runningAnalysisId ||
+        currentState.status === 'analyzing' ||
         checked.value.analysisId !== currentState.analysisId
       )
         return [];

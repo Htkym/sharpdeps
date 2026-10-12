@@ -285,7 +285,7 @@ describe('viewReducer status transitions', () => {
         search: 'Compute'
       }
     ];
-    const next = viewReducer(before, {
+    const returned: Extract<Parameters<typeof viewReducer>[1], { type: 'sourceReturned' }> = {
       type: 'sourceReturned',
       state: {
         scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 2 },
@@ -306,7 +306,8 @@ describe('viewReducer status transitions', () => {
         scroll: { navigation: 140, inspector: 680, map: 250 },
         searchCount: 40
       }
-    });
+    };
+    const next = viewReducer(before, returned);
     expect(next).toMatchObject({
       analysisId: before.analysisId,
       status: 'partial',
@@ -345,6 +346,36 @@ describe('viewReducer status transitions', () => {
     expect(refreshed.selection).toEqual(next.selection);
     expect(refreshed.history).toEqual(next.history);
     expect(refreshed.projectionRequestId).toBe('req_2222222222222222');
+
+    const quickBefore: ViewState = {
+      ...before,
+      queryMetadata: undefined,
+      savedUpdate: undefined,
+      mode: 'quick',
+      resultMode: 'quick',
+      capabilities: { ...before.capabilities, typeGraph: true }
+    };
+    const quick = viewReducer(quickBefore, returned);
+    expect(quick.queryMetadata).toBeUndefined();
+    expect(quick.analysisId).toBe(before.analysisId);
+    expect(quick.scope).toEqual(next.scope);
+    expect(quick.history).toEqual(history);
+    expect(quick.selection).toEqual(next.selection);
+    const complete = {
+      type: 'analysisComplete' as const,
+      analysisId: before.analysisId!,
+      mode: 'quick' as const,
+      completeness: 'partial' as const,
+      coverage: undefined
+    };
+    expect(viewReducer(quick, complete).granularity).toBe('type');
+    expect(viewReducer(quick, { ...complete, capabilities: quick.capabilities }).granularity).toBe(
+      'type'
+    );
+    expect(
+      viewReducer(quick, { ...complete, capabilities: { ...quick.capabilities, typeGraph: false } })
+        .granularity
+    ).toBe('project');
   });
 
   it('accumulates saved search pages without losing non-page limits, then invalidates filtered display data', () => {

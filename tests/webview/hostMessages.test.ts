@@ -177,7 +177,7 @@ describe('Candidate investigation message provenance', () => {
 });
 
 describe('toViewActions', () => {
-  it('accepts source return only for the current saved session and strips transient payload fields', () => {
+  it('accepts source return only for the idle current analysis and strips transient payload fields', () => {
     const relationId = 'rel_1111111111111111';
     const ui = {
       navTab: 'cycles',
@@ -231,7 +231,23 @@ describe('toViewActions', () => {
       { ...message, ui: { ...ui, id: 'D:/source.cs' } }
     ])
       expect(toViewActions(rejected, new Map(), state)).toEqual([]);
-    expect(toViewActions(message, new Map(), { ...INITIAL_STATE, analysisId })).toEqual([]);
+    const quick: ViewState = {
+      ...state,
+      queryMetadata: undefined,
+      status: 'partial',
+      mode: 'quick'
+    };
+    expect(toViewActions(message, new Map(), quick)).toEqual(actions);
+    for (const current of [state, quick]) {
+      expect(toViewActions(message, new Map(), { ...current, status: 'analyzing' })).toEqual([]);
+      expect(
+        toViewActions(message, new Map(), { ...current, runningAnalysisId: analysisId })
+      ).toEqual([]);
+      expect(
+        toViewActions({ ...message, analysisId: 'an_ffffffffffffffff' }, new Map(), current)
+      ).toEqual([]);
+    }
+    expect(toViewActions(message, new Map(), INITIAL_STATE)).toEqual([]);
   });
 
   it('ends a failed current search page while keeping its prior items and retry cursor', () => {

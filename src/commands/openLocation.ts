@@ -20,33 +20,36 @@ export interface OpenLocationOptions {
   output: vscode.OutputChannel;
   /** Directory the analysed paths are relative to; undefined when no target is known. */
   rootDirectory: (analysisId?: string) => string | undefined;
+  /** A queued editor operation may be replaced while awaiting file or user input. */
+  isCurrent?: () => boolean;
 }
 
 export async function openEvidenceLocation(
   options: OpenLocationOptions,
   analysisId: string,
   evidenceId: string
-): Promise<void> {
+): Promise<boolean> {
   const evidence = await options.store.findEvidence(analysisId, evidenceId);
+  if (options.isCurrent?.() === false) return false;
   if (!evidence) {
     void vscode.window.showWarningMessage(
       'SharpDeps: この根拠は現在の解析結果にありません。解析し直してください。'
     );
-    return;
+    return false;
   }
 
   if (!evidence.physicalSpan && evidence.kind !== 'projectEvaluated') {
     void vscode.window.showInformationMessage(
       'SharpDeps: この根拠には位置情報がありません（宣言のみのため開けません）。'
     );
-    return;
+    return false;
   }
 
   const report = options.store.getReport(analysisId);
   const document = report.sourceManifest.find((entry) => entry.id === evidence.documentId);
   if (!document) {
     void vscode.window.showWarningMessage('SharpDeps: この根拠の文書が解析結果にありません。');
-    return;
+    return false;
   }
 
   if (evidence.mappedLocation) {
@@ -58,14 +61,14 @@ export async function openEvidenceLocation(
       ],
       { placeHolder: 'Choose the physical or #line location' }
     );
-    if (!choice) return;
+    if (!choice || options.isCurrent?.() === false) return false;
     if (choice.mapped) {
       const root = options.rootDirectory(analysisId);
       if (!root || !isInsideRoot(root, mapped.relativePath)) {
         void vscode.window.showWarningMessage(
           'SharpDeps: 変換先は解析ルート外のため開けません。物理位置を選択してください。'
         );
-        return;
+        return false;
       }
       try {
         const [realRoot, realFile] = await Promise.all([
@@ -79,9 +82,9 @@ export async function openEvidenceLocation(
             'SharpDeps: 解析結果が古いため、変換先の位置も古い可能性があります。',
             '開く'
           );
-          if (proceed !== '開く') return;
+          if (proceed !== '開く') return false;
         }
-        await openSpan(
+        return await openSpan(
           options,
           analysisId,
           {
@@ -99,16 +102,15 @@ export async function openEvidenceLocation(
             endCharacter: mapped.character
           }
         );
-        return;
       } catch (error) {
         void vscode.window.showWarningMessage(
           `SharpDeps: 変換先を開けません。物理位置を選択してください。${String(error)}`
         );
-        return;
+        return false;
       }
     }
   }
-  await openSpan(options, analysisId, document, evidence.physicalSpan ?? null);
+  return openSpan(options, analysisId, document, evidence.physicalSpan ?? null);
 }
 
 export async function openDeclarationLocation(
@@ -116,13 +118,14 @@ export async function openDeclarationLocation(
   analysisId: string,
   typeId: string,
   declarationIndex?: number
-): Promise<void> {
+): Promise<boolean> {
   const declarations = await options.store.declarationsForType(analysisId, typeId);
+  if (options.isCurrent?.() === false) return false;
   if (declarations.length === 0) {
     void vscode.window.showInformationMessage(
-      'SharpDeps: この型の宣言位置は解析結果に含まれていません（Quick解析では使えません）。'
+      'SharpDeps: この型の宣言位置は解析結果に含まれていません。'
     );
-    return;
+    return false;
   }
 
   if (declarations.length > 1 && declarationIndex === undefined) {
@@ -134,7 +137,7 @@ export async function openDeclarationLocation(
       })),
       { placeHolder: 'Choose a declaration' }
     );
-    if (!chosen) return;
+    if (!chosen || options.isCurrent?.() === false) return false;
     declarationIndex = chosen.record.declarationIndex;
   }
   const record =
@@ -143,7 +146,7 @@ export async function openDeclarationLocation(
   const document = report.sourceManifest.find((entry) => entry.id === record.documentId);
   if (!document) {
     void vscode.window.showWarningMessage('SharpDeps: この宣言の文書が解析結果にありません。');
-    return;
+    return false;
   }
 
   if (declarations.length > 1) {
@@ -152,7 +155,7 @@ export async function openDeclarationLocation(
     );
   }
 
-  await openSpan(options, analysisId, document, record.span);
+  return openSpan(options, analysisId, document, record.span);
 }
 
 async function openSpan(
@@ -160,7 +163,8 @@ async function openSpan(
   analysisId: string,
   document: SourceDocument,
   span: PhysicalSpan | null
-): Promise<void> {
+): Promise<boolean> {
+  if (options.isCurrent?.() === false) return false;
   const range = span
     ? new vscode.Range(span.startLine, span.startCharacter, span.endLine, span.endCharacter)
     : undefined;
@@ -171,12 +175,14 @@ async function openSpan(
     const textDocument = await vscode.workspace.openTextDocument(
       generatedDocumentUri(analysisId, document.id)
     );
+    if (options.isCurrent?.() === false) return false;
     const editor = await vscode.window.showTextDocument(textDocument, { preview: false });
+    if (options.isCurrent?.() === false) return false;
     if (range) {
       editor.selection = new vscode.Selection(range.start, range.end);
       editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
     }
-    return;
+    return true;
   }
 
   const rootDirectory = options.rootDirectory(analysisId);
@@ -184,18 +190,19 @@ async function openSpan(
     void vscode.window.showWarningMessage(
       'SharpDeps: 解析対象のルートが不明なため、この場所を開けません。'
     );
-    return;
+    return false;
   }
 
   const fileUri = vscode.Uri.joinPath(vscode.Uri.file(rootDirectory), document.relativePath);
   const textDocument = await vscode.workspace.openTextDocument(fileUri);
+  if (options.isCurrent?.() === false) return false;
 
   if (textDocument.isDirty) {
     const choice = await vscode.window.showWarningMessage(
       'SharpDeps: 未保存の変更があります。古い位置へ移動しますか？',
       '開く'
     );
-    if (choice !== '開く') return;
+    if (choice !== '開く' || options.isCurrent?.() === false) return false;
   }
 
   // A linked file outside the analysis root is legitimate and opens, but its content is
@@ -211,7 +218,7 @@ async function openSpan(
         '開く'
       );
       if (choice !== '開く') {
-        return;
+        return false;
       }
     }
   } else {
@@ -220,11 +227,14 @@ async function openSpan(
     );
   }
 
+  if (options.isCurrent?.() === false) return false;
   const editor = await vscode.window.showTextDocument(textDocument, { preview: false });
+  if (options.isCurrent?.() === false) return false;
   if (range) {
     editor.selection = new vscode.Selection(range.start, range.end);
     editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
   }
+  return true;
 }
 
 /** 'unknown' when the hash cannot be compared (no hash recorded, or the file is gone). */

@@ -113,8 +113,10 @@ function renderEntity(
 
   const actions = document.createElement('div');
   actions.className = 'sd-inspector-actions';
-  if (summary?.granularity === 'type' && options.mode === 'semantic' && !summary.isExternal) {
+  if (summary?.granularity === 'type' && !summary.isExternal) {
     const open = button(tr('Open declaration'), 'sd-button');
+    open.dataset.sourceReturn = 'declaration';
+    open.dataset.sourceId = entity.id;
     open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
     actions.append(open);
   } else if (summary && summary.granularity !== 'type') {
@@ -372,6 +374,8 @@ function evidenceItem(
 
   if (onOpenEvidence) {
     const open = button(tr('Open in editor'), 'sd-button sd-button-small');
+    open.dataset.sourceReturn = 'evidence';
+    open.dataset.sourceId = evidence.id;
     open.title = evidence.reference;
     open.addEventListener('click', () => onOpenEvidence(evidence.id));
     actions.append(open);

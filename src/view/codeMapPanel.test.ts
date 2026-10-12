@@ -5,6 +5,7 @@ import { SavedQueryProvider } from '../analyzer/queryProvider';
 import type { QueryWireReply, SavedQueryClient } from '../analyzer/queryClient';
 import type { ReportStore } from '../analyzer/reportStore';
 import type { SourceReturnUi } from './protocolV2';
+import { makeSnapshot, IDS } from '../../tests/helpers/reportV2Fixtures';
 
 const api = vi.hoisted(() => ({
   post: vi.fn(),
@@ -13,7 +14,9 @@ const api = vi.hoisted(() => ({
   dialog: vi.fn(),
   info: vi.fn(),
   createPanel: vi.fn(),
-  getReport: vi.fn()
+  getReport: vi.fn(),
+  legacyEvidence: vi.fn(),
+  legacyDeclaration: vi.fn()
 }));
 vi.mock('vscode', () => ({
   Uri: {
@@ -31,6 +34,10 @@ vi.mock('vscode', () => ({
   commands: { executeCommand: vi.fn() }
 }));
 vi.mock('./html', () => ({ getWebviewHtml: () => '<div id="app"></div>' }));
+vi.mock('../commands/openLocation', () => ({
+  openEvidenceLocation: api.legacyEvidence,
+  openDeclarationLocation: api.legacyDeclaration
+}));
 
 const projectionRequestId = 'req_1111111111111111';
 const requestId = 'req_2222222222222222';
@@ -72,6 +79,8 @@ beforeEach(() => {
   api.getReport.mockImplementation(() => {
     throw new Error('legacy store must not be read');
   });
+  api.legacyEvidence.mockReset().mockResolvedValue(true);
+  api.legacyDeclaration.mockReset().mockResolvedValue(true);
 });
 afterEach(() => {
   CodeMapPanel.currentPanel?.dispose();
@@ -106,6 +115,108 @@ function physicalPanel() {
   };
   return panel;
 }
+
+it('returns a Quick source through the common queue only when the editor opened it', async () => {
+  const physical = physicalPanel();
+  api.createPanel.mockReturnValue(physical);
+  const report = makeSnapshot({ mode: 'quick', completeness: 'partial' });
+  const host: CodeMapPanelHost = {
+    store: {
+      currentAnalysisId: report.analysisId,
+      getReport: () => report,
+      isStale: () => false
+    } as unknown as ReportStore,
+    bridge: {
+      handle: vi.fn().mockResolvedValue({
+        type: 'capabilities',
+        protocolVersion: 2,
+        capabilities: report.capabilities
+      })
+    },
+    output: { appendLine: vi.fn() } as never,
+    rootDirectory: () => 'D:/fixture',
+    targetName: () => 'fixture',
+    onAnalyze: vi.fn(),
+    onCancel: vi.fn(),
+    saveViewState: vi.fn(),
+    loadViewState: () => undefined
+  };
+  CodeMapPanel.show(vscode.Uri.file('D:/extension'), host);
+  physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  physical.dispatch({
+    type: 'persistViewState',
+    viewState: { version: 1, granularity: 'type', selection: { entityId: IDS.typeA } }
+  });
+  const ui: SourceReturnUi = {
+    navTab: 'structure',
+    focus: 'declaration',
+    id: IDS.typeA,
+    scroll: { navigation: 10, inspector: 20, map: 0 }
+  };
+  physical.dispatch({
+    type: 'openDeclaration',
+    requestId,
+    analysisId: report.analysisId,
+    entityId: IDS.typeA,
+    returnUi: ui
+  });
+  await vi.waitFor(() => expect(api.legacyDeclaration).toHaveBeenCalledOnce());
+  await Promise.resolve();
+  const current = api.legacyDeclaration.mock.calls[0][0].isCurrent as () => boolean;
+  expect(current()).toBe(true);
+  api.post.mockClear();
+  physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: 'sourceReturn',
+      analysisId: report.analysisId,
+      ui,
+      state: expect.objectContaining({ granularity: 'type', selection: { entityId: IDS.typeA } })
+    })
+  );
+  expect(api.legacyEvidence).not.toHaveBeenCalled();
+  physical.dispatch({ type: 'sourceReturnDismissed', analysisId: report.analysisId });
+  expect(current()).toBe(false);
+  api.legacyEvidence.mockResolvedValue(false);
+  physical.dispatch({
+    type: 'openEvidence',
+    requestId,
+    analysisId: report.analysisId,
+    evidenceId: IDS.evidence,
+    returnUi: { ...ui, focus: 'evidence', id: IDS.evidence }
+  });
+  await vi.waitFor(() => expect(api.legacyEvidence).toHaveBeenCalledOnce());
+  await Promise.resolve();
+  expect(current()).toBe(false);
+  api.post.mockClear();
+  physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(api.post.mock.calls.some(([message]) => message.type === 'sourceReturn')).toBe(false);
+  let finish!: (opened: boolean) => void;
+  api.legacyDeclaration.mockReturnValueOnce(
+    new Promise<boolean>((resolve) => {
+      finish = resolve;
+    })
+  );
+  physical.dispatch({
+    type: 'openDeclaration',
+    requestId: 'req_3333333333333333',
+    analysisId: report.analysisId,
+    entityId: IDS.typeA,
+    returnUi: ui
+  });
+  await vi.waitFor(() => expect(api.legacyDeclaration).toHaveBeenCalledTimes(2));
+  const pendingCurrent = api.legacyDeclaration.mock.calls[1][0].isCurrent as () => boolean;
+  expect(pendingCurrent()).toBe(true);
+  physical.dispatch({ type: 'sourceReturnDismissed', analysisId: report.analysisId });
+  expect(pendingCurrent()).toBe(false);
+  finish(true);
+  await Promise.resolve();
+  api.post.mockClear();
+  physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+  expect(
+    api.post.mock.calls.some(([message]) => ['sourceReturn', 'reveal'].includes(message.type))
+  ).toBe(false);
+});
 
 it('restores a saved source selection only on return to the same live analysis', async () => {
   const fixture = await setup('show');
