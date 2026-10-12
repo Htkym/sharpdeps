@@ -818,6 +818,10 @@
       "type": "string",
       "pattern": "^(prj|var|ns|ty|mb)_[0-9a-f]{16}$"
     },
+    "evidenceId": {
+      "type": "string",
+      "pattern": "^ev_[0-9a-f]{16}$"
+    },
     "granularity": {
       "enum": ["project", "namespace", "type"]
     },

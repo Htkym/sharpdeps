@@ -419,17 +419,18 @@ public sealed class CliTests
         Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
             IndexWriter.Open(fixture.Root, customIndex, fixture.Uuid, true)).Code);
         Assert.Equal(beforeOwner, await CliIndexer.CaptureWatchInputsAsync(fixture.Root, customIndex, deadline.Token));
-        // Prove the real native notification path by observing a non-full extraction, rather than timing a sleep.
-        File.WriteAllText(markdown, "# Native edit\n");
-        await WaitUntilAsync(() => Volatile.Read(ref incrementalBuilds) != 0
-            && owner.Status("native").State == "idle", deadline.Token);
-        await Task.Delay(250, deadline.Token); // settle duplicate OS hints from the one real input save
-        var generation = owner.Status("saved").Result!.Generation;
+        // Probe excluded outputs before editing an input: delayed duplicate save hints are not self-output loops.
+        var generation = owner.Status("initial-committed").Result!.Generation;
         var temporary = customIndex + ".owner.json." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(temporary, "{}");
         File.Delete(temporary);
         await Task.Delay(200, deadline.Token);
         Assert.Equal(generation, owner.Status("no-self-loop").Result!.Generation);
+        // Prove the real native notification path by observing a non-full extraction, rather than timing a sleep.
+        File.WriteAllText(markdown, "# Native edit\n");
+        await WaitUntilAsync(() => Volatile.Read(ref incrementalBuilds) != 0
+            && owner.Status("native").State == "idle", deadline.Token);
+        generation = owner.Status("saved").Result!.Generation;
         // Restart only the watch on the same owner/lease, then observe a subsequent periodic extraction.
         await owner.StopWatchAsync();
         owner.StartWatch(update, TimeSpan.FromSeconds(1));

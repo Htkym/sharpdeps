@@ -212,6 +212,26 @@ describe('protocol v2 schema', () => {
   it('rejects a mismatched protocol version', () => {
     expect(validateProtocol({ type: 'ready', protocolVersion: 1 })).toBe(false);
   });
+
+  it('agrees with the runtime validator on source-return evidence anchors', () => {
+    const message = {
+      type: 'sourceReturn',
+      requestId: 'req_0123456789abcdef',
+      analysisId: 'an_0123456789abcdef',
+      state: { version: 1 },
+      ui: {
+        navTab: 'structure',
+        focus: 'evidence',
+        id: 'ev_0123456789abcdef',
+        scroll: { navigation: 140, inspector: 20, map: 0 }
+      }
+    };
+    expect(validateProtocol(message)).toBe(true);
+    expect(validateHostMessage(message).ok).toBe(true);
+    const wrongRole = { ...message, ui: { ...message.ui, id: 'ty_0123456789abcdef' } };
+    expect(validateProtocol(wrongRole)).toBe(false);
+    expect(validateHostMessage(wrongRole).ok).toBe(false);
+  });
 });
 
 describe('view state v1 schema', () => {
