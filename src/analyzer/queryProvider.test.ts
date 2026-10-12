@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SavedQueryProvider } from './queryProvider';
 import type { SavedQueryClient, QueryWireReply, QueryItem, QuerySnapshot } from './queryClient';
+import { validateQueryReply } from './queryClient';
 import { validateHostMessage } from '../view/protocolV2';
 
 const variant = 'variant-a';
@@ -306,7 +307,7 @@ describe('saved Query provider boundary', () => {
     provider.dispose();
   });
 
-  it('keeps a logical-only candidate unavailable when Symbol supplies another resolved occurrence', async () => {
+  it('isolates candidate details without undoing a newer normal source capability', async () => {
     const candidate = node('Compute', 'Candidate');
     const resolved: QueryItem = {
       ...node('Compute'),
@@ -320,7 +321,17 @@ describe('saved Query provider boundary', () => {
         }
       }
     };
-    const wire = client([reply({ candidates: [candidate] }), reply({ items: [resolved] })]);
+    const newest = { ...resolved, path: 'Newest.cs' };
+    const wire = client([reply({ candidates: [candidate] }), reply({ items: [newest] })]);
+    let finishSymbol!: (value: QueryWireReply) => void;
+    const regularRequest = wire.request;
+    wire.request = (request) => {
+      if (request.kind !== 'Symbol') return regularRequest(request);
+      wire.requests.push(request);
+      return new Promise((resolve) => {
+        finishSymbol = resolve;
+      });
+    };
     const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
     const search = await provider.handle({
       type: 'searchEntities',
@@ -330,28 +341,38 @@ describe('saved Query provider boundary', () => {
     });
     if (search.type !== 'searchResults') throw new Error('search failed');
     const entityId = search.items[0].id;
-    expect(
-      await provider.handle({
-        type: 'getEntityDetails',
-        requestId,
-        analysisId: provider.analysisId,
-        entityId
-      })
-    ).toMatchObject({
+    const pendingDetails = provider.handle({
+      type: 'getEntityDetails',
+      requestId,
+      analysisId: provider.analysisId,
+      entityId
+    });
+    const currentSearch = await provider.handle({
+      type: 'searchEntities',
+      requestId: 'req_1111111111111111',
+      analysisId: provider.analysisId,
+      query: 'Compute'
+    });
+    expect(currentSearch).toMatchObject({
+      type: 'searchResults',
+      items: [{ certainty: 'Resolved', path: 'Newest.cs' }]
+    });
+    finishSymbol(reply({ items: [resolved] }));
+    expect(await pendingDetails).toMatchObject({
       type: 'details',
       entity: { certainty: 'Candidate', sourceLocationAvailable: false },
       dependencies: [],
       dependents: []
     });
-    expect(() =>
+    expect(
       provider.resolveSource({
         type: 'openDeclaration',
         requestId,
         analysisId: provider.analysisId,
         entityId
-      })
-    ).toThrow('QUERY_SOURCE_NOT_RETURNED');
-    expect(wire.requests.map((request) => request.kind)).toEqual(['Search', 'Symbol']);
+      }).relativePath
+    ).toBe('Newest.cs');
+    expect(wire.requests.map((request) => request.kind)).toEqual(['Search', 'Symbol', 'Search']);
     provider.dispose();
   });
 
@@ -979,5 +1000,492 @@ describe('saved Query provider boundary', () => {
     expect(result.projection.queryMetadata?.truncationReasons).toEqual(['OUTPUT_LIMIT']);
     expect(result.projection.queryMetadata?.diagnostics[0]?.code).toBe('CONFIGURATION_UNVERIFIED');
     provider.dispose();
+  });
+});
+
+const investigationTarget = `hsym_${'a'.repeat(64)}`;
+const investigationVariant = `hvar_${'b'.repeat(64)}`;
+const investigationOccurrence = `hocc_${'c'.repeat(64)}`;
+const investigationLocation = {
+  sourceId: 'input-source',
+  contentHash: 'd'.repeat(64),
+  rawSpan: { start: 24, length: 71, end: 95 }
+};
+function investigationReply(fields: Partial<QueryWireReply> = {}): QueryWireReply {
+  return reply({
+    ...fields,
+    snapshot: {
+      ...reply().snapshot,
+      variantIds: [investigationVariant],
+      resultFilterVersion: 1,
+      symbolDeclarationRowsVersion: 1,
+      ...fields.snapshot
+    }
+  });
+}
+function declarationReply(): QueryWireReply {
+  const second = {
+    ...investigationLocation,
+    sourceId: 'partial-source',
+    contentHash: 'e'.repeat(64),
+    rawSpan: { start: 0, length: 10, end: 10 }
+  };
+  const rows: QueryItem[] = [investigationLocation, second].map((location, ordinal) => ({
+    id: `${investigationOccurrence}/${ordinal}`,
+    kind: 'declaration',
+    label: 'Demo.Input',
+    certainty: 'Resolved',
+    resultKind: 'Code',
+    path: ordinal === 0 ? 'Input.cs' : 'Partial.cs',
+    evidence: location,
+    occurrence: {
+      id: investigationOccurrence,
+      logicalSymbolId: investigationTarget,
+      variantId: investigationVariant,
+      location,
+      declarations: [location]
+    }
+  }));
+  return investigationReply({
+    items: [
+      {
+        ...node(investigationTarget),
+        kind: 'Type',
+        resultKind: 'Code',
+        node: {
+          id: investigationTarget,
+          kind: 'Type',
+          name: 'Demo.Input',
+          location: investigationLocation
+        }
+      },
+      ...rows
+    ]
+  });
+}
+async function candidateFixture() {
+  const document: QueryItem = {
+    ...node('document'),
+    kind: 'Document',
+    resultKind: 'Docs',
+    path: 'docs/Task.md',
+    node: {
+      id: 'document',
+      kind: 'Document',
+      name: 'Task',
+      location: {
+        sourceId: 'markdown-source',
+        contentHash: 'f'.repeat(64),
+        rawSpan: { start: 0, length: 10, end: 10 }
+      }
+    }
+  };
+  const mention: QueryItem = {
+    ...node('mention'),
+    kind: 'SymbolMention',
+    resultKind: 'Docs',
+    node: { id: 'mention', kind: 'SymbolMention', name: 'T:Demo.Input', parentId: 'document' }
+  };
+  const section: QueryItem = {
+    ...document,
+    id: 'section',
+    kind: 'Section',
+    node: {
+      ...document.node!,
+      id: 'section',
+      kind: 'Section',
+      name: 'Task section',
+      parentId: 'document'
+    }
+  };
+  const target: QueryItem = {
+    ...node(investigationTarget, 'Candidate'),
+    kind: 'Type',
+    resultKind: 'Code',
+    node: { id: investigationTarget, kind: 'Type', name: 'Demo.Input' }
+  };
+  const edge: QueryItem = {
+    id: 'candidate-edge',
+    kind: 'documents_symbol',
+    label: 'Demo.Input',
+    certainty: 'Candidate',
+    reason: 'related via documents_symbol',
+    edge: {
+      id: 'candidate-edge',
+      sourceNodeId: 'mention',
+      targetNodeId: investigationTarget,
+      kind: 'documents_symbol',
+      certainty: 'Candidate',
+      producer: 'markdown-symbol-resolver'
+    }
+  };
+  const wire: SavedQueryClient & {
+    requests: Record<string, unknown>[];
+    investigate: (request: Record<string, unknown>) => Promise<QueryWireReply>;
+  } = {
+    requests: [],
+    ready: Promise.resolve(investigationReply()),
+    async investigate() {
+      return declarationReply();
+    },
+    async request(request) {
+      this.requests.push(request);
+      let result: QueryWireReply;
+      if (request.includeDeclarationRows) result = await this.investigate(request);
+      else if (request.kind === 'Impact' && request.dependents === false)
+        result = investigationReply({
+          items:
+            request.nodeId === 'mention'
+              ? [mention]
+              : [request.nodeId === 'section' ? section : document, mention],
+          candidates: [target, edge],
+          diagnostics: [{ code: 'markdown.catalog-incomplete', message: 'Catalog incomplete' }]
+        });
+      else if (request.kind === 'Symbol' && request.nodeId === investigationTarget)
+        result = investigationReply({ items: declarationReply().items.slice(0, 1) });
+      else if (request.kind === 'Symbol')
+        result = investigationReply({
+          items: [
+            request.nodeId === 'mention'
+              ? mention
+              : request.nodeId === 'section'
+                ? section
+                : document
+          ]
+        });
+      else if (request.kind === 'Impact')
+        result = investigationReply({
+          items: request.nodeId === 'mention' ? [mention, document] : [document]
+        });
+      else result = investigationReply({ items: [document, section] });
+      return { ...structuredClone(result), requestId: String(request.requestId) };
+    },
+    dispose() {}
+  };
+  const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+  const filters = { resultKinds: ['code', 'docs'] as ('code' | 'docs')[] };
+  const projection = {
+    type: 'getProjection',
+    requestId,
+    analysisId: provider.analysisId,
+    granularity: 'type',
+    scope: { kind: 'root' },
+    filters
+  } as const;
+  const shown = await provider.handle(projection);
+  if (shown.type !== 'projection') throw new Error('projection failed');
+  const documentDetailsRequest = {
+    type: 'getEntityDetails',
+    requestId: 'req_1111111111111111',
+    analysisId: provider.analysisId,
+    entityId: shown.projection.nodes[0].id,
+    filters
+  } as const;
+  const sectionDetailsRequest = {
+    ...documentDetailsRequest,
+    entityId: shown.projection.nodes[1].id
+  };
+  const documentDetails = await provider.handle(documentDetailsRequest);
+  if (documentDetails.type !== 'details') throw new Error('document details failed');
+  const selectedMention = documentDetails.dependencies?.find(
+    (entity) => entity.kind === 'SymbolMention'
+  );
+  if (!selectedMention) throw new Error('mention missing');
+  const detailsRequest = { ...documentDetailsRequest, entityId: selectedMention.id };
+  const details = await provider.handle(detailsRequest);
+  if (details.type !== 'details' || details.candidateOrigins?.length !== 1)
+    throw new Error('origin missing');
+  const origin = details.candidateOrigins[0];
+  const investigation = {
+    type: 'investigateCandidate',
+    requestId: 'req_2222222222222222',
+    analysisId: provider.analysisId,
+    originId: origin.originId
+  } as const;
+  return {
+    provider,
+    wire,
+    projection,
+    detailsRequest,
+    documentDetailsRequest,
+    sectionDetailsRequest,
+    details,
+    origin,
+    investigation
+  };
+}
+
+describe('isolated Candidate declaration investigation', () => {
+  it('keeps normal Candidate/source/export unchanged while an investigation completes after normal work', async () => {
+    const fixture = await candidateFixture();
+    const { provider, wire, origin, investigation } = fixture;
+    let finish!: (value: QueryWireReply) => void;
+    wire.investigate = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const pending = provider.handle(investigation);
+    await provider.handle({
+      ...fixture.projection,
+      requestId: 'req_3333333333333333',
+      scope: { kind: 'root', id: null, depth: 1 }
+    });
+    const normal = await provider.handle({
+      ...fixture.detailsRequest,
+      requestId: 'req_4444444444444444'
+    });
+    expect(normal).toMatchObject({ type: 'details', candidateOrigins: [origin] });
+    if (normal.type !== 'details') throw new Error('normal details failed');
+    expect(normal.dependencies).toHaveLength(1);
+    expect(
+      normal.dependencies?.find((entity) => entity.id === origin.targetEntityId)
+    ).toMatchObject({ kind: 'Type', certainty: 'Candidate', sourceLocationAvailable: false });
+    expect(normal.entity).toMatchObject({
+      kind: 'SymbolMention',
+      certainty: 'Resolved',
+      name: 'T:Demo.Input'
+    });
+    const exported = provider.prepareSavedExport(provider.analysisId);
+    const sourceRequest = {
+      type: 'openDeclaration',
+      requestId,
+      analysisId: provider.analysisId,
+      entityId: origin.targetEntityId
+    } as const;
+    expect(() => provider.resolveSource(sourceRequest)).toThrow('QUERY_SOURCE_NOT_RETURNED');
+    finish(declarationReply());
+    const result = await pending;
+    if (result.type !== 'candidateInvestigation') throw new Error('investigation failed');
+    expect(validateHostMessage(result).ok).toBe(true);
+    expect(result).toMatchObject({
+      certainty: 'Candidate',
+      reason: 'catalog-incomplete',
+      message: '関係は未確定、宣言の存在を別途確認',
+      queryMetadata: { generation: 3, coverage: 'Partial', freshness: 'unverified' },
+      declarations: [{ path: 'Input.cs' }, { path: 'Partial.cs' }]
+    });
+    expect(provider.prepareSavedExport(provider.analysisId)).toEqual(exported);
+    expect(() => provider.resolveSource(sourceRequest)).toThrow('QUERY_SOURCE_NOT_RETURNED');
+    const selected = provider.prepareCandidateSource({
+      analysisId: provider.analysisId,
+      originId: origin.originId,
+      capabilityId: result.declarations[1].capabilityId
+    });
+    expect(selected.location).toMatchObject({
+      relativePath: 'Partial.cs',
+      span: { start: 0, length: 10, end: 10 }
+    });
+    selected.assertCurrent();
+    expect(wire.requests.filter((request) => request.includeDeclarationRows)).toHaveLength(1);
+    expect(wire.requests.find((request) => request.includeDeclarationRows)).toMatchObject({
+      kind: 'Symbol',
+      nodeId: investigationTarget,
+      includeDeclarationRows: true,
+      scope: { variantIds: [investigationVariant], resultKinds: ['Code'], includeExternal: false }
+    });
+    provider.dispose();
+  });
+
+  it('accepts only the newest isolated response and invalidates capabilities on close, repeated stale and context change', async () => {
+    const fixture = await candidateFixture();
+    const { provider, wire, origin, investigation } = fixture;
+    const finish: ((value: QueryWireReply) => void)[] = [];
+    wire.investigate = () =>
+      new Promise((resolve) => {
+        finish.push(resolve);
+      });
+    const older = provider.handle(investigation);
+    const newer = provider.handle({ ...investigation, requestId: 'req_3333333333333333' });
+    finish[1](declarationReply());
+    const current = await newer;
+    if (current.type !== 'candidateInvestigation') throw new Error('investigation failed');
+    finish[0](declarationReply());
+    expect(await older).toMatchObject({
+      type: 'error',
+      code: 'QUERY_CANDIDATE_INVESTIGATION_EXPIRED'
+    });
+    const capability = {
+      analysisId: provider.analysisId,
+      originId: origin.originId,
+      capabilityId: current.declarations[0].capabilityId
+    };
+    const prepared = provider.prepareCandidateSource(capability);
+    provider.dismissCandidateInvestigation(`ci_${'f'.repeat(32)}`);
+    prepared.assertCurrent();
+    expect(() =>
+      provider.prepareCandidateSource({ ...capability, analysisId: 'an_ffffffffffffffff' })
+    ).toThrow();
+    expect(() =>
+      provider.prepareCandidateSource({ ...capability, originId: `ci_${'f'.repeat(32)}` })
+    ).toThrow();
+    expect(() =>
+      provider.prepareCandidateSource({ ...capability, capabilityId: `cd_${'f'.repeat(32)}` })
+    ).toThrow();
+    provider.dismissCandidateInvestigation(origin.originId);
+    expect(() => prepared.assertCurrent()).toThrow('QUERY_CANDIDATE_SOURCE_EXPIRED');
+    wire.investigate = async () => declarationReply();
+    const reopened = await provider.handle(investigation);
+    expect(reopened.type).toBe('candidateInvestigation');
+    provider.markStale('savedChange');
+    expect(await provider.handle(investigation)).toMatchObject({
+      type: 'error',
+      code: 'QUERY_CANDIDATE_ORIGIN_EXPIRED'
+    });
+    const freshDetails = await provider.handle(fixture.detailsRequest);
+    if (freshDetails.type !== 'details' || !freshDetails.candidateOrigins)
+      throw new Error('new origin missing');
+    const freshOrigin = freshDetails.candidateOrigins[0];
+    const response = await provider.handle({ ...investigation, originId: freshOrigin.originId });
+    if (response.type !== 'candidateInvestigation') throw new Error('investigation failed');
+    const freshSource = provider.prepareCandidateSource({
+      analysisId: provider.analysisId,
+      originId: freshOrigin.originId,
+      capabilityId: response.declarations[0].capabilityId
+    });
+    provider.markStale('savedChange');
+    expect(() => freshSource.assertCurrent()).toThrow('QUERY_CANDIDATE_SOURCE_EXPIRED');
+    const scopedDetails = await provider.handle(fixture.detailsRequest);
+    if (scopedDetails.type !== 'details' || !scopedDetails.candidateOrigins)
+      throw new Error('new origin missing');
+    const scopedOrigin = scopedDetails.candidateOrigins[0];
+    const scopedResponse = await provider.handle({
+      ...investigation,
+      originId: scopedOrigin.originId
+    });
+    if (scopedResponse.type !== 'candidateInvestigation') throw new Error('investigation failed');
+    const scopedSource = provider.prepareCandidateSource({
+      analysisId: provider.analysisId,
+      originId: scopedOrigin.originId,
+      capabilityId: scopedResponse.declarations[0].capabilityId
+    });
+    await provider.handle({
+      ...fixture.projection,
+      scope: { kind: 'dependencies', id: fixture.detailsRequest.entityId }
+    });
+    expect(() => scopedSource.assertCurrent()).toThrow('QUERY_CANDIDATE_SOURCE_EXPIRED');
+    expect(
+      await provider.handle({ ...investigation, originId: scopedOrigin.originId })
+    ).toMatchObject({ type: 'error' });
+    provider.dispose();
+    expect(() => provider.prepareCandidateSource(capability)).toThrow();
+  });
+
+  it('rejects foreign target/pin/variant, missing locations and old hosts without registering source', async () => {
+    for (const fault of ['target', 'pin', 'variant', 'location', 'old-host'] as const) {
+      const { provider, wire, origin, investigation } = await candidateFixture();
+      wire.investigate = async () => {
+        const result = declarationReply();
+        if (fault === 'target') result.items[0].node!.id = `hsym_${'f'.repeat(64)}`;
+        if (fault === 'pin') result.snapshot.generation++;
+        if (fault === 'variant') result.items[1].occurrence!.variantId = `hvar_${'f'.repeat(64)}`;
+        if (fault === 'location') result.items = result.items.slice(0, 1);
+        if (fault === 'old-host') delete result.snapshot.symbolDeclarationRowsVersion;
+        return result;
+      };
+      const result = await provider.handle(investigation);
+      if (fault === 'location')
+        expect(result).toMatchObject({
+          type: 'candidateInvestigation',
+          declarations: [],
+          unavailableReason: 'No declaration source location was returned for this variant.'
+        });
+      else expect(result.type).toBe('error');
+      expect(() =>
+        provider.resolveSource({
+          type: 'openDeclaration',
+          requestId,
+          analysisId: provider.analysisId,
+          entityId: origin.targetEntityId
+        })
+      ).toThrow('QUERY_SOURCE_NOT_RETURNED');
+      provider.dispose();
+    }
+    const legacy = client(
+      [],
+      investigationReply({
+        snapshot: { ...investigationReply().snapshot, symbolDeclarationRowsVersion: undefined }
+      })
+    );
+    const provider = await SavedQueryProvider.create(legacy, 'D:/fixture');
+    expect(
+      await provider.handle({
+        type: 'investigateCandidate',
+        requestId,
+        analysisId: provider.analysisId,
+        originId: `ci_${'f'.repeat(32)}`
+      })
+    ).toMatchObject({ type: 'error', code: 'QUERY_SYMBOL_DECLARATION_ROWS_UNSUPPORTED' });
+    expect(legacy.requests).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it('retires old origins on selection/filter changes or a missing original edge, without a foreign dismissal affecting the new one', async () => {
+    for (const change of ['selection', 'filter', 'edge', 'Document', 'Section'] as const) {
+      const fixture = await candidateFixture();
+      const { provider, wire, origin, investigation } = fixture;
+      const first = await provider.handle(investigation);
+      if (first.type !== 'candidateInvestigation') throw new Error('investigation failed');
+      const oldSource = provider.prepareCandidateSource({
+        analysisId: provider.analysisId,
+        originId: origin.originId,
+        capabilityId: first.declarations[0].capabilityId
+      });
+      if (change === 'selection')
+        await provider.handle({ ...fixture.detailsRequest, entityId: origin.targetEntityId });
+      if (change === 'filter')
+        await provider.handle({
+          ...fixture.projection,
+          filters: { ...fixture.projection.filters, includeExternal: false }
+        });
+      if (change === 'Document' || change === 'Section') {
+        const ownerDetails = await provider.handle(
+          change === 'Document' ? fixture.documentDetailsRequest : fixture.sectionDetailsRequest
+        );
+        expect(ownerDetails).toMatchObject({ type: 'details' });
+        expect(ownerDetails).not.toHaveProperty('candidateOrigins');
+      }
+      if (change === 'edge') {
+        const normalRequest = wire.request.bind(wire);
+        wire.request = async (request) => {
+          const value = await normalRequest(request);
+          if (request.kind === 'Impact' && request.dependents === false)
+            value.candidates = value.candidates.map((item) =>
+              item.edge
+                ? { ...item, edge: { ...item.edge, sourceNodeId: 'foreign-mention' } }
+                : item
+            );
+          return value;
+        };
+        const changedDetails = await provider.handle(fixture.detailsRequest);
+        expect(changedDetails).not.toHaveProperty('candidateOrigins');
+      }
+      expect(() => oldSource.assertCurrent()).toThrow('QUERY_CANDIDATE_SOURCE_EXPIRED');
+      expect(await provider.handle(investigation)).toMatchObject({
+        type: 'error',
+        code: 'QUERY_CANDIDATE_ORIGIN_EXPIRED'
+      });
+      provider.dispose();
+    }
+  });
+
+  it('uses the transport wire validator for bounded occurrence and declaration row binding', () => {
+    const valid = declarationReply();
+    expect(
+      validateQueryReply(valid as unknown as Record<string, unknown>).items[1].occurrence?.id
+    ).toBe(investigationOccurrence);
+    expect(() => validateQueryReply(null)).toThrow('QUERY_PROTOCOL_INVALID');
+    for (const fault of ['identity', 'row', 'span', 'duplicate', 'limit'] as const) {
+      const invalid = structuredClone(valid);
+      const row = invalid.items[1];
+      if (fault === 'identity') row.occurrence!.logicalSymbolId = 'opaque-legacy-id';
+      if (fault === 'row') row.id = 'unrelated-row';
+      if (fault === 'span') row.occurrence!.location!.rawSpan!.end++;
+      if (fault === 'duplicate') row.occurrence!.declarations!.push(row.occurrence!.location!);
+      if (fault === 'limit')
+        row.occurrence!.declarations = Array.from({ length: 501 }, () => investigationLocation);
+      expect(() => validateQueryReply(invalid as unknown as Record<string, unknown>)).toThrow(
+        'QUERY_PROTOCOL_INVALID'
+      );
+    }
   });
 });

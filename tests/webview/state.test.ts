@@ -13,10 +13,17 @@ import {
   selectVisibleData,
   selectPrimaryAction,
   selectStatusMessage,
+  candidateContextKey,
   viewReducer,
+  type ViewAction,
   type ViewState
 } from '../../media/app/state';
-import type { Projection, QueryResultMetadata } from '../../src/view/protocolV2';
+import type {
+  HostToWebviewMessage,
+  Projection,
+  QueryResultMetadata
+} from '../../src/view/protocolV2';
+import { restoreViewState, serializeViewState } from '../../media/app/serializer';
 
 const savedMetadata: QueryResultMetadata = {
   provider: 'savedIndex',
@@ -89,6 +96,155 @@ function withProjection(state: ViewState = INITIAL_STATE): ViewState {
     { type: 'projectionReceived', projection: projection() }
   );
 }
+
+describe('isolated Candidate declaration investigation', () => {
+  const originId = 'ci_' + '1'.repeat(32);
+  const mentionId = 'ty_1111111111111111';
+  const targetEntityId = 'ty_2222222222222222';
+  const variantId = 'hvar_' + '1'.repeat(64);
+  const metadata = { ...savedMetadata, variantIds: [variantId] };
+  const response: Extract<HostToWebviewMessage, { type: 'candidateInvestigation' }> = {
+    type: 'candidateInvestigation',
+    requestId: 'req_1111111111111111',
+    analysisId: 'an_0123456789abcdef',
+    originId,
+    relationId: 'rel_1111111111111111',
+    targetEntityId,
+    certainty: 'Candidate',
+    relationKind: 'mentionsSymbol',
+    reason: 'name only',
+    message: 'Relation remains uncertain; declarations are checked separately.',
+    queryMetadata: metadata,
+    declarations: [
+      {
+        capabilityId: 'cd_' + '1'.repeat(32),
+        occurrenceId: 'hocc_' + '1'.repeat(64),
+        variantId,
+        path: 'src/Helper.cs'
+      },
+      {
+        capabilityId: 'cd_' + '2'.repeat(32),
+        occurrenceId: 'hocc_' + '2'.repeat(64),
+        variantId,
+        path: 'src/Helper.Partial.cs'
+      }
+    ]
+  };
+  function current(): ViewState {
+    return {
+      ...INITIAL_STATE,
+      analysisId: response.analysisId,
+      granularity: 'type',
+      status: 'partial',
+      queryMetadata: metadata,
+      selection: { entityId: mentionId },
+      inspectorOpen: true,
+      search: 'Compute',
+      filters: { resultKinds: ['docs'] },
+      projection: projection({ queryMetadata: metadata }),
+      projectionRequestId: 'req_2222222222222222',
+      details: {
+        entityId: mentionId,
+        entity: {
+          id: mentionId,
+          name: 'Compute mention',
+          kind: 'SymbolMention',
+          certainty: 'Resolved',
+          granularity: 'type'
+        },
+        dependencies: [
+          {
+            id: targetEntityId,
+            name: 'Compute',
+            kind: 'Member',
+            certainty: 'Candidate',
+            granularity: 'type'
+          }
+        ],
+        dependents: [],
+        queryMetadata: metadata,
+        candidateOrigins: [
+          { originId, relationId: response.relationId, targetEntityId, targetName: 'Compute' }
+        ]
+      }
+    };
+  }
+
+  it('keeps investigation data outside the normal projection, details, metadata and persisted state', () => {
+    const before = current();
+    const pending = viewReducer(before, { type: 'candidateInvestigationRequested', originId });
+    expect(pending.candidateInvestigation).toMatchObject({ originId, pending: true });
+    const investigated = viewReducer(pending, { type: 'candidateInvestigationReceived', response });
+    expect(investigated.candidateInvestigation).toMatchObject({
+      originId,
+      pending: false,
+      response
+    });
+    expect(investigated.projection).toBe(before.projection);
+    expect(investigated.details).toBe(before.details);
+    expect(investigated.queryMetadata).toBe(before.queryMetadata);
+    expect(investigated.projectionRequestId).toBe(before.projectionRequestId);
+    expect(investigated.details?.dependencies[0].certainty).toBe('Candidate');
+    const persisted = serializeViewState(investigated);
+    expect(persisted).not.toHaveProperty('candidateInvestigation');
+    expect(JSON.stringify(persisted)).not.toContain(response.declarations[0].capabilityId);
+    expect(JSON.stringify(persisted)).not.toContain('src/Helper.cs');
+    expect(
+      restoreViewState({
+        ...persisted,
+        candidateInvestigation: investigated.candidateInvestigation
+      }).state
+    ).not.toHaveProperty('candidateInvestigation');
+  });
+
+  it('drops late results after closing or changing the selected query context', () => {
+    const pending = viewReducer(current(), { type: 'candidateInvestigationRequested', originId });
+    const changes: ViewAction[] = [
+      { type: 'candidateInvestigationDismissed' },
+      { type: 'entitySelected', entityId: targetEntityId },
+      { type: 'scopeChanged', scope: { kind: 'dependencies', id: mentionId, depth: 2 } },
+      { type: 'filtersChanged', filters: { resultKinds: ['code'] } },
+      { type: 'searchChanged', search: 'different' },
+      { type: 'temporaryDisplayAdded', entityId: targetEntityId },
+      {
+        type: 'analysisComplete',
+        analysisId: 'an_1111111111111111',
+        completeness: 'partial',
+        coverage: undefined,
+        queryMetadata: metadata
+      }
+    ];
+    for (const action of changes) {
+      const changed = viewReducer(pending, action);
+      expect(changed.candidateInvestigation).toBeUndefined();
+      expect(
+        viewReducer(changed, { type: 'candidateInvestigationReceived', response })
+          .candidateInvestigation
+      ).toBeUndefined();
+    }
+  });
+
+  it('binds Candidate context to the analysis pin and every query/selection input', () => {
+    const before = current(),
+      key = candidateContextKey(before);
+    const changes: Partial<ViewState>[] = [
+      { analysisId: 'an_1111111111111111' },
+      { queryMetadata: { ...metadata, generation: metadata.generation + 1 } },
+      { queryMetadata: { ...metadata, variantIds: ['hvar_' + '2'.repeat(64)] } },
+      { selection: { entityId: targetEntityId } },
+      { scope: { kind: 'dependencies', id: mentionId, depth: 2 } },
+      { filters: { resultKinds: ['code'] } },
+      { search: 'different' },
+      { granularity: 'project' },
+      { temporaryDisplayIds: [targetEntityId] }
+    ];
+    for (const change of changes)
+      expect(candidateContextKey({ ...before, ...change })).not.toBe(key);
+    expect(
+      candidateContextKey({ ...before, camera: { zoom: 2, scrollLeft: 5, scrollTop: 10 } })
+    ).toBe(key);
+  });
+});
 
 describe('viewReducer status transitions', () => {
   it('restores source navigation without adding history or reusing old projection, details and cursors', () => {

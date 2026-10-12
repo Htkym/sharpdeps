@@ -112,6 +112,22 @@ export interface QueryResultMetadata {
   resultFilterVersion?: number;
 }
 
+/** An issued candidate relation action; independent of declaration availability. */
+export interface CandidateOriginAction {
+  originId: string;
+  relationId: string;
+  targetEntityId: string;
+  targetName: string;
+}
+
+/** Display attributes of one exact occurrence; only capabilityId authorizes source lookup. */
+export interface CandidateDeclarationSummary {
+  capabilityId: string;
+  occurrenceId: string;
+  variantId: string;
+  path: string;
+}
+
 export interface ProjectionEdge {
   id: string;
   sourceId: string;
@@ -230,6 +246,21 @@ export type WebviewToHostMessage =
     }
   | { type: 'getCycleWitness'; requestId: string; analysisId: string; cycleGroupId: string }
   | { type: 'sourceReturnDismissed'; analysisId: string }
+  | { type: 'investigateCandidate'; requestId: string; analysisId: string; originId: string }
+  | {
+      type: 'dismissCandidateInvestigation';
+      requestId: string;
+      analysisId: string;
+      originId: string;
+    }
+  | {
+      type: 'openCandidateDeclaration';
+      requestId: string;
+      analysisId: string;
+      originId: string;
+      capabilityId: string;
+      returnUi?: SourceReturnUi;
+    }
   | {
       type: 'openEvidence';
       requestId: string;
@@ -355,6 +386,22 @@ export type HostToWebviewMessage =
       dependencies?: EntitySummary[];
       dependents?: EntitySummary[];
       queryMetadata?: QueryResultMetadata;
+      candidateOrigins?: CandidateOriginAction[];
+    }
+  | {
+      type: 'candidateInvestigation';
+      requestId: string;
+      analysisId: string;
+      originId: string;
+      relationId: string;
+      targetEntityId: string;
+      certainty: 'Candidate';
+      relationKind: string;
+      reason: string;
+      message: string;
+      queryMetadata: QueryResultMetadata;
+      declarations: CandidateDeclarationSummary[];
+      unavailableReason?: string;
     }
   | {
       type: 'evidencePage';
@@ -414,6 +461,11 @@ const PATTERNS = {
   entityId: /^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/,
   relationId: /^rel_[0-9a-f]{16}$/,
   evidenceId: /^ev_[0-9a-f]{16}$/,
+  candidateOriginId: /^ci_[0-9a-f]{32}$/,
+  candidateDeclarationId: /^cd_[0-9a-f]{32}$/,
+  candidateTargetId: /^ty_[0-9a-f]{16}$/,
+  occurrenceId: /^hocc_[0-9a-f]{64}$/,
+  variantId: /^hvar_[0-9a-f]{64}$/,
   cycleGroupId: /^cyc_[0-9a-f]{16}$/
 } as const;
 
@@ -433,7 +485,13 @@ type FieldKind =
   | 'mode'
   | 'savedUpdatePhase'
   | 'viewState'
-  | 'sourceReturnUi';
+  | 'sourceReturnUi'
+  | 'candidateOrigins'
+  | 'candidateDeclarations'
+  | 'candidateCertainty'
+  | 'candidateQueryMetadata'
+  | 'candidateText'
+  | 'candidateRelationKind';
 
 interface MessageRule {
   required: Record<string, FieldKind>;
@@ -505,6 +563,23 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   sourceReturnDismissed: {
     required: { analysisId: 'analysisId' },
     optional: {}
+  },
+  investigateCandidate: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', originId: 'candidateOriginId' },
+    optional: {}
+  },
+  dismissCandidateInvestigation: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', originId: 'candidateOriginId' },
+    optional: {}
+  },
+  openCandidateDeclaration: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      originId: 'candidateOriginId',
+      capabilityId: 'candidateDeclarationId'
+    },
+    optional: { returnUi: 'sourceReturnUi' }
   },
   openDeclaration: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
@@ -613,7 +688,28 @@ const HOST_RULES: Record<string, MessageRule> = {
   },
   details: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entity: 'object' },
-    optional: { dependencies: 'array', dependents: 'array', queryMetadata: 'object' }
+    optional: {
+      dependencies: 'array',
+      dependents: 'array',
+      queryMetadata: 'object',
+      candidateOrigins: 'candidateOrigins'
+    }
+  },
+  candidateInvestigation: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      originId: 'candidateOriginId',
+      relationId: 'relationId',
+      targetEntityId: 'candidateTargetId',
+      certainty: 'candidateCertainty',
+      relationKind: 'candidateRelationKind',
+      reason: 'candidateText',
+      message: 'candidateText',
+      queryMetadata: 'candidateQueryMetadata',
+      declarations: 'candidateDeclarations'
+    },
+    optional: { unavailableReason: 'candidateText' }
   },
   evidencePage: {
     required: {
@@ -726,6 +822,10 @@ function checkField(
   errors: string[],
   required: boolean
 ): boolean {
+  if (value === null && (kind === 'candidateOrigins' || kind === 'candidateText')) {
+    errors.push(`${path}: expected a candidate field, not null`);
+    return false;
+  }
   if (value === undefined || value === null) {
     if (required) {
       errors.push(`${path}: missing required field`);
@@ -739,6 +839,100 @@ function checkField(
   };
 
   switch (kind) {
+    case 'candidateOriginId':
+    case 'candidateDeclarationId':
+    case 'candidateTargetId':
+    case 'occurrenceId':
+    case 'variantId':
+      return typeof value === 'string' && PATTERNS[kind].test(value)
+        ? true
+        : fail(`value does not match ${PATTERNS[kind]}`);
+    case 'candidateText':
+      return typeof value === 'string' && value.length <= 4096
+        ? true
+        : fail('expected at most 4096 characters');
+    case 'candidateRelationKind':
+      return typeof value === 'string' && value.length >= 1 && value.length <= 128
+        ? true
+        : fail('expected a nonempty relation kind of at most 128 characters');
+    case 'candidateCertainty':
+      return value === 'Candidate'
+        ? true
+        : fail('candidate relation certainty must remain Candidate');
+    case 'candidateOrigins':
+    case 'candidateDeclarations': {
+      const origins = kind === 'candidateOrigins';
+      const limit = origins ? 8 : 16;
+      if (!Array.isArray(value) || value.length > limit)
+        return fail(`expected at most ${limit} candidate entries`);
+      const fields: Record<string, RegExp> = origins
+        ? {
+            originId: PATTERNS.candidateOriginId,
+            relationId: PATTERNS.relationId,
+            targetEntityId: PATTERNS.candidateTargetId
+          }
+        : {
+            capabilityId: PATTERNS.candidateDeclarationId,
+            occurrenceId: PATTERNS.occurrenceId,
+            variantId: PATTERNS.variantId
+          };
+      const textKey = origins ? 'targetName' : 'path';
+      return value.every(
+        (item) =>
+          item &&
+          typeof item === 'object' &&
+          !Array.isArray(item) &&
+          Object.entries(fields).every(
+            ([key, pattern]) => typeof item[key] === 'string' && pattern.test(item[key])
+          ) &&
+          typeof item[textKey] === 'string' &&
+          item[textKey].length >= 1 &&
+          item[textKey].length <= 4096
+      )
+        ? true
+        : fail('expected candidate entries with exact role IDs and bounded display text');
+    }
+    case 'candidateQueryMetadata': {
+      if (typeof value !== 'object' || Array.isArray(value))
+        return fail('expected saved Query metadata');
+      const metadata = value as Record<string, unknown>;
+      const text = (item: unknown, max: number): item is string =>
+        typeof item === 'string' && item.length >= 1 && item.length <= max;
+      const count = (item: unknown): boolean =>
+        typeof item === 'number' && Number.isSafeInteger(item) && item >= 0;
+      return metadata.provider === 'savedIndex' &&
+        metadata.totalKind === 'returned' &&
+        text(metadata.workspaceId, 4096) &&
+        text(metadata.snapshotId, 4096) &&
+        count(metadata.generation) &&
+        Array.isArray(metadata.variantIds) &&
+        metadata.variantIds.length === 1 &&
+        typeof metadata.variantIds[0] === 'string' &&
+        PATTERNS.variantId.test(metadata.variantIds[0]) &&
+        ['CompleteWithinScope', 'Partial', 'Failed'].includes(String(metadata.coverage)) &&
+        ['unverified', 'dirty', 'verified-current'].includes(String(metadata.freshness)) &&
+        typeof metadata.truncated === 'boolean' &&
+        Array.isArray(metadata.truncationReasons) &&
+        metadata.truncationReasons.length <= 64 &&
+        metadata.truncationReasons.every((reason) => text(reason, 128)) &&
+        Array.isArray(metadata.diagnostics) &&
+        metadata.diagnostics.length <= 64 &&
+        metadata.diagnostics.every(
+          (issue) =>
+            issue &&
+            typeof issue === 'object' &&
+            !Array.isArray(issue) &&
+            text(issue.code, 128) &&
+            text(issue.message, 4096)
+        ) &&
+        ['returnedCount', 'candidateCount', 'unresolvedCount'].every((key) =>
+          count(metadata[key])
+        ) &&
+        (metadata.resultFilterVersion === undefined ||
+          (count(metadata.resultFilterVersion) && (metadata.resultFilterVersion as number) >= 1))
+        ? true
+        : fail('expected bounded metadata for one saved variant');
+    }
     case 'string':
       return typeof value === 'string' ? true : fail('expected a string');
     case 'boolean':

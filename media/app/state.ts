@@ -7,6 +7,8 @@
 import type { Granularity } from '../../src/analyzer/reportV2';
 import { translate, translator, type Language } from './i18n';
 import type {
+  CandidateOriginAction,
+  HostToWebviewMessage,
   EntitySummary,
   Filters,
   Projection,
@@ -96,7 +98,14 @@ export interface ViewState {
     dependencies: EntitySummary[];
     dependents: EntitySummary[];
     queryMetadata?: QueryResultMetadata;
+    candidateOrigins?: CandidateOriginAction[];
   } | null;
+  /** Declaration investigation is transient and never belongs to the normal graph/export. */
+  candidateInvestigation?: {
+    originId: string;
+    pending: boolean;
+    response?: Extract<HostToWebviewMessage, { type: 'candidateInvestigation' }>;
+  };
   evidence: {
     relationId: string;
     total: number;
@@ -222,7 +231,14 @@ export type ViewAction =
       dependencies: EntitySummary[];
       dependents: EntitySummary[];
       queryMetadata?: QueryResultMetadata;
+      candidateOrigins?: CandidateOriginAction[];
     }
+  | { type: 'candidateInvestigationRequested'; originId: string }
+  | {
+      type: 'candidateInvestigationReceived';
+      response: Extract<HostToWebviewMessage, { type: 'candidateInvestigation' }>;
+    }
+  | { type: 'candidateInvestigationDismissed' }
   | {
       type: 'evidenceReceived';
       relationId: string;
@@ -304,6 +320,44 @@ function mergeEvidence(
 }
 
 export function viewReducer(state: ViewState, action: ViewAction): ViewState {
+  const next = reduceViewState(state, action);
+  if (
+    next.candidateInvestigation &&
+    (candidateContextKey(next) !== candidateContextKey(state) ||
+      ['analysisStale', 'stateRestored', 'sourceReturned', 'inspectorClosed'].includes(
+        action.type
+      ) ||
+      !next.inspectorOpen ||
+      !next.details?.candidateOrigins?.some(
+        (origin) => origin.originId === next.candidateInvestigation?.originId
+      ))
+  )
+    return { ...next, candidateInvestigation: undefined };
+  return next;
+}
+
+/** Match a declaration investigation to the view which explicitly requested it. */
+export function candidateContextKey(state: ViewState): string {
+  return JSON.stringify({
+    analysisId: state.analysisId,
+    pin: state.queryMetadata
+      ? [
+          state.queryMetadata.workspaceId,
+          state.queryMetadata.snapshotId,
+          state.queryMetadata.generation,
+          [...state.queryMetadata.variantIds].sort()
+        ]
+      : null,
+    selection: state.selection,
+    scope: state.scope,
+    filters: state.filters,
+    search: state.search,
+    granularity: state.granularity,
+    includeIds: state.temporaryDisplayIds
+  });
+}
+
+function reduceViewState(state: ViewState, action: ViewAction): ViewState {
   if (
     state.queryMetadata &&
     ((action.type === 'granularityChanged' && action.granularity !== 'type') ||
@@ -319,6 +373,26 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       }
     };
   switch (action.type) {
+    case 'candidateInvestigationRequested':
+      return state.queryMetadata &&
+        state.details?.candidateOrigins?.some((origin) => origin.originId === action.originId)
+        ? { ...state, candidateInvestigation: { originId: action.originId, pending: true } }
+        : state;
+    case 'candidateInvestigationReceived':
+      return state.candidateInvestigation?.pending &&
+        state.candidateInvestigation.originId === action.response.originId &&
+        action.response.analysisId === state.analysisId
+        ? {
+            ...state,
+            candidateInvestigation: {
+              originId: action.response.originId,
+              pending: false,
+              response: action.response
+            }
+          }
+        : state;
+    case 'candidateInvestigationDismissed':
+      return state.candidateInvestigation ? { ...state, candidateInvestigation: undefined } : state;
     case 'sourceReturned': {
       const restored = sanitizeRestoredState({
         ...state,
@@ -559,7 +633,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
           entity: action.entity,
           dependencies: action.dependencies,
           dependents: action.dependents,
-          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
+          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {}),
+          ...(action.candidateOrigins ? { candidateOrigins: action.candidateOrigins } : {})
         },
         queryMetadata: action.queryMetadata ?? state.queryMetadata,
         inspectorOpen: true

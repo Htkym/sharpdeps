@@ -180,6 +180,11 @@ public sealed class QueryService
             {
                 work.Check();
                 if (!selected.Contains(occurrence.LogicalSymbolId) || !VariantAllowed(occurrence.VariantId, request.Scope)) continue;
+                if (request.IncludeDeclarationRows)
+                {
+                    if (!AddDeclarationRows(work, occurrence)) break;
+                    continue;
+                }
                 var selectedDeclarations = (occurrence.Declarations ?? []).Where(l => LocationInScope(l, request.Scope))
                     .Take(request.Budget!.MaxNodes + 1).ToArray();
                 if (selectedDeclarations.Length > request.Budget.MaxNodes) work.Reasons.Add("DECLARATION_LIMIT");
@@ -200,17 +205,24 @@ public sealed class QueryService
             {
                 work.Check();
                 if (!reached.Contains(new(occurrence.LogicalSymbolId, occurrence.Id, occurrence.VariantId))) continue;
-                var declarations = occurrence.Declarations ?? (occurrence.Location is null ? [] : new[] { occurrence.Location });
-                var number = 0;
-                foreach (var declaration in declarations)
-                {
-                    if (!LocationInScope(declaration, request.Scope)) continue;
-                    if (!work.Add(new(occurrence.Id + "/" + number++, "declaration", nodes[occurrence.LogicalSymbolId].Name,
-                        "declaration in selected variant", HarnessCertainty.Resolved, PathOf(declaration), declaration, [],
-                        Occurrence: occurrence with { Location = declaration, Declarations = [declaration] }))) return;
-                }
+                if (!AddDeclarationRows(work, occurrence)) return;
             }
         }
+    }
+
+    private bool AddDeclarationRows(Work work, HarnessSymbolOccurrence occurrence)
+    {
+        var declarations = occurrence.Declarations ?? (occurrence.Location is null ? [] : new[] { occurrence.Location });
+        var number = 0;
+        foreach (var declaration in declarations)
+        {
+            work.Check();
+            if (!LocationInScope(declaration, work.Request.Scope)) continue;
+            if (!work.Add(new(occurrence.Id + "/" + number++, "declaration", nodes[occurrence.LogicalSymbolId].Name,
+                "declaration in selected variant", HarnessCertainty.Resolved, PathOf(declaration), declaration, [],
+                Occurrence: occurrence with { Location = declaration, Declarations = [declaration] }))) return false;
+        }
+        return true;
     }
 
     private List<QueryItem> Search(Work work)
@@ -612,6 +624,7 @@ public sealed class QueryService
             || (r.Scope?.VariantIds is { } variants && (variants.Count is < 1 or > 64 || variants.Any(s => !Short(s, 128))))
             || (r.Scope?.ResultKinds is { } resultKinds && (resultKinds.Count is < 1 or > 3 || resultKinds.Any(k => !Enum.IsDefined(k))))
             || (r.EdgeKinds is { } edges && (edges.Count is < 1 or > 32 || edges.Any(s => !Short(s, 64))))
+            || (r.IncludeDeclarationRows && r.Kind != QueryKind.Symbol)
             || (r.Kind == QueryKind.Browse && (r.Term is not null || r.NodeId is not null || r.Ids is not null || r.EdgeKinds is not null))
             || (r.Kind == QueryKind.Search && string.IsNullOrWhiteSpace(r.Term))
             || (r.Kind is QueryKind.Symbol or QueryKind.Callers or QueryKind.Callees && r.NodeId is null && r.Ids is not { Count: > 0 })

@@ -62,6 +62,9 @@ export interface ViewerAppOptions {
   onOpenEvidence?: (evidenceId: string) => void;
   onOpenDeclaration?: (entityId: string) => void;
   onSourceReturnDismissed?: () => void;
+  onInvestigateCandidate?: (originId: string) => void;
+  onDismissCandidateInvestigation?: (originId: string, analysisId?: string) => void;
+  onOpenCandidateDeclaration?: (originId: string, capabilityId: string) => void;
   /**
    * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
    * table stays available and the graph shows why it is missing.
@@ -291,6 +294,8 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   }
 
   function dispatch(action: ViewAction): void {
+    const previousInvestigation = state.candidateInvestigation;
+    const previousAnalysisId = state.analysisId;
     if (action.type === 'analyzeStarted' || action.type === 'analysisComplete')
       pendingSourceUi = undefined;
     if (action.type === 'sourceReturned') {
@@ -305,6 +310,11 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     }
 
     state = next;
+    if (
+      previousInvestigation &&
+      state.candidateInvestigation?.originId !== previousInvestigation.originId
+    )
+      options.onDismissCandidateInvestigation?.(previousInvestigation.originId, previousAnalysisId);
     if (pendingSourceUi && pendingSourceUi.pin !== sourceReturnPin()) pendingSourceUi = undefined;
     if (action.type === 'sourceReturned' && state.camera)
       graphRuntime.view?.applyCamera(state.camera);
@@ -1698,6 +1708,79 @@ function renderSavedQueryInspector(
   } else {
     elements.inspectorTitle.textContent = tr('Details');
     body.append(message(tr('Select a node or relation to inspect it.'), 'sd-empty'));
+  }
+  if (
+    details?.candidateOrigins?.length &&
+    !state.selection.relationId &&
+    state.status !== 'stale'
+  ) {
+    const section = document.createElement('section');
+    section.dataset.candidateInvestigation = '';
+    section.append(
+      message(
+        tr('The relationship is unconfirmed; check declaration existence separately.'),
+        'sd-note'
+      )
+    );
+    for (const origin of details.candidateOrigins) {
+      const investigate = document.createElement('button');
+      investigate.type = 'button';
+      investigate.className = 'sd-button';
+      investigate.textContent = tr('Investigate declaration: {0}', origin.targetName);
+      investigate.dataset.candidateOrigin = origin.originId;
+      investigate.dataset.sourceReturn = 'declaration';
+      investigate.dataset.sourceId = details.entityId;
+      investigate.disabled = state.candidateInvestigation?.pending === true;
+      investigate.addEventListener('click', () => {
+        dispatch({ type: 'candidateInvestigationRequested', originId: origin.originId });
+        options.onInvestigateCandidate?.(origin.originId);
+      });
+      section.append(investigate);
+    }
+    const investigation = state.candidateInvestigation;
+    if (investigation) {
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'sd-button';
+      dismiss.textContent = tr('Close declaration investigation');
+      dismiss.dataset.candidateDismiss = '';
+      dismiss.addEventListener('click', () =>
+        dispatch({ type: 'candidateInvestigationDismissed' })
+      );
+      section.append(dismiss);
+      if (investigation.pending) section.append(message(tr('Loading declarations…'), 'sd-note'));
+      const response = investigation.response;
+      if (response) {
+        renderQueryMetadata(section, response.queryMetadata, state.language);
+        if (response.reason)
+          section.append(
+            message(
+              response.reason === 'catalog-incomplete'
+                ? tr('The symbol catalog is incomplete.')
+                : response.reason,
+              'sd-note'
+            )
+          );
+        if (response.unavailableReason)
+          section.append(message(tr(response.unavailableReason), 'sd-note'));
+        if (response.queryMetadata.truncated)
+          section.append(message(tr('Returned declaration list is truncated.'), 'sd-note'));
+        if (!response.declarations.length)
+          section.append(message(tr('Source location unavailable'), 'sd-note'));
+        response.declarations.forEach((declaration, index) => {
+          const open = document.createElement('button');
+          open.type = 'button';
+          open.className = 'sd-button';
+          open.textContent = tr('Open declaration {0}: {1}', index + 1, declaration.path);
+          open.dataset.candidateDeclaration = declaration.capabilityId;
+          open.addEventListener('click', () =>
+            options.onOpenCandidateDeclaration?.(response.originId, declaration.capabilityId)
+          );
+          section.append(open);
+        });
+      }
+    }
+    body.append(section);
   }
   renderQueryMetadata(body, metadata ?? state.queryMetadata!, state.language);
   body.append(

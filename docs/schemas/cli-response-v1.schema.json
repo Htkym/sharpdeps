@@ -160,7 +160,9 @@
         "graphSchemaVersion": { "const": 1 },
         "identityVersion": { "const": "sharpdeps-harness/1" },
         "indexSchemaVersion": { "const": 1 },
-        "coordinatorState": { "const": "not-connected" }
+        "coordinatorState": { "const": "not-connected" },
+        "resultFilterVersion": { "const": 1 },
+        "symbolDeclarationRowsVersion": { "const": 1 }
       }
     },
     "limits": {

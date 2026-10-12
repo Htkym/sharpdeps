@@ -11,6 +11,7 @@ import {
 } from '../export/savedQueryExport';
 import {
   QueryClientError,
+  validateQueryReply,
   type SavedQueryClient,
   type QueryWireReply,
   type QueryItem,
@@ -24,6 +25,7 @@ import type {
   HostToWebviewMessage,
   Projection,
   QueryResultMetadata,
+  CandidateOriginAction,
   WebviewToHostMessage,
   Filters
 } from '../view/protocolV2';
@@ -35,6 +37,24 @@ const CAPABILITIES = {
   cycleWitness: false,
   search: true
 };
+
+interface CandidateOrigin {
+  action: CandidateOriginAction;
+  edge: QueryEdge;
+  mention: QueryNode;
+  target: QueryNode;
+  originalCandidate: QueryItem;
+  reason: string;
+  snapshot: QueryWireReply['snapshot'];
+  epoch: number;
+  contextKey: string;
+}
+interface CandidateSource {
+  origin: CandidateOrigin;
+  revision: number;
+  occurrenceId: string;
+  location: SavedSourceLocation;
+}
 
 /** An explicitly selected saved generation; legacy data is never spliced into it. */
 export class SavedQueryProvider implements ReportBridge {
@@ -55,6 +75,19 @@ export class SavedQueryProvider implements ReportBridge {
   private preparedExport?: SavedQueryExport;
   private preparedProjection?: Extract<WebviewToHostMessage, { type: 'getProjection' }>;
   private projectionRevision = 0;
+  private readonly candidateOrigins = new Map<string, CandidateOrigin>();
+  private readonly candidateInvestigations = new Map<
+    string,
+    Extract<HostToWebviewMessage, { type: 'candidateInvestigation' }>
+  >();
+  private readonly candidateSources = new Map<string, CandidateSource>();
+  private candidateEpoch = 0;
+  private investigationRevision = 0;
+  private activeCandidateOrigin?: string;
+  private candidateFilters: Filters = {};
+  private candidateProjectionKey?: string;
+  private candidateSelection?: string;
+  private detailsRevision = 0;
 
   get staleReason(): Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined {
     return this.inputStaleReason;
@@ -62,6 +95,7 @@ export class SavedQueryProvider implements ReportBridge {
 
   markStale(reason: Extract<HostToWebviewMessage, { type: 'stale' }>['reason']): void {
     this.inputStaleReason = reason;
+    this.invalidateCandidateOrigins();
   }
 
   /** Rereading the same saved generation does not resolve an observed input change. */
@@ -241,6 +275,8 @@ export class SavedQueryProvider implements ReportBridge {
           return await this.details(request);
         case 'getEvidencePage':
           return this.evidence(request);
+        case 'investigateCandidate':
+          return await this.investigateCandidate(request);
         default:
           throw new QueryClientError('QUERY_OPERATION_UNSUPPORTED');
       }
@@ -258,7 +294,7 @@ export class SavedQueryProvider implements ReportBridge {
     }
   }
 
-  private async execute(
+  private async requestValidated(
     kind: string,
     fields: Record<string, unknown> = {},
     maxDepth = 1
@@ -309,6 +345,15 @@ export class SavedQueryProvider implements ReportBridge {
     )
       throw new QueryClientError('QUERY_VARIANT_CHANGED');
     if (reply.errors.length) throw new QueryClientError(reply.errors[0].code);
+    return reply;
+  }
+
+  private async execute(
+    kind: string,
+    fields: Record<string, unknown> = {},
+    maxDepth = 1
+  ): Promise<QueryWireReply> {
+    const reply = await this.requestValidated(kind, fields, maxDepth);
     const returned = [...reply.items, ...reply.candidates, ...reply.unresolved];
     if (this.nodes.size + this.edges.size + this.cursors.size + returned.length > 10000) {
       this.dispose();
@@ -451,6 +496,7 @@ export class SavedQueryProvider implements ReportBridge {
     request: Extract<WebviewToHostMessage, { type: 'searchEntities' }>
   ): Promise<HostToWebviewMessage> {
     this.filters(request.filters);
+    this.observeCandidateFilters(request.filters);
     // Query supports 128 UTF-16 chars; rejecting is preferable to changing the search.
     if (request.query.length > 128) throw new QueryClientError('QUERY_TERM_LIMIT');
     const key = JSON.stringify([
@@ -498,6 +544,18 @@ export class SavedQueryProvider implements ReportBridge {
     request: Extract<WebviewToHostMessage, { type: 'getProjection' }>
   ): Promise<HostToWebviewMessage> {
     const projectionRevision = ++this.projectionRevision;
+    this.observeCandidateFilters(request.filters);
+    const candidateKey = JSON.stringify([
+      request.scope.kind,
+      request.scope.id ?? null,
+      request.scope.depth ?? 1,
+      request.granularity,
+      request.search ?? '',
+      request.includeIds ?? []
+    ]);
+    if (this.candidateProjectionKey !== undefined && this.candidateProjectionKey !== candidateKey)
+      this.invalidateCandidateOrigins();
+    this.candidateProjectionKey = candidateKey;
     this.preparedExport = undefined;
     this.preparedProjection = undefined;
     this.filters(request.filters);
@@ -661,17 +719,19 @@ export class SavedQueryProvider implements ReportBridge {
     request: Extract<WebviewToHostMessage, { type: 'getEntityDetails' }>
   ): Promise<HostToWebviewMessage> {
     this.filters(request.filters);
+    this.observeCandidateFilters(request.filters);
+    if (this.candidateSelection !== undefined && this.candidateSelection !== request.entityId)
+      this.invalidateCandidateOrigins();
+    this.candidateSelection = request.entityId;
+    const detailsRevision = ++this.detailsRevision;
+    const candidateEpoch = this.candidateEpoch;
     const nodeId = this.selected(request.entityId);
     const selected = this.nodes.get(nodeId)!;
     const scope = this.resultScope(request.filters);
-    const symbol = await this.execute('Symbol', { nodeId, scope });
-    const entity = this.entities(symbol).find((item) => item.id === request.entityId);
-    if (!entity) throw new QueryClientError('QUERY_ENTITY_NOT_RETURNED');
     if (selected.item.certainty !== 'Resolved') {
-      this.nodes.set(nodeId, selected);
-      // Symbol may provide a resolved declaration that the original candidate did
-      // not have. Do not invent its occurrence/source capability for that leaf.
+      // Capture before awaiting, without registering the separate Symbol result.
       const candidate = this.entity(nodeId, selected.item.certainty);
+      const symbol = await this.requestValidated('Symbol', { nodeId, scope });
       return {
         type: 'details',
         requestId: request.requestId,
@@ -682,6 +742,9 @@ export class SavedQueryProvider implements ReportBridge {
         queryMetadata: this.metadata(symbol, 1)
       };
     }
+    const symbol = await this.execute('Symbol', { nodeId, scope });
+    const entity = this.entities(symbol).find((item) => item.id === request.entityId);
+    if (!entity) throw new QueryClientError('QUERY_ENTITY_NOT_RETURNED');
     const isDocument = selected.node.kind === 'Document' || selected.node.kind === 'Section';
     // Documentation reaches code through section/mention structure. Candidates remain
     // leaves in Query; ordinary code details and reverse exploration stay one hop.
@@ -703,15 +766,311 @@ export class SavedQueryProvider implements ReportBridge {
       includeCandidates: true
     });
     const metadata = this.combinedMetadata([symbol, outgoing, incoming], 1);
+    const dependencies = this.entities(outgoing).filter((item) => item.id !== request.entityId);
+    const dependents = this.entities(incoming).filter((item) => item.id !== request.entityId);
+    let candidateOrigins: CandidateOriginAction[] = [];
+    if (detailsRevision === this.detailsRevision && candidateEpoch === this.candidateEpoch) {
+      candidateOrigins =
+        selected.node.kind === 'SymbolMention'
+          ? this.issueCandidateOrigins(outgoing, request.entityId, nodeId)
+          : [];
+      const visibleOrigins = new Set(candidateOrigins.map((action) => action.originId));
+      for (const [id, origin] of this.candidateOrigins)
+        if (origin.contextKey === request.entityId && !visibleOrigins.has(id))
+          this.candidateOrigins.delete(id);
+      if (this.activeCandidateOrigin && !this.candidateOrigins.has(this.activeCandidateOrigin))
+        this.invalidateCandidateInvestigation();
+    }
     return {
       type: 'details',
       requestId: request.requestId,
       analysisId: this.analysisId,
       entity: { ...entity },
-      dependencies: this.entities(outgoing).filter((entity) => entity.id !== request.entityId),
-      dependents: this.entities(incoming).filter((entity) => entity.id !== request.entityId),
+      dependencies,
+      dependents,
+      ...(candidateOrigins.length ? { candidateOrigins } : {}),
       queryMetadata: metadata
     };
+  }
+
+  private observeCandidateFilters(filters?: Filters): void {
+    if (!isDeepStrictEqual(this.candidateFilters, filters ?? {})) {
+      this.invalidateCandidateOrigins();
+      this.candidateFilters = structuredClone(filters ?? {});
+    }
+  }
+
+  private invalidateCandidateInvestigation(): void {
+    this.investigationRevision++;
+    this.activeCandidateOrigin = undefined;
+    this.candidateInvestigations.clear();
+    this.candidateSources.clear();
+  }
+
+  private invalidateCandidateOrigins(): void {
+    this.candidateEpoch++;
+    this.candidateOrigins.clear();
+    this.invalidateCandidateInvestigation();
+  }
+
+  private issueCandidateOrigins(
+    reply: QueryWireReply,
+    selectionId: string,
+    selectedRawId: string
+  ): CandidateOriginAction[] {
+    if (this.readyReply.snapshot.symbolDeclarationRowsVersion !== 1 || this.disposed) return [];
+    const returned = [...reply.items, ...reply.candidates, ...reply.unresolved];
+    const actions: CandidateOriginAction[] = [];
+    for (const item of returned) {
+      const edge = item.edge;
+      if (
+        !edge ||
+        item.certainty !== 'Candidate' ||
+        edge.certainty !== 'Candidate' ||
+        edge.producer !== 'markdown-symbol-resolver' ||
+        !['documents_symbol', 'mentions_symbol'].includes(edge.kind) ||
+        (edge.variantId !== undefined && edge.variantId !== this.variant)
+      )
+        continue;
+      const mention = returned.find((entry) => entry.node?.id === edge.sourceNodeId)?.node;
+      const targetItem = returned.find(
+        (entry) => entry.node?.id === edge.targetNodeId && entry.certainty === 'Candidate'
+      );
+      const target = targetItem?.node;
+      if (
+        !mention ||
+        mention.kind !== 'SymbolMention' ||
+        mention.id !== selectedRawId ||
+        !target ||
+        !['Type', 'Member'].includes(target.kind) ||
+        !/^hsym_[0-9a-f]{64}$/.test(target.id) ||
+        target.name.length === 0 ||
+        target.name.length > 4096
+      )
+        continue;
+      const relationId = this.opaque.get(`rel:${edge.id}`);
+      const targetEntityId = this.opaque.get(`ty:${target.id}`);
+      if (!relationId || !targetEntityId) continue;
+      const existing = [...this.candidateOrigins.values()].find(
+        (origin) =>
+          origin.epoch === this.candidateEpoch &&
+          origin.contextKey === selectionId &&
+          origin.edge.id === edge.id &&
+          origin.target.id === target.id
+      );
+      if (existing) {
+        if (!actions.some((action) => action.originId === existing.action.originId))
+          actions.push({ ...existing.action });
+      } else {
+        if (this.candidateOrigins.size >= 64) break;
+        const originId = `ci_${randomBytes(16).toString('hex')}`;
+        if (this.candidateOrigins.has(originId)) throw new QueryClientError('QUERY_ID_COLLISION');
+        const action = { originId, relationId, targetEntityId, targetName: target.name };
+        this.candidateOrigins.set(originId, {
+          action,
+          edge: structuredClone(edge),
+          mention: structuredClone(mention),
+          target: structuredClone(target),
+          originalCandidate: structuredClone(targetItem!),
+          reason: reply.diagnostics.some((issue) => issue.code === 'markdown.catalog-incomplete')
+            ? 'catalog-incomplete'
+            : (item.reason ?? 'candidate-relation'),
+          snapshot: structuredClone(reply.snapshot),
+          epoch: this.candidateEpoch,
+          contextKey: selectionId
+        });
+        actions.push({ ...action });
+      }
+      if (actions.length === 8) break;
+    }
+    return actions;
+  }
+
+  private assertCandidateOrigin(originId: string): CandidateOrigin {
+    const origin = this.candidateOrigins.get(originId);
+    const snapshot = this.readyReply.snapshot;
+    if (
+      this.disposed ||
+      !origin ||
+      origin.epoch !== this.candidateEpoch ||
+      origin.contextKey !== this.candidateSelection ||
+      this.reverse.get(origin.contextKey) !== origin.mention.id ||
+      origin.mention.kind !== 'SymbolMention' ||
+      this.nodes.get(origin.mention.id)?.node.kind !== 'SymbolMention' ||
+      origin.snapshot.workspaceId !== snapshot.workspaceId ||
+      origin.snapshot.id !== snapshot.id ||
+      origin.snapshot.generation !== snapshot.generation ||
+      snapshot.variantCount !== 1 ||
+      snapshot.variantIds.length !== 1 ||
+      snapshot.variantIds[0] !== this.variant ||
+      origin.snapshot.variantCount !== 1 ||
+      origin.snapshot.variantIds[0] !== this.variant ||
+      origin.edge.sourceNodeId !== origin.mention.id ||
+      origin.edge.targetNodeId !== origin.target.id ||
+      origin.edge.certainty !== 'Candidate' ||
+      (origin.edge.variantId !== undefined && origin.edge.variantId !== this.variant)
+    )
+      throw new QueryClientError('QUERY_CANDIDATE_ORIGIN_EXPIRED');
+    return origin;
+  }
+
+  /** Closing this investigation leaves its current origin available for a new explicit request. */
+  dismissCandidateInvestigation(originId: string): void {
+    if (this.candidateOrigins.has(originId) && this.activeCandidateOrigin === originId)
+      this.invalidateCandidateInvestigation();
+  }
+
+  private async investigateCandidate(
+    request: Extract<WebviewToHostMessage, { type: 'investigateCandidate' }>
+  ): Promise<HostToWebviewMessage> {
+    if (this.readyReply.snapshot.symbolDeclarationRowsVersion !== 1)
+      throw new QueryClientError('QUERY_SYMBOL_DECLARATION_ROWS_UNSUPPORTED');
+    const origin = this.assertCandidateOrigin(request.originId);
+    this.invalidateCandidateInvestigation();
+    this.activeCandidateOrigin = request.originId;
+    const revision = this.investigationRevision;
+    const assertCurrent = (): void => {
+      if (
+        this.assertCandidateOrigin(request.originId) !== origin ||
+        revision !== this.investigationRevision ||
+        this.activeCandidateOrigin !== request.originId
+      )
+        throw new QueryClientError('QUERY_CANDIDATE_INVESTIGATION_EXPIRED');
+    };
+    const reply = validateQueryReply(
+      await this.requestValidated('Symbol', {
+        nodeId: origin.target.id,
+        scope: { variantIds: [this.variant], resultKinds: ['Code'], includeExternal: false },
+        includeDeclarationRows: true,
+        pageSize: 16,
+        budget: {
+          maxNodes: 17,
+          maxEdges: 1,
+          maxDepth: 1,
+          maxMilliseconds: 3000,
+          maxChars: 32000,
+          maxBytes: 64000
+        }
+      })
+    );
+    assertCurrent();
+    if (reply.snapshot.symbolDeclarationRowsVersion !== 1)
+      throw new QueryClientError('QUERY_SYMBOL_DECLARATION_ROWS_UNSUPPORTED');
+    const returned = [...reply.items, ...reply.candidates, ...reply.unresolved];
+    const selected = returned.filter((item) => item.node);
+    if (
+      selected.length !== 1 ||
+      selected[0].node!.id !== origin.target.id ||
+      selected[0].node!.kind !== origin.target.kind ||
+      selected[0].resultKind !== 'Code' ||
+      returned.some((item) => item.edge || item.certainty !== 'Resolved')
+    )
+      throw new QueryClientError('QUERY_CANDIDATE_TARGET_INVALID');
+    const rows = returned.filter((item) => item.occurrence);
+    if (rows.length > 16 || returned.length !== rows.length + 1)
+      throw new QueryClientError('QUERY_CANDIDATE_DECLARATION_INVALID');
+    const declarations: Extract<
+      HostToWebviewMessage,
+      { type: 'candidateInvestigation' }
+    >['declarations'] = [];
+    const sources = new Map<string, CandidateSource>();
+    const seen = new Set<string>();
+    let unavailable = rows.length === 0;
+    for (const row of rows) {
+      const occurrence = row.occurrence!;
+      const location = occurrence.location;
+      if (
+        occurrence.logicalSymbolId !== origin.target.id ||
+        occurrence.variantId !== this.variant ||
+        (origin.edge.targetOccurrenceId !== undefined &&
+          origin.edge.targetOccurrenceId !== occurrence.id) ||
+        !/^hocc_[0-9a-f]{64}\/(0|[1-9][0-9]{0,2})$/.test(row.id) ||
+        !row.id.startsWith(occurrence.id + '/') ||
+        row.kind !== 'declaration' ||
+        row.resultKind !== 'Code' ||
+        occurrence.declarations?.length !== 1 ||
+        !isDeepStrictEqual(location, occurrence.declarations[0]) ||
+        !isDeepStrictEqual(location, row.evidence)
+      )
+        throw new QueryClientError('QUERY_CANDIDATE_DECLARATION_INVALID');
+      if (
+        !location?.contentHash ||
+        !/^[0-9a-f]{64}$/.test(location.contentHash) ||
+        !location.rawSpan ||
+        !row.path
+      ) {
+        unavailable = true;
+        continue;
+      }
+      const key = JSON.stringify([
+        occurrence.id,
+        location.sourceId,
+        location.contentHash,
+        location.rawSpan
+      ]);
+      if (seen.has(key)) throw new QueryClientError('QUERY_CANDIDATE_DECLARATION_INVALID');
+      seen.add(key);
+      const capabilityId = `cd_${randomBytes(16).toString('hex')}`;
+      if (sources.has(capabilityId)) throw new QueryClientError('QUERY_ID_COLLISION');
+      const source = this.source(row.path, location)!;
+      sources.set(capabilityId, {
+        origin,
+        revision,
+        occurrenceId: occurrence.id,
+        location: structuredClone(source)
+      });
+      declarations.push({
+        capabilityId,
+        occurrenceId: occurrence.id,
+        variantId: this.variant,
+        path: row.path
+      });
+    }
+    assertCurrent();
+    const response: Extract<HostToWebviewMessage, { type: 'candidateInvestigation' }> = {
+      type: 'candidateInvestigation',
+      requestId: request.requestId,
+      analysisId: this.analysisId,
+      originId: request.originId,
+      relationId: origin.action.relationId,
+      targetEntityId: origin.action.targetEntityId,
+      certainty: 'Candidate',
+      relationKind: origin.edge.kind,
+      reason: origin.reason,
+      message: '関係は未確定、宣言の存在を別途確認',
+      queryMetadata: this.metadata(reply, declarations.length),
+      declarations,
+      ...(unavailable
+        ? { unavailableReason: 'No declaration source location was returned for this variant.' }
+        : {})
+    };
+    this.candidateInvestigations.set(request.originId, structuredClone(response));
+    for (const [id, source] of sources) this.candidateSources.set(id, source);
+    return response;
+  }
+
+  /** A separate, host-owned capability; never an entry in the normal declaration/evidence maps. */
+  prepareCandidateSource(request: { analysisId: string; originId: string; capabilityId: string }): {
+    location: SavedSourceLocation;
+    assertCurrent: () => void;
+  } {
+    const record = this.candidateSources.get(request.capabilityId);
+    const assertCurrent = (): void => {
+      if (
+        request.analysisId !== this.analysisId ||
+        !record ||
+        !/^cd_[0-9a-f]{32}$/.test(request.capabilityId) ||
+        this.candidateSources.get(request.capabilityId) !== record ||
+        this.assertCandidateOrigin(request.originId) !== record.origin ||
+        record.origin.action.originId !== request.originId ||
+        this.activeCandidateOrigin !== request.originId ||
+        record.revision !== this.investigationRevision ||
+        !this.candidateInvestigations.has(request.originId)
+      )
+        throw new QueryClientError('QUERY_CANDIDATE_SOURCE_EXPIRED');
+    };
+    assertCurrent();
+    return { location: structuredClone(record!.location), assertCurrent };
   }
 
   private evidence(
@@ -823,6 +1182,7 @@ export class SavedQueryProvider implements ReportBridge {
 
   dispose(): void {
     this.disposed = true;
+    this.invalidateCandidateOrigins();
     this.preparedExport = undefined;
     this.preparedProjection = undefined;
     this.client.dispose();

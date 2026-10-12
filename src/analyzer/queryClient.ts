@@ -4,8 +4,16 @@ import * as path from 'node:path';
 export type QueryCertainty = 'Resolved' | 'Candidate' | 'Unresolved';
 export interface QueryLocation {
   sourceId: string;
+  sourceVersion?: string;
   contentHash?: string;
   rawSpan?: { start: number; length: number; end: number };
+}
+export interface QueryOccurrence {
+  id: string;
+  logicalSymbolId: string;
+  variantId: string;
+  location?: QueryLocation;
+  declarations?: QueryLocation[];
 }
 export interface QueryNode {
   id: string;
@@ -37,6 +45,7 @@ export interface QueryItem {
   resultKind?: 'Code' | 'Docs' | 'Other';
   node?: QueryNode;
   edge?: QueryEdge;
+  occurrence?: QueryOccurrence;
   evidence?: QueryLocation;
 }
 export interface QuerySnapshot {
@@ -48,6 +57,7 @@ export interface QuerySnapshot {
   coverage: 'CompleteWithinScope' | 'Partial' | 'Failed';
   freshness: string;
   resultFilterVersion?: number;
+  symbolDeclarationRowsVersion?: number;
 }
 export interface QueryWireReply {
   apiVersion: '1';
@@ -162,7 +172,7 @@ export class QueryClient implements SavedQueryClient {
         if (!this.receivedReady) {
           if (value.requestId !== 'ready') throw new QueryClientError('QUERY_HANDSHAKE_INVALID');
           if (errorCode) throw new QueryClientError(errorCode);
-          const reply = validateReply(value);
+          const reply = validateQueryReply(value);
           this.snapshot = reply.snapshot;
           this.receivedReady = true;
           clearTimeout(this.readyTimer);
@@ -171,7 +181,7 @@ export class QueryClient implements SavedQueryClient {
           if (value.requestId === 'host' && errorCode) throw new QueryClientError(errorCode);
           const waiting = this.pending.get(value.requestId);
           if (!waiting) throw new QueryClientError('QUERY_REQUEST_MISMATCH');
-          const reply = errorCode && !value.snapshot ? undefined : validateReply(value);
+          const reply = errorCode && !value.snapshot ? undefined : validateQueryReply(value);
           if (
             reply &&
             (reply.snapshot.workspaceId !== this.snapshot!.workspaceId ||
@@ -233,7 +243,13 @@ function optionalText(value: unknown): boolean {
 }
 function location(value: unknown): boolean {
   if (value === undefined) return true;
-  if (!isRecord(value) || !isText(value.sourceId) || !optionalText(value.contentHash)) return false;
+  if (
+    !isRecord(value) ||
+    !isText(value.sourceId) ||
+    !optionalText(value.sourceVersion) ||
+    !optionalText(value.contentHash)
+  )
+    return false;
   if (value.rawSpan === undefined) return true;
   const span = value.rawSpan;
   return (
@@ -244,9 +260,72 @@ function location(value: unknown): boolean {
     (span.start as number) + (span.length as number) === span.end
   );
 }
-function validateReply(value: Record<string, unknown>): QueryWireReply {
+function occurrenceLocation(value: unknown): boolean {
+  return (
+    location(value) &&
+    (value === undefined ||
+      (isRecord(value) &&
+        (value.contentHash === undefined ||
+          (typeof value.contentHash === 'string' && /^[0-9a-f]{64}$/.test(value.contentHash)))))
+  );
+}
+function occurrence(value: unknown, item: Record<string, unknown>): boolean {
+  if (value === undefined) return true;
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    !/^hocc_[0-9a-f]{64}$/.test(value.id) ||
+    typeof value.logicalSymbolId !== 'string' ||
+    !/^hsym_[0-9a-f]{64}$/.test(value.logicalSymbolId) ||
+    typeof value.variantId !== 'string' ||
+    !/^hvar_[0-9a-f]{64}$/.test(value.variantId) ||
+    item.kind !== 'declaration' ||
+    item.node !== undefined ||
+    item.edge !== undefined ||
+    (item.id !== value.id &&
+      (typeof item.id !== 'string' ||
+        !item.id.startsWith(value.id + '/') ||
+        !/^(0|[1-9][0-9]{0,2})$/.test(item.id.slice(value.id.length + 1)) ||
+        Number(item.id.slice(value.id.length + 1)) >= 500)) ||
+    !occurrenceLocation(value.location)
+  )
+    return false;
+  if (value.declarations !== undefined) {
+    if (
+      !Array.isArray(value.declarations) ||
+      value.declarations.length > 500 ||
+      !value.declarations.every((entry) => entry !== undefined && occurrenceLocation(entry))
+    )
+      return false;
+    const keys = value.declarations.map(locationKey);
+    if (
+      new Set(keys).size !== keys.length ||
+      (value.location !== undefined && !keys.includes(locationKey(value.location)))
+    )
+      return false;
+  }
+  return true;
+}
+
+function locationKey(value: unknown): string {
+  const entry = value as QueryLocation;
+  return JSON.stringify([
+    entry.sourceId,
+    entry.sourceVersion,
+    entry.contentHash,
+    entry.rawSpan?.start,
+    entry.rawSpan?.length,
+    entry.rawSpan?.end
+  ]);
+}
+
+/** The transport and focused boundary tests use the same bounded wire validator. */
+export function validateQueryReply(value: unknown): QueryWireReply {
+  if (!isRecord(value)) throw new QueryClientError('QUERY_PROTOCOL_INVALID');
   const snapshot = value.snapshot;
   if (
+    value.apiVersion !== '1' ||
+    !isText(value.requestId) ||
     !isRecord(snapshot) ||
     !isText(snapshot.workspaceId) ||
     !isText(snapshot.id) ||
@@ -255,6 +334,9 @@ function validateReply(value: Record<string, unknown>): QueryWireReply {
     (snapshot.resultFilterVersion !== undefined &&
       (!Number.isSafeInteger(snapshot.resultFilterVersion) ||
         (snapshot.resultFilterVersion as number) < 1)) ||
+    (snapshot.symbolDeclarationRowsVersion !== undefined &&
+      (!Number.isSafeInteger(snapshot.symbolDeclarationRowsVersion) ||
+        (snapshot.symbolDeclarationRowsVersion as number) < 1)) ||
     !Number.isSafeInteger(snapshot.variantCount) ||
     !Array.isArray(snapshot.variantIds) ||
     snapshot.variantIds.length > 64 ||
@@ -291,6 +373,7 @@ function validateReply(value: Record<string, unknown>): QueryWireReply {
       (item.resultKind !== undefined &&
         !['Code', 'Docs', 'Other'].includes(String(item.resultKind))) ||
       !location(item.evidence) ||
+      !occurrence(item.occurrence, item) ||
       (item.node !== undefined &&
         (!isRecord(item.node) ||
           item.node.id !== item.id ||

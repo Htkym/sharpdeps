@@ -15,6 +15,7 @@ import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
 import type { ViewState } from './state';
 import { restoreViewState } from './serializer';
+import { candidateContextKey } from './state';
 import { validateHostMessage } from '../../src/view/protocolV2';
 
 export interface RequestContext {
@@ -28,6 +29,8 @@ export interface RequestContext {
   analysisId?: string;
   type?: string;
   filtersKey?: string;
+  candidateOriginId?: string;
+  candidateContextKey?: string;
 }
 
 export function toViewActions(
@@ -102,6 +105,36 @@ export function toViewActions(
   }
 
   switch (message.type) {
+    case 'candidateInvestigation': {
+      const checked = validateHostMessage(message);
+      if (!checked.ok || checked.value.type !== 'candidateInvestigation' || !currentState)
+        return [];
+      const reply = checked.value;
+      const pin = currentState.queryMetadata;
+      const origin = currentState.details?.candidateOrigins?.find(
+        (item) => item.originId === reply.originId
+      );
+      if (
+        context?.type !== 'investigateCandidate' ||
+        context.analysisId !== currentState.analysisId ||
+        context.candidateOriginId !== reply.originId ||
+        context.candidateContextKey !== candidateContextKey(currentState) ||
+        !currentState.candidateInvestigation?.pending ||
+        currentState.candidateInvestigation.originId !== reply.originId ||
+        reply.analysisId !== currentState.analysisId ||
+        !origin ||
+        origin.relationId !== reply.relationId ||
+        origin.targetEntityId !== reply.targetEntityId ||
+        !pin ||
+        reply.queryMetadata.workspaceId !== pin.workspaceId ||
+        reply.queryMetadata.snapshotId !== pin.snapshotId ||
+        reply.queryMetadata.generation !== pin.generation ||
+        JSON.stringify(reply.queryMetadata.variantIds) !== JSON.stringify(pin.variantIds) ||
+        reply.declarations.some((row) => row.variantId !== pin.variantIds[0])
+      )
+        return [];
+      return [{ type: 'candidateInvestigationReceived', response: reply }];
+    }
     case 'sourceReturn': {
       const checked = validateHostMessage(message);
       if (
@@ -264,6 +297,12 @@ export function toViewActions(
     }
 
     case 'details': {
+      let candidateOrigins;
+      if (message.candidateOrigins !== undefined) {
+        const checked = validateHostMessage(message);
+        if (!checked.ok || checked.value.type !== 'details' || !queryMetadata) return [];
+        candidateOrigins = checked.value.candidateOrigins;
+      }
       if (typeof message.entityId !== 'string') {
         // The host sends the entity inside `entity`; the details action is keyed by id.
         const entity = isRecord(message.entity) ? message.entity : undefined;
@@ -279,6 +318,7 @@ export function toViewActions(
             entity: readEntities([message.entity])[0],
             dependencies: readEntities(message.dependencies),
             dependents: readEntities(message.dependents),
+            ...(candidateOrigins ? { candidateOrigins } : {}),
             ...(queryMetadata ? { queryMetadata } : {})
           }
         ];
@@ -291,6 +331,7 @@ export function toViewActions(
           entity: readEntities([message.entity])[0],
           dependencies: readEntities(message.dependencies),
           dependents: readEntities(message.dependents),
+          ...(candidateOrigins ? { candidateOrigins } : {}),
           ...(queryMetadata ? { queryMetadata } : {})
         }
       ];
@@ -351,7 +392,17 @@ export function toViewActions(
     }
 
     case 'error':
+      if (
+        context?.type === 'investigateCandidate' &&
+        (!currentState ||
+          context.candidateOriginId !== currentState.candidateInvestigation?.originId ||
+          context.candidateContextKey !== candidateContextKey(currentState))
+      )
+        return [];
       return [
+        ...(context?.type === 'investigateCandidate'
+          ? [{ type: 'candidateInvestigationDismissed' as const }]
+          : []),
         ...(currentState &&
         context?.type === 'searchEntities' &&
         context.analysisId === currentState.analysisId &&

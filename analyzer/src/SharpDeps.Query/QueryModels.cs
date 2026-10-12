@@ -17,7 +17,8 @@ public sealed record QueryRequest(string RequestId, QueryKind Kind, string? Term
     string? NodeId = null, IReadOnlyList<string>? Ids = null, QueryScope? Scope = null,
     IReadOnlyList<string>? EdgeKinds = null, bool IncludeCandidates = false, bool IncludeDocuments = true,
     bool Dependents = true, QueryFreshnessPolicy Freshness = QueryFreshnessPolicy.AllowStale,
-    bool RequireComplete = false, int PageSize = 100, string? Cursor = null, QueryBudget? Budget = null);
+    bool RequireComplete = false, int PageSize = 100, string? Cursor = null, QueryBudget? Budget = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool IncludeDeclarationRows = false);
 public sealed record QueryIssue(string Code, string Message, string? Path = null);
 public sealed record QuerySnapshot(string WorkspaceId, string Id, long Generation,
     IReadOnlyList<string> VariantIds, int VariantCount, string Freshness, DateTimeOffset? CheckedAt,
@@ -29,6 +30,7 @@ public sealed record QuerySnapshot(string WorkspaceId, string Id, long Generatio
     public int IndexSchemaVersion => 1; // The current storage contract accepted by PinnedQueryIndex.
     public string CoordinatorState => "not-connected";
     public int ResultFilterVersion => 1;
+    public int SymbolDeclarationRowsVersion => 1;
 }
 public sealed record QuerySnippet(string SourceId, string ContentHash, HarnessRawSpan Span,
     string Text, bool OmittedBefore, bool OmittedAfter);

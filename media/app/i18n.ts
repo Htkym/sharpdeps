@@ -1,6 +1,16 @@
 import japanese from './ja.json';
 
 const savedQueryJapanese: Record<string, string> = {
+  'The relationship is unconfirmed; check declaration existence separately.':
+    '関係は未確定、宣言の存在を別途確認',
+  'Investigate declaration: {0}': '候補の宣言を調べる: {0}',
+  'Close declaration investigation': '宣言の調査を閉じる',
+  'Loading declarations…': '宣言を取得中…',
+  'Open declaration {0}: {1}': '宣言{0}を開く: {1}',
+  'Returned declaration list is truncated.': '返却された宣言一覧には打切りがあります。',
+  'The symbol catalog is incomplete.': 'シンボル一覧の完全性は未確認です。',
+  'No declaration source location was returned for this variant.':
+    'このvariantでは、宣言の移動先が返却されていません。',
   'Filtering is unavailable in this saved reader.':
     'この保存結果では分類による絞り込みを利用できません。',
   'Location unavailable': '場所が返却されていません',

@@ -55,14 +55,23 @@ export interface CodeMapPanelHost {
     analysisId: string
   ) => Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined;
   openSavedSource?: (
-    request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>,
+    request: Extract<
+      WebviewToHostMessage,
+      { type: 'openEvidence' | 'openDeclaration' | 'openCandidateDeclaration' }
+    >,
     current?: () => boolean
   ) => Promise<void>;
   prepareSavedExport?: (request: SavedExportRequest) => PreparedSavedExport;
+  dismissCandidateInvestigation?: (
+    request: Extract<WebviewToHostMessage, { type: 'dismissCandidateInvestigation' }>
+  ) => void;
 }
 
 interface SavedSourceOpen {
-  request: Extract<WebviewToHostMessage, { type: 'openEvidence' | 'openDeclaration' }>;
+  request: Extract<
+    WebviewToHostMessage,
+    { type: 'openEvidence' | 'openDeclaration' | 'openCandidateDeclaration' }
+  >;
   revision: number;
   readyEpoch: number;
   state?: Record<string, unknown>;
@@ -329,6 +338,29 @@ export class CodeMapPanel {
     }
 
     const request = validation.value;
+    if (request.type === 'dismissCandidateInvestigation') {
+      try {
+        if (
+          !this.host.savedAnalysisState?.(request.analysisId) ||
+          request.analysisId !== this.host.currentAnalysisId?.() ||
+          !this.host.dismissCandidateInvestigation
+        )
+          throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        this.host.dismissCandidateInvestigation(request);
+      } catch (error) {
+        this.post({
+          type: 'error',
+          requestId: request.requestId,
+          analysisId: request.analysisId,
+          code: error instanceof QueryClientError ? error.code : 'QUERY_CANDIDATE_EXPIRED',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'The declaration investigation is no longer current.'
+        });
+      }
+      return;
+    }
     if (request.type === 'sourceReturnDismissed') {
       if (request.analysisId === (this.host.currentAnalysisId?.() ?? this.pendingAnalysisId)) {
         this.sourceOpenRevision++;
@@ -355,7 +387,13 @@ export class CodeMapPanel {
     if (
       'analysisId' in request &&
       this.host.savedAnalysisState?.(request.analysisId) &&
-      ['openEvidence', 'openDeclaration', 'copyContext', 'export'].includes(request.type)
+      [
+        'openEvidence',
+        'openDeclaration',
+        'openCandidateDeclaration',
+        'copyContext',
+        'export'
+      ].includes(request.type)
     ) {
       if (
         (request.type === 'copyContext' || request.type === 'export') &&
@@ -365,7 +403,9 @@ export class CodeMapPanel {
         return;
       }
       if (
-        (request.type === 'openEvidence' || request.type === 'openDeclaration') &&
+        (request.type === 'openEvidence' ||
+          request.type === 'openDeclaration' ||
+          request.type === 'openCandidateDeclaration') &&
         this.host.openSavedSource
       ) {
         this.queueSavedSourceOpen(request);

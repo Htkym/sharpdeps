@@ -361,16 +361,29 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
       openSavedSource: async (request, current = () => true) => {
         const provider = savedProvider;
         if (!provider) throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
-        const location = provider.resolveSource(request);
-        await openSavedLocation(
-          location,
-          () =>
+        const prepared =
+          request.type === 'openCandidateDeclaration'
+            ? provider.prepareCandidateSource(request)
+            : { location: provider.resolveSource(request), assertCurrent: undefined };
+        await openSavedLocation(prepared.location, () => {
+          try {
+            prepared.assertCurrent?.();
+          } catch {
+            return false;
+          }
+          return (
             current() &&
             savedProvider === provider &&
             (vscode.workspace.workspaceFolders ?? []).some(
               (folder) => folder.uri.scheme === 'file' && folder.uri.fsPath === provider.root
             )
-        );
+          );
+        });
+      },
+      dismissCandidateInvestigation: (request) => {
+        if (!savedProvider || request.analysisId !== savedProvider.analysisId)
+          throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        savedProvider.dismissCandidateInvestigation(request.originId);
       },
       targetName: () =>
         store.currentAnalysisId

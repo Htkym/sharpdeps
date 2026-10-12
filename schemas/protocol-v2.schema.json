@@ -6,6 +6,64 @@
   "oneOf": [
     {
       "type": "object",
+      "required": ["type", "requestId", "analysisId", "originId"],
+      "properties": {
+        "type": { "enum": ["investigateCandidate", "dismissCandidateInvestigation"] },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "originId": { "$ref": "#/$defs/candidateOriginId" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "requestId", "analysisId", "originId", "capabilityId"],
+      "properties": {
+        "type": { "const": "openCandidateDeclaration" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "originId": { "$ref": "#/$defs/candidateOriginId" },
+        "capabilityId": { "$ref": "#/$defs/candidateDeclarationId" },
+        "returnUi": { "$ref": "#/$defs/sourceReturnUi" }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "requestId",
+        "analysisId",
+        "originId",
+        "relationId",
+        "targetEntityId",
+        "certainty",
+        "relationKind",
+        "reason",
+        "message",
+        "queryMetadata",
+        "declarations"
+      ],
+      "properties": {
+        "type": { "const": "candidateInvestigation" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "analysisId": { "$ref": "#/$defs/analysisId" },
+        "originId": { "$ref": "#/$defs/candidateOriginId" },
+        "relationId": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+        "targetEntityId": { "$ref": "#/$defs/candidateTargetId" },
+        "certainty": { "const": "Candidate" },
+        "relationKind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "$ref": "#/$defs/candidateText" },
+        "message": { "$ref": "#/$defs/candidateText" },
+        "queryMetadata": { "$ref": "#/$defs/candidateQueryMetadata" },
+        "declarations": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/candidateDeclarationSummary" }
+        },
+        "unavailableReason": { "$ref": "#/$defs/candidateText" }
+      }
+    },
+    {
+      "type": "object",
       "required": ["type", "protocolVersion"],
       "properties": {
         "type": {
@@ -613,6 +671,11 @@
           "items": {
             "$ref": "#/$defs/entitySummary"
           }
+        },
+        "candidateOrigins": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/candidateOriginAction" }
         },
         "queryMetadata": {
           "$ref": "#/$defs/queryMetadata"
@@ -1381,6 +1444,58 @@
           "description": "Optional reader capability; result classification filtering requires version 1."
         }
       }
+    },
+    "candidateOriginId": { "type": "string", "pattern": "^ci_[0-9a-f]{32}$" },
+    "candidateDeclarationId": { "type": "string", "pattern": "^cd_[0-9a-f]{32}$" },
+    "candidateTargetId": { "type": "string", "pattern": "^ty_[0-9a-f]{16}$" },
+    "occurrenceId": { "type": "string", "pattern": "^hocc_[0-9a-f]{64}$" },
+    "variantId": { "type": "string", "pattern": "^hvar_[0-9a-f]{64}$" },
+    "candidateText": { "type": "string", "maxLength": 4096 },
+    "candidateOriginAction": {
+      "type": "object",
+      "required": ["originId", "relationId", "targetEntityId", "targetName"],
+      "properties": {
+        "originId": { "$ref": "#/$defs/candidateOriginId" },
+        "relationId": { "type": "string", "pattern": "^rel_[0-9a-f]{16}$" },
+        "targetEntityId": { "$ref": "#/$defs/candidateTargetId" },
+        "targetName": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "candidateDeclarationSummary": {
+      "type": "object",
+      "required": ["capabilityId", "occurrenceId", "variantId", "path"],
+      "properties": {
+        "capabilityId": { "$ref": "#/$defs/candidateDeclarationId" },
+        "occurrenceId": { "$ref": "#/$defs/occurrenceId" },
+        "variantId": { "$ref": "#/$defs/variantId" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "candidateQueryMetadata": {
+      "allOf": [
+        { "$ref": "#/$defs/queryMetadata" },
+        {
+          "properties": {
+            "workspaceId": { "maxLength": 4096 },
+            "snapshotId": { "maxLength": 4096 },
+            "variantIds": { "items": { "$ref": "#/$defs/variantId" } },
+            "truncationReasons": { "maxItems": 64, "items": { "minLength": 1, "maxLength": 128 } },
+            "diagnostics": {
+              "maxItems": 64,
+              "items": {
+                "properties": {
+                  "code": { "minLength": 1, "maxLength": 128 },
+                  "message": { "minLength": 1, "maxLength": 4096 }
+                }
+              }
+            },
+            "returnedCount": { "maximum": 9007199254740991 },
+            "candidateCount": { "maximum": 9007199254740991 },
+            "unresolvedCount": { "maximum": 9007199254740991 },
+            "resultFilterVersion": { "maximum": 9007199254740991 }
+          }
+        }
+      ]
     },
     "sourceReturnUi": {
       "type": "object",

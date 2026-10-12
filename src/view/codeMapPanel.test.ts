@@ -436,6 +436,101 @@ async function setup(first: 'show' | 'restore' = 'restore') {
 }
 
 describe('saved output through validated panel messages (stubbed local APIs)', () => {
+  it('routes a candidate declaration through the current source queue and returns to the original mention', async () => {
+    const fixture = await setup('show');
+    const mentionId = 'ty_1111111111111111';
+    const originId = 'ci_' + '1'.repeat(32);
+    const capabilityId = 'cd_' + '2'.repeat(32);
+    const ui: SourceReturnUi = {
+      navTab: 'structure',
+      focus: 'declaration',
+      id: mentionId,
+      scroll: { navigation: 10, inspector: 20, map: 30 },
+      searchCount: 0
+    };
+    fixture.physical.dispatch({
+      type: 'persistViewState',
+      viewState: {
+        version: 1,
+        selection: { entityId: mentionId },
+        scope: { kind: 'root' },
+        granularity: 'type'
+      }
+    });
+    let finish!: () => void;
+    let isCurrent!: () => boolean;
+    fixture.host.openSavedSource = vi.fn(async (_request, current) => {
+      isCurrent = current!;
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    const send = (id: string) =>
+      fixture.physical.dispatch({
+        type: 'openCandidateDeclaration',
+        requestId: id,
+        analysisId: fixture.saved.analysisId,
+        originId,
+        capabilityId,
+        returnUi: ui
+      });
+    send(requestId);
+    await vi.waitFor(() => expect(fixture.host.openSavedSource).toHaveBeenCalledOnce());
+    expect(isCurrent()).toBe(true);
+    fixture.physical.dispatch({
+      type: 'sourceReturnDismissed',
+      analysisId: fixture.saved.analysisId
+    });
+    expect(isCurrent()).toBe(false);
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+    expect(api.post.mock.calls.some(([message]) => message.type === 'sourceReturn')).toBe(false);
+    const openAgain = vi.fn().mockResolvedValue(undefined);
+    fixture.host.openSavedSource = openAgain;
+    const nextId = 'req_3333333333333333';
+    send(nextId);
+    await vi.waitFor(() => expect(fixture.host.openSavedSource).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    fixture.physical.dispatch({ type: 'ready', protocolVersion: 2, webviewVersion: '1' });
+    await vi.waitFor(() =>
+      expect(
+        api.post.mock.calls.some(
+          ([message]) =>
+            message.type === 'sourceReturn' &&
+            message.requestId === nextId &&
+            message.ui.id === mentionId
+        )
+      ).toBe(true)
+    );
+    expect(openAgain.mock.calls[0][0]).toMatchObject({
+      type: 'openCandidateDeclaration',
+      originId,
+      capabilityId
+    });
+    expect(api.post.mock.calls.some(([message]) => message.type === 'reveal')).toBe(false);
+    expect(api.getReport).not.toHaveBeenCalled();
+  });
+
+  it('dismisses only a candidate investigation in the current saved analysis', async () => {
+    const fixture = await setup('show');
+    fixture.host.dismissCandidateInvestigation = vi.fn();
+    const request = {
+      type: 'dismissCandidateInvestigation',
+      requestId,
+      analysisId: fixture.saved.analysisId,
+      originId: 'ci_' + '1'.repeat(32)
+    };
+    fixture.physical.dispatch(request);
+    expect(fixture.host.dismissCandidateInvestigation).toHaveBeenCalledWith(request);
+    fixture.switchCurrent('an_1111111111111111');
+    fixture.physical.dispatch(request);
+    fixture.physical.dispatch({ ...request, originId: 'ty_1111111111111111' });
+    expect(fixture.host.dismissCandidateInvestigation).toHaveBeenCalledOnce();
+    expect(api.getReport).not.toHaveBeenCalled();
+  });
+
   it('copies context/JSON and writes UTF8 JSON from the host cache without another Query/store read', async () => {
     const { send, requests } = await setup();
     send({ type: 'copyContext', format: undefined });

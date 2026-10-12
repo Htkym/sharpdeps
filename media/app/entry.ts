@@ -10,6 +10,7 @@ import { createViewerApp, type ViewerApp } from './app';
 import { toViewActions, type RequestContext } from './hostMessages';
 import { serializeViewState } from './serializer';
 import type { ViewAction, ViewState } from './state';
+import { candidateContextKey } from './state';
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -169,6 +170,56 @@ if (root) {
         });
       }
     },
+    onInvestigateCandidate: (originId) => {
+      const state = app.getState();
+      if (!state.analysisId || state.candidateInvestigation?.originId !== originId) return;
+      sendRequest(
+        {
+          type: 'investigateCandidate',
+          requestId: nextRequestId(),
+          analysisId: state.analysisId,
+          originId
+        },
+        {
+          type: 'investigateCandidate',
+          candidateOriginId: originId,
+          candidateContextKey: candidateContextKey(state),
+          filtersKey: JSON.stringify(state.filters)
+        }
+      );
+    },
+    onDismissCandidateInvestigation: (originId, analysisId) => {
+      if (analysisId)
+        sendRequest({
+          type: 'dismissCandidateInvestigation',
+          requestId: nextRequestId(),
+          analysisId,
+          originId
+        });
+    },
+    onOpenCandidateDeclaration: (originId, capabilityId) => {
+      const state = app.getState();
+      const response = state.candidateInvestigation?.response;
+      if (
+        !state.analysisId ||
+        !state.selection.entityId ||
+        response?.originId !== originId ||
+        !response.declarations.some((row) => row.capabilityId === capabilityId)
+      )
+        return;
+      const returnUi = app.captureSourceReturn('declaration', state.selection.entityId);
+      const requestId = nextRequestId();
+      latestSourceOperation = { analysisId: state.analysisId, requestId };
+      persistNow(state);
+      sendRequest({
+        type: 'openCandidateDeclaration',
+        requestId,
+        analysisId: state.analysisId,
+        originId,
+        capabilityId,
+        returnUi
+      });
+    },
     onSourceReturnDismissed: () => {
       const state = app.getState();
       const previous = latestSourceOperation;
@@ -221,7 +272,9 @@ if (root) {
       return;
     if (
       payload &&
-      ['projection', 'details', 'evidencePage', 'searchResults'].includes(payload.type ?? '') &&
+      ['projection', 'details', 'evidencePage', 'searchResults', 'candidateInvestigation'].includes(
+        payload.type ?? ''
+      ) &&
       (!payload.requestId || !requestContext.has(payload.requestId))
     )
       return;

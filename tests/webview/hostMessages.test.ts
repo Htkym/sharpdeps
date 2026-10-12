@@ -7,11 +7,12 @@ import { describe, expect, it } from 'vitest';
 import { toViewActions } from '../../media/app/hostMessages';
 import {
   INITIAL_STATE,
+  candidateContextKey,
   selectPrimaryAction,
   viewReducer,
   type ViewState
 } from '../../media/app/state';
-import type { QueryResultMetadata } from '../../src/view/protocolV2';
+import type { HostToWebviewMessage, QueryResultMetadata } from '../../src/view/protocolV2';
 
 const analysisId = 'an_0123456789abcdef';
 const savedMetadata: QueryResultMetadata = {
@@ -33,6 +34,147 @@ const savedMetadata: QueryResultMetadata = {
 const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
   ['req_0000000000000001', { query: 'OrderStore' }]
 ]);
+
+describe('Candidate investigation message provenance', () => {
+  const originId = 'ci_' + '1'.repeat(32),
+    requestId = 'req_1111111111111111';
+  const mentionId = 'ty_1111111111111111',
+    targetEntityId = 'ty_2222222222222222';
+  const variantId = 'hvar_' + '1'.repeat(64);
+  const metadata = { ...savedMetadata, variantIds: [variantId] };
+  const origin = {
+    originId,
+    relationId: 'rel_1111111111111111',
+    targetEntityId,
+    targetName: 'Compute'
+  };
+  const response: Extract<HostToWebviewMessage, { type: 'candidateInvestigation' }> = {
+    type: 'candidateInvestigation',
+    requestId,
+    analysisId,
+    originId,
+    relationId: origin.relationId,
+    targetEntityId,
+    certainty: 'Candidate',
+    relationKind: 'mentionsSymbol',
+    reason: 'name only',
+    message: 'Relation remains uncertain; declarations are checked separately.',
+    queryMetadata: metadata,
+    declarations: [
+      {
+        capabilityId: 'cd_' + '1'.repeat(32),
+        occurrenceId: 'hocc_' + '1'.repeat(64),
+        variantId,
+        path: 'src/Helper.cs'
+      }
+    ]
+  };
+  function current(): ViewState {
+    return {
+      ...INITIAL_STATE,
+      analysisId,
+      granularity: 'type',
+      queryMetadata: metadata,
+      search: 'Compute',
+      filters: { resultKinds: ['docs'] },
+      selection: { entityId: mentionId },
+      inspectorOpen: true,
+      details: {
+        entityId: mentionId,
+        entity: {
+          id: mentionId,
+          name: 'Compute mention',
+          kind: 'SymbolMention',
+          granularity: 'type',
+          certainty: 'Resolved'
+        },
+        dependencies: [],
+        dependents: [],
+        candidateOrigins: [origin],
+        queryMetadata: metadata
+      },
+      candidateInvestigation: { originId, pending: true }
+    };
+  }
+  function context(state: ViewState) {
+    return new Map([
+      [
+        requestId,
+        {
+          type: 'investigateCandidate',
+          analysisId,
+          candidateOriginId: originId,
+          candidateContextKey: candidateContextKey(state)
+        }
+      ]
+    ]);
+  }
+
+  it('accepts an issued current origin without treating the declaration as a resolved relation', () => {
+    const state = current();
+    expect(toViewActions(response, context(state), state)).toEqual([
+      { type: 'candidateInvestigationReceived', response }
+    ]);
+    const detailsRequest = 'req_2222222222222222';
+    const actions = toViewActions(
+      {
+        type: 'details',
+        requestId: detailsRequest,
+        analysisId,
+        entity: state.details!.entity,
+        dependencies: [],
+        dependents: [],
+        candidateOrigins: [origin],
+        queryMetadata: metadata
+      },
+      new Map(),
+      state
+    );
+    expect(actions[0]).toMatchObject({ type: 'detailsReceived', candidateOrigins: [origin] });
+  });
+
+  it('rejects foreign origins, variants, sessions, replaced requests and responses after close or navigation', () => {
+    const state = current(),
+      requests = context(state);
+    for (const changed of [
+      { ...response, analysisId: 'an_1111111111111111' },
+      { ...response, originId: 'ci_' + '2'.repeat(32) },
+      { ...response, relationId: 'rel_2222222222222222' },
+      { ...response, targetEntityId: 'ty_3333333333333333' },
+      { ...response, requestId: 'req_2222222222222222' },
+      { ...response, certainty: 'Resolved' },
+      { ...response, queryMetadata: { ...metadata, generation: metadata.generation + 1 } },
+      { ...response, queryMetadata: { ...metadata, variantIds: ['hvar_' + '2'.repeat(64)] } },
+      {
+        ...response,
+        declarations: [{ ...response.declarations[0], variantId: 'hvar_' + '2'.repeat(64) }]
+      }
+    ])
+      expect(toViewActions(changed, requests, state)).toEqual([]);
+    const changedStates: ViewState[] = [
+      { ...state, selection: { entityId: targetEntityId } },
+      { ...state, filters: { resultKinds: ['code'] } },
+      { ...state, search: 'different' },
+      { ...state, scope: { kind: 'dependencies', id: mentionId, depth: 2 } },
+      { ...state, temporaryDisplayIds: [targetEntityId] },
+      { ...state, details: { ...state.details!, candidateOrigins: [] } },
+      { ...state, candidateInvestigation: undefined }
+    ];
+    for (const changed of changedStates)
+      expect(toViewActions(response, requests, changed)).toEqual([]);
+    expect(toViewActions(response, new Map(), state)).toEqual([]);
+    expect(
+      toViewActions(
+        response,
+        new Map([
+          [requestId, { ...requests.get(requestId)!, candidateOriginId: 'ci_' + '2'.repeat(32) }]
+        ]),
+        state
+      )
+    ).toEqual([]);
+    expect(toViewActions(response, requests, { ...INITIAL_STATE, analysisId })).toEqual([]);
+  });
+});
 
 describe('toViewActions', () => {
   it('accepts source return only for the current saved session and strips transient payload fields', () => {

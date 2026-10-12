@@ -132,6 +132,142 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void SymbolDeclarationRowsKeepEachFileLocationAndTheDefaultOccurrenceShape()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = MultiFileDeclarations(fixture);
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        var request = new QueryRequest("declarations", QueryKind.Symbol, NodeId: fixture.A,
+            Scope: new(VariantIds: [fixture.Variant]), Budget: Generous);
+        var normal = query.Execute(request);
+        Assert.True(normal.Succeeded);
+        Assert.Equal(2, normal.Envelope.Items.Count);
+        var aggregate = Assert.Single(normal.Envelope.Items, i => i.Occurrence is not null);
+        Assert.Equal(fixture.Occurrence(fixture.A), aggregate.Id);
+        Assert.Equal("src/App.cs", aggregate.Path);
+        Assert.Equal(2, aggregate.Occurrence!.Declarations!.Count);
+        Assert.Equal(normal.Json, query.Execute(request with { IncludeDeclarationRows = false }).Json);
+
+        var expanded = query.Execute(request with { IncludeDeclarationRows = true });
+        Assert.True(expanded.Succeeded);
+        Assert.False(expanded.Envelope.Truncated);
+        var rows = expanded.Envelope.Items.Where(i => i.Occurrence is not null).ToArray();
+        Assert.Equal(new[] { fixture.Occurrence(fixture.A) + "/0", fixture.Occurrence(fixture.A) + "/1" }, rows.Select(i => i.Id));
+        var expected = snapshot.Graph.SymbolOccurrences.Single(o => o.Id == fixture.Occurrence(fixture.A)).Declarations!;
+        Assert.NotEqual(expected[0].ContentHash, expected[1].ContentHash);
+        Assert.NotEqual(expected[0].RawSpan, expected[1].RawSpan);
+        for (var i = 0; i < rows.Length; i++)
+        {
+            Assert.Equal(expected[i], rows[i].Evidence);
+            Assert.Equal(snapshot.Files.Single(f => f.SourceId == expected[i].SourceId).RelativePath, rows[i].Path);
+            Assert.Equal(expected[i], rows[i].Occurrence!.Location);
+            Assert.Equal(expected[i], Assert.Single(rows[i].Occurrence!.Declarations!));
+            Assert.Equal(fixture.Occurrence(fixture.A), rows[i].Occurrence!.Id);
+        }
+        var context = query.Execute(request with { Kind = QueryKind.Context });
+        Assert.True(context.Succeeded);
+        Assert.Equal(JsonSerializer.Serialize(context.Envelope.Items.Where(i => i.Occurrence is not null), QueryJson.Options),
+            JsonSerializer.Serialize(rows, QueryJson.Options));
+        using var json = JsonDocument.Parse(expanded.Json);
+        Assert.Equal(1, json.RootElement.GetProperty("snapshot").GetProperty("symbolDeclarationRowsVersion").GetInt32());
+    }
+
+    [Fact]
+    public void SymbolDeclarationRowsRespectNodeBudgetsAndSeparateCursorFiltersWithoutChangingDefaultFingerprint()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(MultiFileDeclarations(fixture)));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        var request = new QueryRequest("paged", QueryKind.Symbol, NodeId: fixture.A,
+            Scope: new(VariantIds: [fixture.Variant]), PageSize: 1, Budget: Generous);
+        var normal = query.Execute(request);
+        Assert.True(normal.Succeeded);
+        Assert.NotNull(normal.Envelope.NextCursor);
+        // The pre-option request shape must still authenticate already-issued ordinary Symbol cursors.
+        var oldShape = new {
+            RequestId = "", request.Kind, request.Term, request.NodeId, request.Ids, request.Scope,
+            request.EdgeKinds, request.IncludeCandidates, request.IncludeDocuments, request.Dependents,
+            request.Freshness, request.RequireComplete, request.PageSize, Cursor = (string?)null, request.Budget
+        };
+        var oldFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(oldShape, QueryJson.Options))));
+        using var state = JsonDocument.Parse(Convert.FromBase64String(normal.Envelope.NextCursor!.Split('.')[0]));
+        Assert.Equal(oldFingerprint, state.RootElement.GetProperty("Filter").GetString());
+        var normalNext = query.Execute(request with { Cursor = normal.Envelope.NextCursor, IncludeDeclarationRows = false });
+        Assert.True(normalNext.Succeeded);
+        Assert.Equal(fixture.Occurrence(fixture.A), Assert.Single(normalNext.Envelope.Items).Id);
+        Error(query.Execute(request with { Cursor = normal.Envelope.NextCursor, IncludeDeclarationRows = true }), "CURSOR_FILTER_CHANGED");
+
+        var expandedRequest = request with { IncludeDeclarationRows = true };
+        var expanded = query.Execute(expandedRequest);
+        Assert.True(expanded.Succeeded);
+        Assert.NotNull(expanded.Envelope.NextCursor);
+        Error(query.Execute(request with { Cursor = expanded.Envelope.NextCursor }), "CURSOR_FILTER_CHANGED");
+        var expandedNext = query.Execute(expandedRequest with { Cursor = expanded.Envelope.NextCursor });
+        Assert.True(expandedNext.Succeeded);
+        Assert.Equal(fixture.Occurrence(fixture.A) + "/0", Assert.Single(expandedNext.Envelope.Items).Id);
+        var bounded = query.Execute(expandedRequest with { PageSize = 100, Budget = Generous with { MaxNodes = 2 } });
+        Assert.True(bounded.Succeeded);
+        Assert.True(bounded.Envelope.Truncated);
+        Assert.Contains("NODE_LIMIT", bounded.Envelope.TruncationReasons);
+        Assert.Equal(2, bounded.Envelope.Budget.UsedNodes);
+        Assert.Equal(fixture.Occurrence(fixture.A) + "/0", Assert.Single(bounded.Envelope.Items, i => i.Occurrence is not null).Id);
+    }
+
+    [Fact]
+    public void SymbolDeclarationRowsDoNotInventLocationsAndRejectOtherQueryKinds()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, withoutEdges: true);
+        snapshot = snapshot with { Graph = snapshot.Graph with {
+            Nodes = snapshot.Graph.Nodes.Select(n => n.Id == fixture.A ? n with { Location = null } : n).ToArray(),
+            SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(o => o.LogicalSymbolId == fixture.A
+                ? o with { Location = null, Declarations = null } : o).ToArray() } };
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        var result = query.Execute(new("no-location", QueryKind.Symbol, NodeId: fixture.A,
+            Scope: new(VariantIds: [fixture.Variant]), Budget: Generous, IncludeDeclarationRows: true));
+        Assert.True(result.Succeeded);
+        var selected = Assert.Single(result.Envelope.Items);
+        Assert.Null(selected.Occurrence);
+        Assert.Null(selected.Path);
+        Assert.Null(selected.Evidence);
+        Assert.Null(selected.Node!.Location);
+        foreach (var kind in Enum.GetValues<QueryKind>().Where(k => k != QueryKind.Symbol))
+            Assert.Throws<ArgumentException>(() => query.Execute(new("invalid", kind,
+                Term: kind == QueryKind.Search ? "Service" : null,
+                NodeId: kind is QueryKind.Browse or QueryKind.Status ? null : fixture.A,
+                Budget: Generous, IncludeDeclarationRows: true)));
+    }
+
+    private static IndexSnapshot MultiFileDeclarations(StoreFixture fixture)
+    {
+        var snapshot = fixture.Snapshot(1, withoutEdges: true);
+        var text = StoreFixture.Code + "// different partial declaration\n";
+        File.WriteAllText(Path.Combine(fixture.Root, "other/Other.cs"), text, StoreFixture.Utf8);
+        var hash = StoreFixture.Hash(text);
+        HarnessLocation? Updated(HarnessLocation? location) => location is { SourceId: "other/Other.cs" }
+            ? location with { ContentHash = hash } : location;
+        var first = snapshot.Graph.SymbolOccurrences.Single(o => o.Id == fixture.Occurrence(fixture.A)).Location!;
+        var second = new HarnessLocation("other/Other.cs", "fixture-v1", hash, new(17, 8));
+        return snapshot with {
+            Files = snapshot.Files.Select(f => f.SourceId == "other/Other.cs"
+                ? f with { ContentHash = hash, ByteLength = StoreFixture.Utf8.GetByteCount(text), Utf16Length = text.Length } : f).ToArray(),
+            Graph = snapshot.Graph with {
+                Nodes = snapshot.Graph.Nodes.Select(n => n with { Location = Updated(n.Location) }).ToArray(),
+                SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(o => o.Id == fixture.Occurrence(fixture.A)
+                    ? o with { Declarations = [first, second] }
+                    : o with { Location = Updated(o.Location), Declarations = o.Declarations?.Select(l => Updated(l)!).ToArray() }).ToArray() }
+        };
+    }
+
+    [Fact]
     public void SearchPrioritizesExactNamesAndKeepsProjectVariantPathAndJapaneseScopes()
     {
         using var fixture = new StoreFixture();
