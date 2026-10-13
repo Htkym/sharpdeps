@@ -11,6 +11,7 @@ import {
   selectBreadcrumbs,
   selectStatusFooter,
   selectVisibleData,
+  selectTableRows,
   selectPrimaryAction,
   selectStatusMessage,
   candidateContextKey,
@@ -737,6 +738,41 @@ describe('viewReducer navigation and selection', () => {
 
     const back = viewReducer(state, { type: 'historyBack' });
     expect(back.scope).not.toEqual(state.scope);
+  });
+
+  it('returns to the same sorted table page after exploring another scope and view', () => {
+    const original = {
+      ...withProjection(),
+      viewKind: 'table' as const,
+      tableSort: { key: 'name' as const, direction: 'desc' as const },
+      tablePage: 2,
+      projection: projection({
+        nodes: Array.from({ length: 250 }, (_, index) => ({
+          id: `ty_${index.toString(16).padStart(16, '0')}`,
+          name: `Type${index.toString().padStart(3, '0')}`,
+          granularity: 'type' as const,
+          kind: 'class'
+        }))
+      })
+    };
+    const before = selectTableRows(original);
+    let explored = viewReducer(original, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: original.projection.nodes[0].id, depth: 1 }
+    });
+    explored = viewReducer(explored, { type: 'viewKindChanged', viewKind: 'graph' });
+    explored = viewReducer(explored, { type: 'tableSortChanged', key: 'kind' });
+    explored = viewReducer(explored, { type: 'tablePageChanged', page: 0 });
+    const returned = viewReducer(explored, { type: 'historyBack' });
+    const received = viewReducer(returned, {
+      type: 'projectionReceived',
+      projection: original.projection
+    });
+    expect(received.viewKind).toBe('table');
+    expect(received.tableSort).toEqual(original.tableSort);
+    expect(selectTableRows(received)).toEqual(before);
+    expect(before.page).toBe(2);
+    expect(before.rows[0].entity.name).toBe('Type049');
   });
 
   it('tracks pane widths and inspector visibility', () => {

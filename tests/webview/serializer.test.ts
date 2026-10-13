@@ -89,6 +89,7 @@ describe('view state serialization', () => {
       search: 'Order',
       paneWidths: { navigation: 260, inspector: 400 },
       tablePage: 2,
+      tableSort: { key: 'dependencies' as const, direction: 'desc' as const },
       layout: { direction: 'DOWN' as const, nodeSpacing: 40, rankSpacing: 80 }
     };
 
@@ -109,11 +110,55 @@ describe('view state serialization', () => {
       search: 'Order',
       paneWidths: { navigation: 260, inspector: 400 },
       tablePage: 2,
+      tableSort: { key: 'dependencies', direction: 'desc' },
       layout: { direction: 'DOWN', nodeSpacing: 40, rankSpacing: 80 }
     });
 
     const withCamera = restoreViewState(stored);
     expect(withCamera.state.camera).toEqual({ zoom: 1.4, scrollLeft: 30, scrollTop: 12 });
+  });
+
+  it('retains table history across serialization and rejects malformed position fields', () => {
+    const original = {
+      ...INITIAL_STATE,
+      viewKind: 'table' as const,
+      tablePage: 3,
+      tableSort: { key: 'project' as const, direction: 'desc' as const }
+    };
+    const scoped = viewReducer(original, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const restored = restoreViewState(JSON.parse(JSON.stringify(serializeViewState(scoped))));
+    const back = viewReducer(
+      { ...INITIAL_STATE, ...restored.state, viewKind: 'graph', tablePage: 0 },
+      { type: 'historyBack' }
+    );
+    expect(back).toMatchObject({ viewKind: 'table', tablePage: 3, tableSort: original.tableSort });
+    for (const invalid of [
+      { viewKind: 'dashboard', tablePage: -1, tableSort: { key: 'path', direction: 'desc' } },
+      { viewKind: false, tablePage: Infinity, tableSort: { key: 'name', direction: 'sideways' } },
+      {}
+    ]) {
+      const malformed = deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        ...invalid,
+        history: [{ scope: { kind: 'root' }, granularity: 'type', ...invalid }]
+      }).state;
+      expect(malformed.tableSort).toBeUndefined();
+      expect(malformed.history?.[0]).toMatchObject({
+        viewKind: undefined,
+        tablePage: undefined,
+        tableSort: undefined
+      });
+      expect(
+        viewReducer({ ...INITIAL_STATE, ...malformed }, { type: 'historyBack' })
+      ).toMatchObject({
+        viewKind: INITIAL_STATE.viewKind,
+        tablePage: INITIAL_STATE.tablePage,
+        tableSort: INITIAL_STATE.tableSort
+      });
+    }
   });
 
   it('restores old or invalid direction settings as horizontal', () => {

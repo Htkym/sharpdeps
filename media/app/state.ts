@@ -49,6 +49,9 @@ export interface HistoryEntry {
   camera?: ViewState['camera'];
   search?: string;
   filters?: Filters;
+  viewKind?: ViewKind;
+  tablePage?: number;
+  tableSort?: SortState;
 }
 
 export interface ViewState {
@@ -907,7 +910,10 @@ function pushHistory(state: ViewState, entry: HistoryEntry): HistoryEntry[] {
       selectionId: state.selection.entityId,
       camera: state.camera,
       search: state.search,
-      filters: state.filters
+      filters: state.filters,
+      viewKind: state.viewKind,
+      tablePage: state.tablePage,
+      tableSort: state.tableSort
     }
   ].slice(-HISTORY_LIMIT);
 }
@@ -926,6 +932,9 @@ function back(state: ViewState): ViewState {
     camera: previous.camera ?? null,
     search: previous.search ?? '',
     filters: previous.filters ?? {},
+    viewKind: previous.viewKind ?? state.viewKind,
+    tablePage: previous.tablePage ?? state.tablePage,
+    tableSort: previous.tableSort ?? state.tableSort,
     selection: previous.selectionId ? { entityId: previous.selectionId } : {},
     projection: null,
     details:
