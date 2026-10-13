@@ -89,6 +89,9 @@ export function renderEntityTable(container: HTMLElement, options: EntityTableOp
       if (event.key === 'Enter') {
         options.onActivate(entity.id);
         event.preventDefault();
+      } else if (event.key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        options.onSelect(entity.id);
       }
     });
 
