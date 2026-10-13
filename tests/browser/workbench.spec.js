@@ -1,5 +1,39 @@
 const { test, expect } = require('@playwright/test');
 
+test('keeps the current status accessible in a narrow panel', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  await page.goto('/tests/webview/fixtures/shell-fixture.html');
+  await page.evaluate(() => {
+    const app = window.sharpdepsApp;
+    app.dispatch({ type: 'targetSelected', name: 'Input', relativePath: 'Input.csproj' });
+    app.dispatch({ type: 'analyzeStarted', analysisId: 'an_0000000000000001', mode: 'quick' });
+    app.dispatch({
+      type: 'analysisProgress',
+      stage: 'extract',
+      loaded: 2,
+      analyzed: 1,
+      elapsedMs: 10
+    });
+  });
+  const status = page.getByRole('status');
+  await expect(status).toHaveCount(1);
+  await expect(status).toHaveAttribute('data-status', 'analyzing');
+  await expect(status).toContainText('Collecting evidence');
+  await page.evaluate(() =>
+    window.sharpdepsApp.dispatch({
+      type: 'analysisComplete',
+      analysisId: 'an_0000000000000001',
+      completeness: 'partial',
+      coverage: { discovered: 3, loaded: 2, analyzed: 1, failed: 1, skipped: 1 }
+    })
+  );
+  await expect(status).toHaveAttribute('data-status', 'partial');
+  await expect(status).toContainText('Analysis complete (partial)');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(status).toBeVisible();
+  await expect(status).toHaveAttribute('data-status', 'partial');
+});
+
 for (const [width, theme] of [
   [1440, 'vscode-dark'],
   [900, 'vscode-light'],

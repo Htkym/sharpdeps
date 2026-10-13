@@ -732,6 +732,17 @@ body.vscode-high-contrast-light {
 
 @media (max-width: 899px) {
   .sd-topbar-meta {
+    /* Keep the live status in the accessibility tree when the visual toolbar is compact. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .sd-topbar-meta .sd-breadcrumbs {
     display: none;
   }
 
