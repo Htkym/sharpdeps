@@ -85,6 +85,21 @@ export function synchronizeRequestTracking(
   return true;
 }
 
+/** A recreated frame has no live pin yet; its restored operation survives the first matching analysis. */
+export function synchronizeSourceOperation(
+  state: Pick<ViewState, 'analysisId' | 'queryMetadata'>,
+  tracking: RequestTracking,
+  contexts: Map<string, RequestContext>,
+  operation: { analysisId: string; requestId: string } | undefined
+): typeof operation {
+  if (!state.analysisId && tracking.contextKey === undefined) return operation;
+  const established = tracking.contextKey !== undefined;
+  const changed = synchronizeRequestTracking(state, tracking, contexts);
+  return state.analysisId !== operation?.analysisId || (established && changed)
+    ? undefined
+    : operation;
+}
+
 export function toViewActions(
   message: unknown,
   requestContext: ReadonlyMap<string, RequestContext>,

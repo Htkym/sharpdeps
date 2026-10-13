@@ -8,6 +8,7 @@ import {
   toViewActions,
   evidenceRequestContext,
   synchronizeRequestTracking,
+  synchronizeSourceOperation,
   projectionRequestKey,
   type RequestContext,
   type RequestTracking
@@ -260,6 +261,88 @@ describe('relation history safety', () => {
     expect(next.tree).toBe(previous.tree);
     expect(synchronizeRequestTracking(next, tracking, contexts)).toBe(false);
     expect(tracking.projection).toBe(projectionRequestKey(next));
+    expect(contexts.size).toBe(1);
+  });
+});
+
+describe('source operation request context', () => {
+  const operation = { analysisId, requestId: 'req_1111111111111111' };
+  it('preserves a restored token through initial state and the first matching Saved or Quick analysis', () => {
+    for (const queryMetadata of [savedMetadata, undefined]) {
+      const tracking: RequestTracking = {
+        projection: '',
+        details: '',
+        evidence: '',
+        evidencePage: ''
+      };
+      const contexts = new Map<string, RequestContext>();
+      const restored = synchronizeSourceOperation(INITIAL_STATE, tracking, contexts, operation);
+      expect(restored).toBe(operation);
+      expect(tracking.contextKey).toBeUndefined();
+      const live = { analysisId, queryMetadata };
+      const established = synchronizeSourceOperation(live, tracking, contexts, restored);
+      expect(established).toBe(operation);
+      expect(tracking.contextKey).toBeDefined();
+      expect(synchronizeSourceOperation(live, tracking, contexts, established)).toBe(operation);
+      const foreign = { ...operation, analysisId: 'an_ffffffffffffffff' };
+      expect(
+        synchronizeSourceOperation(
+          live,
+          { projection: '', details: '', evidence: '', evidencePage: '' },
+          new Map(),
+          foreign
+        )
+      ).toBeUndefined();
+    }
+  });
+
+  it('discards an operation when an established analysis or pin changes and keeps variant reordering', () => {
+    const queryMetadata = { ...savedMetadata, variantIds: ['variant-net10', 'variant-net11'] };
+    const live = { analysisId, queryMetadata };
+    for (const next of [
+      { ...live, analysisId: 'an_ffffffffffffffff' },
+      { ...live, queryMetadata: { ...queryMetadata, workspaceId: 'hw_other' } },
+      { ...live, queryMetadata: { ...queryMetadata, snapshotId: 'snapshot-4' } },
+      { ...live, queryMetadata: { ...queryMetadata, generation: 4 } },
+      { ...live, queryMetadata: { ...queryMetadata, variantIds: ['variant-net11'] } },
+      { analysisId, queryMetadata: undefined },
+      { analysisId: undefined, queryMetadata: undefined }
+    ]) {
+      const tracking: RequestTracking = {
+        projection: '',
+        details: '',
+        evidence: '',
+        evidencePage: ''
+      };
+      const contexts = new Map<string, RequestContext>();
+      expect(synchronizeSourceOperation(live, tracking, contexts, operation)).toBe(operation);
+      contexts.set(operation.requestId, { type: 'openDeclaration', analysisId });
+      expect(synchronizeSourceOperation(next, tracking, contexts, operation)).toBeUndefined();
+      expect(contexts.size).toBe(0);
+    }
+    const tracking: RequestTracking = {
+      projection: '',
+      details: '',
+      evidence: '',
+      evidencePage: ''
+    };
+    const contexts = new Map<string, RequestContext>();
+    synchronizeSourceOperation(live, tracking, contexts, operation);
+    contexts.set(operation.requestId, { type: 'openDeclaration', analysisId });
+    expect(
+      synchronizeSourceOperation(
+        {
+          ...live,
+          queryMetadata: {
+            ...queryMetadata,
+            variantIds: [...queryMetadata.variantIds].reverse()
+          }
+        },
+        tracking,
+        contexts,
+        operation
+      )
+    ).toBe(operation);
     expect(contexts.size).toBe(1);
   });
 });

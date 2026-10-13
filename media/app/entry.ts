@@ -10,7 +10,7 @@ import { createViewerApp, type ViewerApp } from './app';
 import {
   toViewActions,
   evidenceRequestContext,
-  synchronizeRequestTracking,
+  synchronizeSourceOperation,
   projectionRequestKey,
   type RequestContext,
   type RequestTracking
@@ -402,8 +402,12 @@ if (root) {
   }
 
   function requestForState(state: ViewState): void {
-    if (synchronizeRequestTracking(state, requested, requestContext))
-      latestSourceOperation = undefined;
+    latestSourceOperation = synchronizeSourceOperation(
+      state,
+      requested,
+      requestContext,
+      latestSourceOperation
+    );
     const analysisId = state.analysisId;
     if (!analysisId) {
       return;
