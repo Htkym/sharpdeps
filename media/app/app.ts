@@ -1555,6 +1555,9 @@ function renderSavedQueryTable(
       if (event.key === 'Enter') {
         event.preventDefault();
         onActivate(entity.id);
+      } else if (event.key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        onSelect(entity.id);
       }
     });
     for (const value of [
