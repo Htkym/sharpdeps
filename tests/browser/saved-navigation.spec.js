@@ -41,7 +41,12 @@ async function messages(page) {
     .split('\n')
     .map(JSON.parse);
 }
-async function receive(page, requestType, replyType, { name = 'Input' } = {}) {
+async function receive(
+  page,
+  requestType,
+  replyType,
+  { name = 'Input', returnedEntityId = entityId } = {}
+) {
   await expect
     .poll(async () => (await messages(page)).filter((m) => m.type === requestType).length)
     .toBeGreaterThan(0);
@@ -79,7 +84,7 @@ async function receive(page, requestType, replyType, { name = 'Input' } = {}) {
         })
       );
     },
-    { request, replyType, name, entityId }
+    { request, replyType, name, entityId: returnedEntityId }
   );
   return request;
 }
@@ -87,6 +92,9 @@ async function receive(page, requestType, replyType, { name = 'Input' } = {}) {
 test('saved Back keyboard path waits for a fresh projection token before Copy', async ({
   page
 }) => {
+  test
+    .info()
+    .annotations.push({ type: 'browserVersion', description: page.context().browser().version() });
   const initial = await startSaved(page);
   await page.locator('#sd-view-table').click();
   await page.locator('.sd-table tbody tr').first().click();
@@ -116,12 +124,46 @@ test('saved Back keyboard path waits for a fresh projection token before Copy', 
   );
   expect(returned.requestId).not.toBe(initial.requestId);
   expect(returned.requestId).not.toBe(scoped.requestId);
+  await expect(page.locator('.sd-table tbody tr').first()).toBeFocused();
   await expect(page.locator('#sd-copy')).toBeEnabled();
   await page.locator('#sd-copy').click();
   const copy = (await messages(page)).filter((m) => m.type === 'copyContext').at(-1);
   expect(copy).toMatchObject({ projectionRequestId: returned.requestId, scope: { kind: 'root' } });
   expect((await messages(page)).filter((m) => m.type === 'getEntityDetails')).toHaveLength(1);
   expect(loadingStates).toEqual([false, false]);
+});
+
+test('saved Back does not steal focus when interrupted or the selected target is unavailable', async ({
+  page
+}) => {
+  const otherId = 'ty_2222222222222222';
+  for (const boundary of ['keyboard', 'missing-target', 'selection-changed']) {
+    await startSaved(page);
+    await page.locator('#sd-view-table').click();
+    await page.locator('.sd-table tbody tr').first().click();
+    await receive(page, 'getEntityDetails', 'details');
+    await page.getByRole('button', { name: 'Explore dependencies', exact: true }).click();
+    await receive(page, 'getProjection', 'projection');
+    await page.locator('#sd-back').focus();
+    await page.locator('#sd-back').press('Space');
+    // Programmatic focus alone does not emit the user interruption events.
+    await page.locator('.sd-search').focus();
+    if (boundary === 'keyboard') await page.locator('.sd-search').press('ArrowRight');
+    if (boundary === 'selection-changed')
+      await page.evaluate(
+        (id) => window.sharpdepsApp.dispatch({ type: 'entitySelected', entityId: id }),
+        otherId
+      );
+    await receive(page, 'getProjection', 'projection', {
+      returnedEntityId: boundary === 'missing-target' ? otherId : entityId
+    });
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    );
+    await expect(page.locator('.sd-table tbody tr').first()).toBeVisible();
+    await expect(page.locator('.sd-search')).toBeFocused();
+    await expect(page.locator('.sd-table tbody tr').first()).not.toBeFocused();
+  }
 });
 
 test('saved hostile display text stays literal at narrow width', async ({ page }) => {

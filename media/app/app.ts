@@ -83,8 +83,10 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   let inspectorReturnFocus: HTMLElement | SVGElement | undefined;
   let inspectorWasOpen = false;
   let pendingSourceUi: { pin: string; ui: SourceReturnUi } | undefined;
+  let pendingBackFocus: { pin: string; entityId: string } | undefined;
   let sourceReturnInteracted = false;
   const interruptSourceReturn = () => {
+    pendingBackFocus = undefined;
     sourceReturnInteracted = true;
     pendingSourceUi = undefined;
     options.onSourceReturnDismissed?.();
@@ -304,12 +306,28 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       pendingSourceUi = { pin, ui: action.ui };
       activeTab = action.ui.navTab;
     }
+    if (action.type === 'historyBack') {
+      const previous = state.history.at(-1);
+      const pin = sourceReturnPin();
+      pendingBackFocus =
+        state.queryMetadata && previous?.viewKind === 'table' && previous.selectionId && pin
+          ? { pin, entityId: previous.selectionId }
+          : undefined;
+    }
     const next = viewReducer(state, action);
     if (next === state) {
       return;
     }
 
     state = next;
+    if (
+      pendingBackFocus &&
+      (pendingBackFocus.pin !== sourceReturnPin() ||
+        pendingBackFocus.entityId !== state.selection.entityId ||
+        state.viewKind !== 'table' ||
+        action.type === 'sourceReturned')
+    )
+      pendingBackFocus = undefined;
     if (
       previousInvestigation &&
       state.candidateInvestigation?.originId !== previousInvestigation.originId
@@ -401,6 +419,25 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     elements.footer.textContent = selectStatusFooter(state);
     options.onStateChanged?.(state);
     restoreSourceUiWhenReady();
+    restoreBackFocusWhenReady();
+  }
+
+  function restoreBackFocusWhenReady(): void {
+    const ticket = pendingBackFocus;
+    if (!ticket || !state.projection || ticket.pin !== sourceReturnPin()) return;
+    const row = [
+      ...elements.mapHost.querySelectorAll<HTMLElement>('.sd-table tbody tr[data-entity-id]')
+    ].find((item) => item.dataset.entityId === ticket.entityId);
+    if (!row) {
+      pendingBackFocus = undefined;
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (pendingBackFocus !== ticket || ticket.pin !== sourceReturnPin() || !row.isConnected)
+        return;
+      pendingBackFocus = undefined;
+      row.focus();
+    });
   }
 
   function sourceReturnPin(): string | undefined {
