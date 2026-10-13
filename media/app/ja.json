@@ -280,5 +280,6 @@
   "All results": "すべて",
   "Code": "コード",
   "Documents": "文書",
-  "Result kinds": "検索対象の分類"
+  "Result kinds": "検索対象の分類",
+  "Inspect relation: {0} → {1} · {2} · {3}": "関係を確認: {0} → {1} · {2} · {3}"
 }

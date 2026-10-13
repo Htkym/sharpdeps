@@ -120,6 +120,27 @@ export interface CandidateOriginAction {
   targetName: string;
 }
 
+/** One provider-owned, returned relation; metadata on its reply owns the saved pin. */
+export interface SavedRelation {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  sourceName?: string;
+  targetName?: string;
+  kind: string;
+  certainty: 'Resolved' | 'Candidate' | 'Unresolved';
+  evidenceCount: number;
+  sourceOccurrenceId?: string | null;
+  targetOccurrenceId?: string | null;
+  variantId?: string | null;
+}
+
+/** Groups describe the Impact traversal direction, not a complete incident-edge set. */
+export interface SavedRelations {
+  outgoing: SavedRelation[];
+  incoming: SavedRelation[];
+}
+
 /** Display attributes of one exact occurrence; only capabilityId authorizes source lookup. */
 export interface CandidateDeclarationSummary {
   capabilityId: string;
@@ -387,6 +408,7 @@ export type HostToWebviewMessage =
       dependents?: EntitySummary[];
       queryMetadata?: QueryResultMetadata;
       candidateOrigins?: CandidateOriginAction[];
+      relations?: SavedRelations;
     }
   | {
       type: 'candidateInvestigation';
@@ -412,6 +434,7 @@ export type HostToWebviewMessage =
       items: Record<string, unknown>[];
       nextCursor?: string | null;
       queryMetadata?: QueryResultMetadata;
+      relation?: SavedRelation;
     }
   | {
       type: 'cycleWitness';
@@ -469,6 +492,70 @@ const PATTERNS = {
   cycleGroupId: /^cyc_[0-9a-f]{16}$/
 } as const;
 
+export function readSavedRelation(value: unknown): SavedRelation | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.id !== 'string' ||
+    !PATTERNS.relationId.test(item.id) ||
+    typeof item.sourceId !== 'string' ||
+    !PATTERNS.entityId.test(item.sourceId) ||
+    typeof item.targetId !== 'string' ||
+    !PATTERNS.entityId.test(item.targetId) ||
+    typeof item.kind !== 'string' ||
+    !item.kind.length ||
+    item.kind.length > 128 ||
+    (item.certainty !== 'Resolved' &&
+      item.certainty !== 'Candidate' &&
+      item.certainty !== 'Unresolved') ||
+    (item.evidenceCount !== 0 && item.evidenceCount !== 1)
+  )
+    return undefined;
+  for (const field of ['sourceName', 'targetName'])
+    if (item[field] !== undefined && typeof item[field] !== 'string') return undefined;
+  for (const field of ['sourceOccurrenceId', 'targetOccurrenceId', 'variantId']) {
+    const value = item[field];
+    if (value !== undefined && value !== null && (typeof value !== 'string' || value.length > 256))
+      return undefined;
+  }
+  const nullableText = (field: string) => {
+    const value = item[field];
+    return value === null ? null : typeof value === 'string' ? value : undefined;
+  };
+  return {
+    id: item.id,
+    sourceId: item.sourceId,
+    targetId: item.targetId,
+    sourceName: typeof item.sourceName === 'string' ? item.sourceName : undefined,
+    targetName: typeof item.targetName === 'string' ? item.targetName : undefined,
+    kind: item.kind,
+    certainty: item.certainty,
+    evidenceCount: item.evidenceCount,
+    sourceOccurrenceId: nullableText('sourceOccurrenceId'),
+    targetOccurrenceId: nullableText('targetOccurrenceId'),
+    variantId: nullableText('variantId')
+  };
+}
+
+export function readSavedRelations(value: unknown): SavedRelations | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const groups = value as Record<string, unknown>;
+  if (
+    !Array.isArray(groups.outgoing) ||
+    !Array.isArray(groups.incoming) ||
+    groups.outgoing.length > 1000 ||
+    groups.incoming.length > 1000
+  )
+    return undefined;
+  const outgoing = groups.outgoing.map(readSavedRelation);
+  const incoming = groups.incoming.map(readSavedRelation);
+  if (outgoing.some((item) => !item) || incoming.some((item) => !item)) return undefined;
+  return {
+    outgoing: outgoing.filter((item): item is SavedRelation => !!item),
+    incoming: incoming.filter((item): item is SavedRelation => !!item)
+  };
+}
+
 type FieldKind =
   | keyof typeof PATTERNS
   | 'string'
@@ -491,7 +578,9 @@ type FieldKind =
   | 'candidateCertainty'
   | 'candidateQueryMetadata'
   | 'candidateText'
-  | 'candidateRelationKind';
+  | 'candidateRelationKind'
+  | 'savedRelation'
+  | 'savedRelations';
 
 interface MessageRule {
   required: Record<string, FieldKind>;
@@ -692,7 +781,8 @@ const HOST_RULES: Record<string, MessageRule> = {
       dependencies: 'array',
       dependents: 'array',
       queryMetadata: 'object',
-      candidateOrigins: 'candidateOrigins'
+      candidateOrigins: 'candidateOrigins',
+      relations: 'savedRelations'
     }
   },
   candidateInvestigation: {
@@ -719,7 +809,7 @@ const HOST_RULES: Record<string, MessageRule> = {
       total: 'positiveInteger',
       items: 'array'
     },
-    optional: { nextCursor: 'cursor', queryMetadata: 'object' }
+    optional: { nextCursor: 'cursor', queryMetadata: 'object', relation: 'savedRelation' }
   },
   cycleWitness: {
     required: {
@@ -822,6 +912,10 @@ function checkField(
   errors: string[],
   required: boolean
 ): boolean {
+  if (value === null && (kind === 'savedRelation' || kind === 'savedRelations')) {
+    errors.push(`${path}: expected saved relation data, not null`);
+    return false;
+  }
   if (value === null && (kind === 'candidateOrigins' || kind === 'candidateText')) {
     errors.push(`${path}: expected a candidate field, not null`);
     return false;
@@ -839,6 +933,10 @@ function checkField(
   };
 
   switch (kind) {
+    case 'savedRelation':
+      return !!readSavedRelation(value) || fail('expected a bounded saved relation');
+    case 'savedRelations':
+      return !!readSavedRelations(value) || fail('expected bounded saved relation groups');
     case 'candidateOriginId':
     case 'candidateDeclarationId':
     case 'candidateTargetId':

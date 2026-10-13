@@ -1612,7 +1612,18 @@ function renderSavedQueryInspector(
   const tr = translator(state.language);
   const body = elements.inspectorBody;
   body.replaceChildren();
-  const edge = state.projection?.edges.find((item) => item.id === state.selection.relationId);
+  const savedEvidence =
+    state.evidence?.relationId === state.selection.relationId ? state.evidence : undefined;
+  const relation =
+    savedEvidence?.relation ??
+    [
+      ...(state.details?.relations?.outgoing ?? []),
+      ...(state.details?.relations?.incoming ?? [])
+    ].find((item) => item.id === state.selection.relationId);
+  // Relation details are transient provider data, not additions to the graph/export.
+  const edge = relation
+    ? { ...relation, kinds: [relation.kind] }
+    : state.projection?.edges.find((item) => item.id === state.selection.relationId);
   const details = state.details?.entityId === state.selection.entityId ? state.details : undefined;
   const associated =
     state.projection?.nodes.find((item) => item.id === state.selection.entityId) ??
@@ -1623,14 +1634,19 @@ function renderSavedQueryInspector(
     selected && (associated?.certainty === 'Candidate' || associated?.certainty === 'Unresolved')
       ? { ...selected, certainty: associated.certainty }
       : selected;
-  const savedEvidence =
-    state.evidence?.relationId === state.selection.relationId ? state.evidence : undefined;
   const metadata = edge
-    ? (savedEvidence?.queryMetadata ?? state.projection?.queryMetadata)
+    ? (savedEvidence?.queryMetadata ??
+      (relation ? state.details?.queryMetadata : state.projection?.queryMetadata))
     : details?.queryMetadata;
   if (state.selection.relationId) {
     const nameOf = (id: string): string =>
-      state.projection?.nodes.find((node) => node.id === id)?.name ?? id;
+      (relation?.sourceId === id
+        ? relation.sourceName
+        : relation?.targetId === id
+          ? relation.targetName
+          : undefined) ??
+      state.projection?.nodes.find((node) => node.id === id)?.name ??
+      id;
     elements.inspectorTitle.textContent = edge
       ? `${nameOf(edge.sourceId)} → ${nameOf(edge.targetId)}`
       : state.selection.relationId;
@@ -1750,7 +1766,28 @@ function renderSavedQueryInspector(
         );
         body.append(button);
       }
-      if (!entries.length) body.append(message(tr('No related entries returned.'), 'sd-note'));
+      const relations =
+        (kind === 'dependencies' ? details?.relations?.outgoing : details?.relations?.incoming) ??
+        [];
+      if (!entries.length && !relations.length)
+        body.append(message(tr('No related entries returned.'), 'sd-note'));
+      for (const relation of relations) {
+        const inspect = document.createElement('button');
+        inspect.type = 'button';
+        inspect.className = 'sd-node-item';
+        inspect.dataset.relationId = relation.id;
+        inspect.textContent = tr(
+          'Inspect relation: {0} → {1} · {2} · {3}',
+          relation.sourceName ?? relation.sourceId,
+          relation.targetName ?? relation.targetId,
+          tr(relation.kind),
+          tr(relation.certainty)
+        );
+        inspect.addEventListener('click', () =>
+          dispatch({ type: 'relationSelected', relationId: relation.id })
+        );
+        body.append(inspect);
+      }
       const explore = document.createElement('button');
       explore.type = 'button';
       explore.className = 'sd-button';

@@ -45,6 +45,99 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('relation history safety', () => {
+  it('relays saved relation data only with valid fields and the current saved pin', () => {
+    const relation = {
+      id: 'rel_1111111111111111',
+      sourceId: 'ty_1111111111111111',
+      targetId: 'ty_2222222222222222',
+      sourceName: 'Caller',
+      targetName: 'Compute',
+      kind: 'calls',
+      certainty: 'Resolved',
+      evidenceCount: 1
+    };
+    const state: ViewState = {
+      ...INITIAL_STATE,
+      analysisId,
+      queryMetadata: savedMetadata,
+      selection: { relationId: relation.id }
+    };
+    const requestId = 'req_1111111111111111';
+    const message = {
+      type: 'evidencePage',
+      requestId,
+      analysisId,
+      relationId: relation.id,
+      total: 0,
+      items: [],
+      relation,
+      queryMetadata: savedMetadata
+    };
+    const contexts = new Map([[requestId, evidenceRequestContext(state, relation.id)]]);
+    expect(toViewActions(message, contexts, state)[0]).toMatchObject({
+      type: 'evidenceReceived',
+      relation
+    });
+    expect(
+      toViewActions(
+        { ...message, relation: { ...relation, id: 'rel_2222222222222222' } },
+        contexts,
+        state
+      )
+    ).toEqual([]);
+    expect(
+      toViewActions({ ...message, relation: { ...relation, certainty: 'exact' } }, contexts, state)
+    ).toEqual([]);
+    expect(
+      toViewActions(
+        { ...message, queryMetadata: { ...savedMetadata, generation: 2 } },
+        contexts,
+        state
+      )
+    ).toEqual([]);
+    const detailState: ViewState = { ...state, selection: { entityId: relation.targetId } };
+    const detailMessage = {
+      type: 'details',
+      requestId,
+      analysisId,
+      entity: { id: relation.targetId, name: 'Compute', granularity: 'type', kind: 'Member' },
+      relations: { outgoing: [], incoming: [relation] },
+      queryMetadata: savedMetadata
+    };
+    const detailContext = new Map([[requestId, { type: 'getEntityDetails', analysisId }]]);
+    expect(toViewActions(detailMessage, detailContext, detailState)[0]).toMatchObject({
+      type: 'detailsReceived',
+      relations: detailMessage.relations
+    });
+    expect(
+      toViewActions(
+        {
+          ...detailMessage,
+          relations: { outgoing: [], incoming: [{ ...relation, certainty: 'exact' }] }
+        },
+        detailContext,
+        detailState
+      )
+    ).toEqual([]);
+    expect(
+      toViewActions(
+        {
+          ...detailMessage,
+          relations: { outgoing: [], incoming: [{ ...relation, sourceId: 'not-an-issued-id' }] }
+        },
+        detailContext,
+        detailState
+      )
+    ).toEqual([]);
+    expect(
+      toViewActions(
+        { ...detailMessage, queryMetadata: { ...savedMetadata, generation: 2 } },
+        detailContext,
+        detailState
+      )
+    ).toEqual([]);
+  });
+
   const relationId = 'rel_1111111111111111';
   const requestId = 'req_1111111111111111';
   const current: ViewState = {

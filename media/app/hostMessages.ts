@@ -16,7 +16,11 @@ import type { ViewAction } from './state';
 import type { ViewState } from './state';
 import { restoreViewState } from './serializer';
 import { candidateContextKey, savedSnapshotPin } from './state';
-import { validateHostMessage } from '../../src/view/protocolV2';
+import {
+  validateHostMessage,
+  readSavedRelation,
+  readSavedRelations
+} from '../../src/view/protocolV2';
 
 export interface RequestContext {
   treeParentId?: string;
@@ -366,6 +370,9 @@ export function toViewActions(
     }
 
     case 'details': {
+      const relations =
+        message.relations === undefined ? undefined : readSavedRelations(message.relations);
+      if (message.relations !== undefined && (!relations || !queryMetadata)) return [];
       let candidateOrigins;
       if (message.candidateOrigins !== undefined) {
         const checked = validateHostMessage(message);
@@ -388,6 +395,7 @@ export function toViewActions(
             dependencies: readEntities(message.dependencies),
             dependents: readEntities(message.dependents),
             ...(candidateOrigins ? { candidateOrigins } : {}),
+            ...(relations ? { relations } : {}),
             ...(queryMetadata ? { queryMetadata } : {})
           }
         ];
@@ -401,6 +409,7 @@ export function toViewActions(
           dependencies: readEntities(message.dependencies),
           dependents: readEntities(message.dependents),
           ...(candidateOrigins ? { candidateOrigins } : {}),
+          ...(relations ? { relations } : {}),
           ...(queryMetadata ? { queryMetadata } : {})
         }
       ];
@@ -410,6 +419,13 @@ export function toViewActions(
       if (typeof message.relationId !== 'string') {
         return [];
       }
+      const relation =
+        message.relation === undefined ? undefined : readSavedRelation(message.relation);
+      if (
+        message.relation !== undefined &&
+        (!relation || !queryMetadata || relation.id !== message.relationId)
+      )
+        return [];
 
       const context =
         typeof message.requestId === 'string' ? requestContext.get(message.requestId) : undefined;
@@ -421,6 +437,7 @@ export function toViewActions(
           items: Array.isArray(message.items) ? (message.items as Record<string, unknown>[]) : [],
           nextCursor: typeof message.nextCursor === 'string' ? message.nextCursor : null,
           append: context?.appendEvidence === true,
+          ...(relation ? { relation } : {}),
           ...(queryMetadata ? { queryMetadata } : {})
         }
       ];

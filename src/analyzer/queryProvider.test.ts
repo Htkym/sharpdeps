@@ -55,6 +55,137 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it.each(['Member incoming calls', 'Markdown outgoing candidate'])(
+    'relays registered detail relations and reconstructs evidence without another Query: %s',
+    async (scenario) => {
+      const markdown = scenario.startsWith('Markdown');
+      const selected: QueryItem = {
+        ...node('selected'),
+        kind: markdown ? 'Document' : 'Member',
+        node: {
+          id: 'selected',
+          kind: markdown ? 'Document' : 'Member',
+          name: markdown ? 'Guide' : 'Compute'
+        }
+      };
+      const related = node('related', markdown ? 'Candidate' : 'Resolved');
+      const location = {
+        sourceId: 'fixture',
+        contentHash: 'b'.repeat(64),
+        rawSpan: { start: 4, length: 2, end: 6 }
+      };
+      const relation: QueryItem = {
+        id: 'edge',
+        kind: markdown ? 'documents_symbol' : 'calls',
+        label: 'returned relation',
+        certainty: markdown ? 'Candidate' : 'Resolved',
+        path: markdown ? 'Guide.md' : 'Input.cs',
+        edge: {
+          id: 'edge',
+          sourceNodeId: markdown ? 'selected' : 'related',
+          targetNodeId: markdown ? 'related' : 'selected',
+          kind: markdown ? 'documents_symbol' : 'calls',
+          certainty: markdown ? 'Candidate' : 'Resolved',
+          producer: 'fixture',
+          ...(markdown ? {} : { evidence: location }),
+          variantId: variant
+        }
+      };
+      const bounded = reply({
+        items: markdown ? [selected] : [selected, related, relation],
+        candidates: markdown ? [related, relation] : [],
+        truncated: true,
+        truncationReasons: ['DEPTH_LIMIT']
+      });
+      const wire = client([
+        reply({ items: [selected] }),
+        reply({ items: [selected] }),
+        markdown
+          ? bounded
+          : reply({
+              items: [
+                selected,
+                { ...related, node: { ...related.node!, name: 'Outgoing caller' } }
+              ],
+              candidates: [{ ...relation, certainty: 'Candidate' }]
+            }),
+        markdown ? reply({ items: [selected] }) : bounded
+      ]);
+      const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+      const search = await provider.handle({
+        type: 'searchEntities',
+        requestId,
+        analysisId: provider.analysisId,
+        query: 'selected'
+      });
+      if (search.type !== 'searchResults') throw new Error('search failed');
+      const details = await provider.handle({
+        type: 'getEntityDetails',
+        requestId,
+        analysisId: provider.analysisId,
+        entityId: search.items[0].id
+      });
+      if (details.type !== 'details' || !details.relations)
+        throw new Error('detail relations missing');
+      expect(details.entity.kind).toBe(markdown ? 'Document' : 'Member');
+      const direction = markdown ? details.relations.outgoing : details.relations.incoming;
+      expect(direction).toHaveLength(1);
+      const saved = direction[0];
+      expect(saved).toMatchObject({
+        id: expect.stringMatching(/^rel_[a-f0-9]{16}$/),
+        kind: markdown ? 'documents_symbol' : 'calls',
+        certainty: markdown ? 'Candidate' : 'Resolved',
+        evidenceCount: markdown ? 0 : 1,
+        variantId: variant
+      });
+      expect(markdown ? saved.sourceId : saved.targetId).toBe(search.items[0].id);
+      if (!markdown) {
+        expect(details.relations.outgoing).toHaveLength(1);
+        expect(details.relations.outgoing[0]).toMatchObject({
+          id: saved.id,
+          kind: 'calls',
+          certainty: 'Candidate',
+          sourceName: 'Outgoing caller'
+        });
+        expect(saved).toMatchObject({ certainty: 'Resolved', sourceName: 'related' });
+      }
+      expect(details.queryMetadata).toMatchObject({
+        coverage: 'Partial',
+        truncated: true,
+        truncationReasons: ['DEPTH_LIMIT'],
+        candidateCount: markdown ? 2 : 1
+      });
+      const evidence = await provider.handle({
+        type: 'getEvidencePage',
+        requestId,
+        analysisId: provider.analysisId,
+        relationId: saved.id
+      });
+      if (evidence.type !== 'evidencePage') throw new Error('evidence failed');
+      expect(evidence.relation).toEqual({ ...saved, certainty: 'Candidate' });
+      expect(evidence.items).toHaveLength(markdown ? 0 : 1);
+      if (!markdown) {
+        expect(evidence.items[0].location).toEqual(location);
+        expect(evidence.items[0].certainty).toBe('Candidate');
+      }
+      expect(evidence.queryMetadata).toMatchObject({
+        workspaceId: 'workspace-a',
+        snapshotId: 'snapshot-a',
+        generation: 3,
+        variantIds: [variant],
+        coverage: 'Partial',
+        truncated: true
+      });
+      expect(wire.requests.map((request) => request.kind)).toEqual([
+        'Search',
+        'Symbol',
+        'Impact',
+        'Impact'
+      ]);
+      provider.dispose();
+    }
+  );
+
   it('applies the current result conditions to detail Symbol and both Impact directions', async () => {
     const document: QueryItem = {
       ...node('document-a'),

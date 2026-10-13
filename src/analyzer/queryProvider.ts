@@ -27,7 +27,8 @@ import type {
   QueryResultMetadata,
   CandidateOriginAction,
   WebviewToHostMessage,
-  Filters
+  Filters,
+  SavedRelation
 } from '../view/protocolV2';
 
 const CAPABILITIES = {
@@ -64,7 +65,7 @@ export class SavedQueryProvider implements ReportBridge {
   private readonly reverse = new Map<string, string>();
   private readonly edges = new Map<
     string,
-    { edge: QueryEdge; item: QueryItem; reply: QueryWireReply }
+    { edge: QueryEdge; item: QueryItem; reply: QueryWireReply; certainty: QueryCertainty }
   >();
   private readonly cursors = new Map<string, { cursor: string; key: string }>();
   private sequence = 0;
@@ -365,7 +366,18 @@ export class SavedQueryProvider implements ReportBridge {
       }
       if (item.edge) {
         const id = this.id(item.edge.id, 'rel');
-        this.edges.set(id, { edge: item.edge, item, reply });
+        const returnedCertainty =
+          certaintyRank(item.certainty) > certaintyRank(item.edge.certainty)
+            ? item.certainty
+            : item.edge.certainty;
+        const prior = this.edges.get(id);
+        // One opaque ID may be returned through several paths in this pinned session.
+        // Later replies can supply locations, but cannot strengthen a known tentative path.
+        const certainty =
+          prior && certaintyRank(prior.certainty) > certaintyRank(returnedCertainty)
+            ? prior.certainty
+            : returnedCertainty;
+        this.edges.set(id, { edge: item.edge, item, reply, certainty });
       }
     }
     return reply;
@@ -788,6 +800,10 @@ export class SavedQueryProvider implements ReportBridge {
       entity: { ...entity },
       dependencies,
       dependents,
+      relations: {
+        outgoing: this.returnedRelations(outgoing),
+        incoming: this.returnedRelations(incoming)
+      },
       ...(candidateOrigins.length ? { candidateOrigins } : {}),
       queryMetadata: metadata
     };
@@ -1073,6 +1089,53 @@ export class SavedQueryProvider implements ReportBridge {
     return { location: structuredClone(record!.location), assertCurrent };
   }
 
+  /** Attributes belong to this reply, not to a later result stored under the same ID. */
+  private relationInfo(item: QueryItem, reply: QueryWireReply): SavedRelation {
+    const edge = item.edge!;
+    const returned = [...reply.items, ...reply.candidates, ...reply.unresolved];
+    const endpoint = (nodeId: string) => {
+      const node =
+        returned.find((entry) => entry.node?.id === nodeId)?.node ?? this.nodes.get(nodeId)?.node;
+      return {
+        id: this.id(
+          nodeId,
+          node?.kind === 'Project' ? 'prj' : node?.kind === 'Namespace' ? 'ns' : 'ty'
+        ),
+        name: node?.name
+      };
+    };
+    const source = endpoint(edge.sourceNodeId);
+    const target = endpoint(edge.targetNodeId);
+    return {
+      id: this.id(edge.id, 'rel'),
+      sourceId: source.id,
+      targetId: target.id,
+      sourceName: source.name,
+      targetName: target.name,
+      kind: edge.kind,
+      certainty:
+        certaintyRank(item.certainty) > certaintyRank(edge.certainty)
+          ? item.certainty
+          : edge.certainty,
+      evidenceCount: edge.evidence ? 1 : 0,
+      sourceOccurrenceId: edge.sourceOccurrenceId ?? null,
+      targetOccurrenceId: edge.targetOccurrenceId ?? null,
+      variantId: edge.variantId ?? null
+    };
+  }
+
+  private returnedRelations(reply: QueryWireReply): SavedRelation[] {
+    const relations = new Map<string, SavedRelation>();
+    for (const item of [...reply.items, ...reply.candidates, ...reply.unresolved]) {
+      if (!item.edge) continue;
+      const relation = this.relationInfo(item, reply);
+      const prior = relations.get(relation.id);
+      if (!prior || certaintyRank(relation.certainty) > certaintyRank(prior.certainty))
+        relations.set(relation.id, relation);
+    }
+    return [...relations.values()];
+  }
+
   private evidence(
     request: Extract<WebviewToHostMessage, { type: 'getEvidencePage' }>
   ): HostToWebviewMessage {
@@ -1087,10 +1150,7 @@ export class SavedQueryProvider implements ReportBridge {
       ? [
           {
             id: evidenceId,
-            certainty:
-              certaintyRank(saved.item.certainty) > certaintyRank(saved.edge.certainty)
-                ? saved.item.certainty
-                : saved.edge.certainty,
+            certainty: saved.certainty,
             kind: saved.edge.kind,
             producer: saved.edge.producer,
             documentPath: saved.item.path ?? null,
@@ -1106,6 +1166,7 @@ export class SavedQueryProvider implements ReportBridge {
       requestId: request.requestId,
       analysisId: this.analysisId,
       relationId: request.relationId,
+      relation: { ...this.relationInfo(saved.item, saved.reply), certainty: saved.certainty },
       total: items.length,
       items,
       nextCursor: null,

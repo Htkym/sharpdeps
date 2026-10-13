@@ -14,6 +14,8 @@ import type {
   Projection,
   ProjectionCycleGroup,
   QueryResultMetadata,
+  SavedRelation,
+  SavedRelations,
   Scope
 } from '../../src/view/protocolV2';
 import type { SourceReturnUi } from '../../src/view/protocolV2';
@@ -103,6 +105,7 @@ export interface ViewState {
     dependents: EntitySummary[];
     queryMetadata?: QueryResultMetadata;
     candidateOrigins?: CandidateOriginAction[];
+    relations?: SavedRelations;
   } | null;
   /** Declaration investigation is transient and never belongs to the normal graph/export. */
   candidateInvestigation?: {
@@ -118,6 +121,7 @@ export interface ViewState {
     /** True while the next page is on its way. */
     pending: boolean;
     queryMetadata?: QueryResultMetadata;
+    relation?: SavedRelation;
   } | null;
   /** Restored camera of the graph view; null until the view reports one. */
   camera: { zoom: number; scrollLeft: number; scrollTop: number } | null;
@@ -243,6 +247,7 @@ export type ViewAction =
       dependents: EntitySummary[];
       queryMetadata?: QueryResultMetadata;
       candidateOrigins?: CandidateOriginAction[];
+      relations?: SavedRelations;
     }
   | { type: 'candidateInvestigationRequested'; originId: string }
   | {
@@ -259,6 +264,7 @@ export type ViewAction =
       /** True when the answer continues the current list instead of replacing it. */
       append?: boolean;
       queryMetadata?: QueryResultMetadata;
+      relation?: SavedRelation;
     }
   | { type: 'evidencePageRequested' }
   | {
@@ -651,7 +657,8 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
           dependencies: action.dependencies,
           dependents: action.dependents,
           ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {}),
-          ...(action.candidateOrigins ? { candidateOrigins: action.candidateOrigins } : {})
+          ...(action.candidateOrigins ? { candidateOrigins: action.candidateOrigins } : {}),
+          ...(action.relations ? { relations: action.relations } : {})
         },
         queryMetadata: action.queryMetadata ?? state.queryMetadata,
         inspectorOpen: true
@@ -669,7 +676,8 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
               : action.items,
           nextCursor: action.nextCursor,
           pending: false,
-          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {})
+          ...(action.queryMetadata ? { queryMetadata: action.queryMetadata } : {}),
+          ...(action.relation ? { relation: action.relation } : {})
         },
         queryMetadata: action.queryMetadata ?? state.queryMetadata,
         inspectorOpen: true

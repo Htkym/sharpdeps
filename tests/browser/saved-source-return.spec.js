@@ -46,6 +46,150 @@ const messages = (page) =>
     .locator('#app')
     .getAttribute('data-host-messages')
     .then((value) => (value || '').split('\n').filter(Boolean).map(JSON.parse));
+
+test('saved Inspector opens an off-graph returned relation and reconstructs it on source return', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 900, height: 400 });
+  await page.goto('/tests/webview/fixtures/shell-fixture.html');
+  const method = { ...doc, name: 'Compute', kind: 'Member', sourceLocationAvailable: false };
+  const caller = { ...method, id: entries[1].id, name: 'Value' };
+  const relation = {
+    id: relationId,
+    sourceId: caller.id,
+    targetId: method.id,
+    sourceName: caller.name,
+    targetName: method.name,
+    kind: 'calls',
+    certainty: 'Resolved',
+    evidenceCount: 1,
+    variantId: 'variant'
+  };
+  const projection = async (nodes) => {
+    const req = await request(page, 'getProjection');
+    await result(page, req, 'projection', {
+      projection: {
+        scope: req.scope,
+        granularity: 'type',
+        nodes,
+        edges: [],
+        totalNodeCount: nodes.length,
+        totalEdgeCount: 0,
+        truncated: false,
+        queryMetadata: metadata
+      }
+    });
+  };
+  const evidence = async () => {
+    const req = await request(page, 'getEvidencePage');
+    await result(page, req, 'evidencePage', {
+      relationId,
+      relation,
+      total: 1,
+      items: [
+        {
+          id: evidenceId,
+          kind: 'calls',
+          certainty: 'Resolved',
+          documentPath: 'Input.cs',
+          location: {
+            sourceId: 'fixture',
+            contentHash: 'a'.repeat(64),
+            rawSpan: { start: 4, length: 2, end: 6 }
+          }
+        }
+      ]
+    });
+    return req;
+  };
+  await post(page, {
+    type: 'analysisComplete',
+    analysisId,
+    queryMetadata: metadata,
+    target: { name: 'Saved', relativePath: 'Input.csproj' }
+  });
+  await page.locator('#sd-view-table').click();
+  const tree = await request(
+    page,
+    'searchEntities',
+    (m) => m.query === '' && m.granularity === 'project'
+  );
+  await result(page, tree, 'searchResults', { items: [], total: 0 });
+  await projection([]);
+  await page.locator('.sd-search').fill('Compute');
+  const search = await request(page, 'searchEntities', (m) => m.query === 'Compute');
+  await result(page, search, 'searchResults', { items: [method], total: 1 });
+  await page.locator(`.sd-nav-body button[data-entity-id="${method.id}"]`).click();
+  const details = await request(page, 'getEntityDetails');
+  await result(page, details, 'details', {
+    entity: method,
+    dependencies: [],
+    dependents: [caller],
+    relations: { outgoing: [], incoming: [relation] }
+  });
+  await page.getByRole('button', { name: 'Explore dependents', exact: true }).click();
+  await projection([method]);
+  await page.locator(`.sd-inspector button[data-relation-id="${relationId}"]`).click();
+  const firstEvidence = await evidence();
+  await expect(page.locator('.sd-inspector-title')).toHaveText('Value → Compute');
+  const button = page.locator(`[data-source-return="evidence"][data-source-id="${evidenceId}"]`);
+  await expect(button).toBeVisible();
+  await page.evaluate(() => {
+    window.sharpdepsApp.elements.inspectorBody.scrollTop = 80;
+  });
+  await button.click();
+  const open = await request(page, 'openEvidence');
+  expect(open.evidenceId).toBe(evidenceId);
+  const log = await messages(page),
+    position = log.findIndex((m) => m.requestId === open.requestId);
+  const captured = log[position - 1].viewState;
+  expect(captured.selection).toEqual({ relationId });
+  expect(captured.history.length).toBeGreaterThan(0);
+  expect(open.returnUi.scroll.inspector).toBeGreaterThan(0);
+  await post(page, {
+    type: 'sourceReturn',
+    requestId: open.requestId,
+    analysisId,
+    state: captured,
+    ui: open.returnUi
+  });
+  const returnedTree = await request(
+    page,
+    'searchEntities',
+    (m) => m.query === '' && m.granularity === 'project'
+  );
+  await result(page, returnedTree, 'searchResults', { items: [], total: 0 });
+  await projection([method]);
+  const returnedSearch = await request(page, 'searchEntities', (m) => m.query === 'Compute');
+  await result(page, returnedSearch, 'searchResults', { items: [method], total: 1 });
+  const secondEvidence = await evidence();
+  expect(secondEvidence.requestId).not.toBe(firstEvidence.requestId);
+  await expect(button).toBeFocused();
+  await expect(page.locator('.sd-inspector-title')).toHaveText('Value → Compute');
+  const restored = await page.evaluate(() => ({
+    state: window.sharpdepsApp.getState(),
+    scroll: window.sharpdepsApp.elements.inspectorBody.scrollTop
+  }));
+  expect(restored.state.selection).toEqual(captured.selection);
+  expect(restored.state.history).toEqual(captured.history);
+  expect(restored.state.scope).toEqual(captured.scope);
+  expect(restored.state.viewKind).toBe('table');
+  expect(restored.state.projection.edges).toEqual([]);
+  expect(restored.scroll).toBe(open.returnUi.scroll.inspector);
+  // Replayed data from an older pin must not replace the freshly reconstructed relation.
+  await post(page, {
+    type: 'evidencePage',
+    requestId: firstEvidence.requestId,
+    analysisId,
+    relationId,
+    relation: { ...relation, sourceName: 'Old caller' },
+    total: 0,
+    items: [],
+    queryMetadata: { ...metadata, generation: metadata.generation - 1 }
+  });
+  await expect(page.locator('.sd-inspector-title')).toHaveText('Value → Compute');
+});
+
 async function request(page, type, predicate = () => true) {
   await expect
     .poll(async () => (await messages(page)).filter((m) => m.type === type && predicate(m)).length)
