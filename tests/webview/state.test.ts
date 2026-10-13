@@ -25,6 +25,7 @@ import type {
   QueryResultMetadata
 } from '../../src/view/protocolV2';
 import { restoreViewState, serializeViewState } from '../../media/app/serializer';
+import { toViewActions, evidenceRequestContext } from '../../media/app/hostMessages';
 
 const savedMetadata: QueryResultMetadata = {
   provider: 'savedIndex',
@@ -648,6 +649,119 @@ describe('viewReducer status transitions', () => {
 });
 
 describe('viewReducer navigation and selection', () => {
+  it('does not retain a restored relation when its current evidence request reports it missing', () => {
+    const selected = viewReducer(
+      { ...withProjection(), analysisId: 'an_0123456789abcdef', queryMetadata: savedMetadata },
+      { type: 'relationSelected', relationId: 'rel_1111111111111111' }
+    );
+    const scoped = viewReducer(selected, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const back = viewReducer(scoped, { type: 'historyBack' });
+    const requestId = 'req_1111111111111111';
+    const actions = toViewActions(
+      {
+        type: 'error',
+        requestId,
+        analysisId: back.analysisId,
+        code: 'QUERY_EDGE_UNKNOWN',
+        message: 'Relation is unavailable in the saved provider.'
+      },
+      new Map([[requestId, evidenceRequestContext(back, 'rel_1111111111111111')]]),
+      back
+    );
+    const missing = actions.reduce((state, action) => viewReducer(state, action), back);
+    expect(missing.error?.code).toBe('QUERY_EDGE_UNKNOWN');
+    expect(missing.evidence).toBeNull();
+    expect(missing.selection).toEqual({});
+  });
+
+  it('does not restore old relation history after the same analysis id receives a new snapshot', () => {
+    const selected = viewReducer(
+      { ...withProjection(), analysisId: 'an_0123456789abcdef', queryMetadata: savedMetadata },
+      { type: 'relationSelected', relationId: 'rel_1111111111111111' }
+    );
+    const scoped = viewReducer(selected, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const populated: ViewState = {
+      ...scoped,
+      projection: projection(),
+      projectionRequestId: 'req_1111111111111111',
+      selection: { relationId: 'rel_1111111111111111' },
+      details: { entityId: 'ty_1111111111111111', dependencies: [], dependents: [] },
+      evidence: {
+        relationId: 'rel_1111111111111111',
+        total: 2,
+        items: [{ id: 'old' }],
+        nextCursor: 'old-cursor',
+        pending: false
+      },
+      tree: { root: { items: [], total: 1 } }
+    };
+    const changed = viewReducer(populated, {
+      type: 'analysisComplete',
+      analysisId: 'an_0123456789abcdef',
+      completeness: 'partial',
+      coverage: undefined,
+      queryMetadata: { ...savedMetadata, snapshotId: 'snapshot-4', generation: 4 }
+    });
+    const back = viewReducer(changed, { type: 'historyBack' });
+    expect(back.selection).toEqual({});
+    expect(back.history).toHaveLength(0);
+    expect(back.evidence).toBeNull();
+    expect(changed.projection).toBeNull();
+    expect(changed.projectionRequestId).toBeUndefined();
+    expect(changed.details).toBeNull();
+    expect(changed.tree).toEqual({});
+  });
+
+  it('restores a relation selection on Back without carrying its old evidence page or cursor', () => {
+    const relationId = 'rel_1111111111111111';
+    const selected = viewReducer(
+      { ...withProjection(), queryMetadata: savedMetadata },
+      { type: 'relationSelected', relationId }
+    );
+    const evidence = viewReducer(selected, {
+      type: 'evidenceReceived',
+      relationId,
+      total: 2,
+      items: [{ id: 'old-evidence' }],
+      nextCursor: 'old-cursor',
+      queryMetadata: savedMetadata
+    });
+    const scoped = viewReducer(evidence, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const returned = viewReducer(scoped, { type: 'historyBack' });
+    expect(returned.selection).toEqual({ relationId });
+    expect(returned.scope).toEqual(selected.scope);
+    expect(returned.evidence).toBeNull();
+    expect(returned.details).toBeNull();
+    expect(returned.projection).toBeNull();
+    expect(returned.queryMetadata).toBe(savedMetadata);
+    const fresh = viewReducer(returned, {
+      type: 'evidenceReceived',
+      relationId,
+      total: 1,
+      items: [{ id: 'new-evidence' }],
+      queryMetadata: savedMetadata
+    });
+    expect(fresh.evidence?.items).toEqual([{ id: 'new-evidence' }]);
+    expect(fresh.evidence?.nextCursor).toBeUndefined();
+    const mixedHistory = {
+      ...scoped,
+      history: [{ ...scoped.history[0], selectionId: 'ty_1111111111111111' }],
+      details: { entityId: 'ty_1111111111111111', dependencies: [], dependents: [] }
+    };
+    const mixedBack = viewReducer(mixedHistory, { type: 'historyBack' });
+    expect(mixedBack.selection).toEqual({ relationId });
+    expect(mixedBack.details).toBeNull();
+  });
+
   it('retains saved details only while navigating the same entity in the same analysis', () => {
     const entityId = 'ty_1111111111111111';
     const selected = viewReducer(

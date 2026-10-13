@@ -10,6 +10,36 @@ import {
 } from '../../media/app/serializer';
 
 describe('view state serialization', () => {
+  it('round-trips relation history and preserves old entity-only history', () => {
+    const relationId = 'rel_1111111111111111';
+    const selected = viewReducer(INITIAL_STATE, { type: 'relationSelected', relationId });
+    const scoped = viewReducer(selected, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const restored = deserializeViewState(JSON.parse(JSON.stringify(serializeViewState(scoped))));
+    expect(
+      viewReducer({ ...INITIAL_STATE, ...restored.state }, { type: 'historyBack' }).selection
+    ).toEqual({ relationId });
+    for (const relation of [undefined, '', { id: relationId }, 'x'.repeat(65)]) {
+      const legacy = deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        history: [
+          {
+            scope: { kind: 'root' },
+            granularity: 'type',
+            selectionId: 'ty_1111111111111111',
+            relationId: relation
+          }
+        ]
+      });
+      expect(legacy.state.history?.[0].relationId).toBeUndefined();
+      expect(
+        viewReducer({ ...INITIAL_STATE, ...legacy.state }, { type: 'historyBack' }).selection
+      ).toEqual({ entityId: 'ty_1111111111111111' });
+    }
+  });
+
   it('keeps empty source-return searches and history when replacing a nonempty search', () => {
     const stored = serializeViewState({
       ...INITIAL_STATE,

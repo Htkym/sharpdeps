@@ -15,7 +15,7 @@ import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewAction } from './state';
 import type { ViewState } from './state';
 import { restoreViewState } from './serializer';
-import { candidateContextKey } from './state';
+import { candidateContextKey, savedSnapshotPin } from './state';
 import { validateHostMessage } from '../../src/view/protocolV2';
 
 export interface RequestContext {
@@ -31,6 +31,58 @@ export interface RequestContext {
   filtersKey?: string;
   candidateOriginId?: string;
   candidateContextKey?: string;
+  relationId?: string;
+  savedPin?: string;
+}
+
+export interface RequestTracking {
+  contextKey?: string;
+  projection: string;
+  details: string;
+  evidence: string;
+  evidencePage: string;
+}
+
+export function projectionRequestKey(state: ViewState): string {
+  return [
+    state.analysisId,
+    state.granularity,
+    state.scope.kind,
+    state.scope.id ?? '',
+    state.scope.depth ?? 1,
+    JSON.stringify(state.filters),
+    state.search,
+    state.temporaryDisplayIds.join(',')
+  ].join('|');
+}
+
+/** Shared by the initial evidence request and its next page. */
+export function evidenceRequestContext(
+  state: Pick<ViewState, 'analysisId' | 'queryMetadata'>,
+  relationId: string,
+  appendEvidence = false
+): RequestContext {
+  return {
+    type: 'getEvidencePage',
+    analysisId: state.analysisId,
+    relationId,
+    savedPin: savedSnapshotPin(state.queryMetadata),
+    ...(appendEvidence ? { appendEvidence: true } : {})
+  };
+}
+
+/** Returns true when all dedupe keys and old reply contexts were invalidated together. */
+export function synchronizeRequestTracking(
+  state: Pick<ViewState, 'analysisId' | 'queryMetadata'>,
+  tracking: RequestTracking,
+  contexts: Map<string, RequestContext>
+): boolean {
+  const key = JSON.stringify([state.analysisId, savedSnapshotPin(state.queryMetadata)]);
+  if (tracking.contextKey === key) return false;
+  tracking.contextKey = key;
+  tracking.projection = tracking.details = tracking.evidence = tracking.evidencePage = '';
+  contexts.clear();
+  return true;
 }
 
 export function toViewActions(
@@ -394,6 +446,29 @@ export function toViewActions(
     }
 
     case 'error':
+      if (message.code === 'QUERY_EDGE_UNKNOWN' && context?.type === 'getEvidencePage') {
+        const pin = savedSnapshotPin(currentState?.queryMetadata);
+        if (
+          !currentState?.analysisId ||
+          !currentState.selection.relationId ||
+          pin === undefined ||
+          message.analysisId !== currentState.analysisId ||
+          context.analysisId !== currentState.analysisId ||
+          context.relationId !== currentState.selection.relationId ||
+          context.savedPin !== pin
+        )
+          return [];
+        return [
+          {
+            type: 'relationUnavailable',
+            analysisId: currentState.analysisId,
+            relationId: currentState.selection.relationId,
+            savedPin: pin,
+            message:
+              typeof message.message === 'string' ? message.message : 'The host reported an error.'
+          }
+        ];
+      }
       if (
         context?.type === 'investigateCandidate' &&
         (!currentState ||

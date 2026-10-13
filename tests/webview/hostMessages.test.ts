@@ -4,10 +4,18 @@
 // defensively, and unknown types produce no action at all.
 
 import { describe, expect, it } from 'vitest';
-import { toViewActions } from '../../media/app/hostMessages';
+import {
+  toViewActions,
+  evidenceRequestContext,
+  synchronizeRequestTracking,
+  projectionRequestKey,
+  type RequestContext,
+  type RequestTracking
+} from '../../media/app/hostMessages';
 import {
   INITIAL_STATE,
   candidateContextKey,
+  savedSnapshotPin,
   selectPrimaryAction,
   viewReducer,
   type ViewState
@@ -34,6 +42,227 @@ const savedMetadata: QueryResultMetadata = {
 const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
   ['req_0000000000000001', { query: 'OrderStore' }]
 ]);
+
+describe('relation history safety', () => {
+  const relationId = 'rel_1111111111111111';
+  const requestId = 'req_1111111111111111';
+  const current: ViewState = {
+    ...INITIAL_STATE,
+    analysisId,
+    granularity: 'type',
+    queryMetadata: savedMetadata,
+    selection: { relationId },
+    evidence: {
+      relationId,
+      total: 2,
+      items: [{ id: 'old' }],
+      nextCursor: 'old-cursor',
+      pending: false
+    },
+    history: [
+      { scope: INITIAL_STATE.scope, granularity: 'type', relationId },
+      { scope: INITIAL_STATE.scope, granularity: 'type', selectionId: 'ty_2222222222222222' }
+    ]
+  };
+  const error = {
+    type: 'error',
+    requestId,
+    analysisId,
+    code: 'QUERY_EDGE_UNKNOWN',
+    message: 'Unavailable'
+  };
+
+  it('invalidates only the current initial or next-page evidence target and preserves the error', () => {
+    for (const append of [false, true]) {
+      const context = evidenceRequestContext(current, relationId, append);
+      expect(context).toMatchObject({
+        type: 'getEvidencePage',
+        analysisId,
+        relationId,
+        savedPin: savedSnapshotPin(savedMetadata)
+      });
+      expect(context.appendEvidence).toBe(append ? true : undefined);
+      const actions = toViewActions(error, new Map([[requestId, context]]), current);
+      expect(actions).toHaveLength(1);
+      expect(actions[0].type).toBe('relationUnavailable');
+      const next = actions.reduce(viewReducer, current);
+      expect(next.selection).toEqual({});
+      expect(next.evidence).toBeNull();
+      expect(next.error).toEqual({ code: error.code, message: error.message });
+      expect(next.history[0].relationId).toBeUndefined();
+      expect(next.history[1]).toEqual(current.history[1]);
+    }
+  });
+
+  it('keeps a newer selection for another relation, old request, old pin, wrong analysis or request type', () => {
+    const context = evidenceRequestContext(current, relationId);
+    const cases: Array<{ message: typeof error; contexts: Map<string, RequestContext> }> = [
+      {
+        message: error,
+        contexts: new Map([[requestId, { ...context, relationId: 'rel_2222222222222222' }]])
+      },
+      {
+        message: { ...error, requestId: 'req_2222222222222222' },
+        contexts: new Map([[requestId, context]])
+      },
+      {
+        message: error,
+        contexts: new Map([
+          [
+            requestId,
+            { ...context, savedPin: savedSnapshotPin({ ...savedMetadata, generation: 2 }) }
+          ]
+        ])
+      },
+      {
+        message: error,
+        contexts: new Map([[requestId, { ...context, analysisId: 'an_ffffffffffffffff' }]])
+      },
+      {
+        message: { ...error, analysisId: 'an_ffffffffffffffff' },
+        contexts: new Map([[requestId, context]])
+      },
+      { message: error, contexts: new Map([[requestId, { ...context, type: 'getDetails' }]]) }
+    ];
+    for (const { message, contexts } of cases) {
+      const actions = toViewActions(message, contexts, current);
+      expect(actions.some((action) => action.type === 'relationUnavailable')).toBe(false);
+      const next = actions.reduce(viewReducer, current);
+      expect(next.selection).toEqual(current.selection);
+      expect(next.evidence).toBe(current.evidence);
+    }
+  });
+
+  it('keeps the relation for target-unbound generic errors and empty partial projections', () => {
+    const generic = viewReducer(current, {
+      type: 'errorRaised',
+      code: error.code,
+      message: error.message
+    });
+    expect(generic.selection).toEqual(current.selection);
+    expect(generic.evidence).toBe(current.evidence);
+    const actions = toViewActions(error, new Map(), current);
+    expect(actions[0].type).toBe('errorRaised');
+    expect(actions.reduce(viewReducer, current).selection).toEqual(current.selection);
+    const partial = viewReducer(current, {
+      type: 'projectionReceived',
+      projection: {
+        scope: { kind: 'root', id: null },
+        granularity: 'type',
+        nodes: [],
+        edges: [],
+        totalNodeCount: 10,
+        totalEdgeCount: 10,
+        truncated: true,
+        queryMetadata: savedMetadata
+      }
+    });
+    expect(partial.selection).toEqual(current.selection);
+  });
+
+  it('checks relation, analysis and pin again in the reducer', () => {
+    const action = toViewActions(
+      error,
+      new Map([[requestId, evidenceRequestContext(current, relationId)]]),
+      current
+    )[0];
+    if (action.type !== 'relationUnavailable')
+      throw new Error('Expected qualified relation invalidation');
+    for (const stale of [
+      { ...action, relationId: 'rel_2222222222222222' },
+      { ...action, analysisId: 'an_ffffffffffffffff' },
+      { ...action, savedPin: 'old-pin' }
+    ])
+      expect(viewReducer(current, stale)).toBe(current);
+  });
+
+  it('reopens the same analysis and scope request after any saved pin field changes', () => {
+    const initialPin = savedSnapshotPin(savedMetadata);
+    for (const queryMetadata of [
+      { ...savedMetadata, workspaceId: 'hw_other' },
+      { ...savedMetadata, snapshotId: 'snapshot-4' },
+      { ...savedMetadata, generation: 4 },
+      { ...savedMetadata, variantIds: ['variant-net11'] }
+    ]) {
+      const tracking: RequestTracking = {
+        projection: '',
+        details: '',
+        evidence: '',
+        evidencePage: ''
+      };
+      const contexts = new Map<string, RequestContext>();
+      synchronizeRequestTracking(current, tracking, contexts);
+      tracking.projection = projectionRequestKey(current);
+      tracking.details = 'details';
+      tracking.evidence = relationId;
+      tracking.evidencePage = 'old-cursor';
+      contexts.set(requestId, evidenceRequestContext(current, relationId));
+      const next = { ...current, queryMetadata };
+      expect(savedSnapshotPin(queryMetadata)).not.toBe(initialPin);
+      expect(projectionRequestKey(next)).toBe(tracking.projection);
+      expect(synchronizeRequestTracking(next, tracking, contexts)).toBe(true);
+      expect([
+        tracking.projection,
+        tracking.details,
+        tracking.evidence,
+        tracking.evidencePage
+      ]).toEqual(['', '', '', '']);
+      expect(contexts.size).toBe(0);
+      expect(tracking.projection).not.toBe(projectionRequestKey(next));
+      tracking.projection = projectionRequestKey(next);
+      contexts.set(requestId, evidenceRequestContext(next, relationId));
+      expect(synchronizeRequestTracking(next, tracking, contexts)).toBe(false);
+      expect(contexts.size).toBe(1);
+    }
+  });
+
+  it('retains history, caches and request tracking when only variant order changes', () => {
+    const queryMetadata = { ...savedMetadata, variantIds: ['variant-net10', 'variant-net11'] };
+    const previous: ViewState = {
+      ...current,
+      queryMetadata,
+      tree: { root: { items: [], total: 1 } },
+      projection: {
+        scope: { kind: 'root', id: null },
+        granularity: 'type',
+        nodes: [],
+        edges: [],
+        totalNodeCount: 10,
+        totalEdgeCount: 10,
+        truncated: true,
+        queryMetadata
+      },
+      details: { entityId: 'ty_2222222222222222', dependencies: [], dependents: [], queryMetadata }
+    };
+    const tracking: RequestTracking = {
+      projection: '',
+      details: '',
+      evidence: '',
+      evidencePage: ''
+    };
+    const contexts = new Map<string, RequestContext>();
+    synchronizeRequestTracking(previous, tracking, contexts);
+    tracking.projection = projectionRequestKey(previous);
+    contexts.set(requestId, evidenceRequestContext(previous, relationId));
+    const reordered = { ...queryMetadata, variantIds: [...queryMetadata.variantIds].reverse() };
+    const next = viewReducer(previous, {
+      type: 'analysisComplete',
+      analysisId,
+      coverage: undefined,
+      completeness: 'partial',
+      queryMetadata: reordered
+    });
+    expect(next.history).toBe(previous.history);
+    expect(next.selection).toBe(previous.selection);
+    expect(next.evidence).toBe(previous.evidence);
+    expect(next.projection).toBe(previous.projection);
+    expect(next.details).toBe(previous.details);
+    expect(next.tree).toBe(previous.tree);
+    expect(synchronizeRequestTracking(next, tracking, contexts)).toBe(false);
+    expect(tracking.projection).toBe(projectionRequestKey(next));
+    expect(contexts.size).toBe(1);
+  });
+});
 
 describe('Candidate investigation message provenance', () => {
   const originId = 'ci_' + '1'.repeat(32),

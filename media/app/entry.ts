@@ -7,7 +7,14 @@
 
 import { PROTOCOL_VERSION } from '../../src/view/protocolV2';
 import { createViewerApp, type ViewerApp } from './app';
-import { toViewActions, type RequestContext } from './hostMessages';
+import {
+  toViewActions,
+  evidenceRequestContext,
+  synchronizeRequestTracking,
+  projectionRequestKey,
+  type RequestContext,
+  type RequestTracking
+} from './hostMessages';
 import { serializeViewState } from './serializer';
 import type { ViewAction, ViewState } from './state';
 import { candidateContextKey } from './state';
@@ -28,7 +35,12 @@ const root = document.getElementById('app');
 if (root) {
   const host = createWebviewLink(root);
   const requestContext = new Map<string, RequestContext>();
-  const requested = { projection: '', details: '', evidence: '', evidencePage: '' };
+  const requested: RequestTracking = {
+    projection: '',
+    details: '',
+    evidence: '',
+    evidencePage: ''
+  };
   let persistTimer: number | undefined;
   let lastPersisted = '';
   let latestSourceOperation: { analysisId: string; requestId: string } | undefined;
@@ -390,6 +402,8 @@ if (root) {
   }
 
   function requestForState(state: ViewState): void {
+    if (synchronizeRequestTracking(state, requested, requestContext))
+      latestSourceOperation = undefined;
     const analysisId = state.analysisId;
     if (!analysisId) {
       return;
@@ -417,16 +431,7 @@ if (root) {
       );
     }
 
-    const projectionKey = [
-      analysisId,
-      state.granularity,
-      state.scope.kind,
-      state.scope.id ?? '',
-      state.scope.depth ?? 1,
-      JSON.stringify(state.filters),
-      state.search,
-      state.temporaryDisplayIds.join(',')
-    ].join('|');
+    const projectionKey = projectionRequestKey(state);
     if (requested.projection !== projectionKey) {
       requested.projection = projectionKey;
       if (state.queryMetadata) app.dispatch({ type: 'projectionRequested' });
@@ -463,12 +468,15 @@ if (root) {
     if (relationId && requested.evidence !== `${analysisId}|${relationId}`) {
       requested.evidence = `${analysisId}|${relationId}`;
       requested.evidencePage = '';
-      sendRequest({
-        type: 'getEvidencePage',
-        requestId: nextRequestId(),
-        analysisId,
-        relationId
-      });
+      sendRequest(
+        {
+          type: 'getEvidencePage',
+          requestId: nextRequestId(),
+          analysisId,
+          relationId
+        },
+        evidenceRequestContext(state, relationId)
+      );
     }
 
     // Paging: only the explicit request action asks for the next page, so a re-render
@@ -487,7 +495,7 @@ if (root) {
             relationId,
             cursor
           },
-          { appendEvidence: true }
+          evidenceRequestContext(state, relationId, true)
         );
       }
     }

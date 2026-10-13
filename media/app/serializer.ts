@@ -144,6 +144,7 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
           scope,
           granularity: record.granularity as Granularity,
           selectionId: stringOf(record.selectionId, 64),
+          relationId: stringOf(record.relationId, 64),
           camera: deserializeCamera(record.camera) ?? null,
           search: searchOf(record.search),
           filters: sanitizeFilters(recordOf(record.filters) ?? {}),

@@ -46,6 +46,7 @@ export interface HistoryEntry {
   scope: Scope;
   granularity: Granularity;
   selectionId?: string;
+  relationId?: string;
   camera?: ViewState['camera'];
   search?: string;
   filters?: Filters;
@@ -193,6 +194,13 @@ export const INITIAL_STATE: ViewState = {
 };
 
 export type ViewAction =
+  | {
+      type: 'relationUnavailable';
+      analysisId: string;
+      relationId: string;
+      savedPin: string;
+      message: string;
+    }
   | { type: 'sourceReturned'; state: Partial<ViewState>; ui: SourceReturnUi }
   | { type: 'savedUpdateRequested' }
   | { type: 'savedUpdateState'; analysisId: string; phase: SavedUpdatePhase; canUpdate: boolean }
@@ -540,18 +548,23 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
         statusMessage: progressMessage(action)
       };
 
-    case 'analysisComplete':
+    case 'analysisComplete': {
+      const contextChanged =
+        !!(action.queryMetadata || state.queryMetadata) &&
+        (action.analysisId !== state.analysisId ||
+          savedSnapshotPin(action.queryMetadata) !== savedSnapshotPin(state.queryMetadata));
       return {
         ...state,
         analysisId: action.analysisId,
         queryMetadata: action.queryMetadata,
         savedUpdate:
-          action.queryMetadata && action.analysisId === state.analysisId
+          action.queryMetadata && !contextChanged && action.analysisId === state.analysisId
             ? state.savedUpdate
             : undefined,
-        ...((action.queryMetadata || state.queryMetadata) && action.analysisId !== state.analysisId
+        ...(contextChanged
           ? {
               projection: null,
+              projectionRequestId: undefined,
               projectionTruncated: false,
               details: null,
               evidence: null,
@@ -566,7 +579,7 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
               tablePage: 0
             }
           : {}),
-        tree: action.analysisId === state.analysisId ? state.tree : {},
+        tree: action.analysisId === state.analysisId && !contextChanged ? state.tree : {},
         runningAnalysisId: undefined,
         mode: action.mode ?? state.mode,
         resultMode: action.mode ?? state.mode,
@@ -600,6 +613,7 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
         progress: undefined,
         error: undefined
       };
+    }
 
     case 'analysisFailed':
       return {
@@ -884,6 +898,25 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
     case 'historyBack':
       return back(state);
 
+    case 'relationUnavailable':
+      if (
+        action.analysisId !== state.analysisId ||
+        action.relationId !== state.selection.relationId ||
+        action.savedPin !== savedSnapshotPin(state.queryMetadata)
+      )
+        return state;
+      return {
+        ...state,
+        selection: {},
+        evidence: null,
+        history: state.history.map((entry) =>
+          entry.relationId === action.relationId
+            ? { ...entry, relationId: undefined, selectionId: undefined }
+            : entry
+        ),
+        error: { code: 'QUERY_EDGE_UNKNOWN', message: action.message }
+      };
+
     case 'errorRaised':
       return { ...state, error: { code: action.code, message: action.message } };
 
@@ -908,6 +941,7 @@ function pushHistory(state: ViewState, entry: HistoryEntry): HistoryEntry[] {
       scope: state.scope,
       granularity: state.granularity,
       selectionId: state.selection.entityId,
+      relationId: state.selection.relationId,
       camera: state.camera,
       search: state.search,
       filters: state.filters,
@@ -916,6 +950,18 @@ function pushHistory(state: ViewState, entry: HistoryEntry): HistoryEntry[] {
       tableSort: state.tableSort
     }
   ].slice(-HISTORY_LIMIT);
+}
+
+/** Identity only: freshness/coverage and variant ordering cannot change a saved snapshot pin. */
+export function savedSnapshotPin(metadata: QueryResultMetadata | undefined): string | undefined {
+  return metadata
+    ? JSON.stringify([
+        metadata.workspaceId,
+        metadata.snapshotId,
+        metadata.generation,
+        [...metadata.variantIds].sort()
+      ])
+    : undefined;
 }
 
 function back(state: ViewState): ViewState {
@@ -935,10 +981,16 @@ function back(state: ViewState): ViewState {
     viewKind: previous.viewKind ?? state.viewKind,
     tablePage: previous.tablePage ?? state.tablePage,
     tableSort: previous.tableSort ?? state.tableSort,
-    selection: previous.selectionId ? { entityId: previous.selectionId } : {},
+    selection: previous.relationId
+      ? { relationId: previous.relationId }
+      : previous.selectionId
+        ? { entityId: previous.selectionId }
+        : {},
     projection: null,
     details:
-      state.queryMetadata && state.details?.entityId === previous.selectionId
+      !previous.relationId &&
+      state.queryMetadata &&
+      state.details?.entityId === previous.selectionId
         ? state.details
         : null,
     evidence: null
