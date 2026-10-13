@@ -119,7 +119,10 @@ test('saved Inspector opens an off-graph returned relation and reconstructs it o
   await page.locator('.sd-search').fill('Compute');
   const search = await request(page, 'searchEntities', (m) => m.query === 'Compute');
   await result(page, search, 'searchResults', { items: [method], total: 1 });
-  await page.locator(`.sd-nav-body button[data-entity-id="${method.id}"]`).click();
+  await page
+    .locator('.sd-search-results button.sd-node-item')
+    .filter({ hasText: method.name })
+    .click();
   const details = await request(page, 'getEntityDetails');
   await result(page, details, 'details', {
     entity: method,
