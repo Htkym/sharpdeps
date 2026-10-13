@@ -1288,12 +1288,29 @@ function renderCenter(
   const visible = selectVisibleData(state);
   const graphStamp = JSON.stringify([
     state.analysisId,
+    state.viewKind,
     state.scope,
     state.search,
     !!state.queryMetadata,
+    state.queryMetadata && [
+      state.queryMetadata.workspaceId,
+      state.queryMetadata.snapshotId,
+      state.queryMetadata.generation,
+      [...state.queryMetadata.variantIds].sort()
+    ],
     visible.nodes.map((node) => node.id),
     visible.edges.map((edge) => edge.id)
   ]);
+  const focusedTableRow =
+    state.queryMetadata &&
+    state.viewKind === 'table' &&
+    !elements.mapContent.hidden &&
+    elements.graphHost.dataset.queryRender === graphStamp &&
+    document.activeElement instanceof HTMLElement &&
+    elements.mapContent.contains(document.activeElement) &&
+    document.activeElement.matches('tr[data-entity-id]')
+      ? document.activeElement.dataset.entityId
+      : undefined;
   elements.graphHost.dataset.queryRender = graphStamp;
   elements.mapContent.replaceChildren();
   elements.mapHost.dataset.viewKind = state.viewKind;
@@ -1440,6 +1457,10 @@ function renderCenter(
       tableOptions.onPage
     );
   else renderEntityTable(elements.mapContent, tableOptions);
+  if (focusedTableRow && !graphShown)
+    [...elements.mapContent.querySelectorAll<HTMLElement>('tr[data-entity-id]')]
+      .find((row) => row.dataset.entityId === focusedTableRow)
+      ?.focus({ preventScroll: true });
   if (state.viewKind === 'graph' && !graphShown) {
     elements.mapContent.prepend(
       message(

@@ -125,6 +125,17 @@ test('saved Back keyboard path waits for a fresh projection token before Copy', 
   expect(returned.requestId).not.toBe(initial.requestId);
   expect(returned.requestId).not.toBe(scoped.requestId);
   await expect(page.locator('.sd-table tbody tr').first()).toBeFocused();
+  // A later render must not replace the focused row with an inactive equivalent.
+  await page.evaluate(() => {
+    const app = window.sharpdepsApp;
+    const current = app.getState();
+    app.dispatch({
+      type: 'projectionReceived',
+      projection: current.projection,
+      requestId: current.projectionRequestId
+    });
+  });
+  await expect(page.locator('.sd-table tbody tr').first()).toBeFocused();
   await expect(page.locator('#sd-copy')).toBeEnabled();
   await page.locator('#sd-copy').click();
   const copy = (await messages(page)).filter((m) => m.type === 'copyContext').at(-1);
