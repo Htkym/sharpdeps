@@ -15,7 +15,7 @@ test('keeps the current status accessible in a narrow panel', async ({ page }) =
       elapsedMs: 10
     });
   });
-  const status = page.getByRole('status');
+  const status = page.getByRole('banner').getByRole('status');
   await expect(status).toHaveCount(1);
   await expect(status).toHaveAttribute('data-status', 'analyzing');
   await expect(status).toContainText('Collecting evidence');
