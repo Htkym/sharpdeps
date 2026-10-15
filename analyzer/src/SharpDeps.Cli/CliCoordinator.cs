@@ -196,7 +196,9 @@ internal sealed class CliCoordinator : IAsyncDisposable
                         var snapshot = built.Snapshot;
                         result = new(snapshot.Graph.WorkspaceId, snapshot.Graph.SnapshotId, snapshot.Graph.Generation,
                             snapshot.Graph.Coverage.ToString(), snapshot.Graph.Diagnostics?.Any(d =>
-                                d.Code == "cli.semanticGraphReused" && d.Count == 1) == true ? "markdown-incremental" : "full-rebuild",
+                                d.Code == "cli.semanticGraphReused" && d.Count == 1) == true ? "markdown-incremental"
+                                : snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.projectCollectorsReused" && d.Count > 0) == true
+                                    ? "project-incremental" : "full-rebuild",
                             snapshot.Files.Count, snapshot.Graph.Nodes.Count, snapshot.Graph.Edges.Count);
                         committed = result;
                         committedRevision = captured;

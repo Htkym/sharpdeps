@@ -163,6 +163,39 @@ public static class IndexSnapshotValidator
                             && (o.Location?.SourceId == symbol.SourceId || o.Declarations?.Any(d => d.SourceId == symbol.SourceId) == true))),
                         "Reuse catalog source must identify an actual declaration.");
             }
+            if (reuse.Projects is { } projects)
+            {
+                Identifier(projects.Version, "Project reuse version", 128);
+                ValidateHash(projects.StructureHash);
+                Require(projects.Variants is { Count: > 0 and <= 64 }, "Project reuse needs a bounded variant set.");
+                var projectProofs = Unique(projects.Variants, p => p.Key, "Project reuse key");
+                Require(projectProofs.Values.Select(p => p.VariantId).Distinct(StringComparer.Ordinal).Count() == variants.Count
+                    && projectProofs.Count == variants.Count, "Project proof must cover exactly the graph variants.");
+                var sources = new HashSet<string>(StringComparer.Ordinal);
+                long dataLength = 0;
+                foreach (var project in projectProofs.Values)
+                {
+                    Require(variants.TryGetValue(project.VariantId, out var variant) && variant.ProjectId == project.ProjectId,
+                        "Project proof must bind the actual project variant.");
+                    Count(project.SourceIds, "Project reuse sources"); Count(project.References, "Project reuse references");
+                    Require(project.SourceIds.Distinct(StringComparer.Ordinal).Count() == project.SourceIds.Count
+                        && project.References.Distinct(StringComparer.Ordinal).Count() == project.References.Count,
+                        "Project proof source/reference sets must be unique.");
+                    foreach (var source in project.SourceIds)
+                    {
+                        Require(files.TryGetValue(source, out var input) && input.Kind == "source" && !input.Deleted,
+                            "Project proof source must be a live captured compiler input.");
+                        sources.Add(source);
+                    }
+                    foreach (var reference in project.References)
+                        Require(reference != project.Key && projectProofs.ContainsKey(reference), "Project reference proof is not closed.");
+                    Require(project.Data.ValueKind == JsonValueKind.Object, "Project extraction data must be an object.");
+                    dataLength = checked(dataLength + project.Data.GetRawText().Length);
+                    Require(dataLength <= MaximumSearchTextUtf16, "Project extraction proof exceeds its bounded text budget.");
+                }
+                Require(sources.SetEquals(files.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId)),
+                    "Project proof must own every captured compiler input; shared inputs may have several owners.");
+            }
         }
         foreach (var edge in graph.Edges)
         {

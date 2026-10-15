@@ -17,14 +17,18 @@ public static class CliApplication
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
                 return await Reply(stdout, options, new { commands = new[] { "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
-                    root = "--root absolute-directory", index = "--target root-contained.slnx|.sln|.csproj --trusted", updateMode = "closed-input-markdown-or-full-rebuild",
+                    root = "--root absolute-directory",
+                    index = "--target root-contained.slnx|.sln|.csproj --trusted",
+                    updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = "SharpDeps.Cli@0.2.0-preview.3 (provisional, unpublished)" });
             if (options.Command == "doctor")
                 return await Reply(stdout, options, new { runtime = RuntimeInformation.FrameworkDescription, sdkProbe = "not-run",
                     toolTargetFramework = "net10.0", indexing = "trusted target SDK/MSBuild required", savedQuery = "runtime-only; no restore/build/network",
-                    configurationProof = "not-connected", updateMode = "closed-input-markdown-or-full-rebuild" });
+                    configurationProof = "not-connected",
+                    updateMode = "closed-input-project-markdown-or-full-rebuild"
+                });
             // Validate request syntax before opening any stored data.
             var request = options.Command is "index" or "update" or "serve" or "coordinator-status" ? null : options.QueryRequest();
             if (options.Command is "index" or "update" or "serve" && !options.Has("trusted")) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);

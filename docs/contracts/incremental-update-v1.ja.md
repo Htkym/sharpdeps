@@ -4,24 +4,30 @@ SD2-09は明示的なtrusted CLI `update`を既存IndexWriterのlease内で処�
 
 ## 選択と無効化
 
-再利用proofがない旧Indexはfull rebuildへ戻る。新しいfull抽出では、純粋な`Microsoft.NET.Sdk`の単一`net10.0` projectについて、静的なcompiler propertyとroot内ProjectReferenceだけを許す。PackageReference、Import、custom target/task、Analyzer、AdditionalFiles、Compile override、式、未知property、外部参照、暗黙user hook、祖先configurationがある場合は再利用proofを保存しない。失敗をPartial表示で補完して再利用しない。
+project所有proofがない旧Indexはfull rebuildへ戻る。新しいfull抽出では、純粋な`Microsoft.NET.Sdk`の各projectが単一`net10.0`を対象とする、最大64 variantsの閉集合について、静的なcompiler propertyとroot内ProjectReferenceだけを許す。PackageReference、Import、custom target/task、Analyzer、AdditionalFiles、Compile override、式、未知property、外部参照、暗黙user hook、祖先configurationがある場合は再利用proofを保存しない。失敗をPartial表示で補完して再利用しない。
 
 proofはowner版、target/root/UUID/configuration/platform/TFM/project選択のhash、全non-Markdown workspace入力のpath集合とbytes hash、SDK/tool依存と環境のhash、実抽出したsymbol catalogを含む。空directoryの存在もMSBuildの条件になり得るため、directoryのpathとtypeを照合する。workspaceの`.git`/`.sharpdeps`と実Index/sidecarを除き、`obj`/`bin`/`node_modules`のnon-Markdownも検査する。mtime/sizeだけでは一致としない。SDKは現在hostの既知dotnet root内の選択版へ制限し、任意の保存pathを外部読取り先として使わない。
 
 選択SDK全体、dotnet packs/shared/host/sdk-manifests/metadata、dotnet root filesとSDK directory一覧、実tool payloadをbytesで照合する。 MSBuildEnableWorkloadResolver=falseを明示した.NET専用経路ではworkload importが無効になるため、packsはMicrosoft.NETCore.App.Refだけを全版照合する。未指定の通常経路では全packsを検査し、上限超過はfullへ戻る。環境やhost設定をCLIが自動変更することはない。既知MSBuild登録pathだけを環境hashで正規化し、通常のOS環境名と明示したCLI設定名だけを許し、値を公開せずhashへ入れる。未知の環境名はSDK property/import overrideになり得るため再利用しない。DOTNET_ROOT/host pathは実hostのdotnet rootと一致させ、user hookはOSの既定pathと環境が指すpathの両方を確認する。root inventoryは100,000 entries・64MiB/file・256MiB合計、依存proofは100,000 entries・64MiB/file・2GiB合計と取消/timeoutで制限する。依存proofのリンク、未知closure、過大入力はfullへ戻る。ただし全root内容の公開guardを取得できない場合はfullも公開せず失敗する。大きい無関係ファイルもこの上限に含まれる。通信・OS sandboxや全projectの鮮度証明ではない。
 
-`update`は以上の集合・bytes・選択が一致したときだけ`markdown-incremental`を返す。SemanticEnvironment登録、SemanticLoader、Roslyn collector/projectorを起動せず保存C# graphとcatalogを再利用する。新規・削除・renameを含むC#やproject/config/generator/AdditionalFilesの変更、選択や環境の変化、SDK/tool差分はfull rebuildへ戻す。root内props変更で閉集合が成立しなくなった場合もfullで全symbol候補を作り直す。
+`update`は以上の集合・bytes・選択が一致したときだけ`markdown-incremental`を返す。SemanticEnvironment登録、SemanticLoader、Roslyn collector/projectorを起動せず保存C# graphとcatalogを再利用する。
+
+C#内容だけが変化した場合は、project所有proofと現在の実compilation入力集合・参照closureを照合する。proofにはvariant、project、実SyntaxTreeのsource ID集合、参照先variant集合、symbol情報とcollectorのraw evidence・統計を保存する。Roslyn compilationやsource本文は保持しない。保存データはJSON合計16Mi UTF-16以内とし、宣言の所有variant・source・span、evidenceのsource hashを検査する。構造hashでは実compiler入力の内容だけを除き、全path/directory集合と他の入力bytesを含める。公開用の完全hashからは何も除かない。
+
+変更sourceの全所有variantをdirtyにし、旧参照と新参照を合わせた逆依存閉包へ広げる。共有sourceには複数ownerを許す。MSBuild/Roslynのloadは全選択variantで行い、dirtyのsymbol・宣言・operation collectorだけを実行する。cleanの保存symbolと合成した全symbol集合でdirty参照を解決し、cleanのraw evidenceと一緒にgraph・occurrence・edge・external symbol・legacy mapping・診断・catalogを再投影する。少なくとも一つのcollectorを省略したときだけ`project-incremental`を返す。`cli.semanticVariantsLoaded`と`cli.projectCollectorsExtracted/Reused`、`cli.projectExtracted/Reused.<variant ID>`は実行した分岐を記録し、loadの省略を意味しない。capabilitiesのupdateModeは`closed-input-project-markdown-or-full-rebuild`となる。
+
+project集合、入力path集合、project/config、選択、環境、SDK/toolの変化や不明なclosureはfull rebuildへ戻す。全variantがdirtyの場合もfull扱いとする。root内props変更で閉集合が成立しなくなった場合もfullで全symbol候補を作り直す。部分再利用を選択した後に最終依存proofが変化・取得不能となった場合は`SOURCE_CHANGED_SINCE_STAGING`で公開を拒否する。再利用済みのgraphをproofなしfull扱いとして公開しない。全再抽出だけの場合の既存fallbackは維持する。
 
 ## 文書と世代
 
 現在のMarkdown集合を毎回読み直し、既存MarkdownIdentityMatcherで文書UUIDとsection tokenを照合する。same path、一意なexplicit ID、一意content moveを用い、曖昧なrenameを推測しない。削除した文書はnext snapshotに含めない。全Markdownを新snapshot/generationへ再投影し、補助IDとmention/link ownerを更新する。未変更Markdownの抽出省略やparse cacheは実装したと称さない。再利用範囲はC# graph/catalogと永続文書/section identityである。
 
-C#をfull再抽出した場合は全Markdown mentionを再解決し、既存confirmed mentionも新しい候補集合へ照合する。候補をResolvedへ昇格させず、source hash/UTF-16 span、Partial coverage、configuration unverifiedを維持する。Queryの`require-fresh`/`refresh`は従来どおり不足を拒否する。
+C#をfullまたはproject単位で再抽出した場合は全Markdown mentionを再解決し、既存confirmed mentionも新しい候補集合へ照合する。候補をResolvedへ昇格させず、source hash/UTF-16 span、Partial coverage、configuration unverifiedを維持する。Queryの`require-fresh`/`refresh`は従来どおり不足を拒否する。
 
 proofはselected targetのIndexFileに追加するoptional typed fieldで、既存SQLite JSON row、Stage、Readerを使う。nullはJSONへ書かず、manifest hashは従来の入力fieldだけを計算する。補助reuse metadataをhashから除くことで旧schema-1 readerが新Indexを読む場合も維持する。SQL schemaと旧Graph/Query wire formatは変更しない。
 
 公開には完全なnext snapshotを既存transactionで書き、graphとFTSのactive generationを一度だけ切り替える。reuse proofの有無にかかわらず、抽出前後のnon-Markdown入力path集合と内容を照合し、公開用の内容hashを一時保持する。評価前後は生成されるbin/objを除き、公開guardにはbin/objも含む。root内のPE参照が.git/.sharpdeps/bin/objに入る場合は、評価前の内容を証明できないためfullでもCLI_REFERENCE_INPUT_UNSUPPORTEDとして拒否する。active更新直前のowner callbackで新規Markdown集合とnon-Markdown内容を再照合する。reuse proofがある場合はSDK/tool/環境も再照合する。検査不能・途中変更・取消・proof喪失はrollbackし、前のcommitted世代を維持する。既存readerは旧世代を保持し、新readerは成功公開後の世代を読む。
 
-当面Git metadataのroot/祖先/nested依存を閉じていないため、Git repository内では再利用proofを作らずfullへ戻す。SDKのSourceLink/GenerateAssemblyInfoがHEAD/refs等を読むためで、単純なnon-Markdown source hash一致だけでは安全と判断しない。この版のMarkdown fastpathはGitのない限定workspaceを対象にし、通常Git repositoryのMarkdown編集性能を達成したとは称さない。
+当面Git metadataのroot/祖先/nested依存を閉じていないため、Git repository内では再利用proofを作らずfullへ戻す。SDKのSourceLink/GenerateAssemblyInfoがHEAD/refs等を読むためで、単純なnon-Markdown source hash一致だけでは安全と判断しない。この版の再利用はGitのない限定workspaceを対象にし、通常Git repositoryの編集性能を達成したとは称さない。
 
 CLI候補版は`0.2.0-preview.3`。このソース変更だけでpack/install/公開済みとは判断しない。preview.2や固定Markdown pairの同版上書きは行わない。新providerのVSCode画面/VSIX install/cross-OS実挙動、watch/coordinator、未変更Markdown parse cacheは別の未実施項目として保持する。

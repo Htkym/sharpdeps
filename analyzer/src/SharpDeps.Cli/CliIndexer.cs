@@ -25,7 +25,7 @@ public sealed class CliIndexException : Exception
 }
 
 /// <summary>
-/// Trusted extraction with a closed-input Markdown fast path. The caller validates trust and holds the writer lease from before
+/// Trusted extraction with closed-input Markdown and project collector reuse. The caller validates trust and holds the writer lease from before
 /// this call through commit. No restore, commit, renderer, watch or workspace UUID allocation occurs here.
 /// </summary>
 public static class CliIndexer
@@ -39,8 +39,13 @@ public static class CliIndexer
         CancellationToken token = default)
         => (await BuildForPublicationAsync(options, previous, token)).Snapshot;
 
-    public static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+    public static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token = default)
+        => BuildForPublicationAsync(options, previous, token, null);
+
+    // A scoped test observer changes real dependencies after partial extraction; fingerprints are never substituted.
+    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction)
     {
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
@@ -94,7 +99,8 @@ public static class CliIndexer
             : CliReuseProof.Capture(root, savedProof.SdkPath, token);
         var excludedTarget = new[] { target }.Concat(selectedPaths).Any(path => Path.GetRelativePath(root, path)
             .Replace('\\', '/').Split('/').Any(part => ExcludedDirectories.Contains(part)));
-        if (!excludedTarget && options.AllowSemanticReuse && previous is not null && savedProof is not null && currentInputHash is not null
+        if (!excludedTarget && options.AllowSemanticReuse && previous is not null
+            && savedProof?.Projects?.Version == CliProjectReuse.Version && currentInputHash is not null
             && CliReuseProof.Matches(savedProof, currentFingerprint, optionsHash, currentInputHash))
         {
             // Capture the same physical compile inputs (including obj sources) and retain their exact IDs.
@@ -179,8 +185,10 @@ public static class CliIndexer
             }
             var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(root), root);
             var sourceOffsets = new Dictionary<string, int>(StringComparer.Ordinal);
+            var projectSources = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
             foreach (var input in inputs)
             {
+                var ownedSources = new List<string>();
                 foreach (var tree in input.Compilation.SyntaxTrees)
                 {
                     token.ThrowIfCancellationRequested();
@@ -206,20 +214,75 @@ public static class CliIndexer
                         throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                     manifest[captured.File.RelativePath] = captured with
                         { File = captured.File with { SourceId = registered.Id, Kind = "source" } };
+                    ownedSources.Add(registered.Id);
+                }
+                projectSources.Add(input.VariantId, ownedSources);
+            }
+            var projectSelections = CliProjectReuse.Selections(options.WorkspaceUuid, projects, inputs, projectSources, loaded);
+            var capturedFiles = manifest.Values.ToDictionary(i => i.File.SourceId, i => i.File, StringComparer.Ordinal);
+            var ownedPaths = manifest.Values.Where(i => i.File.Kind == "source").Select(i => i.File.RelativePath).ToHashSet(PathComparer);
+            var structureHash = fullFingerprint is null || projectSelections is null ? null
+                : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token, ownedSourcePaths: ownedPaths);
+            var projectPlan = options.AllowSemanticReuse && previous is not null && savedProof is not null
+                && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
+                && projectSelections is not null
+                ? CliProjectReuse.Select(previous, savedProof.Projects, structureHash, projectSelections, capturedFiles, token) : null;
+            var extracted = new HashSet<string>(StringComparer.Ordinal);
+            var reused = new HashSet<string>(StringComparer.Ordinal);
+            var symbolParts = new Dictionary<string, CliProjectReuse.Symbols>(StringComparer.Ordinal);
+            foreach (var input in inputs)
+            {
+                token.ThrowIfCancellationRequested();
+                if (projectPlan is not null && !projectPlan.Dirty.Contains(input.VariantId))
+                {
+                    symbolParts.Add(input.VariantId, projectPlan.Saved[input.VariantId].Symbols);
+                    reused.Add(input.VariantId);
+                }
+                else
+                {
+                    symbolParts.Add(input.VariantId, CliProjectReuse.CaptureSymbols(SymbolIndexBuilder.Build(documents, [input], token)));
+                    extracted.Add(input.VariantId);
                 }
             }
-            var symbols = SymbolIndexBuilder.Build(documents, inputs, token);
+            // Every target is present while dirty collectors resolve cross-project edges.
+            var symbols = CliProjectReuse.CombineSymbols(symbolParts.Values, documents, inputs.Length);
             var resolver = new SymbolResolver(loaded.DefiningVariantByAssembly);
-            var external = new ExternalTypeRegistry();
-            var declaration = new DeclarationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
-            var operation = new OperationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
-            var collected = operation.Collect(inputs, token);
-            var evidence = declaration.Collect(inputs, token).Concat(collected.HarnessEvidence ?? collected.Evidence).ToArray();
+            var extractions = new Dictionary<string, CliProjectReuse.Extraction>(StringComparer.Ordinal);
+            foreach (var input in inputs)
+            {
+                token.ThrowIfCancellationRequested();
+                if (reused.Contains(input.VariantId))
+                {
+                    extractions.Add(input.VariantId, projectPlan!.Saved[input.VariantId]);
+                    continue;
+                }
+                var external = new ExternalTypeRegistry();
+                var declaration = new DeclarationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
+                var operation = new OperationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
+                var collected = operation.Collect([input], token);
+                var ownEvidence = declaration.Collect([input], token).Concat(collected.HarnessEvidence ?? collected.Evidence).ToArray();
+                extractions.Add(input.VariantId, new(symbolParts[input.VariantId], ownEvidence, collected.Stats));
+            }
+            var evidence = inputs.SelectMany(i => extractions[i.VariantId].Evidence).ToArray();
+            var stats = extractions.Values.Aggregate(new OperationCollectionStats(0, 0, 0, 0), (sum, part) =>
+                new(checked(sum.BodiesScanned + part.Stats.BodiesScanned), checked(sum.UnresolvedOperations + part.Stats.UnresolvedOperations),
+                    checked(sum.DynamicReferences + part.Stats.DynamicReferences), checked(sum.CandidateOnlySymbols + part.Stats.CandidateOnlySymbols)));
+            // Re-project all retained and fresh facts together. Old dirty symbols, external occurrences,
+            // edges, legacy mappings and diagnostics cannot survive by incident-edge filtering.
             graph = HarnessGraphProjector.Project(options.WorkspaceUuid, snapshotId, generation,
-                HarnessCoverage.Partial, projects, symbols, evidence, collected.Stats, token);
+                HarnessCoverage.Partial, projects, symbols, evidence, stats, token);
             graph = AlignCompilationLocations(graph, sourceOffsets);
             diagnostics = (graph.Diagnostics ?? []).ToDictionary(d => d.Code, d => d.Count, StringComparer.Ordinal);
             diagnostics["cli.configurationInventoryUnverified"] = 1;
+            diagnostics["cli.semanticVariantsLoaded"] = inputs.Length;
+            diagnostics["cli.projectCollectorsExtracted"] = extracted.Count;
+            if (reused.Count > 0) diagnostics["cli.projectCollectorsReused"] = reused.Count;
+            foreach (var project in projects)
+            {
+                var variant = HarnessIdentity.VariantId(options.WorkspaceUuid, project.ProjectId, project.TargetFramework,
+                    project.Configuration, project.Platform, project.RuntimeIdentifier);
+                diagnostics[(reused.Contains(project.Key) ? "cli.projectReused." : "cli.projectExtracted.") + variant] = 1;
+            }
             if (loaded.Report.Diagnostics.Count != 0) diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
             if (loaded.Report.Limitations.Count != 0) diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
             var compilerErrors = variants.Sum(v => v.ErrorDiagnosticCount);
@@ -229,6 +292,7 @@ public static class CliIndexer
 
             catalogSymbols = MakeCatalog(graph, symbols, evidence, manifest.Values.Where(i => i.File.Kind == "project")
                 .ToDictionary(i => i.File.SourceId, i => i.File.RelativePath, StringComparer.Ordinal));
+            if (reused.Count > 0) afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
             var afterFingerprint = fullFingerprint is null ? null : CliReuseProof.Capture(root, fullFingerprint.SdkPath, token);
             var stableInputsAfter = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
             var inputHash = afterFingerprint is null ? null : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token);
@@ -241,7 +305,10 @@ public static class CliIndexer
                 && initialInputs == stableInputsAfter && inputHash is not null)
                 reuseProof = new(CliReuseProof.OwnerVersion, optionsHash, inputHash, afterFingerprint.EnvironmentHash,
                     afterFingerprint.DependencyHash, afterFingerprint.SdkPath, catalogSymbols.Select(s => new IndexReuseSymbol(
-                        s.NodeId, s.FullName, s.ShortName, s.DocumentationId, s.Project, s.Namespace, s.VariantId, s.SourceId)).ToArray());
+                        s.NodeId, s.FullName, s.ShortName, s.DocumentationId, s.Project, s.Namespace, s.VariantId, s.SourceId)).ToArray())
+                { Projects = CliProjectReuse.Capture(structureHash, projectSelections, extractions, capturedFiles) };
+            if (reused.Count > 0 && reuseProof is null)
+                throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         }
 
         // SourceFile nodes expose actual manifest metadata and retain project-path to persisted-ID binding.
@@ -402,7 +469,8 @@ public static class CliIndexer
             Markdown = null,
             Diagnostics = (saved.Diagnostics ?? []).Where(d => !d.Code.StartsWith("markdown.", StringComparison.Ordinal)
                 && !d.Code.StartsWith("cli.documentIdentity", StringComparison.Ordinal)
-                && d.Code != "cli.semanticGraphReused").ToArray() };
+                && d.Code != "cli.semanticGraphReused" && !CliProjectReuse.IsExecutionDiagnostic(d.Code)).ToArray()
+        };
     }
 
     // This hash covers the complete non-Markdown path set and bytes, including ignored obj/bin inputs.
@@ -432,7 +500,7 @@ public static class CliIndexer
                 || name.Equals("obj", StringComparison.OrdinalIgnoreCase) || name.Equals("bin", StringComparison.OrdinalIgnoreCase));
 
     private static async Task<string?> FingerprintInputs(string root, string indexPath, bool includeOutputs, CancellationToken token,
-        bool includeMarkdown = false)
+        bool includeMarkdown = false, IReadOnlySet<string>? ownedSourcePaths = null)
     {
         try
         {
@@ -483,6 +551,12 @@ public static class CliIndexer
                 var pathBytes = StrictUtf8.GetBytes("file:" + relative);
                 var pathLength = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
                 hash.AppendData(pathLength); hash.AppendData(pathBytes);
+                if (ownedSourcePaths?.Contains(relative) == true)
+                {
+                    // Keep the complete path/directory set; only proven compiler source contents may vary.
+                    hash.AppendData(SHA256.HashData(StrictUtf8.GetBytes("owned-source-content/1")));
+                    continue;
+                }
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
                 if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes) return null;
                 total = checked(total + stream.Length);
