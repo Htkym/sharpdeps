@@ -222,7 +222,8 @@ public static class CliIndexer
             var capturedFiles = manifest.Values.ToDictionary(i => i.File.SourceId, i => i.File, StringComparer.Ordinal);
             var ownedPaths = manifest.Values.Where(i => i.File.Kind == "source").Select(i => i.File.RelativePath).ToHashSet(PathComparer);
             var structureHash = fullFingerprint is null || projectSelections is null ? null
-                : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token, ownedSourcePaths: ownedPaths);
+                : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token,
+                    includeMarkdown: true, ownedSourcePaths: ownedPaths);
             var projectPlan = options.AllowSemanticReuse && previous is not null && savedProof is not null
                 && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
                 && projectSelections is not null
@@ -506,6 +507,7 @@ public static class CliIndexer
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var paths = new List<string>(); var directoryPaths = new List<string>();
+            var foundSources = new HashSet<string>(PathComparer);
             var directories = new Stack<string>(); directories.Push(root);
             var count = 0; long total = 0;
             var absoluteIndex = InsideRoot(root, indexPath);
@@ -548,15 +550,16 @@ public static class CliIndexer
             {
                 token.ThrowIfCancellationRequested(); RejectLinks(path);
                 var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                if (ownedSourcePaths?.Contains(relative) == true)
+                {
+                    // Project proof v2 omits only actual compiler files from the inventory hash.
+                    // Every other file path/type/byte and every directory must remain identical.
+                    foundSources.Add(relative);
+                    continue;
+                }
                 var pathBytes = StrictUtf8.GetBytes("file:" + relative);
                 var pathLength = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
                 hash.AppendData(pathLength); hash.AppendData(pathBytes);
-                if (ownedSourcePaths?.Contains(relative) == true)
-                {
-                    // Keep the complete path/directory set; only proven compiler source contents may vary.
-                    hash.AppendData(SHA256.HashData(StrictUtf8.GetBytes("owned-source-content/1")));
-                    continue;
-                }
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
                 if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes) return null;
                 total = checked(total + stream.Length);
@@ -573,6 +576,7 @@ public static class CliIndexer
                 if (read != expectedLength || stream.Length != expectedLength) return null;
                 hash.AppendData(content.GetHashAndReset()); RejectLinks(path);
             }
+            if (ownedSourcePaths is not null && !foundSources.SetEquals(ownedSourcePaths)) return null;
             return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or OverflowException or CliFailure)

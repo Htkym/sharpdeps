@@ -31,5 +31,40 @@ public sealed class ProjectIncrementalTests
         Assert.Null(CliProjectReuse.Select(snapshot, proof, new string('e', 64), selections, current, default));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SourceMembershipUsesBothActualOwnersAndRejectsUnprovenInventory(bool delete)
+    {
+        var before = new[] { File("a", 'a'), File("b", 'a'), File("shared", 'a') };
+        var after = before.Append(File("added", 'a')).ToArray();
+        var oldSelections = new CliProjectSelection[] { new("A", "vA", "pA", ["a"], ["B"]),
+            new("B", "vB", "pB", ["b", "shared"], []), new("C", "vC", "pC", ["shared"], []),
+            new("D", "vD", "pD", [], []) };
+        var newSelections = oldSelections.Select(s => s.Key == "B" ? s with { SourceIds = ["b", "shared", "added"] } : s).ToArray();
+        if (delete) { (before, after) = (after, before); (oldSelections, newSelections) = (newSelections, oldSelections); }
+        // Retained shared content also changes: both B and C must be dirty; D remains reusable.
+        var current = after.Select(f => f.SourceId == "shared" ? File("shared", 'b') : f).ToDictionary(f => f.SourceId);
+        var data = JsonSerializer.SerializeToElement(new CliProjectReuse.Extraction(new([], [], [], false), [],
+            new OperationCollectionStats(0, 0, 0, 0)));
+        var proof = new IndexProjectReuse(CliProjectReuse.Version, new string('f', 64), oldSelections.Select(s =>
+            new IndexProjectExtraction(s.Key, s.VariantId, s.ProjectId, s.SourceIds, s.References, data)).ToArray());
+        var snapshot = new IndexSnapshot(null!, before, [], [], []);
+        var plan = CliProjectReuse.Select(snapshot, proof, proof.StructureHash, newSelections, current, default);
+        Assert.NotNull(plan);
+        Assert.Equal(["A", "B", "C"], plan.Dirty.Order(StringComparer.Ordinal));
+        Assert.Null(CliProjectReuse.Select(snapshot, proof with { Version = "sharpdeps-cli-project-reuse/1" },
+            proof.StructureHash, newSelections, current, default));
+        Assert.Null(CliProjectReuse.Select(snapshot, proof, new string('e', 64), newSelections, current, default));
+        var unowned = new Dictionary<string, IndexFile>(current) { ["unowned"] = File("unowned", 'a') };
+        Assert.Null(CliProjectReuse.Select(snapshot, proof, proof.StructureHash, newSelections, unowned, default));
+        // Simultaneous add/delete is conservatively full; no rename ownership is guessed.
+        var replacement = current.Where(p => p.Key != "b").ToDictionary();
+        replacement["replacement"] = File("replacement", 'a');
+        var renamed = newSelections.Select(s => s.Key == "B" ? s with
+        { SourceIds = s.SourceIds.Where(id => id != "b").Append("replacement").ToArray() } : s).ToArray();
+        Assert.Null(CliProjectReuse.Select(snapshot, proof, proof.StructureHash, renamed, replacement, default));
+    }
+
     private static IndexFile File(string id, char hash) => new(id, id + ".cs", "source", new string(hash, 64), 1, 1);
 }

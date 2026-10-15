@@ -13,7 +13,7 @@ internal sealed record CliProjectSelection(string Key, string VariantId, string 
 /// <summary>Snapshot-neutral collector data, not compilations or executable/source buffers.</summary>
 internal static class CliProjectReuse
 {
-    internal const string Version = "sharpdeps-cli-project-reuse/1";
+    internal const string Version = "sharpdeps-cli-project-reuse/2";
     internal static bool IsExecutionDiagnostic(string code) => code is "cli.semanticVariantsLoaded"
         or "cli.projectCollectorsExtracted" or "cli.projectCollectorsReused"
         || code.StartsWith("cli.projectExtracted.", StringComparison.Ordinal)
@@ -33,6 +33,22 @@ internal static class CliProjectReuse
         var selected = selections.ToDictionary(p => p.Key, StringComparer.Ordinal);
         if (!old.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(selected.Keys)) return null;
         var oldFiles = previous.Files.ToDictionary(f => f.SourceId, StringComparer.Ordinal);
+        var oldSources = old.Values.SelectMany(p => p.SourceIds).ToHashSet(StringComparer.Ordinal);
+        var newSources = selections.SelectMany(p => p.SourceIds).ToHashSet(StringComparer.Ordinal);
+        // Together with the complete non-source/directory inventory hash, these sets prove every
+        // added path from the new compilation and every deleted path from the old actual owners.
+        if (!oldSources.SetEquals(oldFiles.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId))
+            || !newSources.SetEquals(current.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId))) return null;
+        var added = newSources.Except(oldSources, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        var removed = oldSources.Except(newSources, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        // An add/delete pair may be a rename. This version does not infer its history.
+        if (added.Count > 0 && removed.Count > 0) return null;
+        var oldPaths = oldFiles.Values.Select(f => f.RelativePath).ToHashSet(StringComparer.Ordinal);
+        var newPaths = current.Values.Select(f => f.RelativePath).ToHashSet(StringComparer.Ordinal);
+        if (oldSources.Intersect(newSources, StringComparer.Ordinal).Any(source =>
+                oldFiles[source].RelativePath != current[source].RelativePath)
+            || added.Any(source => oldPaths.Contains(current[source].RelativePath))
+            || removed.Any(source => newPaths.Contains(oldFiles[source].RelativePath))) return null;
         var saved = new Dictionary<string, Extraction>(StringComparer.Ordinal);
         var dirty = new HashSet<string>(StringComparer.Ordinal);
         foreach (var selection in selections)
@@ -40,14 +56,18 @@ internal static class CliProjectReuse
             token.ThrowIfCancellationRequested();
             var prior = old[selection.Key];
             if (prior.VariantId != selection.VariantId || prior.ProjectId != selection.ProjectId
-                || !prior.SourceIds.ToHashSet(StringComparer.Ordinal).SetEquals(selection.SourceIds)
                 || prior.References.Any(key => !selected.ContainsKey(key))) return null;
             var data = Read(prior, oldFiles);
             if (data is null) return null;
             saved.Add(selection.Key, data);
-            // A shared source is checked in every actual owner, never by directory prefix.
-            foreach (var source in selection.SourceIds)
+            var beforeSources = prior.SourceIds.ToHashSet(StringComparer.Ordinal);
+            var afterSources = selection.SourceIds.ToHashSet(StringComparer.Ordinal);
+            if (!beforeSources.SetEquals(afterSources)) dirty.Add(selection.Key);
+            // Check the union of actual old/new owners, including retained shared inputs.
+            // Deleted inputs are read only from the old snapshot, never the live manifest.
+            foreach (var source in beforeSources.Union(afterSources, StringComparer.Ordinal))
             {
+                if (added.Contains(source) || removed.Contains(source)) { dirty.Add(selection.Key); continue; }
                 if (!oldFiles.TryGetValue(source, out var before) || !current.TryGetValue(source, out var after)) return null;
                 if (before.ContentHash != after.ContentHash || before.ByteLength != after.ByteLength
                     || before.Utf16Length != after.Utf16Length) dirty.Add(selection.Key);
