@@ -58,12 +58,14 @@ public sealed class ProjectIncrementalTests
         Assert.Null(CliProjectReuse.Select(snapshot, proof, new string('e', 64), newSelections, current, default));
         var unowned = new Dictionary<string, IndexFile>(current) { ["unowned"] = File("unowned", 'a') };
         Assert.Null(CliProjectReuse.Select(snapshot, proof, proof.StructureHash, newSelections, unowned, default));
-        // Simultaneous add/delete is conservatively full; no rename ownership is guessed.
+        // Simultaneous add/delete uses independent actual owners, without inferred rename history.
         var replacement = current.Where(p => p.Key != "b").ToDictionary();
         replacement["replacement"] = File("replacement", 'a');
-        var renamed = newSelections.Select(s => s.Key == "B" ? s with
+        var batched = newSelections.Select(s => s.Key == "B" ? s with
         { SourceIds = s.SourceIds.Where(id => id != "b").Append("replacement").ToArray() } : s).ToArray();
-        Assert.Null(CliProjectReuse.Select(snapshot, proof, proof.StructureHash, renamed, replacement, default));
+        var batchPlan = CliProjectReuse.Select(snapshot, proof, proof.StructureHash, batched, replacement, default);
+        Assert.NotNull(batchPlan);
+        Assert.Equal(["A", "B", "C"], batchPlan.Dirty.Order(StringComparer.Ordinal));
     }
 
     private static IndexFile File(string id, char hash) => new(id, id + ".cs", "source", new string(hash, 64), 1, 1);

@@ -41,8 +41,7 @@ internal static class CliProjectReuse
             || !newSources.SetEquals(current.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId))) return null;
         var added = newSources.Except(oldSources, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         var removed = oldSources.Except(newSources, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        // An add/delete pair may be a rename. This version does not infer its history.
-        if (added.Count > 0 && removed.Count > 0) return null;
+        // Addition and deletion are independent owner facts; never infer rename history or transfer IDs.
         var oldPaths = oldFiles.Values.Select(f => f.RelativePath).ToHashSet(StringComparer.Ordinal);
         var newPaths = current.Values.Select(f => f.RelativePath).ToHashSet(StringComparer.Ordinal);
         if (oldSources.Intersect(newSources, StringComparer.Ordinal).Any(source =>
