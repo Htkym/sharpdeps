@@ -27,6 +27,66 @@ import type {
 import { restoreViewState, serializeViewState } from '../../media/app/serializer';
 import { toViewActions, evidenceRequestContext } from '../../media/app/hostMessages';
 
+it('restores a saved Namespace list using fresh pages and all navigation controls', () => {
+  const before: ViewState = {
+    ...INITIAL_STATE,
+    queryMetadata: savedMetadata,
+    scope: { kind: 'namespace', id: 'ns_1111111111111111' },
+    granularity: 'type',
+    search: 'Item',
+    filters: { resultKinds: ['code'] },
+    viewKind: 'table',
+    tablePage: 1,
+    tableSort: { key: 'name', direction: 'desc' },
+    selection: { entityId: 'ty_1111111111111111' },
+    searchResults: {
+      query: 'Item',
+      items: Array.from({ length: 120 }, (_, i) => ({
+        id: `ty_${i}`,
+        name: `Item${i}`,
+        granularity: 'type' as const
+      })),
+      total: 120,
+      pending: false
+    }
+  };
+  const drilled = viewReducer(before, {
+    type: 'revealRequested',
+    entityId: 'ty_1111111111111111',
+    scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+  });
+  expect(drilled.history.at(-1)?.searchCount).toBe(120);
+  const back = viewReducer(drilled, { type: 'historyBack' });
+  for (const key of [
+    'scope',
+    'granularity',
+    'search',
+    'filters',
+    'viewKind',
+    'tablePage',
+    'tableSort',
+    'selection'
+  ] as const)
+    expect(back[key]).toEqual(before[key]);
+  expect(back.searchResults.items).toEqual([]);
+  expect(back.searchRevision).toBe(1);
+  const reloaded = viewReducer(
+    { ...back, projection: projection({ nodes: [], edges: [] }) },
+    {
+      type: 'searchResultsReceived',
+      query: before.search,
+      items: before.searchResults.items,
+      total: 120,
+      nextCursor: null,
+      queryMetadata: savedMetadata
+    }
+  );
+  const rows = selectTableRows(reloaded);
+  expect(rows.page).toBe(1);
+  expect(rows.totalItems).toBe(120);
+  expect(rows.rows).toHaveLength(20);
+});
+
 const savedMetadata: QueryResultMetadata = {
   provider: 'savedIndex',
   workspaceId: 'hw_fixture',

@@ -58,6 +58,7 @@ export interface QuerySnapshot {
   freshness: string;
   resultFilterVersion?: number;
   symbolDeclarationRowsVersion?: number;
+  namespaceBrowseVersion?: number;
 }
 export interface QueryWireReply {
   apiVersion: '1';
@@ -334,6 +335,9 @@ export function validateQueryReply(value: unknown): QueryWireReply {
     (snapshot.resultFilterVersion !== undefined &&
       (!Number.isSafeInteger(snapshot.resultFilterVersion) ||
         (snapshot.resultFilterVersion as number) < 1)) ||
+    (snapshot.namespaceBrowseVersion !== undefined &&
+      (!Number.isSafeInteger(snapshot.namespaceBrowseVersion) ||
+        (snapshot.namespaceBrowseVersion as number) < 1)) ||
     (snapshot.symbolDeclarationRowsVersion !== undefined &&
       (!Number.isSafeInteger(snapshot.symbolDeclarationRowsVersion) ||
         (snapshot.symbolDeclarationRowsVersion as number) < 1)) ||

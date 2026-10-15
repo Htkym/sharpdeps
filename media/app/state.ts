@@ -55,9 +55,12 @@ export interface HistoryEntry {
   viewKind?: ViewKind;
   tablePage?: number;
   tableSort?: SortState;
+  searchCount?: number;
 }
 
 export interface ViewState {
+  /** Transient revision forces a fresh list when returning through history. */
+  searchRevision?: number;
   language: Language;
   /** Target shown in the top bar. */
   target: { name: string; relativePath: string } | null;
@@ -379,14 +382,20 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
     state.queryMetadata &&
     ((action.type === 'granularityChanged' && action.granularity !== 'type') ||
       ((action.type === 'scopeChanged' || action.type === 'revealRequested') &&
-        ((action.granularity !== undefined && action.granularity !== 'type') ||
-          (action.scope && !['root', 'dependencies', 'dependents'].includes(action.scope.kind)))))
+        ((action.granularity !== undefined &&
+          action.granularity !== 'type' &&
+          !(action.scope?.kind === 'project' && action.granularity === 'namespace')) ||
+          (action.scope &&
+            !['root', 'project', 'namespace', 'dependencies', 'dependents'].includes(
+              action.scope.kind
+            )))))
   )
     return {
       ...state,
       error: {
         code: 'query.unsupportedOperation',
-        message: 'Saved index supports symbol views and bounded dependencies/dependents only.'
+        message:
+          'Saved index supports project/namespace symbol views and bounded dependencies/dependents only.'
       }
     };
   switch (action.type) {
@@ -698,6 +707,14 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
         evidence: null,
         granularity: action.granularity ?? state.granularity,
         scope: action.scope ?? state.scope,
+        searchResults:
+          action.scope &&
+          state.queryMetadata &&
+          (action.scope.kind !== state.scope.kind ||
+            action.scope.id !== state.scope.id ||
+            action.scope.depth !== state.scope.depth)
+            ? { query: state.search, items: [], total: 0, pending: false }
+            : state.searchResults,
         history: pushHistory(state, {
           scope: action.scope ?? state.scope,
           granularity: action.granularity ?? state.granularity,
@@ -733,6 +750,10 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
         projection: null,
         details: null,
         evidence: null,
+        tablePage: 0,
+        searchResults: state.queryMetadata
+          ? { query: state.search, items: [], total: 0, pending: false }
+          : state.searchResults,
         history: pushHistory(state, {
           scope: action.scope,
           granularity: state.granularity,
@@ -761,6 +782,7 @@ function reduceViewState(state: ViewState, action: ViewAction): ViewState {
         ...state,
         searchResults: {
           ...state.searchResults,
+          items: state.queryMetadata ? [] : state.searchResults.items,
           query: action.query,
           pending: true,
           nextCursor: undefined,
@@ -955,7 +977,8 @@ function pushHistory(state: ViewState, entry: HistoryEntry): HistoryEntry[] {
       filters: state.filters,
       viewKind: state.viewKind,
       tablePage: state.tablePage,
-      tableSort: state.tableSort
+      tableSort: state.tableSort,
+      searchCount: Math.min(500, state.searchResults.items.length)
     }
   ].slice(-HISTORY_LIMIT);
 }
@@ -982,6 +1005,10 @@ function back(state: ViewState): ViewState {
     ...state,
     history: state.history.slice(0, -1),
     scope: previous.scope,
+    searchRevision: (state.searchRevision ?? 0) + 1,
+    searchResults: state.queryMetadata
+      ? { query: previous.search ?? '', items: [], total: 0, pending: false }
+      : state.searchResults,
     granularity: previous.granularity,
     camera: previous.camera ?? null,
     search: previous.search ?? '',
@@ -1007,18 +1034,17 @@ function back(state: ViewState): ViewState {
 
 /** Restored state is untrusted: keep the safe defaults for anything unexpected. */
 function sanitizeRestoredState(state: ViewState): ViewState {
-  const granularity: Granularity = state.queryMetadata
-    ? 'type'
-    : ['project', 'namespace', 'type'].includes(state.granularity)
-      ? state.granularity
-      : INITIAL_STATE.granularity;
+  const granularity: Granularity = ['project', 'namespace', 'type'].includes(state.granularity)
+    ? state.granularity
+    : INITIAL_STATE.granularity;
   const viewKind: ViewKind = state.viewKind === 'table' ? 'table' : 'graph';
 
   return {
     ...state,
     granularity,
     scope:
-      state.queryMetadata && !['root', 'dependencies', 'dependents'].includes(state.scope?.kind)
+      state.queryMetadata &&
+      !['root', 'project', 'namespace', 'dependencies', 'dependents'].includes(state.scope?.kind)
         ? INITIAL_STATE.scope
         : state.scope,
     viewKind,
@@ -1117,7 +1143,13 @@ export function selectVisibleData(state: ViewState): VisibleData {
 
   const filters = state.filters;
   const temporary = new Set(state.temporaryDisplayIds);
-  const nodes = projection.nodes.filter(
+  const list =
+    state.queryMetadata &&
+    state.viewKind === 'table' &&
+    ['project', 'namespace'].includes(state.scope.kind)
+      ? state.searchResults.items
+      : projection.nodes;
+  const nodes = list.filter(
     (node) =>
       state.scope.kind === 'cycle' ||
       temporary.has(node.id) ||
@@ -1148,7 +1180,7 @@ export function selectVisibleData(state: ViewState): VisibleData {
     isFilteredEmpty:
       nodes.length === 0 &&
       (projection.nodes.length > 0 || state.search.trim().length > 0 || countFilters(filters) > 0),
-    totalNodeCount: projection.totalNodeCount,
+    totalNodeCount: list === projection.nodes ? projection.totalNodeCount : list.length,
     totalEdgeCount: projection.totalEdgeCount
   };
 }
@@ -1171,7 +1203,10 @@ export function selectBreadcrumbs(state: ViewState): string[] {
 export function selectStatusFooter(state: ViewState): string {
   const tr = translator(state.language);
   const visible = selectVisibleData(state);
-  const metadata = state.projection?.queryMetadata ?? state.queryMetadata;
+  const metadata =
+    (state.viewKind === 'table' && ['project', 'namespace'].includes(state.scope.kind)
+      ? state.searchResults.queryMetadata
+      : state.projection?.queryMetadata) ?? state.queryMetadata;
   if (metadata)
     return [
       queryResultSummary(metadata, state.language),

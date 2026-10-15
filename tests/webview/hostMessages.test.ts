@@ -10,6 +10,7 @@ import {
   synchronizeRequestTracking,
   synchronizeSourceOperation,
   projectionRequestKey,
+  searchScopeKey,
   type RequestContext,
   type RequestTracking
 } from '../../media/app/hostMessages';
@@ -45,6 +46,27 @@ const queries = new Map<string, { query?: string; appendEvidence?: boolean }>([
 ]);
 
 describe('relation history safety', () => {
+  it('drops a delayed list reply after moving to another Namespace with the same search', () => {
+    const old: ViewState = {
+      ...INITIAL_STATE,
+      analysisId,
+      queryMetadata: savedMetadata,
+      scope: { kind: 'namespace', id: 'ns_1111111111111111' },
+      search: 'Item'
+    };
+    const current = { ...old, scope: { kind: 'namespace' as const, id: 'ns_2222222222222222' } };
+    const contexts = new Map([['late', { query: 'Item', scopeKey: searchScopeKey(old) }]]);
+    const response = {
+      type: 'searchResults',
+      requestId: 'late',
+      analysisId,
+      queryMetadata: savedMetadata,
+      items: [],
+      total: 0
+    };
+    expect(toViewActions(response, contexts, old)).toHaveLength(1);
+    expect(toViewActions(response, contexts, current)).toEqual([]);
+  });
   it('relays saved relation data only with valid fields and the current saved pin', () => {
     const relation = {
       id: 'rel_1111111111111111',

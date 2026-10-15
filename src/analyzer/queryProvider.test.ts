@@ -55,6 +55,68 @@ function client(
 }
 
 describe('saved Query provider boundary', () => {
+  it('requires Namespace capability and exact direct Types on every scoped page', async () => {
+    const ns = {
+      ...node('namespace'),
+      kind: 'Namespace',
+      node: {
+        id: 'namespace',
+        kind: 'Namespace',
+        name: 'Exact',
+        parentId: 'project'
+      }
+    };
+    const supported = reply({ snapshot: { ...reply().snapshot, namespaceBrowseVersion: 1 } });
+    for (const fault of ['unsupported', 'wrong-parent', 'missing-page-capability', 'valid']) {
+      const child = {
+        ...node('child'),
+        kind: 'Type',
+        node: {
+          id: 'child',
+          kind: 'Type',
+          name: 'Child',
+          parentId: fault === 'wrong-parent' ? 'other' : 'namespace'
+        }
+      };
+      const wire = client(
+        [
+          reply({ items: [ns] }),
+          {
+            ...supported,
+            items: [child],
+            snapshot: fault === 'missing-page-capability' ? reply().snapshot : supported.snapshot
+          }
+        ],
+        fault === 'unsupported' ? reply() : supported
+      );
+      const provider = await SavedQueryProvider.create(wire, 'D:/fixture');
+      const found = await provider.handle({
+        type: 'searchEntities',
+        requestId,
+        analysisId: provider.analysisId,
+        query: '',
+        granularity: 'namespace'
+      });
+      if (found?.type !== 'searchResults') throw new Error('Expected Namespace result');
+      const result = await provider.handle({
+        type: 'searchEntities',
+        requestId,
+        analysisId: provider.analysisId,
+        query: 'Child',
+        granularity: 'type',
+        parentId: found.items[0].id
+      });
+      if (fault === 'valid') {
+        expect(result?.type).toBe('searchResults');
+        expect(wire.requests.at(-1)?.scope).toEqual({
+          variantIds: [variant],
+          parentId: 'namespace',
+          projectId: 'project',
+          kind: 'Type'
+        });
+      } else expect(result).toMatchObject({ type: 'error', code: 'QUERY_SCOPE_UNSUPPORTED' });
+    }
+  });
   it.each(['Member incoming calls', 'Markdown outgoing candidate'])(
     'relays registered detail relations and reconstructs evidence without another Query: %s',
     async (scenario) => {

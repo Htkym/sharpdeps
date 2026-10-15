@@ -12,7 +12,7 @@ public sealed record QueryBudget(int MaxNodes = 60, int MaxEdges = 120, int MaxD
     int MaxMilliseconds = 1000, int MaxChars = 18000, int MaxBytes = 64000);
 public sealed record QueryScope(HarnessNodeKind? Kind = null, string? ProjectId = null,
     string? PathPrefix = null, IReadOnlyList<string>? VariantIds = null,
-    IReadOnlyList<QueryResultKind>? ResultKinds = null, bool IncludeExternal = true);
+    IReadOnlyList<QueryResultKind>? ResultKinds = null, bool IncludeExternal = true, string? ParentId = null);
 public sealed record QueryRequest(string RequestId, QueryKind Kind, string? Term = null,
     string? NodeId = null, IReadOnlyList<string>? Ids = null, QueryScope? Scope = null,
     IReadOnlyList<string>? EdgeKinds = null, bool IncludeCandidates = false, bool IncludeDocuments = true,
@@ -31,6 +31,7 @@ public sealed record QuerySnapshot(string WorkspaceId, string Id, long Generatio
     public string CoordinatorState => "not-connected";
     public int ResultFilterVersion => 1;
     public int SymbolDeclarationRowsVersion => 1;
+    public int NamespaceBrowseVersion => 1;
 }
 public sealed record QuerySnippet(string SourceId, string ContentHash, HarnessRawSpan Span,
     string Text, bool OmittedBefore, bool OmittedAfter);

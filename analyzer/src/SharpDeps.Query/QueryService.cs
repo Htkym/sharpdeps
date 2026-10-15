@@ -42,6 +42,7 @@ public sealed class QueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
+        ValidateParent(request);
         // Clone input collections as well: cursor filters and selection use the same immutable request.
         request = request with { Budget = request.Budget ?? new QueryBudget(), Scope = request.Scope is null ? null :
             request.Scope with { VariantIds = request.Scope.VariantIds?.ToArray(),
@@ -143,7 +144,7 @@ public sealed class QueryService
             foreach (var node in saved.Graph.Nodes.OrderBy(n => n.Id, StringComparer.Ordinal))
             {
                 work.Check();
-                if (!BrowseInScope(node, work) || !ResultAllowed(node, request.Scope)
+                if (!InScope(node, request.Scope) || !ResultAllowed(node, request.Scope)
                     || (!request.IncludeDocuments && IsDocument(node.Kind))) continue;
                 if (matched++ < browseOffset) continue;
                 if (work.Items.Count == request.PageSize || !work.Add(NodeItem(node, "browse", [], request.Scope)))
@@ -265,31 +266,20 @@ public sealed class QueryService
 
     private readonly record struct WalkPosition(string Id, string? OccurrenceId, string? VariantId);
 
-    private bool BrowseInScope(HarnessNode node, Work work)
+    private void ValidateParent(QueryRequest request)
     {
-        var scope = work.Request.Scope;
-        if (node.Kind != HarnessNodeKind.Namespace || scope?.VariantIds is not { Count: > 0 } variants)
-            return InScope(node, scope);
-        // A namespace has project ownership, but no declaration/path proof for the selected variant.
-        if (scope.PathPrefix is not null || (scope.Kind is { } kind && kind != node.Kind)) return false;
-        var visited = new HashSet<string>(StringComparer.Ordinal);
-        var current = node;
-        while (visited.Add(current.Id))
-        {
-            work.Check();
-            if (current.Kind == HarnessNodeKind.Project)
-            {
-                if (scope.ProjectId is { } project && project != current.Id) return false;
-                foreach (var variant in saved.Graph.Variants)
-                {
-                    work.Check();
-                    if (variant.ProjectId == current.Id && variants.Contains(variant.Id)) return true;
-                }
-                return false;
-            }
-            if (current.ParentId is not { } parent || !nodes.TryGetValue(parent, out current)) return false;
-        }
-        return false;
+        var scope = request.Scope;
+        if (scope?.ParentId is not { } id) return;
+        if (request.Kind is not (QueryKind.Browse or QueryKind.Search)
+            || scope.Kind is not (null or HarnessNodeKind.Type)
+            || !nodes.TryGetValue(id, out var parent) || parent.Kind != HarnessNodeKind.Namespace
+            || parent.ParentId is not { } projectId || !nodes.TryGetValue(projectId, out var project)
+            || project.Kind != HarnessNodeKind.Project
+            || (scope.ProjectId is { } requiredProject && requiredProject != projectId)
+            || scope.VariantIds is not { Count: > 0 } variants
+            || variants.Any(variant => !saved.Graph.Variants.Any(v => v.Id == variant && v.ProjectId == projectId)
+                || !saved.Graph.SymbolOccurrences.Any(o => o.LogicalSymbolId == id && o.VariantId == variant)))
+            throw new ArgumentException("Namespace scope requires saved project and variant occurrence ownership.", nameof(request));
     }
 
     private HashSet<WalkPosition> Walk(Work work, IReadOnlyList<string> seeds)
@@ -404,6 +394,7 @@ public sealed class QueryService
     private bool InScope(HarnessNode node, QueryScope? scope)
     {
         if (scope is null) return true;
+        if (scope.ParentId is { } parentId && (node.ParentId != parentId || node.Kind != HarnessNodeKind.Type)) return false;
         if (scope.Kind is { } kind && node.Kind != kind) return false;
         if (scope.PathPrefix is { } prefix)
         {
@@ -619,6 +610,7 @@ public sealed class QueryService
             || b.MaxDepth is < 1 or > 8 || b.MaxMilliseconds is < 10 or > 30000
             || b.MaxChars is < 2048 or > 1000000 || b.MaxBytes is < 2048 or > 4000000
             || !Short(r.Term, 128) || !Short(r.NodeId, 128) || !Short(r.Scope?.ProjectId, 128) || !Short(r.Scope?.PathPrefix, 512)
+            || !Short(r.Scope?.ParentId, 128)
             || (r.Scope?.Kind is { } kind && !Enum.IsDefined(kind))
             || (r.Ids is { } ids && (ids.Count > 64 || ids.Any(s => !Short(s, 128) || string.IsNullOrWhiteSpace(s))))
             || (r.Scope?.VariantIds is { } variants && (variants.Count is < 1 or > 64 || variants.Any(s => !Short(s, 128))))

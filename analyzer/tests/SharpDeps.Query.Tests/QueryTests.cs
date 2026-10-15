@@ -339,11 +339,11 @@ public sealed class QueryTests
         } while (continuation is not null);
         Assert.Equal(expected, seen);
         var namespaces = browse with { Scope = new(Kind: HarnessNodeKind.Namespace, VariantIds: [fixture.Variant]), PageSize = 100 };
-        Assert.Equal(new[] { fixture.OuterNamespaceId, fixture.NamespaceId }.Order(StringComparer.Ordinal),
-            query.Execute(namespaces).Envelope.Items.Select(i => i.Id));
+        // A project variant cannot prove a Namespace without a saved occurrence.
+        Assert.Empty(query.Execute(namespaces).Envelope.Items);
         Assert.Empty(query.Execute(namespaces with { Scope = namespaces.Scope! with { ProjectId = fixture.OtherProjectId } }).Envelope.Items);
         Assert.Empty(query.Execute(namespaces with { Scope = namespaces.Scope! with { PathPrefix = "src" } }).Envelope.Items);
-        // Browse adds containers using saved ancestry; ordinary symbol search keeps occurrence filtering.
+        // Browse and search both require occurrence membership.
         Assert.Empty(query.Execute(new("namespace-search", QueryKind.Search, Term: "App",
             Scope: namespaces.Scope, Budget: Generous)).Envelope.Items);
         Assert.Throws<ArgumentException>(() => query.Execute(browse with { Term = "Service" }));
@@ -663,6 +663,51 @@ public sealed class QueryTests
         Assert.False(snippet.OmittedBefore);
         Assert.True(snippet.OmittedAfter);
         Assert.Equal("unverified", reply.Envelope.Snapshot.Freshness);
+    }
+
+    [Fact]
+    public void NamespaceScopeProvesOccurrenceAndDirectTypesBeforePagingAndSearch()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, withoutEdges: true, partialDeclarations: true);
+        var graph = snapshot.Graph;
+        snapshot = snapshot with
+        {
+            Graph = graph with
+            {
+                Nodes = graph.Nodes.Select(node => node.Id == fixture.NamespaceId
+                    ? node with { ParentId = fixture.ProjectId }
+                    : node.Id == fixture.A || node.Id == fixture.B
+                        ? node with { Kind = HarnessNodeKind.Type, ParentId = fixture.NamespaceId }
+                        : node.Id == fixture.C ? node with { Kind = HarnessNodeKind.Type, ParentId = fixture.A } : node).ToArray(),
+                SymbolOccurrences = [.. graph.SymbolOccurrences,
+                new(fixture.Occurrence(fixture.NamespaceId), fixture.NamespaceId, fixture.Variant, null, []),
+                new(fixture.Occurrence(fixture.OuterNamespaceId), fixture.OuterNamespaceId, fixture.Variant, null, [])]
+            }
+        };
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        var request = new QueryRequest("namespace", QueryKind.Browse,
+            Scope: new(ProjectId: fixture.ProjectId, VariantIds: [fixture.Variant], ParentId: fixture.NamespaceId),
+            PageSize: 1, Budget: Generous);
+        var first = query.Execute(request);
+        Assert.Equal(1, first.Envelope.Snapshot.NamespaceBrowseVersion);
+        var second = query.Execute(request with { Cursor = first.Envelope.NextCursor });
+        Assert.Equal(new[] { fixture.A, fixture.B }.Order(StringComparer.Ordinal),
+            first.Envelope.Items.Concat(second.Envelope.Items).Select(item => item.Id));
+        Assert.Null(second.Envelope.NextCursor);
+        Error(query.Execute(request with
+        {
+            Cursor = first.Envelope.NextCursor,
+            Scope = request.Scope! with { ParentId = fixture.OuterNamespaceId }
+        }), "CURSOR_FILTER_CHANGED");
+        var search = query.Execute(request with { Kind = QueryKind.Search, Term = "Service", PageSize = 100 });
+        Assert.Equal(2, search.Envelope.Items.Count);
+        Assert.All(search.Envelope.Items, item => Assert.Equal(fixture.NamespaceId, item.Node!.ParentId));
+        Assert.Throws<ArgumentException>(() => query.Execute(request with { Scope = request.Scope! with { VariantIds = [fixture.AlternateVariant] } }));
+        Assert.Throws<ArgumentException>(() => query.Execute(request with { Scope = request.Scope! with { ProjectId = fixture.OtherProjectId } }));
     }
 
     private static QueryItem[] All(QueryReply reply)

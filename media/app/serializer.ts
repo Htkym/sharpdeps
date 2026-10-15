@@ -153,7 +153,14 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
               ? record.viewKind
               : undefined,
           tablePage: deserializeTablePage(record.tablePage),
-          tableSort: deserializeTableSort(record.tableSort)
+          tableSort: deserializeTableSort(record.tableSort),
+          searchCount:
+            typeof record.searchCount === 'number' &&
+            Number.isSafeInteger(record.searchCount) &&
+            record.searchCount >= 0 &&
+            record.searchCount <= 500
+              ? record.searchCount
+              : undefined
         }
       ];
     });

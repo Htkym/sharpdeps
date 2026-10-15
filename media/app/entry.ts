@@ -12,6 +12,7 @@ import {
   evidenceRequestContext,
   synchronizeSourceOperation,
   projectionRequestKey,
+  searchScopeKey,
   type RequestContext,
   type RequestTracking
 } from './hostMessages';
@@ -53,6 +54,11 @@ if (root) {
       ...context,
       type,
       analysisId: String(message.analysisId),
+      ...(app.getState().queryMetadata &&
+      ((message.type === 'searchEntities' && !context.treeParentId) ||
+        message.type === 'getProjection')
+        ? { scopeKey: searchScopeKey(app.getState()) }
+        : {}),
       ...(['searchEntities', 'getProjection', 'getEntityDetails'].includes(String(message.type))
         ? { filtersKey: JSON.stringify(message.filters ?? {}) }
         : {})
@@ -90,6 +96,7 @@ if (root) {
         return;
       }
       if (action.type === 'searchStarted') {
+        if (app.getState().queryMetadata) return; // Saved lists follow the current navigation key.
         const requestId = nextRequestId();
         sendRequest(
           {
@@ -113,6 +120,7 @@ if (root) {
               requestId: nextRequestId(),
               analysisId: state.analysisId,
               query: state.search,
+              ...savedListScope(state),
               filters: state.filters,
               cursor: state.searchResults.nextCursor,
               limit: 20
@@ -297,12 +305,13 @@ if (root) {
       latestSourceOperation = undefined;
       requestContext.clear();
       requested.projection = requested.details = requested.evidence = requested.evidencePage = '';
+      requested.search = '';
     }
     for (const action of actions) {
       app.dispatch(action);
     }
     if (sourceReturn) persistNow(app.getState());
-    if (sourceReturn && app.getState().search) {
+    if (sourceReturn && app.getState().search && !app.getState().queryMetadata) {
       const state = app.getState();
       app.dispatch({ type: 'searchStarted', query: state.search });
       sendRequest(
@@ -318,7 +327,7 @@ if (root) {
       );
     }
     const state = app.getState(),
-      target = app.sourceReturnSearchTarget();
+      target = app.searchRestoreTarget();
     if (
       payload.type === 'searchResults' &&
       target !== undefined &&
@@ -333,6 +342,7 @@ if (root) {
           requestId: nextRequestId(),
           analysisId: state.analysisId,
           query: state.search,
+          ...savedListScope(state),
           filters: state.filters,
           limit: 20,
           cursor: state.searchResults.nextCursor
@@ -436,6 +446,27 @@ if (root) {
     }
 
     const projectionKey = projectionRequestKey(state);
+    if (state.queryMetadata) {
+      const key = JSON.stringify([analysisId, searchScopeKey(state), state.searchRevision ?? 0]);
+      if (requested.search !== key) {
+        requested.search = key;
+        if (state.search || ['project', 'namespace'].includes(state.scope.kind)) {
+          app.dispatch({ type: 'searchStarted', query: state.search });
+          sendRequest(
+            {
+              type: 'searchEntities',
+              requestId: nextRequestId(),
+              analysisId,
+              query: state.search,
+              filters: state.filters,
+              ...savedListScope(state),
+              limit: 20
+            },
+            { query: state.search }
+          );
+        }
+      }
+    }
     if (requested.projection !== projectionKey) {
       requested.projection = projectionKey;
       if (state.queryMetadata) app.dispatch({ type: 'projectionRequested' });
@@ -504,6 +535,12 @@ if (root) {
       }
     }
   }
+}
+
+function savedListScope(state: ViewState): Record<string, unknown> {
+  return state.queryMetadata && ['project', 'namespace'].includes(state.scope.kind)
+    ? { parentId: state.scope.id, granularity: state.granularity }
+    : {};
 }
 
 function toHostMessage(action: ViewAction, state: ViewState): Record<string, unknown> | undefined {

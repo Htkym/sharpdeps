@@ -39,6 +39,15 @@ const entries = [
     sourceLocationAvailable: false
   }))
 ];
+const namespaceId = 'ns_1111111111111111';
+const browseEntries = Array.from({ length: 125 }, (_, i) => ({
+  ...doc,
+  id: i === 0 ? doc.id : 'ty_' + (i + 100).toString(16).padStart(16, '0'),
+  name: `Item${String(i).padStart(3, '0')}`,
+  kind: 'Type',
+  resultKind: 'code',
+  path: 'Input.cs'
+}));
 const relationId = 'rel_1111111111111111',
   evidenceId = 'ev_1111111111111111';
 const messages = (page) =>
@@ -211,7 +220,11 @@ async function result(page, req, type, fields, quick = false) {
     ...fields
   });
 }
-async function completeViews(page, { evidence = false, pages = false, quick = false } = {}) {
+async function completeViews(
+  page,
+  { evidence = false, pages = false, quick = false, namespaceBrowse = false } = {}
+) {
+  if (namespaceBrowse) return completeNamespaceViews(page, pages);
   const items = quick
     ? entries.map((entry, index) => ({
         id: entry.id,
@@ -323,6 +336,59 @@ async function completeViews(page, { evidence = false, pages = false, quick = fa
   }
 }
 
+// Reuse the source-return roundtrip with empty-query Browse pages. Host replies are
+// supplied by this browser fixture; this does not claim QueryHost/editor/trust proof.
+async function completeNamespaceViews(page, restoring) {
+  const tree = await request(page, 'searchEntities', (m) => m.granularity === 'project');
+  await result(page, tree, 'searchResults', { items: [], total: 0 });
+  const projection = await request(page, 'getProjection');
+  await result(page, projection, 'projection', {
+    projection: {
+      scope: projection.scope,
+      granularity: 'type',
+      nodes: browseEntries.slice(0, 20),
+      edges: [],
+      totalNodeCount: 20,
+      totalEdgeCount: 0,
+      truncated: true,
+      queryMetadata: metadata
+    }
+  });
+  // Details must be ready before the first page: otherwise the details wait hides
+  // premature completion of source focus restoration while Browse pages are pending.
+  const details = await request(page, 'getEntityDetails', (m) => m.entityId === doc.id);
+  await result(page, details, 'details', {
+    entity: browseEntries[0],
+    dependencies: [],
+    dependents: []
+  });
+  const first = await request(
+    page,
+    'searchEntities',
+    (m) => m.query === '' && m.parentId === namespaceId && !m.cursor
+  );
+  for (let start = 0; start < browseEntries.length; start += 20) {
+    const cursor = `cur_${String(start).padStart(16, '0')}`;
+    if (start && !restoring)
+      await page.getByRole('button', { name: 'More results', exact: true }).click();
+    const req = start ? await request(page, 'searchEntities', (m) => m.cursor === cursor) : first;
+    const next =
+      start + 20 < browseEntries.length ? `cur_${String(start + 20).padStart(16, '0')}` : null;
+    await result(page, req, 'searchResults', {
+      items: browseEntries.slice(start, start + 20),
+      total: Math.min(20, browseEntries.length - start),
+      nextCursor: next
+    });
+    if (restoring && next) {
+      // Let focus restoration's RAF run before answering the next page.
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      );
+      await expect(page.locator('[data-source-return="declaration"]')).not.toBeFocused();
+    }
+  }
+}
+
 function quickEvidence() {
   return {
     id: evidenceId,
@@ -348,8 +414,12 @@ function quickEvidence() {
   };
 }
 
-for (const quick of [false, true]) {
-  test(`${quick ? 'Quick report' : 'Saved'} source return keeps navigation, loaded search pages, focus and scroll across recreation and rejects an older return`, async ({
+for (const { quick, namespaceBrowse } of [
+  { quick: false },
+  { quick: true },
+  { quick: false, namespaceBrowse: true }
+]) {
+  test(`${namespaceBrowse ? 'Saved Namespace empty-search' : quick ? 'Quick report' : 'Saved'} source return keeps navigation, loaded search pages, focus and scroll across recreation and rejects an older return`, async ({
     page
   }) => {
     await page.setViewportSize({ width: 900, height: 650 });
@@ -374,17 +444,21 @@ for (const quick of [false, true]) {
       target: { name: quick ? 'Quick' : 'Saved', relativePath: 'Input.csproj' }
     });
     await page.evaluate(
-      ({ doc, quick }) => {
+      ({ doc, quick, namespaceBrowse }) => {
         const app = window.sharpdepsApp;
         if (quick) app.dispatch({ type: 'granularityChanged', granularity: 'type' });
         app.dispatch({ type: 'viewKindChanged', viewKind: 'table' });
         app.dispatch({
           type: 'filtersChanged',
-          filters: quick ? { basis: ['typeReferenceInferred'] } : { resultKinds: ['docs'] }
+          filters: quick
+            ? { basis: ['typeReferenceInferred'] }
+            : { resultKinds: [namespaceBrowse ? 'code' : 'docs'] }
         });
         app.dispatch({
           type: 'scopeChanged',
-          scope: { kind: 'dependencies', id: doc.id, depth: 2 }
+          scope: namespaceBrowse
+            ? { kind: 'namespace', id: 'ns_2222222222222222', depth: 1 }
+            : { kind: 'dependencies', id: doc.id, depth: 2 }
         });
         app.dispatch({ type: 'entitySelected', entityId: doc.id });
         app.dispatch({
@@ -392,10 +466,41 @@ for (const quick of [false, true]) {
           camera: { zoom: 1.5, scrollLeft: 55, scrollTop: 250 }
         });
       },
-      { doc, quick }
+      { doc, quick, namespaceBrowse }
     );
-    await page.locator('.sd-search').fill('調査');
-    await completeViews(page, { quick });
+    let oldScope;
+    if (namespaceBrowse) {
+      oldScope = await request(page, 'searchEntities', (m) => m.parentId === 'ns_2222222222222222');
+      await page.evaluate(
+        ({ namespaceId, doc }) => {
+          const app = window.sharpdepsApp;
+          app.dispatch({
+            type: 'scopeChanged',
+            scope: { kind: 'namespace', id: namespaceId, depth: 1 }
+          });
+          app.dispatch({ type: 'entitySelected', entityId: doc.id });
+        },
+        { namespaceId, doc }
+      );
+    } else await page.locator('.sd-search').fill('調査');
+    await completeViews(page, { quick, namespaceBrowse });
+    if (namespaceBrowse) {
+      await result(page, oldScope, 'searchResults', {
+        items: [{ ...browseEntries[0], name: 'WRONG OLD SCOPE' }],
+        total: 1,
+        nextCursor: null
+      });
+      expect(
+        await page.evaluate(() =>
+          window.sharpdepsApp.getState().searchResults.items.map((x) => x.name)
+        )
+      ).toEqual(browseEntries.map((x) => x.name));
+      await page.locator('.sd-table').getByRole('button', { name: 'Name', exact: true }).click();
+      await page
+        .locator('.sd-table-footer')
+        .getByRole('button', { name: 'Next', exact: true })
+        .click();
+    }
     if (quick) {
       await expect(
         page.getByRole('button', { name: 'Open declaration', exact: true })
@@ -418,9 +523,9 @@ for (const quick of [false, true]) {
       position = log.findIndex((m) => m.requestId === open.requestId);
     expect(log[position - 1].type).toBe('persistViewState');
     const captured = log[position - 1].viewState;
-    expect(captured.scope.kind).toBe('dependencies');
+    expect(captured.scope.kind).toBe(namespaceBrowse ? 'namespace' : 'dependencies');
     expect(captured.history.length).toBeGreaterThan(0);
-    expect(open.returnUi.searchCount).toBe(23);
+    expect(open.returnUi.searchCount).toBe(namespaceBrowse ? 125 : 23);
     expect(open.returnUi.scroll.navigation).toBeGreaterThan(0);
     await page.reload();
     await post(page, {
@@ -436,7 +541,7 @@ for (const quick of [false, true]) {
       state: captured,
       ui: open.returnUi
     });
-    await completeViews(page, { pages: true, quick });
+    await completeViews(page, { pages: true, quick, namespaceBrowse });
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.dataset.sourceReturn))
       .toBe('declaration');
@@ -445,7 +550,7 @@ for (const quick of [false, true]) {
     expect(restored.history).toEqual(captured.history);
     expect(restored.selection).toEqual(captured.selection);
     expect(restored.camera).toEqual(captured.camera);
-    expect(restored.searchResults.items).toHaveLength(23);
+    expect(restored.searchResults.items).toHaveLength(namespaceBrowse ? 125 : 23);
     expect(restored.granularity).toBe('type');
     if (quick) expect(restored.queryMetadata).toBeUndefined();
     expect(await page.evaluate(() => window.sharpdepsApp.elements.navPaneBody.scrollTop)).toBe(
@@ -454,6 +559,18 @@ for (const quick of [false, true]) {
     expect(await page.evaluate(() => window.sharpdepsApp.elements.inspectorBody.scrollTop)).toBe(
       open.returnUi.scroll.inspector
     );
+    if (namespaceBrowse) {
+      for (const key of ['search', 'filters', 'tableSort', 'tablePage', 'viewKind'])
+        expect(restored[key]).toEqual(captured[key]);
+      expect(restored.search).toBe('');
+      expect(restored.tablePage).toBe(1);
+      expect(restored.tableSort.direction).toBe('desc');
+      await expect(page.locator(`.sd-table tbody tr[data-entity-id="${doc.id}"]`)).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      return;
+    }
     await page.evaluate(
       (relationId) => window.sharpdepsApp.dispatch({ type: 'relationSelected', relationId }),
       relationId
@@ -598,7 +715,7 @@ test('drops a pending source-return page target when the saved session changes',
     nextCursor: 'cur_1111111111111111'
   });
   await request(page, 'searchEntities', (m) => m.cursor === 'cur_1111111111111111');
-  expect(await page.evaluate(() => window.sharpdepsApp.sourceReturnSearchTarget())).toBe(23);
+  expect(await page.evaluate(() => window.sharpdepsApp.searchRestoreTarget())).toBe(23);
 
   const newAnalysisId = 'an_2222222222222222';
   const newMetadata = { ...metadata, generation: 6, snapshotId: 'new-snapshot' };
@@ -608,7 +725,7 @@ test('drops a pending source-return page target when the saved session changes',
     queryMetadata: newMetadata,
     target: { name: 'Saved', relativePath: 'Input.csproj' }
   });
-  expect(await page.evaluate(() => window.sharpdepsApp.sourceReturnSearchTarget())).toBeUndefined();
+  expect(await page.evaluate(() => window.sharpdepsApp.searchRestoreTarget())).toBeUndefined();
 
   // A controlled input event avoids pointer/key dismissal masking the session guard.
   // This checks the defensive boundary, not a claim of normal user-flow reproduction.
@@ -677,7 +794,7 @@ test('keeps a manual search change while old source and search replies arrive', 
     'searchEntities',
     (m) => m.query === '調査' && !m.cursor && m.requestId !== previous.requestId
   );
-  expect(await page.evaluate(() => window.sharpdepsApp.sourceReturnSearchTarget())).toBe(23);
+  expect(await page.evaluate(() => window.sharpdepsApp.searchRestoreTarget())).toBe(23);
   const searchInput = page.locator('.sd-search');
   await searchInput.click();
   await searchInput.fill('新しい検索');
@@ -705,7 +822,7 @@ test('keeps a manual search change while old source and search replies arrive', 
   expect(state.search).toBe('新しい検索');
   expect(state.searchResults.query).toBe('新しい検索');
   expect(state.searchResults.items.map((item) => item.id)).toEqual([fresh.id]);
-  expect(await page.evaluate(() => window.sharpdepsApp.sourceReturnSearchTarget())).toBeUndefined();
+  expect(await page.evaluate(() => window.sharpdepsApp.searchRestoreTarget())).toBeUndefined();
   expect((await messages(page)).some((m) => m.cursor === 'cur_3333333333333333')).toBe(false);
   expect(
     await page.evaluate(() => document.activeElement === window.sharpdepsApp.elements.searchInput)

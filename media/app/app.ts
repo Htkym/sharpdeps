@@ -45,7 +45,7 @@ export interface ViewerApp {
   elements: ShellElements;
   captureSourceReturn(focus: SourceReturnUi['focus'], id: string): SourceReturnUi;
   acceptsSourceReturn(): boolean;
-  sourceReturnSearchTarget(): number | undefined;
+  searchRestoreTarget(): number | undefined;
   export(format: 'mermaid' | 'svg' | 'png' | 'json', copy?: boolean): Promise<void>;
 }
 
@@ -83,7 +83,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   let inspectorReturnFocus: HTMLElement | SVGElement | undefined;
   let inspectorWasOpen = false;
   let pendingSourceUi: { pin: string; ui: SourceReturnUi } | undefined;
-  let pendingBackFocus: { pin: string; entityId: string } | undefined;
+  let pendingBackFocus: { pin: string; entityId?: string; count: number } | undefined;
   let sourceReturnInteracted = false;
   const interruptSourceReturn = () => {
     pendingBackFocus = undefined;
@@ -175,7 +175,17 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   elements.navPaneBody.addEventListener('sd-select', (event) => {
     const detail = (event as CustomEvent<{ entityId: string }>).detail;
     if (detail?.entityId) {
-      dispatch({ type: 'entitySelected', entityId: detail.entityId });
+      const entity = Object.values(state.tree)
+        .flatMap((page) => page.items)
+        .find((item) => item.id === detail.entityId);
+      if (state.queryMetadata && entity && entity.granularity !== 'type')
+        dispatch({
+          type: 'revealRequested',
+          entityId: entity.id,
+          scope: { kind: entity.granularity, id: entity.id, depth: 1 },
+          granularity: entity.granularity === 'project' ? 'namespace' : 'type'
+        });
+      else dispatch({ type: 'entitySelected', entityId: detail.entityId });
     }
   });
   elements.navPaneBody.addEventListener('sd-search-more', () => {
@@ -310,8 +320,8 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       const previous = state.history.at(-1);
       const pin = sourceReturnPin();
       pendingBackFocus =
-        state.queryMetadata && previous?.viewKind === 'table' && previous.selectionId && pin
-          ? { pin, entityId: previous.selectionId }
+        state.queryMetadata && previous && pin
+          ? { pin, entityId: previous.selectionId, count: previous.searchCount ?? 0 }
           : undefined;
     }
     const next = viewReducer(state, action);
@@ -324,7 +334,6 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       pendingBackFocus &&
       (pendingBackFocus.pin !== sourceReturnPin() ||
         pendingBackFocus.entityId !== state.selection.entityId ||
-        state.viewKind !== 'table' ||
         action.type === 'sourceReturned')
     )
       pendingBackFocus = undefined;
@@ -425,6 +434,11 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   function restoreBackFocusWhenReady(): void {
     const ticket = pendingBackFocus;
     if (!ticket || !state.projection || ticket.pin !== sourceReturnPin()) return;
+    if (
+      state.searchResults.pending ||
+      (state.searchResults.items.length < ticket.count && state.searchResults.nextCursor)
+    )
+      return;
     const row = [
       ...elements.mapHost.querySelectorAll<HTMLElement>('.sd-table tbody tr[data-entity-id]')
     ].find((item) => item.dataset.entityId === ticket.entityId);
@@ -471,11 +485,9 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       !state.tree.root ||
       (state.selection.entityId && state.details?.entityId !== state.selection.entityId) ||
       (state.selection.relationId && state.evidence?.relationId !== state.selection.relationId) ||
-      (state.search &&
-        (state.searchResults.pending ||
-          state.searchResults.query !== state.search ||
-          (state.searchResults.items.length < (ui.searchCount ?? 0) &&
-            state.searchResults.nextCursor)))
+      state.searchResults.pending ||
+      state.searchResults.query !== state.search ||
+      (state.searchResults.items.length < (ui.searchCount ?? 0) && state.searchResults.nextCursor)
     )
       return;
     const button = [
@@ -604,7 +616,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     elements,
     export: exportCurrent,
     acceptsSourceReturn: () => !sourceReturnInteracted,
-    sourceReturnSearchTarget: () => currentSourceUi()?.searchCount,
+    searchRestoreTarget: () => currentSourceUi()?.searchCount ?? pendingBackFocus?.count,
     captureSourceReturn: (focus, id) => {
       if (graphRuntime.view)
         dispatch({ type: 'cameraChanged', camera: graphRuntime.view.cameraState() });
@@ -881,7 +893,7 @@ function renderStructureTab(
     kind: entity.kind,
     inCycle: entity.inCycle,
     isExternal: entity.isExternal,
-    canExpand: !state.queryMetadata && entity.granularity !== 'type',
+    canExpand: entity.granularity !== 'type',
     moreCursor: state.tree[entity.id]?.nextCursor,
     children: (state.tree[entity.id]?.items ?? []).map(branch)
   });
@@ -926,11 +938,7 @@ function renderStructureTab(
     more.className = 'sd-button';
     more.textContent = tr(state.queryMetadata ? 'Load more symbols' : 'Load more projects');
     more.addEventListener('click', () =>
-      context.requestTree(
-        'root',
-        state.queryMetadata ? 'type' : 'project',
-        state.tree.root.nextCursor
-      )
+      context.requestTree('root', 'project', state.tree.root.nextCursor)
     );
     container.append(more);
   }
@@ -939,7 +947,10 @@ function renderStructureTab(
 /** Search hits from the whole index, including entities the view does not show. */
 function renderSearchResults(elements: ShellElements, state: ViewState): void {
   const tr = translator(state.language);
-  if (state.search.trim().length === 0) {
+  if (
+    state.search.trim().length === 0 &&
+    !(state.queryMetadata && ['project', 'namespace'].includes(state.scope.kind))
+  ) {
     return;
   }
 
@@ -1326,7 +1337,12 @@ function renderCenter(
 
   const summaryParts = state.queryMetadata
     ? [
-        queryResultSummary(state.projection.queryMetadata ?? state.queryMetadata, state.language),
+        queryResultSummary(
+          (state.viewKind === 'table' && ['project', 'namespace'].includes(state.scope.kind)
+            ? state.searchResults.queryMetadata
+            : state.projection.queryMetadata) ?? state.queryMetadata,
+          state.language
+        ),
         tr(
           '{0} node(s), {1} relation(s) shown from the returned graph',
           visible.nodes.length,
@@ -1538,7 +1554,26 @@ function renderSavedQueryTable(
   for (const label of ['Name', 'Kind', 'Certainty']) {
     const cell = document.createElement('th');
     cell.scope = 'col';
-    cell.textContent = tr(label);
+    if (label === 'Name' || label === 'Kind') {
+      const key = label === 'Name' ? 'name' : 'kind';
+      if (state.tableSort.key === key)
+        cell.setAttribute(
+          'aria-sort',
+          state.tableSort.direction === 'asc' ? 'ascending' : 'descending'
+        );
+      const sort = document.createElement('button');
+      sort.type = 'button';
+      sort.textContent = tr(label);
+      sort.addEventListener('click', () =>
+        container.dispatchEvent(
+          new CustomEvent('sd-sort', {
+            bubbles: true,
+            detail: { key }
+          })
+        )
+      );
+      cell.append(sort);
+    } else cell.textContent = tr(label);
     header.append(cell);
   }
   head.append(header);

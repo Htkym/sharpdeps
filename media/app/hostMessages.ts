@@ -33,6 +33,7 @@ export interface RequestContext {
   analysisId?: string;
   type?: string;
   filtersKey?: string;
+  scopeKey?: string;
   candidateOriginId?: string;
   candidateContextKey?: string;
   relationId?: string;
@@ -40,6 +41,7 @@ export interface RequestContext {
 }
 
 export interface RequestTracking {
+  search?: string;
   contextKey?: string;
   projection: string;
   details: string;
@@ -58,6 +60,11 @@ export function projectionRequestKey(state: ViewState): string {
     state.search,
     state.temporaryDisplayIds.join(',')
   ].join('|');
+}
+
+/** Binds list and projection replies to the active navigation, including empty searches. */
+export function searchScopeKey(state: ViewState): string {
+  return JSON.stringify([state.scope, state.granularity, state.search, state.filters]);
 }
 
 /** Shared by the initial evidence request and its next page. */
@@ -85,6 +92,7 @@ export function synchronizeRequestTracking(
   if (tracking.contextKey === key) return false;
   tracking.contextKey = key;
   tracking.projection = tracking.details = tracking.evidence = tracking.evidencePage = '';
+  tracking.search = '';
   contexts.clear();
   return true;
 }
@@ -122,6 +130,8 @@ export function toViewActions(
   // A malformed saved result must not silently acquire the legacy display semantics.
   if (metadataValue !== undefined && !queryMetadata) return [];
   if (currentState) {
+    if (context?.scopeKey !== undefined && context.scopeKey !== searchScopeKey(currentState))
+      return [];
     if (
       currentState.queryMetadata &&
       ['projection', 'searchResults', 'details', 'error'].includes(message.type) &&

@@ -466,7 +466,14 @@ export class SavedQueryProvider implements ReportBridge {
     if (parentId) {
       const parent = this.nodes.get(this.selected(parentId))!.node;
       if (parent.kind === 'Project') scope.projectId = parent.id;
-      else throw new QueryClientError('QUERY_SCOPE_UNSUPPORTED');
+      else if (
+        parent.kind === 'Namespace' &&
+        this.readyReply.snapshot.namespaceBrowseVersion === 1
+      ) {
+        scope.parentId = parent.id;
+        scope.projectId = parent.parentId;
+        scope.kind = 'Type';
+      } else throw new QueryClientError('QUERY_SCOPE_UNSUPPORTED');
     }
     return scope;
   }
@@ -491,6 +498,14 @@ export class SavedQueryProvider implements ReportBridge {
 
   private entities(reply: QueryWireReply, parentId?: string, filters?: Filters): EntitySummary[] {
     const parent = parentId ? this.nodes.get(this.selected(parentId))!.node : undefined;
+    if (
+      parent?.kind === 'Namespace' &&
+      (reply.snapshot.namespaceBrowseVersion !== 1 ||
+        [...reply.items, ...reply.candidates, ...reply.unresolved].some(
+          (item) => !item.node || item.node.kind !== 'Type' || item.node.parentId !== parent.id
+        ))
+    )
+      throw new QueryClientError('QUERY_SCOPE_UNSUPPORTED');
     const certaintyByNode = new Map<string, QueryCertainty>();
     for (const item of [...reply.items, ...reply.candidates, ...reply.unresolved]) {
       if (!item.node || (parent && parent.kind !== 'Project' && item.node.parentId !== parent.id))
