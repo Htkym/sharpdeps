@@ -1,5 +1,3 @@
-// Analysis controller tests (SD-014).
-//
 // A fake analyzer process exercises the real process handling: progress parsing,
 // superseding, cooperative cancellation, forced tree termination, timeouts, and
 // cleanup. The fake is a Node script, so the tests run everywhere without a .NET SDK.
@@ -183,7 +181,7 @@ describe('AnalysisController', () => {
     expect(outcomes.map((entry) => entry.analysisId)).toEqual(['an_0000000000000001']);
     expect(controller.isRunning).toBe(false);
     // The store reads evidence from the run directory on demand, so the newest one is
-    // kept (SD-028); older runs are pruned instead.
+    // kept; older runs are pruned instead.
     expect(fs.existsSync(outcome.workDirectory)).toBe(true);
   });
 

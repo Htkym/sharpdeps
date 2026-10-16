@@ -1,4 +1,3 @@
-// Production graph component (SD-017).
 //
 // Owns the SVG, camera, selection, and the ELK worker for one webview. Layout runs only
 // when the graph itself changes: a selection change or an inspector toggle re-renders

@@ -1,5 +1,3 @@
-// SharpDeps map panel (SD-017: the v2 shell and the report bridge).
-//
 // The panel owns the webview and the message plumbing; everything that needs the
 // analysis result is answered by the report bridge, and everything that needs extension
 // work (starting or stopping an analysis) is delegated to the host callbacks. A message
@@ -97,12 +95,12 @@ export class CodeMapPanel {
 
     const panel = vscode.window.createWebviewPanel(CodeMapPanel.viewType, 'SharpDeps', column, {
       enableScripts: true,
-      // No command URIs and no form submission from the map (SD-023); the script only
+      // No command URIs and no form submission from the map; the script only
       // talks through the validated message channel.
       enableCommandUris: false,
       enableForms: false,
       // Restore is verified (serializer + persistence + browser fixture), so the webview
-      // is recreated when it is hidden instead of being kept alive (SD-021).
+      // is recreated when it is hidden instead of being kept alive.
       retainContextWhenHidden: false,
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
     });
@@ -209,7 +207,7 @@ export class CodeMapPanel {
   }
 
   /**
-   * Asks the webview to select an entity (SD-019). The scope is sent with it, so the
+   * Asks the webview to select an entity. The scope is sent with it, so the
    * view requests the projection it needs; nothing is pushed unrequested.
    */
   revealEntity(entityId: string, scope: Scope, granularity?: Granularity): void {

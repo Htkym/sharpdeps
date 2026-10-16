@@ -1,4 +1,3 @@
-// Host -> webview message mapping (SD-017).
 //
 // A malformed host message must not half-update the shell: every field is read
 // defensively, and unknown types produce no action at all.

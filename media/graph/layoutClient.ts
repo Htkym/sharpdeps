@@ -1,4 +1,3 @@
-// Layout worker client (SD-004).
 //
 // The webview cannot load a worker script directly from the extension's resource
 // URI, so the script is fetched and started from a Blob URL. Every request carries

@@ -1,5 +1,3 @@
-// Declaration-based dependency collector (SD-009).
-//
 // Collects the relations that a declaration states about itself: inheritance,
 // interface implementation, member signatures, generic constraints, and attributes.
 // Only what the source writes is collected: implicit bases (System.Object), compiler
@@ -8,7 +6,7 @@
 //
 // Type references are normalized so type arguments, tuple elements, and array
 // elements each become their own reference with their own span (see
-// docs/analysis-semantics.md). typeof/casts/patterns are SD-010's `typeUse`, not here.
+// docs/analysis-semantics.md). typeof/casts/patterns belong to operation `typeUse`.
 
 namespace SharpDeps.Analysis.Roslyn.Evidence;
 

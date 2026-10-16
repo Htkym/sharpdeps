@@ -1,4 +1,3 @@
-// Viewer application (SD-015): renders the shell from the view state.
 //
 // Rendering is one-directional: the state is the source of truth, the DOM is derived
 // from it, and user gestures only dispatch actions. Every state the plan requires
@@ -149,8 +148,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     onViewKind: (viewKind) => dispatch({ type: 'viewKindChanged', viewKind }),
     onSearch: (search) => {
       dispatch({ type: 'searchChanged', search });
-      // The full analysis index is searched host-side; results arrive as
-      // `searchResultsReceived` (SD-013 bridge).
+      // Search uses the full host index rather than the bounded projection.
       options.onHostAction?.({ type: 'searchStarted', query: search });
     },
     onExport: (format) => void exportCurrent(format),
@@ -356,7 +354,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   }
 
   /**
-   * Keyboard path through the whole flow (SD-024): search, view switch, selection,
+   * Keyboard path through the whole flow: search, view switch, selection,
    * inspector close, and graph zoom, all without a mouse.
    */
   window.addEventListener('keydown', (event) => {
@@ -515,7 +513,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
 
   function renderDetails(): void {
     // Opening remembers the trigger; closing gives the focus back to it, so a keyboard
-    // user never lands at the top of the page (SD-024).
+    // user never lands at the top of the page.
     if (state.inspectorOpen && !inspectorWasOpen) {
       inspectorReturnFocus =
         document.activeElement instanceof HTMLElement ||

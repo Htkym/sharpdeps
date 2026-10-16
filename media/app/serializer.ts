@@ -1,4 +1,3 @@
-// View state serialization (SD-021).
 //
 // Only small, path-free fields are persisted: the target name, selection, filters,
 // scope, panes, table page, and the graph camera. Nothing here can start an analysis,

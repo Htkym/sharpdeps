@@ -1,5 +1,3 @@
-// Source-generated documents the loader obtained (SD-011).
-//
 // A generator that registers sources in memory writes no file itself, yet its output
 // is part of the compilation the collectors read. The loader keeps the content and hash
 // next to the analysis result so the UI can open the document read-only, and the

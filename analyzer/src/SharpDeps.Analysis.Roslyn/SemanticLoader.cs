@@ -19,7 +19,7 @@ public sealed record ProjectVariantSelection(string ProjectLogicalId, string Tar
 
 /// <summary>
 /// Result of a semantic load: the probe report, the per-variant compilations the
-/// collectors (SD-008/SD-010) analyze, and the "assembly name → defining variant"
+/// collectors analyze, and the "assembly name → defining variant"
 /// map the symbol resolver needs. Compilations are keyed by variant key.
 /// </summary>
 public sealed record SemanticLoadResult(

@@ -1,5 +1,3 @@
-// Webview protocol v2 (SD-002, plan section 5.5).
-//
 // The normative definition is schemas/protocol-v2.schema.json. This module holds
 // the compile-time shapes plus the runtime validation the receivers use:
 // unknown message types are rejected, ids and cursors are pattern-checked, and
@@ -839,7 +837,7 @@ export function validateWebviewMessage(
     return result;
   }
 
-  // Search text is echoed back to the UI and the host: keep it bounded (SD-023).
+  // Search text is echoed back to the UI and the host: keep it bounded.
   if (result.value.type === 'searchEntities' && result.value.query.length > MAX_QUERY_LENGTH) {
     return {
       ok: false,

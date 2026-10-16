@@ -1,4 +1,3 @@
-// Webview view state, actions, and selectors (SD-015).
 //
 // The state is the single source of truth: the DOM is rendered from it and never
 // read back to derive it. The reducer is pure so every UI state (initial, partial,

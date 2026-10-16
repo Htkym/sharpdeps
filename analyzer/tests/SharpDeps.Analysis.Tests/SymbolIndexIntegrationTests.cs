@@ -151,7 +151,7 @@ public sealed class SymbolIndexIntegrationTests
             member => member.Id == resolvedMemberId && member.TypeId == domainOrder.Id);
 
         // The test project only sees Domain through a transitive reference; the
-        // resolution must still work (SD-007 adds it to the compilation).
+        // resolution must still work.
         Assert.True(testProject.AddedTransitiveReferences >= 1);
     }
 

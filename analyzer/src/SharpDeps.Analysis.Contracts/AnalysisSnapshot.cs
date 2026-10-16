@@ -1,9 +1,6 @@
 // v2 analysis model (report v2) for the analyzers. The normative definition is
 // schemas/report-v2.schema.json; these records mirror it and are serialized with
 // the camelCase naming policy so the TypeScript validator accepts them as-is.
-//
-// The property order of the JSON source generator follows the declaration order
-// below; the shape (not the order) is what the contract test checks.
 
 namespace SharpDeps.Analysis.Contracts;
 
@@ -124,7 +121,7 @@ public sealed record DeclarationIndexEntry(string TypeId, long StartByte, int Co
 
 /// <summary>
 /// Where a type's declarations are in the declarations file. Editor-driven lookups
-/// (SD-019) resolve a cursor position to a type and a type back to a declaration.
+/// resolve a cursor position to a type and a type back to a declaration.
 /// </summary>
 public sealed record DeclarationIndex(
     string Format,

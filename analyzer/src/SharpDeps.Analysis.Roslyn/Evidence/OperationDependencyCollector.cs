@@ -1,5 +1,3 @@
-// Operation-based dependency collector (SD-010).
-//
 // Collects what the code actually uses: object creation, calls, member access, type
 // use, and compile-time names. Each body is scanned exactly once (the operation tree
 // of that body is visited once, not every descendant root), so a `new Foo()` is one

@@ -16,7 +16,7 @@ public static class HarnessIdentity
         return "hw_" + workspaceUuid.ToString("N");
     }
 
-    // This is an initial project seed. Verified moves retain the persisted ID/alias in later storage work.
+    // Path-based seed; verified moves must retain the persisted ID/alias.
     public static string ProjectId(Guid workspaceUuid, string relativeProjectPath)
         => Hash("hpr", WorkspaceId(workspaceUuid), RelativeProjectPath(relativeProjectPath));
 

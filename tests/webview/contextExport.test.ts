@@ -1,4 +1,4 @@
-// Export builders (SD-022): the context text, JSON, and Mermaid describe the same
+// Export builders: the context text, JSON, and Mermaid describe the same
 // selection, never leak absolute paths, and state what must not be asserted.
 
 import { describe, expect, it } from 'vitest';

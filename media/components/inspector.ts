@@ -1,4 +1,3 @@
-// Inspector: node overview / edge evidence (SD-018).
 //
 // The inspector is a pure renderer: the state is the source of truth, and every action
 // (navigate to a related entity, load the next evidence page, copy a reference) is a

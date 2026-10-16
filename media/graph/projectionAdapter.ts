@@ -1,4 +1,3 @@
-// Protocol projection -> renderer input (SD-017).
 //
 // The protocol carries analysis ids and summary fields; the renderer wants labels and
 // flags. This module is the only place that decides how a summary becomes a graph node,

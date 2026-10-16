@@ -1,4 +1,4 @@
-// Evidence presentation (SD-018): locations, origin, confidence, and the edge summary
+// Evidence presentation: locations, origin, confidence, and the edge summary
 // that reconciles an aggregated edge's occurrence count with the paged evidence.
 
 import { describe, expect, it } from 'vitest';

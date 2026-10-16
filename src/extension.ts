@@ -41,7 +41,7 @@ const STAGE_LABELS: Record<AnalysisStage, string> = {
 
 export function activate(context: vscode.ExtensionContext): ReturnType<typeof extensionTestApi> {
   const channel = vscode.window.createOutputChannel('SharpDeps');
-  // A short ring buffer so the end-to-end suite can report why a run failed (SD-027).
+  // A short ring buffer so the end-to-end suite can report why a run failed.
   // The channel object itself is not patched: VS Code's output channel properties are
   // read-only, so the tail lives in a thin wrapper.
   const outputTail: string[] = [];
@@ -88,7 +88,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   const bridge = { handle: (message: unknown) => (savedProvider ?? legacyBridge).handle(message) };
   context.subscriptions.push(output, diagnostics);
 
-  // Generated code is opened read-only from the analysis result (SD-011): the provider
+  // Generated code is opened read-only from the analysis result: the provider
   // serves the retained content and never writes a file into the workspace.
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
@@ -180,7 +180,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
 
   /**
    * An untrusted workspace must not run the analyzer: it evaluates MSBuild and project
-   * logic (SD-023). Reading a stored result stays allowed because it is data only.
+   * logic. Reading a stored result stays allowed because it is data only.
    */
   function requireTrustedWorkspace(): boolean {
     const decision = trustDecision(vscode.workspace.isTrusted);
@@ -992,7 +992,7 @@ export function deactivate(): void {
 }
 
 /**
- * Test surface for the end-to-end suite (SD-027): the analysis ids the store holds and
+ * Test surface for the end-to-end suite: the analysis ids the store holds and
  * the persisted view state. Nothing here changes behaviour; it only lets an automated
  * run assert what the UI would show.
  */

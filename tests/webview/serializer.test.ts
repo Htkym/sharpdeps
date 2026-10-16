@@ -1,4 +1,4 @@
-// View state persistence (SD-021): round trip, version guard, and clamped restore.
+// View state persistence: round trip, version guard, and clamped restore.
 
 import { describe, expect, it } from 'vitest';
 import { INITIAL_STATE, viewReducer } from '../../media/app/state';

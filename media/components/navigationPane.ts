@@ -1,9 +1,5 @@
-// Navigation pane (SD-016): Project → Namespace → Type hierarchy.
-//
 // Children are rendered the first time a node is expanded (lazy rendering), and the
-// expansion set is kept in the component rather than derived from the DOM. The
-// hierarchy is grouped from the current projection; fetching children for scopes that
-// the display budget left out arrives with the graph projection work (SD-017).
+// expansion set is kept in the component rather than derived from the DOM.
 
 import type { EntitySummary } from '../../src/view/protocolV2';
 import { translator, type Language } from '../app/i18n';

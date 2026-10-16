@@ -1,4 +1,3 @@
-// View state tests (SD-015).
 //
 // The reducer is pure, so every UI state the plan requires can be produced from a
 // fixture without a browser. The structural assertions (which state renders which

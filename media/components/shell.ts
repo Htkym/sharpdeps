@@ -1,4 +1,3 @@
-// Shell: the DOM skeleton of the new viewer (SD-015).
 //
 // The shell builds elements and wires user gestures to callbacks. It never reads the
 // state from the DOM and never decides what to show: rendering is driven by the state

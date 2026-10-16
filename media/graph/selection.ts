@@ -1,4 +1,3 @@
-// Selection state and keyboard interaction for the SVG graph (SD-004).
 //
 // Selection is plain state plus events: the renderer only receives id sets, and
 // the camera is never touched by a selection change. Keyboard users can reach

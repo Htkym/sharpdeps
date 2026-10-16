@@ -1,4 +1,3 @@
-// Layout input sizes for the SVG graph (SD-004).
 //
 // Text is measured in the webview (where the DOM exists) and the resulting sizes
 // are handed to the layout worker, so the worker never needs fonts or a DOM.

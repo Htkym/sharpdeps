@@ -1,4 +1,3 @@
-// Evidence presentation (SD-018).
 //
 // Evidence records arrive as plain objects from the host and are never trusted: every
 // field is read defensively. Lines and characters are stored 0-based (Roslyn

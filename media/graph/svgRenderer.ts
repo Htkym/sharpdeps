@@ -1,4 +1,3 @@
-// Pure SVG renderer for the dependency graph (SD-004).
 //
 // Renders the projection + layout as SVG elements with keyed updates: the same
 // ids reuse the same DOM elements, so selection and camera are not disturbed by a

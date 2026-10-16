@@ -1,5 +1,3 @@
-// Exports and the evidence-backed AI handoff (SD-022).
-//
 // Everything is built from the registered analysis result: no network call is made, no
 // source file is read, and relative paths only. The context text states what is known,
 // what is inferred, and what the reader must not assert as fact.

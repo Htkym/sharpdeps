@@ -1,5 +1,3 @@
-// Identity rules for the v2 model (ADR 0002, plan section 5.2).
-//
 // The TypeScript implementation in src/analyzer/identity.ts is the reference; the
 // two must produce the same ids for the same logical inputs. `IdentityTests` and
 // `tests/helpers/identityAgreement.test.ts` pin the same golden values on both

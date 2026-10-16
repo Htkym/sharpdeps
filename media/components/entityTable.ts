@@ -1,4 +1,4 @@
-// Entity table (SD-016): 100 rows per page, stable sort, row selection, actions.
+// Entity table: 100 rows per page, stable sort, row selection, actions.
 //
 // The component renders what it is given and reports intent back; sorting, paging,
 // and selection live in the view state so switching Graph/Table or re-rendering never

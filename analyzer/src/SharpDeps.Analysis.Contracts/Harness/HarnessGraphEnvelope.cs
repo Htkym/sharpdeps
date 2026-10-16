@@ -22,7 +22,7 @@ public static class HarnessGraphContract
         catch (OverflowException error) { throw new JsonException("Invalid harness graph range.", error); }
     }
 
-    // Header validation is separate from complete storage/query graph validation in later tasks.
+    // Header validation does not validate the storage/query graph.
     public static void ValidateHeader(HarnessGraphEnvelope graph)
     {
         ArgumentNullException.ThrowIfNull(graph);

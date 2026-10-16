@@ -1,4 +1,4 @@
-// Keyboard map (SD-024): the resolver decides what a key means without touching the DOM.
+// Keyboard map: the resolver decides what a key means without touching the DOM.
 
 import { describe, expect, it } from 'vitest';
 import { SHORTCUT_HELP, resolveShortcut } from '../../media/app/shortcuts';

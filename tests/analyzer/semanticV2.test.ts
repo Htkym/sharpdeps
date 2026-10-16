@@ -1,4 +1,4 @@
-// Semantic report v2 contract test (SD-011 / SD-013).
+// Semantic report v2 contract test.
 //
 // Runs the published SemanticHost against the fixture solution, validates the report
 // with the runtime validator and the JSON Schemas, and registers it in the result

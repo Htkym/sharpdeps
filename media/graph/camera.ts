@@ -1,4 +1,3 @@
-// Camera (zoom and pan) for the SVG graph (SD-004).
 //
 // Zoom is expressed as the rendered size of the SVG element relative to its
 // viewBox (the content bounds): the viewBox never changes, so one user unit is

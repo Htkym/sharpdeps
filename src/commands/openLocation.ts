@@ -1,5 +1,3 @@
-// Opening analysed locations in the editor (SD-019).
-//
 // The webview selects an opaque evidence or declaration id; the host resolves it
 // against the registered analysis and opens the document. Generated documents are served
 // read-only by the document provider, so opening them never writes to the repository.
@@ -206,7 +204,7 @@ async function openSpan(
   }
 
   // A linked file outside the analysis root is legitimate and opens, but its content is
-  // not read for hash comparison: only paths inside the root are read (SD-023).
+  // not read for hash comparison: only paths inside the root are read.
   const realFile = await fs.promises.realpath(fileUri.fsPath).catch(() => undefined);
   const realRoot = await fs.promises.realpath(rootDirectory).catch(() => undefined);
   if (realFile && realRoot && isInsideRoot(realRoot, path.relative(realRoot, realFile))) {

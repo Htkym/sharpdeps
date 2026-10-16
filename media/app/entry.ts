@@ -1,4 +1,3 @@
-// Browser entry for the new shell (SD-015, host wiring in SD-017).
 //
 // Used by the webview panel and by the fixture page for verification. It creates the
 // app, keeps the CSS pane variables in sync, and translates between protocol v2 messages

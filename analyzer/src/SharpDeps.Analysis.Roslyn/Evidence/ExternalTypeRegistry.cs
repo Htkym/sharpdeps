@@ -1,5 +1,3 @@
-// External type registry (SD-011).
-//
 // Evidence may point at types the solution does not declare (BCL, packages). The v2
 // model materializes those as external type nodes, so the collectors record their id
 // and display name here while they work. Assembly identity stays an internal

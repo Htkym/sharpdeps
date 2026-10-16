@@ -1,4 +1,3 @@
-// SVG/PNG export for the graph (SD-004).
 //
 // Exports exactly what is displayed: the current projection and layout, with the
 // theme styles inlined so the file opens standalone. The SVG contains no script,

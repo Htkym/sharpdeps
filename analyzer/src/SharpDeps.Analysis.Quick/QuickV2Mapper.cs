@@ -1,5 +1,3 @@
-// Maps the Quick analysis (v1 report + source index) to the v2 model (SD-006).
-//
 // Quick knows syntax sites only: relations are projectDeclared, usingInferred or
 // typeReferenceInferred and every evidence record is inferred. Namespaces are keyed by
 // project variant; when a using matches the same namespace name in several

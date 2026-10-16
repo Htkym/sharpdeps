@@ -1,4 +1,4 @@
-// Graph projection tests (SD-017, first half): aggregation to namespace/project
+// Graph projection tests: aggregation to namespace/project
 // granularity, scope handling, and display budgets.
 
 import { describe, expect, it } from 'vitest';

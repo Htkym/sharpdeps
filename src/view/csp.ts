@@ -1,5 +1,3 @@
-// Webview Content Security Policy (SD-023).
-//
 // Kept free of the vscode import so the policy is unit-testable. Minimal by
 // construction: no eval, no remote origins, scripts only with the nonce, workers only
 // from Blob URLs (the ELK script is fetched from the extension's own resources), and

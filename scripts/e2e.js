@@ -1,5 +1,3 @@
-// VS Code end-to-end runner (SD-027).
-//
 // Launching VS Code needs a real installation: this script uses an existing one
 // (SHARPDEPTS_VSCODE or a PATH installation) or the one @vscode/test-electron would
 // download. When neither is available it exits with code 2 and says so, so a missing

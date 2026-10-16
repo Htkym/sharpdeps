@@ -1,4 +1,3 @@
-// ELK layout worker (SD-004).
 //
 // Runs the layered layout off the main thread so a large graph never blocks the
 // UI. The worker owns no state between requests: the client sends the whole

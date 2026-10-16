@@ -1,5 +1,3 @@
-// Read-only document provider for analyzer-generated code (SD-011).
-//
 // Registered for the `sharpdeps-generated` scheme: VS Code treats provided documents as
 // read-only, and the content is read from the registered analysis result. A document
 // whose content the analysis did not retain fails to open with a clear error instead of

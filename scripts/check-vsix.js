@@ -1,5 +1,3 @@
-// VSIX content check (SD-029).
-//
 // Packs the extension and asserts what a user installs: the analyzer hosts and their
 // runtime files, the webview entry point and worker, the styles, and the licence notices
 // are present, while development-only material (sources, tests, schemas, plans, local

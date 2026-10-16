@@ -1,4 +1,4 @@
-// Semantic report writer (SD-011 / SD-013): builds the v2 snapshot from a semantic
+// Semantic report writer: builds the v2 snapshot from a semantic
 // load result.
 //
 // Symbol relations are emitted at type granularity. Coarser views (namespace, project)
@@ -75,7 +75,7 @@ public static class SemanticReportWriter
                 variant.TargetFramework is null ? "notSpecified" : "targetFramework"));
         }
 
-        // One project entry per loaded variant, each with its own logical id (SD-025).
+        // One project entry per loaded variant, each with its own logical id.
         foreach (var variant in loadedVariants.OrderBy(
                      entry => logicalIdByVariantKey[entry.VariantKey],
                      StringComparer.Ordinal))

@@ -1,5 +1,3 @@
-// Minimal static file server for webview fixtures (SD-004 verification, and the
-// basis for the Playwright suite in SD-027).
 //
 //   node scripts/serve-webview.mjs [port] [--evidence <dir>]
 //

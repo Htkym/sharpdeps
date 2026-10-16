@@ -1,15 +1,8 @@
-// Webview request bridge (SD-013).
-//
 // Translates protocol v2 messages into ReportStore calls and back. The bridge owns
 // the rules the webview must not be trusted with:
 //   - unknown message types and malformed ids are rejected before touching the store,
 //   - analysis-scoped messages must reference a registered analysis (stale ones fail),
 //   - the webview never sends paths, byte offsets, or line numbers.
-//
-// Actions that need host-side work outside the store (starting or cancelling an
-// analysis, opening an editor, exporting, persisting view state) are answered with an
-// explicit "not implemented in this build" error until SD-014/SD-019/SD-021/SD-022
-// implement them. They are never silently accepted.
 
 import { ReportStore, ReportStoreError } from './reportStore';
 import type { EvidencePage, SearchPage } from './reportStore';

@@ -16,12 +16,7 @@ export interface AnalyzerLocation {
   path: string;
 }
 
-/**
- * Locate the published Quick analyzer. The VSIX ships
- * `analyzer/bin/quick/code-map.dll`; `analyzer/bin/code-map.dll` is accepted so a
- * v0.0.4-era layout keeps working. There is no source fallback: the file-based
- * analyzer was replaced by the QuickHost project in SD-005.
- */
+/** Accepts the legacy Quick binary layout; source execution is never a fallback. */
 export function locateAnalyzer(
   context: vscode.ExtensionContext,
   mode: 'quick' | 'semantic' = 'quick'

@@ -1,4 +1,3 @@
-// Rendering model for the interactive SVG graph (SD-004).
 //
 // The projection is derived from the v2 analysis snapshot. Node and edge ids are the analysis ids, so a redraw keeps the
 // same DOM keys and selection. Coordinates are never part of this model.

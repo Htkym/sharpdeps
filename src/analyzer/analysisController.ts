@@ -1,5 +1,3 @@
-// Analysis run controller (SD-014).
-//
 // One in-flight analysis at a time, identified by a generation id. A new request
 // cancels the previous one, and only the current generation may publish a result, so
 // a late completion can never overwrite a newer view.
@@ -78,7 +76,7 @@ export interface AnalysisControllerOptions {
   maxLogLines?: number;
   /**
    * How many run directories to keep under the work root. The store reads evidence from
-   * them lazily, so the newest ones must outlive the analysis result (SD-028).
+   * them lazily, so the newest ones must outlive the analysis result.
    */
   keepRunDirectories?: number;
   onProgress?: (event: AnalysisProgressEvent) => void;

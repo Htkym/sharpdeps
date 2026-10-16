@@ -1,5 +1,3 @@
-// Symbol-to-id resolution across compilations (SD-008).
-//
 // A type declared in a referenced project must resolve to the id of the *defining*
 // project variant, not to a copy owned by the referencing project. Project variants
 // are matched by assembly name through the resolved reference closure, which keeps

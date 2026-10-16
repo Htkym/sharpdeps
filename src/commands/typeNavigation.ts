@@ -1,5 +1,3 @@
-// Editor -> type resolution (SD-019).
-//
 // The cursor's type is resolved through the analysis' declaration index: the type that
 // is declared in this document at this offset. Names are never used for lookup, so a
 // same-named type in another project cannot be selected by mistake. When the analysis

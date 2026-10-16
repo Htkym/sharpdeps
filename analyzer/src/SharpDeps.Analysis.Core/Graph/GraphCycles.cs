@@ -1,5 +1,3 @@
-// Cycle groups and witnesses over an aggregated graph (SD-012).
-//
 // Strongly connected components are computed per basis: relations from different
 // bases (declared, inferred, resolved) are never mixed into one component. A witness
 // is a real directed cycle found by walking the edges that exist inside the

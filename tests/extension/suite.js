@@ -1,4 +1,4 @@
-// End-to-end suite for the extension host (SD-027).
+// End-to-end suite for the extension host.
 //
 // VS Code's built-in test runner loads this module and calls run(). Assertions are plain
 // checks: a failure throws with every failing check listed, and the run also writes a

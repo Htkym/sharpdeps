@@ -1,7 +1,5 @@
-// Evidence collected from declarations (SD-009).
-//
 // A collected record carries the v2 evidence (ids, span, confidence, public surface)
-// plus the classification SD-012 needs for aggregation: which project variant and
+// plus the classification for aggregation: which project variant and
 // namespace the two ends belong to, and whether the target is external. Relations are
 // never built here; the aggregator groups evidence into relations so the counting
 // rules stay in one place (docs/analysis-semantics.md).
@@ -38,7 +36,7 @@ public sealed record CollectedEvidence(
         => SourceVariantId == TargetVariantId;
 
     /// <summary>
-    /// Projects the collected record onto the shared graph model (SD-012). One
+    /// Projects the collected record onto the shared graph model. One
     /// evidence record is one occurrence; the aggregator groups them into relations.
     /// </summary>
     public GraphEvidence ToGraphEvidence(string basis = "symbolResolved")

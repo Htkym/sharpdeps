@@ -1,9 +1,7 @@
-// Symbol index for the semantic model (SD-008).
-//
 // Collects namespace/type/member declarations with their owning project variant,
 // containment, flags (partial, nested, file-local, generic, top-level), declaration
 // locations, and the source documents they live in. The position index answers
-// "which type is at this offset" for editor-driven lookups (SD-019).
+// "which type is at this offset" for editor-driven lookups.
 
 namespace SharpDeps.Analysis.Roslyn.Symbols;
 

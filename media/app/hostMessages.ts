@@ -1,4 +1,3 @@
-// Host -> webview message interpretation (SD-017).
 //
 // The webview never trusts the host payload shape: every field is read defensively and
 // an unknown or malformed message becomes no action at all, so a protocol change cannot

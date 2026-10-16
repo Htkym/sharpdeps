@@ -1,5 +1,3 @@
-// Read-only virtual documents for analyzer-generated code (SD-011).
-//
 // The reference travels in the URI path as `<analysisId>/<documentId>`; both are opaque
 // ids, so a URI never names a file on disk. The content comes from the analysis result,
 // and the provider is a TextDocumentContentProvider: VS Code treats it as read-only, so

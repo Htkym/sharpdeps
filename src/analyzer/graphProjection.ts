@@ -1,5 +1,3 @@
-// Graph projection (SD-017, first half).
-//
 // The analysis stores relations at type granularity only, so coarse views are derived
 // here: each type relation maps to its namespace or project parent, and the underlying
 // relations stay reachable through the projection edge. Display budgets never change

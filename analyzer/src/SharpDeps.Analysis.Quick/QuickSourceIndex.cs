@@ -1,5 +1,3 @@
-// Source index for the Quick v2 model (SD-006).
-//
 // The Quick analysis already reads every C# file and every project file; this
 // index records what it read (documents, declaration and using positions, declared
 // ProjectReference items) so the report v2 mapper can attach evidence without a

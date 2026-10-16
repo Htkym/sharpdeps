@@ -1,4 +1,3 @@
-// Normalised summary of a semantic v2 report (SD-025).
 //
 // Ids and timestamps change between runs, so the summary keeps only what a precision
 // regression must not change: per-variant type/relation counts, evidence and basis
