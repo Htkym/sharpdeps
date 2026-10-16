@@ -80,6 +80,19 @@ jobs:
           path: artifacts/cli/
           if-no-files-found: error
 
+      - name: Pack and check optional MCP candidate
+        run: |
+          version="$(node -p "require('./package.json').version")-ci.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/mcp
+          node scripts/check-release.js --mcp-package "artifacts/mcp/SharpDeps.Mcp.$version.nupkg" --mcp-version "$version" > artifacts/mcp/candidate-identity.json
+
+      - name: Upload optional MCP candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharpdeps-mcp-candidate
+          path: artifacts/mcp/
+          if-no-files-found: error
+
       # The end-to-end suite needs a VS Code binary. On CI that comes from
       # @vscode/test-electron, which the runner falls back to when no installation is
       # present; locally the installed VS Code is used instead.

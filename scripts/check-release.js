@@ -18,12 +18,16 @@ function checkDefinitions(tag) {
   const manifest = JSON.parse(read('package.json'));
   const lock = JSON.parse(read('package-lock.json'));
   const cli = read('analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj');
+  const mcp = read('analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj');
   assert.match(manifest.version, stable, 'VSIX version must be a stable-shaped candidate base');
   assert.equal(lock.version, manifest.version, 'Lock version');
   assert.equal(lock.packages[''].version, manifest.version, 'Lock root version');
   assert.equal(xmlValue(cli, 'PackageId'), 'SharpDeps.Cli');
   assert.equal(xmlValue(cli, 'Version'), manifest.version, 'CLI/VSIX candidate base');
   assert.equal(xmlValue(cli, 'ToolCommandName'), 'sharpdeps');
+  assert.equal(xmlValue(mcp, 'PackageId'), 'SharpDeps.Mcp');
+  assert.equal(xmlValue(mcp, 'Version'), manifest.version, 'MCP/CLI candidate base');
+  assert.equal(xmlValue(mcp, 'ToolCommandName'), 'sharpdeps-mcp');
   const pin = JSON.parse(read('docs/contracts/markdown-runtime-pin.json'));
   const markdown = read(
     'analyzer/src/SharpDeps.Analysis.Markdown/SharpDeps.Analysis.Markdown.csproj'
@@ -55,6 +59,7 @@ function checkDefinitions(tag) {
     releaseTag: `v${manifest.version}`,
     vsixFileName: `${manifest.name}-${manifest.version}.vsix`,
     cliPackageId: 'SharpDeps.Cli',
+    mcpPackageId: 'SharpDeps.Mcp',
     pairVersion: pin.componentVersion,
     stablePublicationAllowed: stable.test(pin.componentVersion),
     manifest,
@@ -115,53 +120,76 @@ async function checkVsix(file, definition = checkDefinitions()) {
   return { ...artifactIdentity(file), version: manifest.version };
 }
 
-async function checkCli(file, version, definition = checkDefinitions()) {
+async function checkTool(file, version, definition, packageId, command, extraRequired) {
   version ??= definition.version;
   assert.ok(
     version === definition.version ||
       version.startsWith(`${definition.version}-ci.`) ||
       version.startsWith(`${definition.version}-rc.`),
-    'CLI candidate version must use the declared base'
+    'Tool candidate version must use the declared base'
   );
   const prefix = 'tools/net10.0/any/';
   const required = [
     'DotnetToolSettings.xml',
-    'SharpDeps.Cli.dll',
-    'SharpDeps.Cli.runtimeconfig.json',
-    'SharpDeps.Cli.deps.json',
-    'Syntamark.dll'
+    `${packageId}.dll`,
+    `${packageId}.runtimeconfig.json`,
+    `${packageId}.deps.json`,
+    'Syntamark.dll',
+    ...extraRequired
   ];
   const entries = await readArchive(
     file,
     (name) => /^[^/]+\.nuspec$/.test(name) || required.some((item) => name === prefix + item)
   );
   const specs = Object.keys(entries).filter((name) => name.endsWith('.nuspec'));
-  assert.equal(specs.length, 1, 'CLI nuspec');
+  assert.equal(specs.length, 1, `${packageId} nuspec`);
   const spec = entries[specs[0]].toString('utf8');
-  assert.equal(xmlValue(spec, 'id'), definition.cliPackageId);
+  assert.equal(xmlValue(spec, 'id'), packageId);
   assert.equal(xmlValue(spec, 'version'), version);
-  assert.equal(path.basename(file), `${definition.cliPackageId}.${version}.nupkg`);
-  for (const name of required) assert.ok(entries[prefix + name], `CLI ${name}`);
+  assert.equal(path.basename(file), `${packageId}.${version}.nupkg`);
+  for (const name of required) assert.ok(entries[prefix + name], `${packageId} ${name}`);
   assert.match(
     entries[prefix + 'DotnetToolSettings.xml'].toString('utf8'),
-    /<Command Name="sharpdeps" EntryPoint="SharpDeps.Cli.dll" Runner="dotnet"\s*\/>/
+    new RegExp(
+      `<Command Name="${command}" EntryPoint="${packageId.replaceAll('.', '\\.')}\\.dll" Runner="dotnet"\\s*\\/>`
+    )
   );
-  const deps = JSON.parse(entries[prefix + 'SharpDeps.Cli.deps.json'].toString('utf8'));
+  const deps = JSON.parse(entries[prefix + `${packageId}.deps.json`].toString('utf8'));
   assert.ok(
     deps.libraries[`Syntamark/${definition.pairVersion}`],
-    'CLI selected runtime dependency'
+    `${packageId} selected runtime dependency`
   );
   assert.equal(
     hash(entries[prefix + 'Syntamark.dll']),
     definition.pin.artifacts.runtime.assemblySha256,
-    'CLI fixed runtime bytes'
+    `${packageId} fixed runtime bytes`
   );
   return { ...artifactIdentity(file), version };
 }
 
+async function checkCli(file, version, definition = checkDefinitions()) {
+  return checkTool(file, version, definition, definition.cliPackageId, 'sharpdeps', []);
+}
+
+async function checkMcp(file, version, definition = checkDefinitions()) {
+  return checkTool(file, version, definition, definition.mcpPackageId, 'sharpdeps-mcp', [
+    'SharpDeps.Cli.dll',
+    'SharpDeps.Cli.runtimeconfig.json',
+    'SharpDeps.Cli.deps.json',
+    'ModelContextProtocol.Core.dll'
+  ]);
+}
+
 async function main() {
   const options = {};
-  const names = ['--tag', '--vsix', '--cli-package', '--cli-version'];
+  const names = [
+    '--tag',
+    '--vsix',
+    '--cli-package',
+    '--cli-version',
+    '--mcp-package',
+    '--mcp-version'
+  ];
   for (let i = 2; i < process.argv.length; i += 2) {
     const name = process.argv[i];
     assert.ok(
@@ -174,6 +202,10 @@ async function main() {
     !options['--cli-version'] || options['--cli-package'],
     '--cli-version requires --cli-package'
   );
+  assert.ok(
+    !options['--mcp-version'] || options['--mcp-package'],
+    '--mcp-version requires --mcp-package'
+  );
   const definition = checkDefinitions(options['--tag']);
   const { manifest, pin, ...report } = definition;
   void manifest;
@@ -181,10 +213,12 @@ async function main() {
   if (options['--vsix']) report.vsix = await checkVsix(options['--vsix'], definition);
   if (options['--cli-package'])
     report.cli = await checkCli(options['--cli-package'], options['--cli-version'], definition);
+  if (options['--mcp-package'])
+    report.mcp = await checkMcp(options['--mcp-package'], options['--mcp-version'], definition);
   console.log(JSON.stringify(report, null, 2));
 }
 
-module.exports = { checkDefinitions, checkVsix, checkCli };
+module.exports = { checkDefinitions, checkVsix, checkCli, checkMcp };
 if (require.main === module)
   main().catch((error) => {
     console.error(error.message);

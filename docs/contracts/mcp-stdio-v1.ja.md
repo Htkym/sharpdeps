@@ -3,7 +3,7 @@
 SharpDeps.Mcpは独立した任意toolであり、既存CLI／Skill／VSCodeの必須依存にはしない。
 ModelContextProtocol.Core 2.2.0のstdio transport、lifecycle、request cancellationを使用し、
 protocolは2025-11-25に固定する。HTTP listener、外部port、LLM呼出し、認証変更は追加しない。
-候補段階では同名preview.3 packageをpack／公開しない。配布名はSharpDeps.Mcpを仮称とする。
+配布名はSharpDeps.Mcp、起動コマンドはsharpdeps-mcpとする。版はCLI／VSIXと同じ0.2.0を基準とする。
 
 rootとindexは起動時に固定する。各toolのargumentsは同じCLI commandのflag/value配列であり、
 既存CLIへ渡す。search／symbol／callers／callees／impact／context／statusを公開する。
