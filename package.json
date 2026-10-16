@@ -151,6 +151,12 @@
           "default": "legacy",
           "markdownDescription": "Result provider for Show/Refresh Dependency Map. Legacy keeps Quick/Semantic analysis. SavedIndex reads an existing .sharpdeps index with the shared Query engine; it never analyzes or updates it. An absent index can display a retained legacy report from the same workspace, read-only."
         },
+        "sharpdeps.savedIndexAutoRefresh": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Automatically display committed saved-index generations from an explicitly started CLI watch. Requires one trusted workspace folder and a compatible savedIndexCliPath. Keeps the last view on failure; never starts analysis or a writer."
+        },
         "sharpdeps.savedIndexVariant": {
           "type": "string",
           "default": "",

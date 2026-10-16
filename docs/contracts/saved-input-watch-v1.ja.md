@@ -1,5 +1,21 @@
 # 保存済み入力のwatch収束部品
 
+## 既存watchのcommitted世代をVS Codeで追従する限定接続
+
+`sharpdeps.savedIndexAutoRefresh`は既定falseで、trustedな単一folderのsavedIndex表示だけへ適用する。
+利用者が既存CLIの`serve --watch`を明示起動し、互換CLIの絶対pathをsavedIndexCliPathに設定する。
+拡張はread-onlyのcoordinator-statusを直列に取得するだけで、writer、watch、解析、restoreを起動しない。
+完了後2秒で次の照会を予約し、status processは5秒・出力64KiBで制限する。設定無効化、root/provider/panelの
+終了で監視を解放し、variant/runtime設定変更は明示Refreshまで自動反映を止める。
+
+idle ownerの新committed tuple（workspace/snapshot/generation）を新QueryHost readerで読取り、前後のowner instance、
+revision/desiredRevision、committed tupleとreaderのtupleが一致する場合だけ表示を交換する。旧providerはその間保持し、
+途中の入力/context変更やowner交替、dirty/updating/degraded、停止、読取失敗は旧表示とstaleを保持する。
+新世代では旧cursor/selection/evidenceを再利用せず、旧readerの遅延応答と失敗をpanelから送信しない。
+未保存bufferのstale、Partial/unverifiedと既存source hash/UTF-16検査を維持し、owner idleをfreshness証明とはしない。
+statusはownerのwatch有無を証明しない。watch起動と対象選択は利用者が行い、拡張はownerのcommitted結果だけを追う。
+即時trust revokeの既知の公開API制限、全watch fault matrix、cross-OS/性能、SD2-11/13全体の完了はこの接続に含めない。
+
 SD2-11の準備実装として、`src/analyzer/savedInputWatch.ts`にopt-inの
 `SavedInputWatch`を追加します。既存extensionの自動解析、Quick/Semantic、report v2、
 固定Syntamark pairを変更しません。前段の部品版はWindowsで11件の限定テストを通過しました。

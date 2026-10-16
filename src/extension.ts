@@ -18,6 +18,7 @@ import { createReportBridge } from './analyzer/reportBridge';
 import { QueryClient, QueryClientError } from './analyzer/queryClient';
 import { SavedQueryProvider } from './analyzer/queryProvider';
 import { affectsSavedInput } from './analyzer/savedInputChanges';
+import { SavedIndexAutoRefresh, readSavedOwnerStatus } from './analyzer/savedIndexAutoRefresh';
 import type { CodeMapReport } from './analyzer/types';
 import { CodeMapPanel } from './view/codeMapPanel';
 import { CycleDiagnostics } from './diagnostics/cycleDiagnostics';
@@ -81,6 +82,8 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   let savedUpdateAnalysisId: string | undefined;
   let savedUpdatePhase: SavedUpdatePhase = 'idle';
   const savedWatchers: vscode.Disposable[] = [];
+  let savedAutoRefresh: SavedIndexAutoRefresh | undefined;
+  let savedQueryOptions: ConstructorParameters<typeof QueryClient>[0] | undefined;
   let pendingSavedClient: QueryClient | undefined;
   const bridge = { handle: (message: unknown) => (savedProvider ?? legacyBridge).handle(message) };
   context.subscriptions.push(output, diagnostics);
@@ -314,10 +317,94 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
   }
 
   function closeSavedProvider(): void {
+    savedAutoRefresh?.dispose();
+    savedAutoRefresh = undefined;
+    savedQueryOptions = undefined;
     savedUpdateStop?.abort();
     savedWatchers.splice(0).forEach((watcher) => watcher.dispose());
     savedProvider?.dispose();
     savedProvider = undefined;
+  }
+
+  function publishSavedProvider(candidate: SavedQueryProvider): void {
+    const watchers = watchSavedResult(candidate);
+    savedWatchers.splice(0).forEach((watcher) => watcher.dispose());
+    savedProvider?.dispose();
+    savedProvider = candidate;
+    savedWatchers.push(...watchers);
+    diagnostics.clear();
+    CodeMapPanel.currentPanel?.notifyAnalysis(candidate.analysisId);
+  }
+
+  function configureSavedAutoRefresh(): void {
+    savedAutoRefresh?.dispose();
+    savedAutoRefresh = undefined;
+    const launch = savedQueryOptions;
+    const config = vscode.workspace.getConfiguration('sharpdeps');
+    const cliPath = config.get<string>('savedIndexCliPath', '').trim();
+    const enabled = () =>
+      vscode.workspace.isTrusted &&
+      vscode.workspace.workspaceFolders?.length === 1 &&
+      vscode.workspace.workspaceFolders[0].uri.fsPath === launch?.root &&
+      vscode.workspace.getConfiguration('sharpdeps').get<boolean>('savedIndexAutoRefresh', false) &&
+      vscode.workspace.getConfiguration('sharpdeps').get<string>('resultProvider', 'legacy') ===
+        'savedIndex';
+    if (
+      !launch ||
+      !savedProvider ||
+      !enabled() ||
+      !path.isAbsolute(cliPath) ||
+      path.extname(cliPath).toLowerCase() !== '.dll'
+    )
+      return;
+    savedAutoRefresh = new SavedIndexAutoRefresh({
+      provider: () => savedProvider,
+      captureCurrent: () => {
+        const ticket = requestGeneration,
+          version = inputVersion;
+        return () =>
+          enabled() && !savedUpdateStop && requestGeneration === ticket && inputVersion === version;
+      },
+      readStatus: (signal) => readSavedOwnerStatus({ ...launch, cliPath, signal }),
+      load: async (signal) => {
+        const client = new QueryClient(launch);
+        const dispose = () => client.dispose();
+        signal.addEventListener('abort', dispose, { once: true });
+        try {
+          if (signal.aborted) throw new QueryClientError('QUERY_SESSION_CLOSED');
+          return await SavedQueryProvider.create(
+            client,
+            launch.root,
+            config.get<string>('savedIndexVariant', '').trim() || undefined,
+            projectionLimits('type')
+          );
+        } catch (error) {
+          client.dispose();
+          throw error;
+        } finally {
+          signal.removeEventListener('abort', dispose);
+        }
+      },
+      adopt: (candidate) => {
+        if (
+          vscode.workspace.textDocuments.some(
+            (document) =>
+              document.isDirty &&
+              document.uri.scheme === 'file' &&
+              affectsSavedInput(candidate.root, document.uri.fsPath)
+          )
+        )
+          candidate.markStale('unsavedChange');
+        publishSavedProvider(candidate);
+        output.appendLine(
+          `Saved watch generation displayed: ${candidate.analysisState('saved').queryMetadata!.generation}. Freshness remains unverified.`
+        );
+      },
+      unavailable: (previous) => {
+        previous.markStale('unknown');
+        CodeMapPanel.currentPanel?.notifyStale(previous.analysisId, 'unknown');
+      }
+    });
   }
 
   function closePendingSavedClient(): void {
@@ -543,6 +630,14 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         savedProvider.markStale('profileChange');
         CodeMapPanel.currentPanel?.notifyStale(savedProvider.analysisId, 'profileChange');
       }
+      if (
+        event.affectsConfiguration('sharpdeps.savedIndexVariant') ||
+        event.affectsConfiguration('sharpdeps.dotnetPath')
+      ) {
+        savedAutoRefresh?.dispose();
+        savedAutoRefresh = undefined;
+        savedQueryOptions = undefined;
+      } else configureSavedAutoRefresh();
     })
   );
 
@@ -795,12 +890,17 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         )
       )
         candidate.markStale('unknown');
-      const candidateWatchers = watchSavedResult(candidate);
-      closeSavedProvider();
-      savedProvider = candidate;
-      savedWatchers.push(...candidateWatchers);
-      diagnostics.clear();
-      CodeMapPanel.show(context.extensionUri, panelHost()).notifyAnalysis(candidate.analysisId);
+      savedAutoRefresh?.dispose();
+      savedAutoRefresh = undefined;
+      CodeMapPanel.show(context.extensionUri, panelHost());
+      publishSavedProvider(candidate);
+      savedQueryOptions = {
+        dotnetPath: dotnet.dotnetPath,
+        hostPath,
+        root: candidate.root,
+        cwd: context.extensionUri.fsPath
+      };
+      configureSavedAutoRefresh();
       output.appendLine(
         `Read-only saved index: ${candidate.analysisId}. Refresh rereads the saved generation; no analysis is started.`
       );
@@ -853,6 +953,7 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
         closePendingSavedClient();
         closeSavedProvider();
       }
+      configureSavedAutoRefresh();
     }),
     vscode.commands.registerCommand('sharpdeps.updateSavedIndex', () => updateCurrentSavedIndex()),
     vscode.commands.registerCommand('sharpdeps.showDependencyMap', (uri?: vscode.Uri) =>

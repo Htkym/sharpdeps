@@ -4,7 +4,7 @@ import { CodeMapPanel, type CodeMapPanelHost } from './codeMapPanel';
 import { SavedQueryProvider } from '../analyzer/queryProvider';
 import type { QueryWireReply, SavedQueryClient } from '../analyzer/queryClient';
 import type { ReportStore } from '../analyzer/reportStore';
-import type { SourceReturnUi } from './protocolV2';
+import type { HostToWebviewMessage, SourceReturnUi } from './protocolV2';
 import { makeSnapshot, IDS } from '../../tests/helpers/reportV2Fixtures';
 
 const api = vi.hoisted(() => ({
@@ -765,6 +765,43 @@ describe('saved output through validated panel messages (stubbed local APIs)', (
 });
 
 describe('panel ownership with a delayed serializer (stubbed VSCode panel events)', () => {
+  it('drops delayed bridge replies and failures after a committed reader swap', async () => {
+    const { host, physical, switchCurrent } = await setup();
+    let finish!: (value: HostToWebviewMessage) => void;
+    let fail!: (error: Error) => void;
+    host.bridge.handle = vi.fn(
+      () =>
+        new Promise<HostToWebviewMessage>((resolve, reject) => {
+          finish = resolve;
+          fail = reject;
+        })
+    );
+    const id = host.currentAnalysisId!()!;
+    const request = {
+      type: 'getProjection',
+      analysisId: id,
+      requestId: projectionRequestId,
+      scope: { kind: 'root' },
+      granularity: 'type',
+      filters: {},
+      search: '',
+      includeIds: []
+    };
+    physical.dispatch(request);
+    expect(host.bridge.handle).toHaveBeenCalledOnce();
+    switchCurrent('an_9999999999999999');
+    api.post.mockClear();
+    finish({ type: 'stale', analysisId: id, reason: 'unknown' });
+    await Promise.resolve();
+    expect(api.post).not.toHaveBeenCalled();
+    switchCurrent(id);
+    physical.dispatch(request);
+    switchCurrent('an_9999999999999999');
+    api.post.mockClear();
+    fail(new Error('disposed old reader'));
+    await Promise.resolve();
+    expect(api.post).not.toHaveBeenCalled();
+  });
   it.each(['show', 'restore'] as const)(
     'keeps one owner and a usable saved export when %s arrives first',
     async (first) => {

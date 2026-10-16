@@ -513,18 +513,26 @@ export class CodeMapPanel {
           request
         );
         return;
-      default:
+      default: {
         // Everything else is answered from the store by the bridge; unimplemented host
         // work comes back as an explicit error message.
+        const analysisId = 'analysisId' in request ? request.analysisId : undefined;
+        const current = () =>
+          !this.disposed && (!analysisId || analysisId === this.sourceAnalysisId());
         void this.host.bridge.handle(request).then(
-          (response) => this.post(response),
-          (error: unknown) =>
-            this.post({
-              type: 'error',
-              code: 'bridge.failed',
-              message: error instanceof Error ? error.message : String(error)
-            })
+          (response) => {
+            if (current()) this.post(response);
+          },
+          (error: unknown) => {
+            if (current())
+              this.post({
+                type: 'error',
+                code: 'bridge.failed',
+                message: error instanceof Error ? error.message : String(error)
+              });
+          }
         );
+      }
     }
   }
 
