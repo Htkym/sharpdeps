@@ -2,7 +2,9 @@
 
 English · [日本語](guide.ja.md) · [README](../README.md)
 
-This guide covers the **0.1.0 workbench**. The screenshots show a real analysis of `tests/fixtures/semantic-baseline/SemanticBaseline.sln` in VS Code. External types are hidden in the graph and table to keep the example focused.
+This guide covers the development candidate on `feature/0.2.0`. The release version and distribution destinations are not yet final. To try a supplied candidate, check its VSIX commit and hash, then choose **Install from VSIX** in the VS Code Extensions menu. Quick does not require a separate CLI installation.
+
+The screenshots show the older 0.1.0 workbench analyzing `tests/fixtures/semantic-baseline/SemanticBaseline.sln`; external types are hidden for clarity. First-use and keyboard-only acceptance remain incomplete for this candidate.
 
 ## Open a solution or project
 
@@ -18,9 +20,9 @@ In this example, `Infrastructure` depends on `Domain(net10.0)`. `Domain(netstand
 
 ## Choose an analysis mode
 
-Use **Quick** for a first project/namespace overview. It reads project XML and `using` directives without evaluating MSBuild, so conditional references and unused imports may appear. It needs a .NET 10 runtime. Runtime resolution tries `sharpdeps.dotnetPath`, the .NET Install Tool, `PATH`, then private runtime acquisition.
+Use **Quick** to inspect projects, namespaces, and C# type declarations. It reads project XML and C# syntax without MSBuild evaluation or symbol binding, so conditional references and unused imports may appear. Where a base-list name has one matching declaration, such as within the same project and namespace, it can appear as a syntax type reference. This does not prove callers or resolved inheritance. Quick needs a .NET 10 runtime; it does not require an SDK or package restore. Runtime resolution tries `sharpdeps.dotnetPath`, the .NET Install Tool, `PATH`, then private runtime acquisition.
 
-Use **Semantic** to investigate C# types and code references:
+Use **Semantic** to investigate C# callers and resolved code references:
 
 1. Install an SDK compatible with the target and its `global.json`, and make a .NET 10 runtime available.
 2. Restore the target's packages yourself, for example with `dotnet restore path/to/YourSolution.sln` in a terminal.
@@ -29,9 +31,34 @@ Use **Semantic** to investigate C# types and code references:
 
 SharpDeps does not download an SDK or restore packages automatically. It requires workspace trust because Semantic evaluates project build logic and source generators. Quick provides inferred relationships; Semantic may still report incomplete results when projects or references cannot be loaded. Read the Analysis tab's coverage and limitations before drawing conclusions.
 
+## Inspect types and source with Quick
+
+`sharpdeps.resultProvider` defaults to `legacy`, and `sharpdeps.analysisMode` to `quick`. If you previously selected the saved-index provider, choose `legacy` for this first Quick journey.
+
+1. Open a trusted target and choose **SharpDeps: Show Dependency Map** to display its Quick result.
+2. Switch to **Types** and search for a type name. In **Table**, selecting a row opens Details. With the keyboard, use Tab to reach a row and Space to select it; Enter activates the item.
+3. Choose **Open declaration** to open the original code. For example, `class Base { }` and `class Derived : Base { }` in the same C# project provide declarations and an entry point into the syntax reference from `Derived` to `Base`. Relation evidence also points to syntax locations. Do not treat ambiguous references or results without locations as resolved references.
+4. Use VS Code's tab switching to return to the dependency map. In a narrow view, **Close** or Escape dismisses Details before you use **Back**. Use Tab to reach Back and Enter to activate it. Check the search, selection, and view position. Opening source alone does not require going back through scopes.
+
+If a type is missing, check the target, search conditions, and Analysis limitations. Quick does not resolve every type reference. Use Semantic for method callers, or savedIndex below for stored member/document graphs.
+
+## Read a saved index
+
+Set `sharpdeps.resultProvider` to `savedIndex` to read an existing `.sharpdeps` index with the bundled QueryHost. This is separate from choosing Quick or Semantic. Reading requires an existing .NET 10 runtime; this path does not acquire one automatically. With multiple variants, set `sharpdeps.savedIndexVariant` to the ID to display. Variants are never merged implicitly.
+
+**Refresh** rereads stored results. To create or update an index, set `sharpdeps.savedIndexCliPath` to the absolute path of a compatible `SharpDeps.Cli.dll`, then explicitly run **SharpDeps: Update Saved Index** in a trusted workspace. Updating requires the target SDK and restored dependencies. Running the CLI DLL directly and querying stored results require a .NET 10 runtime; local tool installation/restore, `dotnet tool run`, and `dnx` require an SDK. See the [CLI instructions](contracts/cli-skill-v1.ja.md) for candidate acquisition requirements.
+
+`sharpdeps.savedIndexAutoRefresh` defaults to `false`. To enable it, use savedIndex in one trusted workspace folder, configure the same compatible CLI, and explicitly start its watch with a chosen target. Replace the paths in this PowerShell example with your prepared paths. This starts analysis and index writes.
+
+```powershell
+dotnet 'D:\tools\SharpDeps.Cli.dll' serve --root 'D:\work\repo' --target 'D:\work\repo\App.sln' --trusted --watch
+```
+
+The extension adopts committed generations from the existing owner; it does not start watch or analysis. If watch stops or reading fails, it retains the last view as stale. Unsaved edits are not indexed. `Partial` means coverage is incomplete; `unverified` means correspondence with current inputs and configuration has not been verified. Automatic adoption or a running owner does not turn those states into `Complete` or a freshness guarantee. See [watch scope and limitations](contracts/saved-input-watch-v1.ja.md).
+
 ## Find and narrow dependencies
 
-Choose **Projects**, **Namespaces**, or **Types** above the graph. Types require Semantic analysis. Expand the left-hand hierarchy with its chevrons, or use search to find an entity across the full analyzed index, including entities outside the display limit.
+Choose **Projects**, **Namespaces**, or **Types** above the graph. Quick shows syntax-based type results; Semantic shows semantic analysis results. Expand the left-hand hierarchy with its chevrons, or use search to find an entity across the full analyzed index, including entities outside the display limit.
 
 Select a node to open **Details**. Choose **Dependencies** to follow its outgoing references, or **Dependents** to find what refers to it. **Depth 1–3** controls how many steps to follow. Double-click a project or namespace to drill down; **Back** returns to the preceding scope. If a search term still restricts the graph, clear it to see the other entities in the chosen scope.
 
@@ -64,7 +91,7 @@ To inspect a source reference:
 
 The example selects `OrderStore → Order`. The evidence shows where `Order` appears in `OrderStore.cs`, including its reference kind and source position. **Copy reference** copies a location; **Open declaration** on a type opens its declaration. Dependency counts describe distinct related entities; occurrence counts describe reference evidence, so those numbers can differ.
 
-From a C# editor, **SharpDeps: Show Type Dependencies (cursor)** and **Show Type Dependents (cursor)** reveal the type at the cursor using declaration positions. Semantic analysis is required for these commands.
+From a C# editor, **SharpDeps: Show Type Dependencies (cursor)** and **Show Type Dependents (cursor)** reveal the type at the cursor using declaration positions. These commands work with Quick or Semantic results that contain a declaration index. If the result is stale or has no declaration positions, follow the message and analyze again.
 
 ## Arrange the graph
 
@@ -98,7 +125,7 @@ Open **Export** and choose Mermaid, JSON, SVG, or PNG. Text and JSON exports use
 
 Use **日本語** or **English** in the top menu to switch UI language. The chosen language is saved, and switching does not rerun analysis. Code names, paths, and raw analyzer diagnostics keep their original text.
 
-The view saves its target, scope, selection, filters, layout, pane sizes, and camera. Returning to a hidden tab or reloading the window restores the view without starting analysis. Edits and configuration changes can make the result stale; choose **Analyze** to refresh it. **Stop** stops analysis and preserves the last successful result.
+The view retains its target, scope, selection, filters, layout, pane sizes, and camera. Source-to-list return has verified limited paths, while restoration after restart or reload remains unverified for this candidate. For stale legacy results, choose **Analyze**; for savedIndex, explicitly update and then **Refresh** to reread the index. **Stop** stops analysis and preserves the last successful result.
 
 ## Keyboard shortcuts
 
@@ -110,7 +137,7 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | `g` / `t` | Show the graph / table. |
 | Tab / Shift+Tab | Move between controls. |
 | Enter | Select or activate a focused node, connection, or row. |
-| Space | Select or activate a focused graph node or connection. |
+| Space | Select a focused graph node, connection, or table row. |
 | Escape | Close a popup or Details; otherwise clear selection. |
 | `+` / `−` / `0` | Zoom in / out / fit the graph. |
 | Arrow keys on a pane divider | Resize the pane. |
@@ -120,6 +147,9 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `sharpdeps.analysisMode` | `quick` | Initial mode. |
+| `sharpdeps.resultProvider` | `legacy` | Quick/Semantic or stored `savedIndex` results. |
+| `sharpdeps.savedIndexAutoRefresh` | `false` | Adopt committed generations from an explicitly started CLI watch. |
+| `sharpdeps.savedIndexCliPath` | `""` | Absolute path to a compatible CLI DLL for explicit updates and automatic adoption. |
 | `sharpdeps.analysisTimeoutSeconds` | `180` | Analysis time limit in seconds. |
 | `sharpdeps.maxProjects` | `60` | Project/namespace display limit. |
 | `sharpdeps.maxVisibleTypes` | `100` | Type display limit. |
@@ -129,8 +159,8 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | Symptom | What to check |
 | --- | --- |
 | Analysis cannot start | Trust the workspace. For Quick, check the runtime; for Semantic, check the installed SDK, `global.json`, and package restore. |
-| Type view is unavailable | Choose Semantic and Analyze. |
+| Type view is unavailable | Check the target and limitations. Quick shows syntax declarations; Semantic shows semantic analysis results. |
 | Entities are missing from the picture | Check scope, search, filters, and display limits. Search still covers the analyzed index; limitations describe anything not analyzed. |
 | Graph layout failed or was cancelled | Use Table to inspect the result; use Spacing → Retry layout to try placement again. |
-| Result is stale | Save intended source edits, then Analyze again. |
+| Result is stale | Save intended edits. Analyze again for legacy, or explicitly update then Refresh for savedIndex. |
 | Analysis failed or was stopped | Check Analysis limitations and the **SharpDeps** channel in VS Code's Output panel. The last successful result remains available. |
