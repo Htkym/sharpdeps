@@ -4,7 +4,11 @@ SD2-09は明示的なtrusted CLI `update`を既存IndexWriterのlease内で処�
 
 ## 選択と無効化
 
-project所有proofがない旧Indexはfull rebuildへ戻る。新しいfull抽出では、純粋な`Microsoft.NET.Sdk`の各projectが単一`net10.0`を対象とする、最大64 variantsの閉集合について、静的なcompiler propertyとroot内ProjectReferenceだけを許す。PackageReference、Import、custom target/task、Analyzer、AdditionalFiles、Compile override、式、未知property、外部参照、暗黙user hook、祖先configurationがある場合は再利用proofを保存しない。失敗をPartial表示で補完して再利用しない。
+project所有proofがない旧Indexはfull rebuildへ戻る。新しいfull抽出では、純粋な`Microsoft.NET.Sdk`の各projectが単一`net10.0`を対象とする、最大64 variantsの閉集合について、静的なcompiler propertyとroot内ProjectReferenceだけを許す。下記の閉包を証明できないPackageReference、Import、custom target/task、Analyzer、AdditionalFiles、Compile override、式、未知property、外部参照、暗黙user hook、祖先configurationがある場合は再利用proofを保存しない。失敗をPartial表示で補完して再利用しない。
+
+PackageReferenceの限定例外はWindows・固定SDK10.0.402で、workspace全体に固定数値版（major.minor.patch）の直接参照1個、復元結果の追加package依存なし、compile/runtime DLLのみの場合に限る。対象cacheは明示した絶対`NUGET_PACKAGES`の該当id/version directoryだけとし、原nupkgのSHA512・展開bytes・assets・packages.lock.jsonの版/contentHashを照合する。生成NuGet importsは従来の非実行metadataだけを許し、package root/SourceRootもこのcacheへ限定する。未知layout、build/analyzer/content/native資産、fallback folder、リンク/不明/読取不能はfullへ戻す。既存設定の強制、restore、package実行はproofでは行わない。
+
+SDKのResolvePackageAssets v12 cacheも検査し、Analyzer等の入力groupや未確認の外部pathを許さない。package directory・assets/lock・生成imports・cacheの二回inventory/hashをDependencyHashへ結合し、実compiler参照も確認済みpackage directory内だけを追加許可する。SDKのcache採用条件（cacheのLastWriteTimeUtcがassetsより新しい）も各inventoryへ含め、bytes不変でも採用条件が変われば再利用と公開を拒否する。package inventoryは2048 files・合計64MiB・5秒を上限とし、既存の全体budget/取消/部分抽出後と公開直前guardを保持する。固定Markdown runtime/source pair、Index schema、ID、QuickやAPIの契約は変更しない。
 
 proofはowner版、target/root/UUID/configuration/platform/TFM/project選択のhash、全non-Markdown workspace入力のpath集合とbytes hash、SDK/tool依存と環境のhash、実抽出したsymbol catalogを含む。空directoryの存在もMSBuildの条件になり得るため、directoryのpathとtypeを照合する。workspaceの`.git`/`.sharpdeps`と実Index/sidecarを除き、`obj`/`bin`/`node_modules`のnon-Markdownも検査する。mtime/sizeだけでは一致としない。SDKは現在hostの既知dotnet root内の選択版へ制限し、任意の保存pathを外部読取り先として使わない。
 

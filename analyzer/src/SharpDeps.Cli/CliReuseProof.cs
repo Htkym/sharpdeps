@@ -10,7 +10,7 @@ using System.Xml;
 using System.Xml.Linq;
 using SharpDeps.Index;
 
-internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHash, string DependencyHash);
+internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHash, string DependencyHash, string? PackageRoot = null);
 
 /// <summary>
 /// Trusted update input proof only. This helper never registers MSBuild, loads Roslyn, runs a process,
@@ -83,7 +83,7 @@ internal static partial class CliReuseProof
             var environment = NormalizeEnvironment(Environment.GetEnvironmentVariables(), sdk);
             if (environment is null || HasUserHooks() || HasAncestorConfiguration(root)) return null;
             var git = CaptureGit(root, sdk, budget);
-            if (git is null || !PlainProjects(root, sdk, budget, git.Value.Present, out var localGitScope)
+            if (git is null || !PlainProjects(root, sdk, budget, git.Value.Present, out var localGitScope, out var package)
                 || (git.Value.Present && !localGitScope && !ExternalGitConfigurationAbsent())) return null;
             var environmentHash = HashEnvironment(environment, token);
             using var dependencies = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -91,6 +91,7 @@ internal static partial class CliReuseProof
             Append(dependencies, dotnetRoot);
             Append(dependencies, sdk);
             Append(dependencies, git.Value.Hash);
+            if (package is not null) Append(dependencies, package.Value.Hash);
             AddTree(sdk, "sdk", dependencies, budget);
             if (Environment.GetEnvironmentVariable("MSBuildEnableWorkloadResolver") == "false")
                 AddTree(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"), "dotnet/packs/Microsoft.NETCore.App.Ref", dependencies, budget);
@@ -114,7 +115,7 @@ internal static partial class CliReuseProof
             Append(dependencies, payload);
             AddTree(payload, "tool", dependencies, budget);
             token.ThrowIfCancellationRequested();
-            return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant());
+            return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant(), package?.Root);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception) { return null; }
@@ -127,9 +128,15 @@ internal static partial class CliReuseProof
             && proof.EnvironmentHash == current.EnvironmentHash && proof.DependencyHash == current.DependencyHash
             && PathComparer.Equals(proof.SdkPath, current.SdkPath);
 
-    private static bool PlainProjects(string root, string sdk, ProofBudget budget, bool git, out bool localGitScope)
+    private static bool PlainProjects(string root, string sdk, ProofBudget budget, bool git, out bool localGitScope,
+        out (string Root, string Hash)? package)
     {
         localGitScope = true;
+        package = null;
+        var projectPaths = new List<string>();
+        var packages = new List<PackageSpec>();
+        var imports = new List<string>();
+        var assets = new List<string>();
         var directories = new Stack<string>(); directories.Push(root);
         var projects = 0;
         while (directories.TryPop(out var directory))
@@ -156,22 +163,27 @@ internal static partial class CliReuseProof
                 if (Path.GetExtension(entry).Equals(".props", StringComparison.OrdinalIgnoreCase)
                     || Path.GetExtension(entry).Equals(".targets", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!PlainRestoreImport(entry, budget)) return false;
+                    imports.Add(entry);
                     continue;
                 }
-                if (name == "project.assets.json" && !PlainAssets(entry, root, sdk, budget)) return false;
+                if (name == "project.assets.json") assets.Add(entry);
                 if (!Path.GetExtension(entry).Equals(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!PlainProject(entry, root, budget, out var local)) return false;
+                if (!PlainProject(entry, root, budget, out var local, out var reference)) return false;
+                projectPaths.Add(entry);
+                if (reference is not null) packages.Add(reference);
                 localGitScope &= local;
                 projects++;
             }
         }
-        return projects > 0;
+        if (projects == 0 || imports.Any(path => !PlainRestoreImport(path, budget))) return false;
+        if (packages.Count == 0) return assets.All(path => PlainAssets(path, root, sdk, budget));
+        return packages.Count == 1 && CapturePackage(root, sdk, packages[0], projectPaths, imports, assets, budget, out package);
     }
 
-    private static bool PlainProject(string path, string root, ProofBudget budget, out bool localGitScope)
+    private static bool PlainProject(string path, string root, ProofBudget budget, out bool localGitScope, out PackageSpec? package)
     {
         localGitScope = false;
+        package = null;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         budget.Bytes(input.Length);
@@ -211,6 +223,11 @@ internal static partial class CliReuseProof
             {
                 foreach (var reference in child.Elements())
                 {
+                    if (reference.Name == "PackageReference")
+                    {
+                        if (package is not null || !PlainPackageReference(reference, path, out package)) return false;
+                        continue;
+                    }
                     var include = (string?)reference.Attribute("Include");
                     if (reference.Name != "ProjectReference" || reference.Attributes().Count() != 1
                         || reference.HasElements || !string.IsNullOrWhiteSpace(reference.Value)
@@ -284,7 +301,11 @@ internal static partial class CliReuseProof
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         budget.Bytes(input.Length);
         using var document = JsonDocument.Parse(input, new JsonDocumentOptions { MaxDepth = 64 });
-        var assets = document.RootElement;
+        return PlainAssetDocument(document.RootElement, path, root, sdk, budget);
+    }
+
+    private static bool PlainAssetDocument(JsonElement assets, string path, string root, string sdk, ProofBudget budget)
+    {
         if (!assets.TryGetProperty("libraries", out var libraries) || libraries.ValueKind != JsonValueKind.Object
             || !assets.TryGetProperty("targets", out var targets) || targets.ValueKind != JsonValueKind.Object
             || targets.EnumerateObject().Count() != 1 || !targets.TryGetProperty("net10.0", out var target)

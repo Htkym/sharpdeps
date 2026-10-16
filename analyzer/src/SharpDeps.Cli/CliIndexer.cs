@@ -300,7 +300,7 @@ public static class CliIndexer
             var closedReferences = fullFingerprint is not null && inputs.All(i => i.Compilation.References.All(reference =>
                 reference is Microsoft.CodeAnalysis.CompilationReference
                 || reference is Microsoft.CodeAnalysis.PortableExecutableReference { FilePath: { } path }
-                    && ReferenceInsideProof(path, root, fullFingerprint.SdkPath)));
+                    && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot)));
             if (closedReferences && fullFingerprint is not null && afterFingerprint is not null
                 && fullFingerprint == afterFingerprint
                 && initialInputs == stableInputsAfter && inputHash is not null)
@@ -438,13 +438,14 @@ public static class CliIndexer
             projects = (options.ProjectPaths ?? []).Select(p => InsideRoot(root, p)).Order(StringComparer.Ordinal).ToArray()
         })))).ToLowerInvariant();
 
-    private static bool ReferenceInsideProof(string path, string root, string sdk)
+    private static bool ReferenceInsideProof(string path, string root, string sdk, string? packageRoot)
     {
         if (!Path.IsPathFullyQualified(path)) return false;
         var full = Path.GetFullPath(path);
         var dotnet = Directory.GetParent(sdk)?.Parent?.FullName;
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (full.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison)) return true;
+        if (packageRoot is not null && full.StartsWith(packageRoot + Path.DirectorySeparatorChar, comparison)) return true;
         if (dotnet is null) return false;
         return new[] { sdk, Path.Combine(dotnet, "packs", "Microsoft.NETCore.App.Ref"), Path.Combine(dotnet, "shared"),
             Path.Combine(dotnet, "host"), Path.Combine(dotnet, "sdk-manifests"), Path.Combine(dotnet, "metadata") }
