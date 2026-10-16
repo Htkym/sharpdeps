@@ -495,7 +495,7 @@ internal static partial class CliReuseProof
         Append(hash, label);
         Append(hash, length.ToString(System.Globalization.CultureInfo.InvariantCulture));
         using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[65536];
+        var buffer = budget.ReadBuffer;
         long read = 0;
         for (int count; (count = input.Read(buffer)) != 0;)
         {
@@ -524,8 +524,11 @@ internal static partial class CliReuseProof
     {
         private int entries;
         private long bytes;
+        private byte[]? readBuffer;
         private readonly System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
         internal CancellationToken Token { get; } = token;
+        // Synchronous child passes share only this Capture's scratch storage.
+        internal byte[] ReadBuffer => parent?.ReadBuffer ?? (readBuffer ??= new byte[65536]);
         internal void Check()
         {
             Token.ThrowIfCancellationRequested();
