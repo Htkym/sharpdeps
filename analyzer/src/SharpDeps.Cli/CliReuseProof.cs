@@ -16,9 +16,9 @@ internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHas
 /// Trusted update input proof only. This helper never registers MSBuild, loads Roslyn, runs a process,
 /// restores packages or publishes an index. Unknown input closure conservatively returns no proof.
 /// </summary>
-internal static class CliReuseProof
+internal static partial class CliReuseProof
 {
-    internal const string OwnerVersion = "sharpdeps-cli-reuse/1";
+    internal const string OwnerVersion = "sharpdeps-cli-reuse/2";
     private const int MaximumEntries = 100_000;
     private const long MaximumBytes = 2L * 1024 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -32,7 +32,8 @@ internal static class CliReuseProof
         "AssemblyName", "RootNamespace", "OutputType", "AllowUnsafeBlocks", "DefineConstants",
         "Optimize", "CheckForOverflowUnderflow", "WarningLevel", "NoWarn", "WarningsAsErrors",
         "WarningsNotAsErrors", "TreatWarningsAsErrors", "EnableNETAnalyzers", "AnalysisLevel",
-        "GenerateAssemblyInfo", "GenerateGlobalUsings", "Deterministic", "DebugType", "DebugSymbols"
+        "GenerateAssemblyInfo", "GenerateGlobalUsings", "Deterministic", "DebugType", "DebugSymbols",
+        "GitRepositoryConfigurationScope"
     };
     private static readonly string[] ImplicitConfiguration =
     [
@@ -80,13 +81,16 @@ internal static class CliReuseProof
 
             var budget = new ProofBudget(token);
             var environment = NormalizeEnvironment(Environment.GetEnvironmentVariables(), sdk);
-            if (environment is null || HasUserHooks() || HasAncestorConfiguration(root) || HasGitMetadata(root)) return null;
-            if (!PlainProjects(root, sdk, budget)) return null;
+            if (environment is null || HasUserHooks() || HasAncestorConfiguration(root)) return null;
+            var git = CaptureGit(root, sdk, budget);
+            if (git is null || !PlainProjects(root, sdk, budget, git.Value.Present, out var localGitScope)
+                || (git.Value.Present && !localGitScope && !ExternalGitConfigurationAbsent())) return null;
             var environmentHash = HashEnvironment(environment, token);
             using var dependencies = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             Append(dependencies, OwnerVersion);
             Append(dependencies, dotnetRoot);
             Append(dependencies, sdk);
+            Append(dependencies, git.Value.Hash);
             AddTree(sdk, "sdk", dependencies, budget);
             if (Environment.GetEnvironmentVariable("MSBuildEnableWorkloadResolver") == "false")
                 AddTree(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"), "dotnet/packs/Microsoft.NETCore.App.Ref", dependencies, budget);
@@ -123,16 +127,23 @@ internal static class CliReuseProof
             && proof.EnvironmentHash == current.EnvironmentHash && proof.DependencyHash == current.DependencyHash
             && PathComparer.Equals(proof.SdkPath, current.SdkPath);
 
-    private static bool PlainProjects(string root, string sdk, ProofBudget budget)
+    private static bool PlainProjects(string root, string sdk, ProofBudget budget, bool git, out bool localGitScope)
     {
+        localGitScope = true;
         var directories = new Stack<string>(); directories.Push(root);
         var projects = 0;
         while (directories.TryPop(out var directory))
         {
             foreach (var entry in Entries(directory, budget))
             {
-                if (Path.GetFileName(entry).Equals(".git", StringComparison.OrdinalIgnoreCase)) return false;
                 var attributes = Attributes(entry);
+                if (Path.GetFileName(entry).Equals(".git", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!git || !CliPaths.SamePath(entry, Path.Combine(root, ".git"))
+                        || (attributes & FileAttributes.Directory) == 0) return false;
+                    continue;
+                }
+                if (Path.GetFileName(entry).Equals(".gitmodules", StringComparison.OrdinalIgnoreCase)) return false;
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
                     if (!Path.GetFileName(entry).Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)) directories.Push(entry);
@@ -150,21 +161,24 @@ internal static class CliReuseProof
                 }
                 if (name == "project.assets.json" && !PlainAssets(entry, root, sdk, budget)) return false;
                 if (!Path.GetExtension(entry).Equals(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!PlainProject(entry, root, budget)) return false;
+                if (!PlainProject(entry, root, budget, out var local)) return false;
+                localGitScope &= local;
                 projects++;
             }
         }
         return projects > 0;
     }
 
-    private static bool PlainProject(string path, string root, ProofBudget budget)
+    private static bool PlainProject(string path, string root, ProofBudget budget, out bool localGitScope)
     {
+        localGitScope = false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         budget.Bytes(input.Length);
         using var reader = XmlReader.Create(input, new XmlReaderSettings
         {
-            DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null,
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
             MaxCharactersInDocument = IndexSnapshotValidator.MaximumInputFileBytes
         });
         var document = XDocument.Load(reader);
@@ -185,6 +199,11 @@ internal static class CliReuseProof
                     {
                         frameworks++;
                         if (property.Value.Trim() != "net10.0") return false;
+                    }
+                    if (property.Name.LocalName == "GitRepositoryConfigurationScope")
+                    {
+                        if (localGitScope || !property.Value.Equals("local", StringComparison.OrdinalIgnoreCase)) return false;
+                        localGitScope = true;
                     }
                 }
             }
@@ -391,13 +410,6 @@ internal static class CliReuseProof
         return false;
     }
 
-    private static bool HasGitMetadata(string root)
-    {
-        for (DirectoryInfo? directory = new(root); directory is not null; directory = directory.Parent)
-            if (Exists(Path.Combine(directory.FullName, ".git"))) return true;
-        return false;
-    }
-
     private static bool Exists(string path)
     {
         try { CliPaths.RejectLinks(path); _ = Attributes(path); return true; }
@@ -452,7 +464,7 @@ internal static class CliReuseProof
         }
     }
 
-    private static void AddFile(string path, string label, IncrementalHash hash, ProofBudget budget)
+    private static string AddFile(string path, string label, IncrementalHash hash, ProofBudget budget)
     {
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
@@ -466,7 +478,7 @@ internal static class CliReuseProof
         long read = 0;
         for (int count; (count = input.Read(buffer)) != 0;)
         {
-            budget.Token.ThrowIfCancellationRequested();
+            budget.Check();
             read = checked(read + count);
             if (read > length) throw new IOException("Reuse input changed.");
             content.AppendData(buffer, 0, count);
@@ -474,7 +486,9 @@ internal static class CliReuseProof
         if (read != length || input.Length != length) throw new IOException("Reuse input changed.");
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
-        Append(hash, Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant());
+        var digest = Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant();
+        Append(hash, digest);
+        return digest;
     }
 
     private static void Append(IncrementalHash hash, string text)
@@ -485,21 +499,30 @@ internal static class CliReuseProof
         hash.AppendData(size); hash.AppendData(bytes);
     }
 
-    private sealed class ProofBudget(CancellationToken token)
+    private sealed class ProofBudget(CancellationToken token, ProofBudget? parent = null, bool git = false)
     {
         private int entries;
         private long bytes;
+        private readonly System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
         internal CancellationToken Token { get; } = token;
-        internal void Entry()
+        internal void Check()
         {
             Token.ThrowIfCancellationRequested();
-            if (++entries > MaximumEntries) throw new IOException("Reuse proof entry budget exceeded.");
+            if (git && elapsed.ElapsedMilliseconds >= 5000) throw new IOException("Git proof time budget exceeded.");
+        }
+        internal void NextGitPass() { entries = 0; bytes = 0; Check(); }
+        internal void Entry()
+        {
+            Check();
+            if (++entries > (git ? 10_000 : MaximumEntries)) throw new IOException("Reuse proof entry budget exceeded.");
+            parent?.Entry();
         }
         internal void Bytes(long length)
         {
-            Token.ThrowIfCancellationRequested();
+            Check();
             if (length < 0 || length > IndexSnapshotValidator.MaximumInputFileBytes
-                || (bytes = checked(bytes + length)) > MaximumBytes) throw new IOException("Reuse proof byte budget exceeded.");
+                || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes)) throw new IOException("Reuse proof byte budget exceeded.");
+            parent?.Bytes(length);
         }
     }
 }
