@@ -2,7 +2,7 @@
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
   "description": "Explore .NET project, namespace, and type dependencies with source evidence and cycle detection.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
@@ -188,7 +188,7 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run build:analyzer && npm run build -- --production",
+    "vscode:prepublish": "npm run check:release && npm run build:analyzer && npm run build -- --production",
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "build:analyzer": "node scripts/build-analyzer.js",
@@ -202,7 +202,8 @@
     "test:e2e": "node scripts/e2e.js",
     "test:browser": "playwright test",
     "perf": "node scripts/perf.js",
-    "check:vsix": "node scripts/check-vsix.js"
+    "check:vsix": "node scripts/check-vsix.js",
+    "check:release": "node scripts/check-release.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

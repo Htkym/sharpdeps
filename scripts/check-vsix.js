@@ -8,6 +8,7 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { checkVsix } = require('./check-release');
 
 const repoRoot = path.resolve(__dirname, '..');
 const vsce = require.resolve('@vscode/vsce/vsce');
@@ -107,7 +108,9 @@ async function main() {
     entries.some((name) => (entry.endsWith('/') ? name.startsWith(entry) : name === entry))
   );
 
+  const identity = await checkVsix(vsixPath);
   const report = {
+    version: identity.version,
     checkedAt: new Date().toISOString(),
     vsix: path.basename(vsixPath),
     bytes: fs.statSync(vsixPath).size,

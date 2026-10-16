@@ -20,7 +20,7 @@ jobs:
       - name: Check release version
         run: |
           version="$(node -p "require('./package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$version"
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME"
           echo "VSIX_PATH=sharpdeps-$version.vsix" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
@@ -63,6 +63,9 @@ jobs:
           npm run check:vsix
           mv sharpdeps-check.vsix "$VSIX_PATH"
           sha256sum "$VSIX_PATH" > "$VSIX_PATH.sha256"
+
+      - name: Recheck stable publication inputs
+        run: node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH"
 
       - name: Publish to Visual Studio Marketplace
         if: ${{ env.VSCE_PAT != '' }}

@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.2.0 (unreleased candidate)
+
+- Align the VSIX and CLI candidate base at 0.2.0; CLI help reports its packaged version.
+- Check candidate artifact identities and block stable publication while the selected Syntamark runtime/source pair is a preview. This does not publish a new release or change the fixed pair.
+
 ## 0.1.0
 
 - Interactive SVG graph and table views at project, namespace, and type granularity, with hierarchy navigation, search, filters, and cycle detection.
