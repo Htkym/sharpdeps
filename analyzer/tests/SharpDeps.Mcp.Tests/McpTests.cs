@@ -40,4 +40,29 @@ public sealed class McpTests
         using var lines = new BoundedMcpInput(new MemoryStream(Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("日本語\n", 10000)))));
         while (await lines.ReadAsync(buffer.AsMemory()) > 0) { }
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ZeroLengthReadsPreservePendingUtf8(bool asynchronous)
+    {
+        var expected = Encoding.UTF8.GetBytes("\u65e5\n");
+        var actual = new byte[expected.Length];
+        using var input = new BoundedMcpInput(new MemoryStream(expected));
+        if (asynchronous)
+        {
+            Assert.Equal(1, await input.ReadAsync(actual.AsMemory(0, 1)));
+            Assert.Equal(0, await input.ReadAsync(Memory<byte>.Empty));
+            Assert.Equal(expected.Length - 1, await input.ReadAsync(actual.AsMemory(1)));
+            Assert.Equal(0, await input.ReadAsync(actual.AsMemory()));
+        }
+        else
+        {
+            Assert.Equal(1, input.Read(actual, 0, 1));
+            Assert.Equal(0, input.Read(actual, 1, 0));
+            Assert.Equal(expected.Length - 1, input.Read(actual, 1, actual.Length - 1));
+            Assert.Equal(0, input.Read(actual, 0, actual.Length));
+        }
+        Assert.Equal(expected, actual);
+    }
 }

@@ -20,13 +20,13 @@ public sealed class BoundedMcpInput(Stream inner) : Stream
     public override int Read(byte[] buffer, int offset, int count)
     {
         var read = inner.Read(buffer, offset, count);
-        Check(buffer.AsSpan(offset, read), read == 0);
+        Check(buffer.AsSpan(offset, read), read == 0 && count != 0);
         return read;
     }
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
     {
         var read = await inner.ReadAsync(buffer, token);
-        Check(buffer.Span[..read], read == 0);
+        Check(buffer.Span[..read], read == 0 && !buffer.IsEmpty);
         return read;
     }
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token)
