@@ -5,6 +5,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SharpDeps.Query;
 
 // Dedicated local IPC. No stdio, shell command, source text, or cursor key crosses this boundary.
 internal sealed record CoordinatorOwner(int Protocol, Guid Instance, Guid WorkspaceUuid,
@@ -14,7 +15,11 @@ internal sealed record CoordinatorRequest(int Protocol, Guid Instance, Guid Work
 internal sealed record CoordinatorResult(string WorkspaceId, string SnapshotId, long Generation,
     string Coverage, string UpdateMode, int Files, int Nodes, int Edges);
 internal sealed record CoordinatorReply(int Protocol, Guid Instance, string RequestId, long Revision,
-    long DesiredRevision, string State, CoordinatorResult? Result, string? ErrorCode);
+    long DesiredRevision, string State, CoordinatorResult? Result, string? ErrorCode)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public QueryInputInventory? QueryInventory { get; init; }
+}
 
 internal static class CoordinatorProtocol
 {

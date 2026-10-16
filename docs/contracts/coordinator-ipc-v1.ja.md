@@ -14,7 +14,7 @@ sharpdeps update --root ROOT_ABS --target App.csproj --trusted --timeout-seconds
 
 既存ownerがあれば`index`／`update`は専用IPCへ送る。接続できないときはOS leaseの実取得を試みる。取得成功時だけ短命ownerとして更新し、受理済みの他clientを処理して終了する。保存Queryはownerを起動せず、committed generationを固定したreaderで動く。更新後のQueryでは新readerを開く。古いreader／cursorの世代を途中で置き換えない。
 
-ownerの`idle`、`dirty`、`updating`、`degraded`、`stopping`は更新処理の状態である。live入力の完全な一致やQuery freshnessを証明しない。`configurationProof`は`unverified`を保持する。保存Queryの`refresh`は従来どおり`UPDATE_REQUIRED`であり、自動更新しない。
+ownerの`idle`、`dirty`、`updating`、`degraded`、`stopping`は更新処理の状態である。生存やidleだけでlive入力の完全な一致やQuery freshnessを証明しない。statusの`configurationProof`は`unverified`を保持する。trusted `verify-query`だけは保存snapshot ID/generationを照合し、直近の成功したproduction更新が持つclosed-input proofで現在の入力集合・設定/variant/参照/SDKを再評価する。照合の前後でowner revisionが同じidleの場合だけQuery用inventoryを返す。証明なし・不一致・更新中・既存64KiB frame上限超過は成功としない。client切断はその検査だけを取り消す。保存Queryの`refresh`は従来どおり`UPDATE_REQUIRED`であり、自動更新しない。
 
 watchも既存v1のstateへ写像し、wire fieldやstate名を追加しない。native監視が使えない場合は周期resyncを続け、idle相当をdegradedとして表示する。watchの失敗はstatusのerrorCodeへ保持し、次のwatchによるdurable commitが成功したときに消す。入力検査やSDK選択の失敗、停止後も、古いcommitted Queryは読める。extensionのtrust変更とwatch UIは未接続であり、CLIのtrust撤回にはowner processを停止する。
 

@@ -9,11 +9,15 @@ using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Analysis.Roslyn.Evidence;
 using SharpDeps.Analysis.Roslyn.Symbols;
 using SharpDeps.Index;
+using SharpDeps.Query;
 
 public sealed record CliIndexOptions(string Root, string Target, string IndexPath, Guid WorkspaceUuid,
     string Configuration = "Debug", string? Platform = null, IReadOnlyList<string>? ProjectPaths = null,
     string? TargetFramework = null, int TimeoutSeconds = 180, bool AllowSemanticReuse = false);
-public sealed record CliIndexBuild(IndexSnapshot Snapshot, Action VerifySelection);
+public sealed record CliIndexBuild(IndexSnapshot Snapshot, Action VerifySelection)
+{
+    internal Func<CancellationToken, QueryInputInventory>? VerifyQueryInputs { get; init; }
+}
 
 public sealed class CliIndexException : Exception
 {
@@ -391,7 +395,13 @@ public static class CliIndexer
         var publicationInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         token.ThrowIfCancellationRequested();
-        return new(snapshot, () => VerifySelection(options, snapshot, publicationInputs, publicationToken));
+        var files = snapshot.Files;
+        return new(snapshot, () => VerifySelection(options, files, publicationInputs, publicationToken))
+        {
+            // Only a production extraction with a closed dependency/SDK proof may attest freshness.
+            // Retain file metadata/options, not the graph or compiler workspace.
+            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs)
+        };
 
         async Task<InputText> Capture(string path, string kind)
         {
@@ -414,17 +424,30 @@ public static class CliIndexer
         }
     }
 
-    private static void VerifySelection(CliIndexOptions options, IndexSnapshot snapshot, string expectedInputs,
+    private static Func<CancellationToken, QueryInputInventory> QueryVerifier(CliIndexOptions options,
+        IReadOnlyList<IndexFile> files, string expectedInputs)
+    {
+        // Query revalidation needs only fingerprints, not the extraction catalog/graph payload.
+        var metadata = files.Select(f => f.Reuse is { } proof
+            ? f with { Reuse = proof with { Catalog = [], Projects = null } } : f).ToArray();
+        return token =>
+        {
+            VerifySelection(options, metadata, expectedInputs, token);
+            return new(metadata.Where(f => !f.Deleted).Select(f => f.RelativePath).ToArray(), true);
+        };
+    }
+
+    private static void VerifySelection(CliIndexOptions options, IReadOnlyList<IndexFile> files, string expectedInputs,
         CancellationToken token)
     {
         var root = CliPaths.Root(options.Root);
         var markdownPaths = WalkInputs(root, options.IndexPath, token).Where(IsMarkdown)
             .Select(p => Path.GetRelativePath(root, p).Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!markdownPaths.SetEquals(snapshot.Files.Where(f => !f.Deleted && f.Kind == "markdown").Select(f => f.RelativePath)))
+        if (!markdownPaths.SetEquals(files.Where(f => !f.Deleted && f.Kind == "markdown").Select(f => f.RelativePath)))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var hash = FingerprintInputs(root, options.IndexPath, includeOutputs: true, token).GetAwaiter().GetResult();
         if (hash is null || hash != expectedInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
-        var proof = snapshot.Files.SingleOrDefault(f => PathComparer.Equals(f.RelativePath,
+        var proof = files.SingleOrDefault(f => PathComparer.Equals(f.RelativePath,
             Path.GetRelativePath(root, InsideRoot(root, options.Target)).Replace('\\', '/')))?.Reuse;
         if (proof is null) return;
         var current = CliReuseProof.Capture(root, proof.SdkPath, token);

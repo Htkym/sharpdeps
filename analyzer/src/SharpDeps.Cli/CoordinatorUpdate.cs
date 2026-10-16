@@ -71,8 +71,23 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
         }
         catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && update.Full) { }
         var build = await CliIndexer.BuildForPublicationAsync(options, previous, token);
-        return build with { VerifySelection = PublicationGuard(current, Path.GetDirectoryName(options.Target)!, build.VerifySelection) };
+        var directory = Path.GetDirectoryName(options.Target)!;
+        return build with
+        {
+            VerifySelection = PublicationGuard(current, directory, build.VerifySelection),
+            VerifyQueryInputs = build.VerifyQueryInputs is not { } verify ? null : QueryGuard(current, directory, verify)
+        };
     }
+
+    private static Func<CancellationToken, SharpDeps.Query.QueryInputInventory> QueryGuard(CliSdkSelection current,
+        string directory, Func<CancellationToken, SharpDeps.Query.QueryInputInventory> verify) => token =>
+    {
+        token.ThrowIfCancellationRequested();
+        PublicationGuard(current, directory, () => { })();
+        var inventory = verify(token);
+        PublicationGuard(current, directory, () => { })();
+        return inventory;
+    };
 
     internal static Action PublicationGuard(CliSdkSelection current, string directory, Action verifyBuildSelection)
         => () =>

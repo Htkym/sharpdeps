@@ -3,6 +3,7 @@ namespace SharpDeps.Cli;
 using System.Diagnostics;
 using System.IO.Pipes;
 using SharpDeps.Index;
+using SharpDeps.Query;
 
 /// <summary>One OS writer lease from before analysis until all admitted work drains.</summary>
 internal sealed class CliCoordinator : IAsyncDisposable
@@ -13,6 +14,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
     private readonly CancellationTokenSource admission = new();
     private readonly SemaphoreSlim signal = new(0);
     private readonly SemaphoreSlim slots = new(32);
+    private readonly SemaphoreSlim queryProofSlot = new(1, 1);
     private readonly object gate = new();
     private readonly List<Batch> pending = [];
     private readonly HashSet<Task> sessions = [];
@@ -21,6 +23,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
     private long desiredRevision;
     private long committedRevision;
     private CoordinatorResult? committed;
+    private Func<CancellationToken, QueryInputInventory>? verifyQueryInputs;
     private string state = "idle";
     private bool stopping;
     private bool accepting = true;
@@ -201,6 +204,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
                                     ? "project-incremental" : "full-rebuild",
                             snapshot.Files.Count, snapshot.Graph.Nodes.Count, snapshot.Graph.Edges.Count);
                         committed = result;
+                        verifyQueryInputs = built.VerifyQueryInputs;
                         committedRevision = captured;
                         if (batch.VerifyWatchInputs is not null) watchError = null;
                         state = pending.Count == 0 ? "idle" : "dirty";
@@ -314,6 +318,13 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 Validate(request);
                 CoordinatorReply reply;
                 if (request.Operation == "status") reply = Status(request.RequestId);
+                else if (request.Operation == "verify-query")
+                {
+                    disconnect = WatchDisconnectAsync(pipe, session);
+                    await queryProofSlot.WaitAsync(session.Token);
+                    try { reply = await Task.Run(() => VerifyQuery(request, session.Token), session.Token); }
+                    finally { queryProofSlot.Release(); }
+                }
                 else
                 {
                     var arguments = CliArguments.Parse(request.Arguments);
@@ -354,11 +365,40 @@ internal sealed class CliCoordinator : IAsyncDisposable
         if (request.Instance != Owner.Instance || request.WorkspaceUuid != Owner.WorkspaceUuid
             || !CliPaths.SamePath(request.Root, Owner.Root) || !CliPaths.SamePath(request.IndexPath, Owner.IndexPath)
             || string.IsNullOrWhiteSpace(request.RequestId) || request.RequestId.Length > 64 || request.RequestId.Any(char.IsControl)
-            || request.Operation is not ("status" or "update") || request.Arguments is null
+            || request.Operation is not ("status" or "update" or "verify-query") || request.Arguments is null
             || request.Arguments.Length > 200 || request.Arguments.Any(argument => argument is null || argument.Length > 8192))
             throw new CliFailure("COORDINATOR_REQUEST_INVALID", 6);
-        if (request.Operation == "update" && !request.Trusted) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
+        if (request.Operation is "update" or "verify-query" && !request.Trusted) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
         if (request.Operation == "status" && request.Arguments.Length != 0) throw new CliFailure("COORDINATOR_REQUEST_INVALID", 6);
+        if (request.Operation == "verify-query" && (request.Arguments.Length != 2
+            || !long.TryParse(request.Arguments[1], System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var generation) || generation < 1))
+            throw new CliFailure("COORDINATOR_REQUEST_INVALID", 6);
+    }
+
+    private CoordinatorReply VerifyQuery(CoordinatorRequest request, CancellationToken token)
+    {
+        Func<CancellationToken, QueryInputInventory> verify;
+        long revision;
+        lock (gate)
+        {
+            if (stopping || state != "idle" || watchError is not null || desiredRevision != committedRevision
+                || committed?.SnapshotId != request.Arguments[0]
+                || committed.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture) != request.Arguments[1]
+                || verifyQueryInputs is null)
+                throw new CliFailure("QUERY_PROOF_UNAVAILABLE", 3);
+            revision = committedRevision;
+            verify = verifyQueryInputs;
+        }
+        var inventory = verify(token);
+        token.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (stopping || state != "idle" || watchError is not null || committedRevision != revision
+                || desiredRevision != revision || !ReferenceEquals(verify, verifyQueryInputs))
+                throw new CliFailure("QUERY_PROOF_UNAVAILABLE", 3);
+            return Status(request.RequestId) with { QueryInventory = inventory };
+        }
     }
 
     private static async Task WatchDisconnectAsync(Stream pipe, CancellationTokenSource session)
@@ -417,5 +457,6 @@ internal sealed class CliCoordinator : IAsyncDisposable
         admission.Dispose();
         signal.Dispose();
         slots.Dispose();
+        queryProofSlot.Dispose();
     }
 }

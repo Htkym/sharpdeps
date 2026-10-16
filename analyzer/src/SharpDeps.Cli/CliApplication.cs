@@ -43,7 +43,9 @@ public static class CliApplication
             var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(indexPath)) throw new CliFailure("INDEX_MISSING", 3);
             using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid);
-            var service = new QueryService(new PinnedQueryIndex(reader), options.Has("trusted") ? new QueryWorkspace(root) : null,
+            var pinned = new PinnedQueryIndex(reader);
+            var service = new QueryService(pinned, options.Has("trusted") ? new QueryWorkspace(root,
+                queryToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, queryToken)) : null,
                 options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
             var reply = service.Execute(request!, token);
             await stdout.WriteLineAsync(reply.Json);
@@ -57,6 +59,27 @@ public static class CliApplication
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { return await Error(stdout, options, "ROOT_ACCESS_DENIED", 5); }
         catch (Exception) { return await Error(stdout, options, "INTERNAL_ERROR", 7); }
+    }
+
+    private static QueryInputInventory VerifyQueryOwner(string root, string indexPath, Guid uuid,
+        IndexSnapshot snapshot, CancellationToken token)
+    {
+        try
+        {
+            var owner = CoordinatorProtocol.Discover(root, indexPath, uuid);
+            if (owner is null) throw new QuerySourceException("QUERY_PROOF_UNAVAILABLE");
+            var reply = CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version, owner.Instance, uuid,
+                "query-proof", "verify-query", root, indexPath, true,
+                [snapshot.Graph.SnapshotId, snapshot.Graph.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture)]),
+                token).GetAwaiter().GetResult();
+            if (reply?.ErrorCode is not null || reply?.QueryInventory is not { ConfigurationVerified: true } inventory
+                || reply.Result?.SnapshotId != snapshot.Graph.SnapshotId || reply.Result.Generation != snapshot.Graph.Generation
+                || reply.State != "idle" || reply.Revision != reply.DesiredRevision)
+                throw new QuerySourceException("QUERY_PROOF_UNAVAILABLE");
+            return inventory;
+        }
+        catch (Exception error) when (error is CliFailure or IOException or UnauthorizedAccessException)
+        { throw new QuerySourceException("QUERY_PROOF_UNAVAILABLE"); }
     }
 
     // Keep target SDK/MSBuild activation out of the saved-only command path.

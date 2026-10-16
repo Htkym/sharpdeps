@@ -77,7 +77,7 @@ exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialを
 
 ## 鮮度、sourceと権限
 
-trusted更新は[coordinator／IPC契約](coordinator-ipc-v1.ja.md)でownerへ接続する。保存Queryの現在入力集合・設定fingerprintのowner接続は未完了で、そのQuery snapshotのcoordinator stateは`not-connected`を保持する。保存manifestのhashが全部一致しても、新規入力と現設定を証明できない。`require-fresh`は不足を未達として拒否し、`refresh`は`UPDATE_REQUIRED`を返す。mtime/sizeだけでverified-currentと称さない。明示的に許可されたtrusted index/update後、新readerから問い合わせる。
+trusted更新は[coordinator／IPC契約](coordinator-ipc-v1.ja.md)でownerへ接続する。trusted `require-fresh`は同じ保存世代を明示更新したlive ownerへ入力集合・設定の再照合を依頼する。closed-input proofで内容hash、設定/variant/参照/SDKを再確認できる範囲だけ成功し、owner不在・再起動後の証明なし・別世代・更新中・未知の入力閉包・不一致は条件未達のままとする。Queryはownerを起動せず、ReadSavedの読取りにこの証明を必須としない。Query snapshotの`coordinatorState`は既存の`not-connected`を保持し、一回の入力証明と継続接続の状態を分ける。`refresh`は`UPDATE_REQUIRED`を保持し、mtime/保存bool/ownerの生存だけでverified-currentと称しない。
 
 source snippetはmanifest/evidenceのcontent hashと同じ一回のbounded byte bufferを照合してから、元UTF-16のzero-based半開区間を切る。BOM/CRLFを除去しない。不一致は`SOURCE_CHANGED_SINCE_SNAPSHOT`でsnippetを省略する。unknown/generated spanを実source位置へ推測補完しない。untrusted ReadSavedではsourceを読まない。
 
