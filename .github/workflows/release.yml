@@ -107,7 +107,16 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS --verify-tag --notes-file CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p .local
+          awk -v version="$version" '
+            $1 == "##" { if ($2 == version) { found = 1; next } if (found) exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > .local/release-notes.md
+          grep -q '[^[:space:]]' .local/release-notes.md
+          gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS --verify-tag --title "SharpDeps $version" --notes-file .local/release-notes.md
 
   publish-nuget:
     needs: release
