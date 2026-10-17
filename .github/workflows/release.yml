@@ -64,8 +64,13 @@ jobs:
           mv sharpdeps-check.vsix "$VSIX_PATH"
           sha256sum "$VSIX_PATH" > "$VSIX_PATH.sha256"
 
-      - name: Recheck stable publication inputs
-        run: node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH"
+      - name: Pack and verify release tools
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dotnet pack analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-cli" -o artifacts/release-tools
+          dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/release-tools
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-identity.json
+          (cd artifacts/release-tools && sha256sum *.nupkg > SHA256SUMS)
 
       - name: Publish to Visual Studio Marketplace
         if: ${{ env.VSCE_PAT != '' }}
@@ -78,4 +83,4 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" --verify-tag --notes-file CHANGELOG.md
+        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS artifacts/release-identity.json --verify-tag --notes-file CHANGELOG.md
