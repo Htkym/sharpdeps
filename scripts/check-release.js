@@ -67,25 +67,32 @@ function checkDefinitions(tag) {
   };
 }
 
-async function readArchive(file, wanted) {
+async function readArchive(file, wanted, hashOnly = false) {
   return new Promise((resolve, reject) => {
     require('yauzl').open(file, { lazyEntries: true }, (error, zip) => {
       if (error) return reject(error);
-      const entries = {};
+      const entries = Object.create(null);
+      let total = 0;
       zip.on('error', reject);
       zip.on('entry', (entry) => {
         if (!wanted(entry.fileName)) return zip.readEntry();
-        if (Object.hasOwn(entries, entry.fileName) || entry.uncompressedSize > 8 * 1024 * 1024) {
+        total += entry.uncompressedSize;
+        if (
+          Object.hasOwn(entries, entry.fileName) ||
+          entry.uncompressedSize > (hashOnly ? 64 : 8) * 1024 * 1024 ||
+          total > 1024 * 1024 * 1024
+        ) {
           zip.close();
           return reject(new Error(`Duplicate or oversized metadata/payload: ${entry.fileName}`));
         }
         zip.openReadStream(entry, (streamError, stream) => {
           if (streamError) return reject(streamError);
           const chunks = [];
+          const digest = hashOnly ? crypto.createHash('sha256') : undefined;
           stream.on('error', reject);
-          stream.on('data', (chunk) => chunks.push(chunk));
+          stream.on('data', (chunk) => (digest ? digest.update(chunk) : chunks.push(chunk)));
           stream.on('end', () => {
-            entries[entry.fileName] = Buffer.concat(chunks);
+            entries[entry.fileName] = digest ? digest.digest('hex') : Buffer.concat(chunks);
             zip.readEntry();
           });
         });
@@ -94,6 +101,16 @@ async function readArchive(file, wanted) {
       zip.readEntry();
     });
   });
+}
+
+async function checkPublishedTool(sealed, published) {
+  const wanted = (name) => !name.endsWith('/');
+  const expected = await readArchive(sealed, wanted, true);
+  const actual = await readArchive(published, wanted, true);
+  assert.ok(Object.keys(expected).length, 'A sealed package must not be empty');
+  // NuGet.org adds this repository-signature entry to uploaded unsigned archives.
+  if (!Object.hasOwn(expected, '.signature.p7s')) delete actual['.signature.p7s'];
+  assert.deepEqual(actual, expected, 'Published package differs from the sealed tool');
 }
 
 function artifactIdentity(file) {
@@ -188,7 +205,9 @@ async function main() {
     '--cli-package',
     '--cli-version',
     '--mcp-package',
-    '--mcp-version'
+    '--mcp-version',
+    '--sealed-package',
+    '--published-package'
   ];
   for (let i = 2; i < process.argv.length; i += 2) {
     const name = process.argv[i];
@@ -207,6 +226,7 @@ async function main() {
     '--mcp-version requires --mcp-package'
   );
   const definition = checkDefinitions(options['--tag']);
+  assert.equal(Boolean(options['--sealed-package']), Boolean(options['--published-package']));
   const { manifest, pin, ...report } = definition;
   void manifest;
   void pin;
@@ -215,10 +235,14 @@ async function main() {
     report.cli = await checkCli(options['--cli-package'], options['--cli-version'], definition);
   if (options['--mcp-package'])
     report.mcp = await checkMcp(options['--mcp-package'], options['--mcp-version'], definition);
+  if (options['--sealed-package']) {
+    await checkPublishedTool(options['--sealed-package'], options['--published-package']);
+    report.publishedToolMatches = true;
+  }
   console.log(JSON.stringify(report, null, 2));
 }
 
-module.exports = { checkDefinitions, checkVsix, checkCli, checkMcp };
+module.exports = { checkDefinitions, checkVsix, checkCli, checkMcp, checkPublishedTool };
 if (require.main === module)
   main().catch((error) => {
     console.error(error.message);

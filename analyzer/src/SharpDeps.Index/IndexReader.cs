@@ -26,7 +26,20 @@ public sealed class IndexReader : IDisposable
         {
             transaction=connection.BeginTransaction(deferred:true);
             IndexDatabase.CheckMetadata(connection,transaction,workspace);
-            using var command=IndexDatabase.Command(connection,transaction,"SELECT g.generation,g.snapshot_id,g.manifest_hash,g.graph_json FROM generations g JOIN metadata m ON m.active_generation=g.generation WHERE m.singleton=1 AND g.status='committed'");
+            // Rows are the validated graph source; project only header fields from legacy full-graph JSON.
+            using var command=IndexDatabase.Command(connection,transaction,"""
+                SELECT g.generation,g.snapshot_id,g.manifest_hash,
+                    CASE WHEN json_type(g.graph_json,'$.nodes')='array'
+                        AND json_type(g.graph_json,'$.variants')='array'
+                        AND json_type(g.graph_json,'$.symbolOccurrences')='array'
+                        AND json_type(g.graph_json,'$.edges')='array'
+                        AND json_type(g.graph_json,'$.legacyReferences')='array'
+                    THEN json_set(g.graph_json,'$.nodes',json('[]'),'$.variants',json('[]'),
+                        '$.symbolOccurrences',json('[]'),'$.edges',json('[]'),'$.legacyReferences',json('[]'))
+                    ELSE g.graph_json END
+                FROM generations g JOIN metadata m ON m.active_generation=g.generation
+                WHERE m.singleton=1 AND g.status='committed'
+                """);
             using var row=command.ExecuteReader();
             if(!row.Read())throw new IndexStoreException("INDEX_NO_SNAPSHOT", "No committed generation exists.");
             var header=HarnessGraphContract.Read(row.GetString(3));

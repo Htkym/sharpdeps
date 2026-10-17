@@ -128,6 +128,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@v4
         with:
           name: sharpdeps-release-tools-${{ github.sha }}
@@ -136,16 +140,44 @@ jobs:
         run: |
           node scripts/check-release.js --tag "$GITHUB_REF_NAME"
           (cd artifacts/release-tools && sha256sum -c SHA256SUMS)
+      - name: Check existing NuGet tools before pushing either package
+        # Retry a partial NuGet publication with "Re-run failed jobs" to reuse these sealed tools.
+        id: publication
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          : > missing-packages.txt
+          curl --fail --silent --show-error --location --connect-timeout 15 --max-time 120 https://api.nuget.org/v3/index.json > nuget-index.json
+          base=$(node <<'JS'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const base = JSON.parse(fs.readFileSync('nuget-index.json')).resources.find(r => r['@type'] === 'PackageBaseAddress/3.0.0')['@id'];
+          assert.equal(new URL(base).protocol, 'https:');
+          console.log(base.endsWith('/') ? base : base + '/');
+          JS
+          )
+          for id in SharpDeps.Cli SharpDeps.Mcp; do
+            lower="${id,,}"
+            local="artifacts/release-tools/$id.$version.nupkg"
+            published="$RUNNER_TEMP/$id.published.nupkg"
+            status=$(curl --silent --show-error --location --connect-timeout 15 --max-time 120 --max-filesize 268435456 --output "$published" --write-out '%{http_code}' "$base$lower/$version/$lower.$version.nupkg")
+            case "$status" in
+              200) node scripts/check-release.js --sealed-package "$local" --published-package "$published" ;;
+              404) printf '%s\n' "$local" >> missing-packages.txt ;;
+              *) echo "Cannot check published package $id: HTTP $status" >&2; exit 1 ;;
+            esac
+          done
+          if [ -s missing-packages.txt ]; then echo 'needed=true' >> "$GITHUB_OUTPUT"; else echo 'needed=false' >> "$GITHUB_OUTPUT"; fi
       - name: NuGet login (OIDC)
+        if: steps.publication.outputs.needed == 'true'
         id: login
         uses: NuGet/login@v1
         with:
           user: ${{ vars.NUGET_USER }}
       - name: Publish the verified tools to NuGet
+        if: steps.publication.outputs.needed == 'true'
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          for id in SharpDeps.Cli SharpDeps.Mcp; do
-            dotnet nuget push "artifacts/release-tools/$id.$version.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-          done
+          while IFS= read -r package; do
+            dotnet nuget push "$package" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          done < missing-packages.txt

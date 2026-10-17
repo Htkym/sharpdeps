@@ -12,6 +12,16 @@ using Xunit;
 public sealed class IndexStoreTests
 {
     [Fact]
+    public void HeaderProjectionStillRejectsIncompleteStoredGraphCollections()
+    {
+        using var fixture = new StoreFixture();
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE generations SET graph_json=json_set(graph_json,'$.nodes',NULL)");
+        Assert.Throws<System.Text.Json.JsonException>(() => { using var reader = fixture.Reader(); });
+    }
+
+    [Fact]
     public void FilesystemRootWorkspaceCommitsAnOwnedInput()
     {
         using var fixture = new StoreFixture();
