@@ -1,9 +1,13 @@
 # Change Log
 
-## 0.2.0 (unreleased candidate)
+## 0.2.0 (2026-10-17)
 
-- Align the VSIX and CLI candidate base at 0.2.0; CLI help reports its packaged version.
-- Check candidate artifact identities and block stable publication while the selected Syntamark runtime/source pair is a preview. This does not publish a new release or change the fixed pair.
+- Publish the VSIX, SharpDeps.Cli, and optional SharpDeps.Mcp together as version 0.2.0.
+- Add saved-index CLI queries and context output with explicit freshness and trust boundaries and incremental reuse for supported closed inputs.
+- Add an optional stdio MCP adapter for status, search, symbol, callers, callees, impact, and context. Mutations require explicit host-side opt-in and workspace trust.
+- Follow newly committed saved-index generations in the editor, preserve namespace navigation, and improve keyboard selection and evidence navigation.
+- Use the verified Syntamark 1.0.0 runtime/source pair. Reuse hashing buffers and avoid duplicate graph deserialization.
+- Freshness-proof buffer reuse reduces allocations, not full input verification. Large SDK inputs can still make require-fresh queries slow, and the existing query timeout still applies.
 
 ## 0.1.0
 
