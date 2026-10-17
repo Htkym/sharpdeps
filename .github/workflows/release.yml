@@ -69,8 +69,15 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           dotnet pack analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-cli" -o artifacts/release-tools
           dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/release-tools
-          node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-identity.json
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-tools/release-identity.json
           (cd artifacts/release-tools && sha256sum *.nupkg > SHA256SUMS)
+
+      - name: Preserve verified tools for NuGet publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharpdeps-release-tools-${{ github.sha }}
+          path: artifacts/release-tools/
+          if-no-files-found: error
 
       - name: Publish to Visual Studio Marketplace
         if: ${{ env.VSCE_PAT != '' }}
@@ -83,4 +90,37 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS artifacts/release-identity.json --verify-tag --notes-file CHANGELOG.md
+        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS artifacts/release-tools/release-identity.json --verify-tag --notes-file CHANGELOG.md
+
+  publish-nuget:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: sharpdeps-release-tools-${{ github.sha }}
+          path: artifacts/release-tools
+      - name: Verify stable inputs and tool checksums
+        run: |
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME"
+          (cd artifacts/release-tools && sha256sum -c SHA256SUMS)
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Publish the verified tools to NuGet
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for id in SharpDeps.Cli SharpDeps.Mcp; do
+            dotnet nuget push "artifacts/release-tools/$id.$version.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          done
