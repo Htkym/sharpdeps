@@ -1,15 +1,11 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Existing release tag pointing to the current reviewed main commit
-        required: true
-        type: string
+  push:
+    tags:
+      - 'v*'
 
 env:
-  RELEASE_TAG: ${{ inputs.release_tag }}
   DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 
 permissions:
@@ -26,16 +22,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify current main, release tag, and normal CI
+      - name: Verify release tag equals current reviewed main
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:RELEASE_TAG -RequireTag
+        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
 
       - name: Check release version
         run: |
           version="$(node -p "require('./package.json').version")"
-          node scripts/check-release.js --tag "$RELEASE_TAG"
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME"
           echo "VSIX_PATH=sharpdeps-$version.vsix" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
@@ -81,10 +77,10 @@ jobs:
 
       - name: Pack and verify release tools
         run: |
-          version="${RELEASE_TAG#v}"
+          version="${GITHUB_REF_NAME#v}"
           dotnet pack analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-cli" -o artifacts/release-tools
           dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/release-tools
-          node scripts/check-release.js --tag "$RELEASE_TAG" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-tools/release-identity.json
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-tools/release-identity.json
           (cd artifacts/release-tools && sha256sum *.nupkg > SHA256SUMS)
 
       - name: Preserve verified tools for NuGet publication
@@ -98,7 +94,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:RELEASE_TAG -RequireTag
+        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
 
       - name: Publish to Visual Studio Marketplace
         if: ${{ env.VSCE_PAT != '' }}
@@ -111,7 +107,7 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS artifacts/release-tools/release-identity.json --verify-tag --notes-file CHANGELOG.md
+        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS --verify-tag --notes-file CHANGELOG.md
 
   publish-nuget:
     needs: release
@@ -124,11 +120,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify current main, release tag, and normal CI
+      - name: Verify release tag equals current reviewed main
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:RELEASE_TAG -RequireTag
+        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -138,7 +134,7 @@ jobs:
           path: artifacts/release-tools
       - name: Verify stable inputs and tool checksums
         run: |
-          node scripts/check-release.js --tag "$RELEASE_TAG"
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME"
           (cd artifacts/release-tools && sha256sum -c SHA256SUMS)
       - name: NuGet login (OIDC)
         id: login
@@ -149,7 +145,7 @@ jobs:
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          version="${RELEASE_TAG#v}"
+          version="${GITHUB_REF_NAME#v}"
           for id in SharpDeps.Cli SharpDeps.Mcp; do
             dotnet nuget push "artifacts/release-tools/$id.$version.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
           done

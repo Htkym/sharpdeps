@@ -6,9 +6,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch' -or
-    $env:DEFAULT_BRANCH -ne 'main' -or $env:GITHUB_REF -ne 'refs/heads/main') {
-    throw 'Release operations must be dispatched from the actual default main branch.'
+if ($env:DEFAULT_BRANCH -ne 'main') { throw 'Release source must be the actual default main branch.' }
+if ($RequireTag) {
+    if ([string]::IsNullOrWhiteSpace($ReleaseTag)) { throw 'Select an existing release tag.' }
+    if ($env:GITHUB_EVENT_NAME -notin @('push', 'workflow_dispatch') -or
+        $env:GITHUB_REF -cne "refs/tags/$ReleaseTag") {
+        throw 'Publication must run from the matching release tag.'
+    }
+} elseif ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch' -or $env:GITHUB_REF -ne 'refs/heads/main') {
+    throw 'Pair preparation must be dispatched from the actual default main branch.'
 }
 $head = git rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the dispatch SHA.' }
@@ -17,7 +23,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not read the current main branch.' }
 $main = git rev-parse FETCH_HEAD
 if ($LASTEXITCODE -ne 0 -or $main -ne $head) { throw 'Main advanced; select and verify the current main commit.' }
 
-if ($RequireTag -and [string]::IsNullOrWhiteSpace($ReleaseTag)) { throw 'Select an existing release tag.' }
 if ($ReleaseTag) {
     git check-ref-format "refs/tags/$ReleaseTag"
     if ($LASTEXITCODE -ne 0) { throw 'Invalid release tag.' }
