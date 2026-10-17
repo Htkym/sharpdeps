@@ -1,5 +1,3 @@
-// SharpDeps map panel (SD-017: the v2 shell and the report bridge).
-//
 // The panel owns the webview and the message plumbing; everything that needs the
 // analysis result is answered by the report bridge, and everything that needs extension
 // work (starting or stopping an analysis) is delegated to the host callbacks. A message
@@ -11,9 +9,16 @@ import type { ReportStore } from '../analyzer/reportStore';
 import { openDeclarationLocation, openEvidenceLocation } from '../commands/openLocation';
 import { buildContextExport, buildExportJson, buildMermaid } from '../export/contextExport';
 import type { ContextEvidence, ContextExportInput } from '../export/contextExport';
+import {
+  buildSavedContextExport,
+  serializeSavedQueryExport,
+  type PreparedSavedExport,
+  type SavedExportRequest
+} from '../export/savedQueryExport';
+import { QueryClientError } from '../analyzer/queryClient';
 import { getWebviewHtml } from './html';
 import { PROTOCOL_VERSION, validateWebviewMessage } from './protocolV2';
-import type { ExportFormat, HostToWebviewMessage, Scope } from './protocolV2';
+import type { ExportFormat, HostToWebviewMessage, Scope, WebviewToHostMessage } from './protocolV2';
 import type { Granularity } from '../analyzer/reportV2';
 import type { AnalysisProgressEvent } from '../analyzer/analysisController';
 import type { ProfileRequest, Filters } from './protocolV2';
@@ -35,9 +40,40 @@ export interface CodeMapPanelHost {
   /** Starts an analysis for the current target in the requested mode. */
   onAnalyze: (mode: 'quick' | 'semantic', profile?: ProfileRequest) => void;
   /** Stops the running analysis. */
-  onCancel: () => void;
+  onCancel: (analysisId?: string) => void;
+  onUpdateSavedIndex?: (analysisId: string) => void;
+  savedUpdateState?: () => Extract<HostToWebviewMessage, { type: 'savedUpdateState' }> | undefined;
   onDispose?: () => void;
   projectionLimits?: (granularity: Granularity) => { maxNodes: number; maxEdges: number };
+  currentAnalysisId?: () => string | undefined;
+  savedAnalysisState?: (
+    analysisId: string
+  ) => Extract<HostToWebviewMessage, { type: 'analysisComplete' }> | undefined;
+  savedStaleReason?: (
+    analysisId: string
+  ) => Extract<HostToWebviewMessage, { type: 'stale' }>['reason'] | undefined;
+  openSavedSource?: (
+    request: Extract<
+      WebviewToHostMessage,
+      { type: 'openEvidence' | 'openDeclaration' | 'openCandidateDeclaration' }
+    >,
+    current?: () => boolean
+  ) => Promise<void>;
+  prepareSavedExport?: (request: SavedExportRequest) => PreparedSavedExport;
+  dismissCandidateInvestigation?: (
+    request: Extract<WebviewToHostMessage, { type: 'dismissCandidateInvestigation' }>
+  ) => void;
+}
+
+interface SourceOpen {
+  request: Extract<
+    WebviewToHostMessage,
+    { type: 'openEvidence' | 'openDeclaration' | 'openCandidateDeclaration' }
+  >;
+  revision: number;
+  readyEpoch: number;
+  provider: 'saved' | 'report';
+  state?: Record<string, unknown>;
 }
 
 /** Singleton webview panel (an editor tab) that renders the dependency map. */
@@ -59,12 +95,12 @@ export class CodeMapPanel {
 
     const panel = vscode.window.createWebviewPanel(CodeMapPanel.viewType, 'SharpDeps', column, {
       enableScripts: true,
-      // No command URIs and no form submission from the map (SD-023); the script only
+      // No command URIs and no form submission from the map; the script only
       // talks through the validated message channel.
       enableCommandUris: false,
       enableForms: false,
       // Restore is verified (serializer + persistence + browser fixture), so the webview
-      // is recreated when it is hidden instead of being kept alive (SD-021).
+      // is recreated when it is hidden instead of being kept alive.
       retainContextWhenHidden: false,
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
     });
@@ -78,6 +114,12 @@ export class CodeMapPanel {
     extensionUri: vscode.Uri,
     host: CodeMapPanelHost
   ): CodeMapPanel {
+    const current = CodeMapPanel.current;
+    if (current) {
+      // A late serializer must not replace a panel already opened in this session.
+      if (current.panel !== panel) panel.dispose();
+      return current;
+    }
     panel.webview.options = {
       enableScripts: true,
       enableCommandUris: false,
@@ -91,9 +133,15 @@ export class CodeMapPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
   private ready = false;
+  private disposed = false;
   private pendingAnalysisId: string | undefined;
   private runningMessage: Extract<HostToWebviewMessage, { type: 'analysisStarted' }> | undefined;
   private viewState: Record<string, unknown> | undefined;
+  private sourceReturn: SourceOpen | undefined;
+  private pendingSourceOpen: SourceOpen | undefined;
+  private sourceOpenRunning = false;
+  private sourceOpenRevision = 0;
+  private readyEpoch = 0;
   private pendingReveal:
     { analysisId: string; entityId: string; scope: Scope; granularity?: Granularity } | undefined;
 
@@ -149,16 +197,24 @@ export class CodeMapPanel {
     this.runningMessage = undefined;
     this.post({ type: 'analysisFailed', analysisId, message, cancelled });
   }
+  notifySavedUpdateState(
+    message: Extract<HostToWebviewMessage, { type: 'savedUpdateState' }>
+  ): void {
+    if (this.ready) this.post(message);
+  }
   requestExport(format: ExportFormat, copy?: boolean): void {
     this.post({ type: 'requestExport', format, copy });
   }
 
   /**
-   * Asks the webview to select an entity (SD-019). The scope is sent with it, so the
+   * Asks the webview to select an entity. The scope is sent with it, so the
    * view requests the projection it needs; nothing is pushed unrequested.
    */
   revealEntity(entityId: string, scope: Scope, granularity?: Granularity): void {
-    const analysisId = this.pendingAnalysisId ?? this.host.store.currentAnalysisId;
+    const analysisId =
+      this.pendingAnalysisId ??
+      this.host.currentAnalysisId?.() ??
+      this.host.store.currentAnalysisId;
     if (!analysisId) {
       void vscode.window.showInformationMessage(
         'SharpDeps: 解析結果がありません。先に解析してください。'
@@ -186,6 +242,117 @@ export class CodeMapPanel {
     });
   }
 
+  private flushSourceReturn(): void {
+    if (!this.ready) return;
+    const selection = this.sourceReturn;
+    this.sourceReturn = undefined;
+    if (!selection || !this.sourceOpenCurrent(selection)) return;
+    const request = selection.request;
+    if (selection.state && request.returnUi) {
+      this.post({
+        type: 'sourceReturn',
+        requestId: request.requestId,
+        analysisId: request.analysisId,
+        state: selection.state,
+        ui: request.returnUi
+      });
+      return;
+    }
+    // Keep the declaration-only fallback for older webviews without navigation context.
+    if (request.type !== 'openDeclaration') return;
+    this.post({
+      type: 'reveal',
+      analysisId: request.analysisId,
+      entityId: request.entityId,
+      scope: { kind: 'root' },
+      granularity: 'type'
+    });
+  }
+
+  private sourceAnalysisId(): string | undefined {
+    return this.host.currentAnalysisId
+      ? this.host.currentAnalysisId()
+      : (this.pendingAnalysisId ?? this.host.store.currentAnalysisId);
+  }
+
+  private sourceOpenCurrent(open: SourceOpen): boolean {
+    return (
+      !this.disposed &&
+      open.revision === this.sourceOpenRevision &&
+      open.request.analysisId === this.sourceAnalysisId()
+    );
+  }
+
+  private queueSourceOpen(request: SourceOpen['request']): void {
+    this.sourceReturn = undefined;
+    const open: SourceOpen = {
+      request: structuredClone(request),
+      revision: ++this.sourceOpenRevision,
+      readyEpoch: this.readyEpoch,
+      provider: this.host.savedAnalysisState?.(request.analysisId) ? 'saved' : 'report',
+      ...(request.returnUi && this.viewState ? { state: structuredClone(this.viewState) } : {})
+    };
+    // Only the latest waiting request is retained. Serial editor operations ensure
+    // an already-started showTextDocument cannot finish after the newer editor open.
+    this.pendingSourceOpen = open;
+    void this.drainSourceOpens();
+  }
+
+  private async drainSourceOpens(): Promise<void> {
+    if (this.sourceOpenRunning) return;
+    this.sourceOpenRunning = true;
+    try {
+      while (this.pendingSourceOpen && !this.disposed) {
+        const open = this.pendingSourceOpen;
+        this.pendingSourceOpen = undefined;
+        if (!this.sourceOpenCurrent(open)) continue;
+        try {
+          const current = () => this.sourceOpenCurrent(open);
+          const request = open.request;
+          let opened: boolean;
+          if (open.provider === 'saved') {
+            if (!this.host.savedAnalysisState?.(request.analysisId) || !this.host.openSavedSource)
+              throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+            await this.host.openSavedSource(request, current);
+            opened = true;
+          } else if (request.type === 'openEvidence') {
+            opened = await openEvidenceLocation(
+              { ...this.locationOptions, isCurrent: current },
+              request.analysisId,
+              request.evidenceId
+            );
+          } else if (request.type === 'openDeclaration') {
+            opened = await openDeclarationLocation(
+              { ...this.locationOptions, isCurrent: current },
+              request.analysisId,
+              request.entityId,
+              request.declarationIndex
+            );
+          } else {
+            opened = false;
+          }
+          if (opened && current()) {
+            this.sourceReturn = open;
+            // A recreated webview may handshake before the asynchronous opener completes.
+            if (this.ready && this.panel.visible && this.readyEpoch > open.readyEpoch)
+              this.flushSourceReturn();
+          }
+        } catch (error: unknown) {
+          if (this.sourceOpenCurrent(open))
+            this.post({
+              type: 'error',
+              analysisId: open.request.analysisId,
+              requestId: open.request.requestId,
+              code: 'QUERY_SOURCE_OPEN_FAILED',
+              message: error instanceof Error ? error.message : 'The source could not be opened.'
+            });
+        }
+      }
+    } finally {
+      this.sourceOpenRunning = false;
+    }
+  }
+
   private onMessage(message: unknown): void {
     const validation = validateWebviewMessage(message);
     if (!validation.ok) {
@@ -199,17 +366,103 @@ export class CodeMapPanel {
     }
 
     const request = validation.value;
+    if (request.type === 'dismissCandidateInvestigation') {
+      try {
+        if (
+          !this.host.savedAnalysisState?.(request.analysisId) ||
+          request.analysisId !== this.host.currentAnalysisId?.() ||
+          !this.host.dismissCandidateInvestigation
+        )
+          throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        this.host.dismissCandidateInvestigation(request);
+      } catch (error) {
+        this.post({
+          type: 'error',
+          requestId: request.requestId,
+          analysisId: request.analysisId,
+          code: error instanceof QueryClientError ? error.code : 'QUERY_CANDIDATE_EXPIRED',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'The declaration investigation is no longer current.'
+        });
+      }
+      return;
+    }
+    if (request.type === 'sourceReturnDismissed') {
+      if (request.analysisId === this.sourceAnalysisId()) {
+        this.sourceOpenRevision++;
+        this.sourceReturn = undefined;
+        this.pendingSourceOpen = undefined;
+      }
+      return;
+    }
+    if (
+      (request.type === 'copyContext' || request.type === 'export') &&
+      this.host.currentAnalysisId &&
+      request.analysisId !== this.host.currentAnalysisId()
+    ) {
+      this.post({
+        type: 'error',
+        requestId: request.requestId,
+        analysisId: request.analysisId,
+        code: 'QUERY_ANALYSIS_EXPIRED',
+        message: 'The displayed result is no longer current.'
+      });
+      return;
+    }
+    // Saved data never falls through to legacy source/export handlers or their store.
+    if (
+      'analysisId' in request &&
+      this.host.savedAnalysisState?.(request.analysisId) &&
+      [
+        'openEvidence',
+        'openDeclaration',
+        'openCandidateDeclaration',
+        'copyContext',
+        'export'
+      ].includes(request.type)
+    ) {
+      if (
+        (request.type === 'copyContext' || request.type === 'export') &&
+        this.host.prepareSavedExport
+      ) {
+        void this.outputSavedExport(request);
+        return;
+      }
+      if (
+        (request.type === 'openEvidence' ||
+          request.type === 'openDeclaration' ||
+          request.type === 'openCandidateDeclaration') &&
+        this.host.openSavedSource
+      ) {
+        this.queueSourceOpen(request);
+        return;
+      }
+      void this.host.bridge.handle(request).then((response) => this.post(response));
+      return;
+    }
     switch (request.type) {
       case 'ready':
         this.ready = true;
+        this.readyEpoch++;
         this.postViewState();
         void this.host.bridge
           .handle({ type: 'ready', protocolVersion: PROTOCOL_VERSION })
           .then((response) => this.post(response));
-        if (this.pendingAnalysisId ?? this.host.store.currentAnalysisId) {
-          this.postAnalysisState((this.pendingAnalysisId ?? this.host.store.currentAnalysisId)!);
+        if (
+          this.pendingAnalysisId ??
+          this.host.currentAnalysisId?.() ??
+          this.host.store.currentAnalysisId
+        ) {
+          this.postAnalysisState(
+            (this.pendingAnalysisId ??
+              this.host.currentAnalysisId?.() ??
+              this.host.store.currentAnalysisId)!
+          );
         }
         if (this.runningMessage) this.post(this.runningMessage);
+        this.flushSourceReturn();
         this.flushReveal();
         return;
       case 'analyze':
@@ -217,27 +470,28 @@ export class CodeMapPanel {
         return;
       case 'persistViewState': {
         const restored = restoreViewState(request.viewState);
-        this.viewState = serializeViewState({
-          ...INITIAL_STATE,
-          ...restored.state
-        }) as unknown as Record<string, unknown>;
+        this.viewState = serializeViewState(
+          {
+            ...INITIAL_STATE,
+            ...restored.state
+          },
+          restored.state.camera ?? undefined
+        ) as unknown as Record<string, unknown>;
         this.host.saveViewState(this.viewState);
         return;
       }
       case 'cancelAnalysis':
-        this.host.onCancel();
+        this.host.onCancel(request.analysisId);
+        return;
+      case 'updateSavedIndex':
+        this.host.onUpdateSavedIndex?.(request.analysisId);
         return;
       case 'openEvidence':
         // Resolved host-side from the opaque id: the webview never sends a path.
-        void openEvidenceLocation(this.locationOptions, request.analysisId, request.evidenceId);
+        this.queueSourceOpen(request);
         return;
       case 'openDeclaration':
-        void openDeclarationLocation(
-          this.locationOptions,
-          request.analysisId,
-          request.entityId,
-          request.declarationIndex
-        );
+        this.queueSourceOpen(request);
         return;
       case 'copyContext':
         // Built and copied locally; nothing is sent anywhere.
@@ -257,18 +511,26 @@ export class CodeMapPanel {
           request
         );
         return;
-      default:
+      default: {
         // Everything else is answered from the store by the bridge; unimplemented host
         // work comes back as an explicit error message.
+        const analysisId = 'analysisId' in request ? request.analysisId : undefined;
+        const current = () =>
+          !this.disposed && (!analysisId || analysisId === this.sourceAnalysisId());
         void this.host.bridge.handle(request).then(
-          (response) => this.post(response),
-          (error: unknown) =>
-            this.post({
-              type: 'error',
-              code: 'bridge.failed',
-              message: error instanceof Error ? error.message : String(error)
-            })
+          (response) => {
+            if (current()) this.post(response);
+          },
+          (error: unknown) => {
+            if (current())
+              this.post({
+                type: 'error',
+                code: 'bridge.failed',
+                message: error instanceof Error ? error.message : String(error)
+              });
+          }
         );
+      }
     }
   }
 
@@ -279,6 +541,57 @@ export class CodeMapPanel {
     relativePaths?: string[]
   ): void {
     this.post({ type: 'stale', analysisId, reason, relativePaths });
+  }
+
+  /** Saved metadata only; never delegates to legacy store/source/image handlers. */
+  private async outputSavedExport(request: SavedExportRequest): Promise<void> {
+    try {
+      const prepared = this.host.prepareSavedExport!(request);
+      const assertCurrent = (): void => {
+        if (
+          this.disposed ||
+          (this.host.currentAnalysisId && this.host.currentAnalysisId() !== request.analysisId)
+        )
+          throw new QueryClientError('QUERY_ANALYSIS_EXPIRED');
+        prepared.assertCurrent();
+      };
+      const text =
+        request.type === 'copyContext'
+          ? buildSavedContextExport(prepared.data)
+          : serializeSavedQueryExport(prepared.data);
+      if (request.type === 'copyContext' || request.copy) {
+        assertCurrent();
+        await vscode.env.clipboard.writeText(text);
+        void vscode.window.showInformationMessage(
+          'SharpDeps: 保存済みの取得結果をコピーしました。'
+        );
+        return;
+      }
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file('sharpdeps-saved-query.json'),
+        filters: { 'SharpDeps saved Query': ['json'] }
+      });
+      if (!uri) return;
+      if (uri.scheme !== 'file' || uri.authority || /^[/\\]{2}/.test(uri.fsPath))
+        throw new QueryClientError('QUERY_EXPORT_LOCAL_FILE_REQUIRED');
+      const bytes = Buffer.from(text, 'utf8');
+      assertCurrent();
+      await vscode.workspace.fs.writeFile(uri, bytes);
+      void vscode.window.showInformationMessage(
+        'SharpDeps: 保存済みの取得結果をJSONで保存しました。'
+      );
+    } catch (error) {
+      this.post({
+        type: 'error',
+        requestId: request.requestId,
+        analysisId: request.analysisId,
+        code: error instanceof QueryClientError ? error.code : 'QUERY_EXPORT_FAILED',
+        message:
+          error instanceof QueryClientError
+            ? error.message
+            : 'The saved result could not be exported.'
+      });
+    }
   }
 
   /** Builds the export input for the webview's current selection (SD-022). */
@@ -493,7 +806,7 @@ export class CodeMapPanel {
 
   /** Restores the last small state when the webview asks (SD-021). */
   private postViewState(): void {
-    const state = this.host.loadViewState();
+    const state = this.viewState ?? this.host.loadViewState();
     if (state) {
       this.post({ type: 'viewState', state });
     }
@@ -505,6 +818,15 @@ export class CodeMapPanel {
     }
 
     try {
+      const saved = this.host.savedAnalysisState?.(analysisId);
+      if (saved) {
+        this.post(saved);
+        const reason = this.host.savedStaleReason?.(analysisId);
+        if (reason) this.notifyStale(analysisId, reason);
+        const updateState = this.host.savedUpdateState?.();
+        if (updateState?.analysisId === analysisId) this.post(updateState);
+        return;
+      }
       const report = this.host.store.getReport(analysisId);
       this.post({
         type: 'analysisComplete',
@@ -553,12 +875,23 @@ export class CodeMapPanel {
   }
 
   dispose(): void {
-    this.host.onDispose?.();
-    CodeMapPanel.current = undefined;
-    setPanelActiveContext(false);
-    this.panel.dispose();
-    while (this.disposables.length) {
-      this.disposables.pop()?.dispose();
+    if (this.disposed) return;
+    this.disposed = true;
+    this.sourceOpenRevision++;
+    this.sourceReturn = undefined;
+    this.pendingSourceOpen = undefined;
+    const ownsCurrent = CodeMapPanel.current === this;
+    if (ownsCurrent) {
+      CodeMapPanel.current = undefined;
+      setPanelActiveContext(false);
+    }
+    try {
+      if (ownsCurrent) this.host.onDispose?.();
+    } finally {
+      this.panel.dispose();
+      while (this.disposables.length) {
+        this.disposables.pop()?.dispose();
+      }
     }
   }
 }

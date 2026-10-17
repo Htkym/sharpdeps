@@ -1,5 +1,3 @@
-// Adjacency index, depth-limited exploration, and display projection (SD-012).
-//
 // The index is derived from the analysis result and is read-only. Exploration is a
 // breadth-first walk over forward (dependencies) or reverse (dependents) adjacency
 // with a visited set, so cycles cannot loop forever and the depth limit is a hard

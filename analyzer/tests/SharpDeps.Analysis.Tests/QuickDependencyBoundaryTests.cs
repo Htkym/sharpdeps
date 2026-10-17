@@ -48,7 +48,8 @@ public sealed class QuickDependencyBoundaryTests
     [Fact]
     public void PublishedQuickHostDoesNotShipMsBuildAssemblies()
     {
-        var publishDirectory = Path.Combine(RepositoryRoot(), "analyzer", "bin", "quick");
+        var publishDirectory = Environment.GetEnvironmentVariable("SHARPDEPS_QUICK_HOST_OUTPUT")
+            ?? Path.Combine(TestPaths.RepositoryRoot, "analyzer", "bin", "quick");
         if (!Directory.Exists(publishDirectory))
         {
             return;
@@ -62,19 +63,4 @@ public sealed class QuickDependencyBoundaryTests
         Assert.True(File.Exists(Path.Combine(publishDirectory, "code-map.dll")));
     }
 
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "analyzer", "src")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException("Repository root could not be located.");
-    }
 }

@@ -1,4 +1,4 @@
-// Read-only generated document URIs (SD-011): opaque ids only, no file paths.
+// Read-only generated document URIs: opaque ids only, no file paths.
 
 import { describe, expect, it } from 'vitest';
 import {

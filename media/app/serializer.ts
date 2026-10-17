@@ -1,4 +1,3 @@
-// View state serialization (SD-021).
 //
 // Only small, path-free fields are persisted: the target name, selection, filters,
 // scope, panes, table page, and the graph camera. Nothing here can start an analysis,
@@ -8,6 +7,7 @@
 import type { Filters, Scope } from '../../src/view/protocolV2';
 import type { Granularity } from '../../src/analyzer/reportV2';
 import type { ViewState, ViewKind } from './state';
+import type { SortKey, SortState } from './query';
 
 export const VIEW_STATE_VERSION = 1;
 
@@ -30,6 +30,7 @@ export interface PersistedViewState {
   search?: string;
   paneWidths?: { navigation: number; inspector: number };
   tablePage?: number;
+  tableSort?: SortState;
   camera?: { zoom: number; scrollLeft: number; scrollTop: number };
 }
 
@@ -70,6 +71,7 @@ export function serializeViewState(
     search: state.search,
     paneWidths: { ...state.paneWidths },
     tablePage: state.tablePage,
+    tableSort: state.tableSort,
     camera
   };
 }
@@ -141,9 +143,23 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
           scope,
           granularity: record.granularity as Granularity,
           selectionId: stringOf(record.selectionId, 64),
+          relationId: stringOf(record.relationId, 64),
           camera: deserializeCamera(record.camera) ?? null,
-          search: stringOf(record.search, MAX_SEARCH_LENGTH),
-          filters: sanitizeFilters(recordOf(record.filters) ?? {})
+          search: searchOf(record.search),
+          filters: sanitizeFilters(recordOf(record.filters) ?? {}),
+          viewKind:
+            record.viewKind === 'graph' || record.viewKind === 'table'
+              ? record.viewKind
+              : undefined,
+          tablePage: deserializeTablePage(record.tablePage),
+          tableSort: deserializeTableSort(record.tableSort),
+          searchCount:
+            typeof record.searchCount === 'number' &&
+            Number.isSafeInteger(record.searchCount) &&
+            record.searchCount >= 0 &&
+            record.searchCount <= 500
+              ? record.searchCount
+              : undefined
         }
       ];
     });
@@ -183,7 +199,7 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
     state.scope = scope;
   }
 
-  const search = stringOf(value.search, MAX_SEARCH_LENGTH);
+  const search = searchOf(value.search);
   if (search !== undefined) {
     state.search = search;
   }
@@ -196,10 +212,10 @@ export function deserializeViewState(raw: unknown): RestoredViewState {
     };
   }
 
-  const tablePage = numberOf(value.tablePage);
-  if (tablePage !== undefined && tablePage >= 0) {
-    state.tablePage = Math.floor(tablePage);
-  }
+  const tablePage = deserializeTablePage(value.tablePage);
+  if (tablePage !== undefined) state.tablePage = tablePage;
+  const tableSort = deserializeTableSort(value.tableSort);
+  if (tableSort) state.tableSort = tableSort;
 
   return { state, versionMismatch: false };
 }
@@ -238,8 +254,31 @@ export function deserializeCamera(
   };
 }
 
+function deserializeTablePage(raw: unknown): number | undefined {
+  const page = numberOf(raw);
+  return page !== undefined && page >= 0 ? Math.floor(page) : undefined;
+}
+
+function deserializeTableSort(raw: unknown): SortState | undefined {
+  const sort = recordOf(raw);
+  if (
+    !sort ||
+    typeof sort.key !== 'string' ||
+    !['name', 'kind', 'project', 'dependencies', 'dependents', 'cycle'].includes(
+      String(sort.key)
+    ) ||
+    (sort.direction !== 'asc' && sort.direction !== 'desc')
+  )
+    return undefined;
+  return { key: sort.key as SortKey, direction: sort.direction };
+}
+
 function sanitizeFilters(filters: Record<string, unknown>): Filters {
   const sanitized: Filters = {};
+  const resultKinds = stringArray(filters.resultKinds, 2)?.filter(
+    (kind): kind is 'code' | 'docs' => kind === 'code' || kind === 'docs'
+  );
+  if (resultKinds?.length) sanitized.resultKinds = [...new Set(resultKinds)];
   const kinds = stringArray(filters.kinds, 50);
   if (kinds) {
     sanitized.kinds = kinds;
@@ -313,6 +352,10 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   }
 
   return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function searchOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= MAX_SEARCH_LENGTH ? value : undefined;
 }
 
 function stringOf(value: unknown, maxLength: number): string | undefined {

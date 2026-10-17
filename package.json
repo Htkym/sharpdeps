@@ -2,7 +2,7 @@
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
   "description": "Explore .NET project, namespace, and type dependencies with source evidence and cycle detection.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
@@ -42,13 +42,19 @@
       "supported": "limited",
       "description": "Viewing data is available; analysis, project evaluation, generators and runtime execution require workspace trust.",
       "restrictedConfigurations": [
-        "sharpdeps.dotnetPath"
+        "sharpdeps.dotnetPath",
+        "sharpdeps.savedIndexCliPath"
       ]
     }
   },
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "sharpdeps.updateSavedIndex",
+        "title": "Update Saved Index",
+        "category": "SharpDeps"
+      },
       {
         "command": "sharpdeps.showDependencyMap",
         "title": "Show Dependency Map",
@@ -136,11 +142,36 @@
           "default": "quick",
           "markdownDescription": "Analysis mode. Quick works without the .NET SDK; Semantic uses MSBuild and Roslyn and is only used when selected explicitly."
         },
+        "sharpdeps.resultProvider": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "savedIndex"
+          ],
+          "default": "legacy",
+          "markdownDescription": "Result provider for Show/Refresh Dependency Map. Legacy keeps Quick/Semantic analysis. SavedIndex reads an existing .sharpdeps index with the shared Query engine; it never analyzes or updates it. An absent index can display a retained legacy report from the same workspace, read-only."
+        },
+        "sharpdeps.savedIndexAutoRefresh": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Automatically display committed saved-index generations from an explicitly started CLI watch. Requires one trusted workspace folder and a compatible savedIndexCliPath. Keeps the last view on failure; never starts analysis or a writer."
+        },
+        "sharpdeps.savedIndexVariant": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Exact saved hvar_ ID for the savedIndex provider. Required when the saved index contains multiple variants. Blank selects a variant only when exactly one exists; variants are never combined implicitly."
+        },
         "sharpdeps.analysisTimeoutSeconds": {
           "type": "number",
           "default": 180,
           "minimum": 10,
           "markdownDescription": "Time limit for one analysis run, in seconds. When exceeded, the run is stopped and the process tree it started is terminated."
+        },
+        "sharpdeps.savedIndexCliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to a compatible installed SharpDeps.Cli.dll for the explicit Update Saved Index command. Requires workspace trust and a target SDK. Refresh remains read-only; no automatic restore is performed."
         },
         "sharpdeps.dotnetPath": {
           "type": "string",
@@ -157,7 +188,7 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run build:analyzer && npm run build -- --production",
+    "vscode:prepublish": "npm run check:release && npm run build:analyzer && npm run build -- --production",
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "build:analyzer": "node scripts/build-analyzer.js",
@@ -171,7 +202,8 @@
     "test:e2e": "node scripts/e2e.js",
     "test:browser": "playwright test",
     "perf": "node scripts/perf.js",
-    "check:vsix": "node scripts/check-vsix.js"
+    "check:vsix": "node scripts/check-vsix.js",
+    "check:release": "node scripts/check-release.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

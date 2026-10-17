@@ -1,7 +1,5 @@
-// Evidence collected from declarations (SD-009).
-//
 // A collected record carries the v2 evidence (ids, span, confidence, public surface)
-// plus the classification SD-012 needs for aggregation: which project variant and
+// plus the classification for aggregation: which project variant and
 // namespace the two ends belong to, and whether the target is external. Relations are
 // never built here; the aggregator groups evidence into relations so the counting
 // rules stay in one place (docs/analysis-semantics.md).
@@ -18,7 +16,13 @@ public sealed record CollectedEvidence(
     string? SourceNamespaceId,
     string? TargetVariantId,
     string? TargetNamespaceId,
-    bool TargetIsExternal)
+    bool TargetIsExternal,
+    string? CanonicalSourceMemberId = null,
+    string? CanonicalTargetMemberId = null,
+    string? Access = null,
+    HarnessTargetSymbol? TargetSymbol = null,
+    string? Producer = null,
+    IReadOnlyList<HarnessDeclarationOwner>? HarnessDeclarationOwners = null)
 {
     /// <summary>A type that depends on itself must not be reported as a cycle.</summary>
     public bool IsSelfReference => Evidence.SourceEntityId == Evidence.TargetEntityId;
@@ -32,7 +36,7 @@ public sealed record CollectedEvidence(
         => SourceVariantId == TargetVariantId;
 
     /// <summary>
-    /// Projects the collected record onto the shared graph model (SD-012). One
+    /// Projects the collected record onto the shared graph model. One
     /// evidence record is one occurrence; the aggregator groups them into relations.
     /// </summary>
     public GraphEvidence ToGraphEvidence(string basis = "symbolResolved")
@@ -52,6 +56,20 @@ public sealed record CollectedEvidence(
             TargetProjectId: TargetVariantId,
             TargetIsExternal: TargetIsExternal);
 }
+
+/// <summary>Owner-specific declaration provenance, separate from legacy type aggregation.</summary>
+public sealed record HarnessDeclarationOwner(string? SourceMemberId, bool PublicSurface);
+
+/// <summary>Normalized external identity inputs; legacy hashes are lookup keys, not signatures.</summary>
+public sealed record HarnessTargetSymbol(
+    string LegacyTypeId,
+    string? LegacyMemberId,
+    string Kind,
+    string Name,
+    string CanonicalSignature,
+    string AssemblyIdentity,
+    string TypeCanonicalSignature,
+    string TypeName);
 
 /// <summary>Effective accessibility, including the containing types.</summary>
 public static class PublicSurface

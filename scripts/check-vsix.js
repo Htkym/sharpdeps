@@ -1,5 +1,3 @@
-// VSIX content check (SD-029).
-//
 // Packs the extension and asserts what a user installs: the analyzer hosts and their
 // runtime files, the webview entry point and worker, the styles, and the licence notices
 // are present, while development-only material (sources, tests, schemas, plans, local
@@ -8,6 +6,7 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { checkVsix } = require('./check-release');
 
 const repoRoot = path.resolve(__dirname, '..');
 const vsce = require.resolve('@vscode/vsce/vsce');
@@ -39,7 +38,16 @@ const REQUIRED = [
   'analyzer/bin/semantic/sharpdeps-semantic-host.dll',
   'analyzer/bin/semantic/sharpdeps-semantic-host.runtimeconfig.json',
   'analyzer/bin/semantic/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
+  'analyzer/bin/query/sharpdeps-query-host.dll',
+  'analyzer/bin/query/sharpdeps-query-host.runtimeconfig.json',
+  'analyzer/bin/query/SharpDeps.Query.dll',
+  'analyzer/bin/query/SharpDeps.Index.dll',
+  'analyzer/bin/query/Microsoft.Data.Sqlite.dll',
+  'analyzer/bin/query/SQLitePCLRaw.core.dll',
+  'analyzer/bin/query/SQLitePCLRaw.batteries_v2.dll',
+  'analyzer/bin/query/SQLitePCLRaw.provider.e_sqlite3.dll',
   'resources/ELK-LICENSE.md',
+  'resources/APACHE-2.0-LICENSE.txt',
   'resources/icon.png',
   'LICENSE.txt', // VSCE adds .txt to an extensionless LICENSE in the archive.
   'package.json',
@@ -71,7 +79,8 @@ const FORBIDDEN = [
   'media/app/entry.js.map',
   'media/workers/elkLayout.worker.js.map',
   'analyzer/bin/quick/code-map.exe',
-  'analyzer/bin/semantic/sharpdeps-semantic-host.exe'
+  'analyzer/bin/semantic/sharpdeps-semantic-host.exe',
+  'analyzer/bin/query/sharpdeps-query-host.exe'
 ];
 
 async function main() {
@@ -97,7 +106,9 @@ async function main() {
     entries.some((name) => (entry.endsWith('/') ? name.startsWith(entry) : name === entry))
   );
 
+  const identity = await checkVsix(vsixPath);
   const report = {
+    version: identity.version,
     checkedAt: new Date().toISOString(),
     vsix: path.basename(vsixPath),
     bytes: fs.statSync(vsixPath).size,

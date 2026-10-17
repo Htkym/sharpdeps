@@ -1,5 +1,3 @@
-// Aggregated analysis graph (SD-012).
-//
 // Evidence is collected at the finest granularity (types). This graph turns it into
 // relations at a requested granularity, keeping the distinction the plan requires:
 //   - relation count: distinct source → target pairs (per basis)

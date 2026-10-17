@@ -16,9 +16,14 @@
 !media/styles/graph.css
 !resources/icon.png
 !resources/ELK-LICENSE.md
+!resources/APACHE-2.0-LICENSE.txt
 !analyzer/bin/quick/**/*.dll
 !analyzer/bin/quick/**/*.json
 !analyzer/bin/semantic/**/*.dll
 !analyzer/bin/semantic/**/*.json
 !analyzer/bin/semantic/**/*.config
 !analyzer/bin/semantic/BuildHost-net472/*.exe
+!analyzer/bin/query/**/*.dll
+!analyzer/bin/query/**/*.json
+!analyzer/bin/query/**/*.so
+!analyzer/bin/query/**/*.dylib

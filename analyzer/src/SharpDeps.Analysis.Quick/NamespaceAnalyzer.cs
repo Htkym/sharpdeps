@@ -78,9 +78,10 @@ public static class NamespaceAnalyzer
                         continue;
                     }
 
-                    bytes = await File.ReadAllBytesAsync(file);
+                    bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                     text = DecodeSource(bytes);
                 }
+                catch (OperationCanceledException) { throw; }
                 catch
                 {
                     collector?.AddSkip(file, "sourceFileUnreadable");
@@ -90,8 +91,9 @@ public static class NamespaceAnalyzer
                 SyntaxNode root;
                 try
                 {
-                    root = CSharpSyntaxTree.ParseText(text).GetRoot();
+                    root = CSharpSyntaxTree.ParseText(text, cancellationToken: cancellationToken).GetRoot(cancellationToken);
                 }
+                catch (OperationCanceledException) { throw; }
                 catch
                 {
                     collector?.AddSkip(file, "sourceFileUnparsable");
@@ -103,7 +105,7 @@ public static class NamespaceAnalyzer
                 var fileNamespaces = root
                     .DescendantNodes()
                     .OfType<BaseNamespaceDeclarationSyntax>()
-                    .Select(FullNamespaceName)
+                    .Select(node => { cancellationToken.ThrowIfCancellationRequested(); return FullNamespaceName(node); })
                     .Where(name => name.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
@@ -111,6 +113,7 @@ public static class NamespaceAnalyzer
                 var usings = new List<string>();
                 foreach (var directive in root.DescendantNodes().OfType<UsingDirectiveSyntax>())
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (directive.Alias is not null)
                     {
                         continue;
@@ -158,7 +161,7 @@ public static class NamespaceAnalyzer
 
                 if (collector is not null)
                 {
-                    CollectIndexData(collector, Core.Paths.ProjectPaths.NormalizePathKey(project.FullPath), file, bytes, root, fileNamespaces);
+                    CollectIndexData(collector, Core.Paths.ProjectPaths.NormalizePathKey(project.FullPath), file, bytes, root, fileNamespaces, cancellationToken);
                 }
             }
         }
@@ -312,15 +315,23 @@ public static class NamespaceAnalyzer
         string fullPath,
         byte[] bytes,
         SyntaxNode root,
-        IReadOnlyList<string> fileNamespaces)
+        IReadOnlyList<string> fileNamespaces,
+        CancellationToken cancellationToken)
     {
-        var document = collector.AddDocument(
-            fullPath,
-            bytes,
-            QuickSourceIndexCollector.ComputeContentHash(bytes));
+        cancellationToken.ThrowIfCancellationRequested();
+        var contentHash = QuickSourceIndexCollector.ComputeContentHash(bytes);
+        var document = collector.AddDocument(fullPath, bytes, contentHash);
+
+        if (document.ContentHash != contentHash)
+        {
+            collector.AddSkip(fullPath, "sourceChangedDuringRead");
+            return;
+        }
+        CollectTypes(collector, projectName, document.Id, root, cancellationToken);
 
         foreach (var declaration in root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = FullNamespaceName(declaration);
             if (name.Length == 0)
             {
@@ -334,6 +345,7 @@ public static class NamespaceAnalyzer
         var usings = new List<QuickUsing>();
         foreach (var directive in root.DescendantNodes().OfType<UsingDirectiveSyntax>())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (directive.Alias is not null)
             {
                 continue;
@@ -356,6 +368,146 @@ public static class NamespaceAnalyzer
         }
 
         collector.AddFileUsage(new QuickFileUsage(projectName, document.Id, fileNamespaces, usings));
+    }
+
+    private static void CollectTypes(QuickSourceIndexCollector collector, string projectPath, string documentId, SyntaxNode root,
+        CancellationToken cancellationToken)
+    {
+        foreach (var directive in root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (directive.Alias is not null || directive.StaticKeyword.IsKind(SyntaxKind.StaticKeyword))
+                collector.AddTypeLookupBarrier(projectPath,
+                    directive.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword) ? null : documentId);
+        }
+
+        foreach (var declaration in root.DescendantNodes().OfType<MemberDeclarationSyntax>()
+                     .Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ancestors = declaration.Ancestors().OfType<MemberDeclarationSyntax>()
+                .Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
+                .Take(QuickSourceIndexCollector.MaxTypeDepth).ToArray();
+            var namespaceNodes = declaration.Ancestors().OfType<BaseNamespaceDeclarationSyntax>()
+                .Take(QuickSourceIndexCollector.MaxNamespaceParts + 1).ToArray();
+            if (ancestors.Length >= QuickSourceIndexCollector.MaxTypeDepth
+                || namespaceNodes.Length > QuickSourceIndexCollector.MaxNamespaceParts)
+            {
+                collector.OmitTypeDeclaration();
+                continue;
+            }
+            var namespaces = new List<string>();
+            var namespaceSupported = true;
+            foreach (var node in namespaceNodes.Reverse())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryNameSegments(node.Name, QuickSourceIndexCollector.MaxNamespaceParts - namespaces.Count, false, out var parts))
+                {
+                    namespaceSupported = false;
+                    break;
+                }
+                namespaces.AddRange(parts);
+            }
+            if (!namespaceSupported)
+            {
+                collector.OmitTypeDeclaration();
+                continue;
+            }
+            var chain = ancestors.Reverse().Append(declaration).ToArray();
+            var modifiers = TypeModifiers(declaration);
+            var identifier = TypeIdentifier(declaration);
+            var syntaxKind = declaration switch
+            {
+                RecordDeclarationSyntax record => record.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword) ? "recordStruct" : "recordClass",
+                ClassDeclarationSyntax => "class",
+                StructDeclarationSyntax => "struct",
+                InterfaceDeclarationSyntax => "interface",
+                EnumDeclarationSyntax => "enum",
+                _ => "delegate"
+            };
+            var access = modifiers.Where(token => token.IsKind(SyntaxKind.PublicKeyword)
+                || token.IsKind(SyntaxKind.PrivateKeyword) || token.IsKind(SyntaxKind.ProtectedKeyword)
+                || token.IsKind(SyntaxKind.InternalKeyword) || token.IsKind(SyntaxKind.FileKeyword)).ToArray();
+            collector.AddTypeDeclaration(new QuickTypeDeclaration(
+                projectPath, documentId, namespaces, namespaceNodes.Length == 0 ? "" : FullNamespaceName(namespaceNodes[0]),
+                chain.Select(node => new QuickTypeSegment(TypeIdentifier(node).ValueText,
+                    node switch { TypeDeclarationSyntax type => type.TypeParameterList?.Parameters.Count ?? 0,
+                        DelegateDeclarationSyntax type => type.TypeParameterList?.Parameters.Count ?? 0, _ => 0 })).ToArray(),
+                chain.Take(chain.Length - 1).Select(node => ToQuickSpan(node.GetLocation())).ToArray(),
+                syntaxKind, syntaxKind.StartsWith("record", StringComparison.Ordinal) ? "record" : syntaxKind,
+                access.Length == 1 ? access[0].ValueText : "unknown",
+                modifiers.Any(token => token.IsKind(SyntaxKind.PartialKeyword)),
+                chain.Any(node => TypeModifiers(node).Any(token => token.IsKind(SyntaxKind.FileKeyword))),
+                identifier.IsMissing || declaration.ContainsDiagnostics
+                    || namespaceNodes.Any(node => node.Name.ContainsDiagnostics),
+                ToQuickSpan(declaration.GetLocation())));
+
+            if (declaration is not BaseTypeDeclarationSyntax { BaseList: { } baseList }) continue;
+            foreach (var reference in baseList.Types)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var shape = "unsupported";
+                IReadOnlyList<string> names = [];
+                if (reference.Type is IdentifierNameSyntax simple)
+                {
+                    shape = "simple";
+                    names = [simple.Identifier.ValueText];
+                }
+                else if (reference.Type is NameSyntax name
+                    && HasGlobalRoot(name)
+                    && TryNameSegments(name, QuickSourceIndexCollector.MaxQualifiedParts, true, out var qualified))
+                {
+                    shape = "global";
+                    names = qualified;
+                }
+                collector.AddTypeReference(new QuickTypeBaseReference(projectPath, documentId,
+                    declaration.SpanStart, declaration.Span.Length, shape, names, ToQuickSpan(reference.Type.GetLocation())));
+            }
+        }
+    }
+
+    private static SyntaxToken TypeIdentifier(MemberDeclarationSyntax declaration)
+        => declaration is BaseTypeDeclarationSyntax type ? type.Identifier : ((DelegateDeclarationSyntax)declaration).Identifier;
+
+    private static SyntaxTokenList TypeModifiers(MemberDeclarationSyntax declaration)
+        => declaration is BaseTypeDeclarationSyntax type ? type.Modifiers : ((DelegateDeclarationSyntax)declaration).Modifiers;
+
+    private static bool TryNameSegments(NameSyntax name, int limit, bool allowGlobal, out IReadOnlyList<string> segments)
+    {
+        var pending = new Stack<NameSyntax>();
+        var names = new List<string>();
+        pending.Push(name);
+        while (pending.Count > 0)
+        {
+            // Reject long left-associated names before building their full path.
+            if (pending.Count + names.Count > limit) break;
+            switch (pending.Pop())
+            {
+                case IdentifierNameSyntax identifier when !identifier.Identifier.IsMissing && names.Count < limit:
+                    names.Add(identifier.Identifier.ValueText);
+                    break;
+                case QualifiedNameSyntax qualified:
+                    pending.Push(qualified.Right);
+                    pending.Push(qualified.Left);
+                    break;
+                case AliasQualifiedNameSyntax alias when allowGlobal && alias.Alias.Identifier.ValueText == "global":
+                    pending.Push(alias.Name);
+                    break;
+                default:
+                    segments = [];
+                    return false;
+            }
+        }
+        segments = pending.Count == 0 ? names : [];
+        return pending.Count == 0 && names.Count > 0;
+    }
+
+    private static bool HasGlobalRoot(NameSyntax name)
+    {
+        var depth = 0;
+        while (name is QualifiedNameSyntax qualified && depth++ < QuickSourceIndexCollector.MaxQualifiedParts)
+            name = qualified.Left;
+        return name is AliasQualifiedNameSyntax alias && alias.Alias.Identifier.ValueText == "global";
     }
 
     private static QuickSpan ToQuickSpan(Location location)

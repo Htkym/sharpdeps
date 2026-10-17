@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as vscode from 'vscode';
-import { openEvidenceLocation } from './openLocation';
+import { openDeclarationLocation, openEvidenceLocation } from './openLocation';
 import type { ReportStore } from '../analyzer/reportStore';
 
 vi.mock('vscode', () => ({
@@ -41,7 +41,7 @@ describe('mapped source boundaries', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sharpdeps-location-'));
     directories.push(root);
     fs.writeFileSync(path.join(root, 'Mapped.cs'), 'one\ntwo\nthree');
-    await open(root, 'Mapped.cs');
+    expect(await open(root, 'Mapped.cs')).toBe(true);
     expect(vscode.window.showQuickPick).toHaveBeenCalledOnce();
     expect(vscode.workspace.openTextDocument).toHaveBeenCalledWith({
       fsPath: path.join(root, 'Mapped.cs')
@@ -59,10 +59,29 @@ describe('mapped source boundaries', () => {
       path.join(root, 'link'),
       process.platform === 'win32' ? 'junction' : 'dir'
     );
-    await open(root, 'link/Mapped.cs');
+    expect(await open(root, 'link/Mapped.cs')).toBe(false);
     expect(vscode.window.showWarningMessage).toHaveBeenCalledOnce();
     expect(vscode.workspace.openTextDocument).not.toHaveBeenCalled();
   });
+});
+it('does not open or queue a declaration replaced while its positions were being read', async () => {
+  let resolve!: (records: unknown[]) => void;
+  let current = true;
+  const records = new Promise<unknown[]>((done) => {
+    resolve = done;
+  });
+  const options = {
+    store: { declarationsForType: () => records } as unknown as ReportStore,
+    rootDirectory: () => 'D:/fixture',
+    output: { appendLine: vi.fn() } as unknown as vscode.OutputChannel,
+    isCurrent: () => current
+  };
+  const opening = openDeclarationLocation(options, 'an_1111111111111111', 'ty_1111111111111111');
+  current = false;
+  resolve([]);
+  expect(await opening).toBe(false);
+  expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+  expect(vscode.window.showTextDocument).not.toHaveBeenCalled();
 });
 async function open(root: string, relativePath: string) {
   const document = {
@@ -80,7 +99,7 @@ async function open(root: string, relativePath: string) {
     getReport: () => ({ sourceManifest: [document] }),
     isStale: () => false
   } as unknown as ReportStore;
-  await openEvidenceLocation(
+  return openEvidenceLocation(
     {
       store,
       rootDirectory: () => root,

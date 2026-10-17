@@ -172,10 +172,16 @@
       "pattern": "^(prj|var|ns|ty|mb)_[0-9a-f]{16}$"
     },
     "relationBasis": {
-      "enum": ["projectDeclared", "projectEvaluated", "usingInferred", "symbolResolved"]
+      "enum": [
+        "projectDeclared",
+        "projectEvaluated",
+        "usingInferred",
+        "typeReferenceInferred",
+        "symbolResolved"
+      ]
     },
     "relationKind": {
-      "description": "Declaration-level kinds (projectDeclared, projectEvaluated, usingInferred) are only produced together with the matching basis; the rest require symbol resolution.",
+      "description": "Declaration-level kinds (projectDeclared, projectEvaluated, usingInferred, typeReferenceInferred) are only produced together with the matching basis; the rest require symbol resolution.",
       "enum": [
         "inherits",
         "implements",
@@ -189,7 +195,8 @@
         "compileTimeName",
         "projectDeclared",
         "projectEvaluated",
-        "usingInferred"
+        "usingInferred",
+        "typeReferenceInferred"
       ]
     },
     "projectVariant": {
@@ -284,7 +291,7 @@
         },
         "isPartial": { "type": "boolean" },
         "declarationCount": { "type": "integer", "minimum": 1 },
-        "memberCount": { "type": "integer", "minimum": 0 },
+        "memberCount": { "type": ["integer", "null"], "minimum": 0 },
         "isExternal": {
           "type": "boolean",
           "description": "True for types resolved from referenced assemblies. External assembly identities are not guessed into NuGet packages."
@@ -293,6 +300,30 @@
     },
     "relation": {
       "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["basis"],
+                "properties": { "basis": { "const": "typeReferenceInferred" } }
+              },
+              {
+                "required": ["kinds"],
+                "properties": { "kinds": { "contains": { "const": "typeReferenceInferred" } } }
+              }
+            ]
+          },
+          "then": {
+            "required": ["confidence"],
+            "properties": {
+              "basis": { "const": "typeReferenceInferred" },
+              "kinds": { "const": ["typeReferenceInferred"] },
+              "confidence": { "const": "inferred" }
+            }
+          }
+        }
+      ],
       "required": [
         "id",
         "sourceEntityId",

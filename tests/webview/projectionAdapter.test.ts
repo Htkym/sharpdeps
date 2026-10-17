@@ -1,4 +1,3 @@
-// Protocol projection -> renderer input (SD-017).
 //
 // The mapping is pure, so the graph's labels, flags, and the "same graph" key are
 // pinned without a DOM: selection changes must never alter the key, because a changed

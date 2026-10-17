@@ -5,8 +5,12 @@ on:
     tags:
       - 'v*'
 
+env:
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
@@ -16,11 +20,18 @@ jobs:
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release tag equals current reviewed main
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
 
       - name: Check release version
         run: |
           version="$(node -p "require('./package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$version"
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME"
           echo "VSIX_PATH=sharpdeps-$version.vsix" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
@@ -64,6 +75,27 @@ jobs:
           mv sharpdeps-check.vsix "$VSIX_PATH"
           sha256sum "$VSIX_PATH" > "$VSIX_PATH.sha256"
 
+      - name: Pack and verify release tools
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dotnet pack analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-cli" -o artifacts/release-tools
+          dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/release-tools
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-tools/release-identity.json
+          (cd artifacts/release-tools && sha256sum *.nupkg > SHA256SUMS)
+
+      - name: Preserve verified tools for NuGet publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharpdeps-release-tools-${{ github.sha }}
+          path: artifacts/release-tools/
+          if-no-files-found: error
+
+      - name: Recheck main before publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
+
       - name: Publish to Visual Studio Marketplace
         if: ${{ env.VSCE_PAT != '' }}
         run: npx --no-install vsce publish --packagePath "$VSIX_PATH" --pat "$VSCE_PAT"
@@ -75,4 +107,77 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" --verify-tag --notes-file CHANGELOG.md
+        run: gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS --verify-tag --notes-file CHANGELOG.md
+
+  publish-nuget:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release tag equals current reviewed main
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: sharpdeps-release-tools-${{ github.sha }}
+          path: artifacts/release-tools
+      - name: Verify stable inputs and tool checksums
+        run: |
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME"
+          (cd artifacts/release-tools && sha256sum -c SHA256SUMS)
+      - name: Check existing NuGet tools before pushing either package
+        # Retry a partial NuGet publication with "Re-run failed jobs" to reuse these sealed tools.
+        id: publication
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          : > missing-packages.txt
+          curl --fail --silent --show-error --location --connect-timeout 15 --max-time 120 https://api.nuget.org/v3/index.json > nuget-index.json
+          base=$(node <<'JS'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const base = JSON.parse(fs.readFileSync('nuget-index.json')).resources.find(r => r['@type'] === 'PackageBaseAddress/3.0.0')['@id'];
+          assert.equal(new URL(base).protocol, 'https:');
+          console.log(base.endsWith('/') ? base : base + '/');
+          JS
+          )
+          for id in SharpDeps.Cli SharpDeps.Mcp; do
+            lower="${id,,}"
+            local="artifacts/release-tools/$id.$version.nupkg"
+            published="$RUNNER_TEMP/$id.published.nupkg"
+            status=$(curl --silent --show-error --location --connect-timeout 15 --max-time 120 --max-filesize 268435456 --output "$published" --write-out '%{http_code}' "$base$lower/$version/$lower.$version.nupkg")
+            case "$status" in
+              200) node scripts/check-release.js --sealed-package "$local" --published-package "$published" ;;
+              404) printf '%s\n' "$local" >> missing-packages.txt ;;
+              *) echo "Cannot check published package $id: HTTP $status" >&2; exit 1 ;;
+            esac
+          done
+          if [ -s missing-packages.txt ]; then echo 'needed=true' >> "$GITHUB_OUTPUT"; else echo 'needed=false' >> "$GITHUB_OUTPUT"; fi
+      - name: NuGet login (OIDC)
+        if: steps.publication.outputs.needed == 'true'
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Publish the verified tools to NuGet
+        if: steps.publication.outputs.needed == 'true'
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          while IFS= read -r package; do
+            dotnet nuget push "$package" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          done < missing-packages.txt

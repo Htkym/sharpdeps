@@ -1,11 +1,13 @@
-// Exports and the evidence-backed AI handoff (SD-022).
-//
 // Everything is built from the registered analysis result: no network call is made, no
 // source file is read, and relative paths only. The context text states what is known,
 // what is inferred, and what the reader must not assert as fact.
 
 import type { EntitySummary, ProjectionEdge, ProjectionCycleGroup } from '../view/protocolV2';
 import { sanitizeSingleLine } from '../security/paths';
+
+function isInferredBasis(basis: string): boolean {
+  return basis === 'usingInferred' || basis === 'typeReferenceInferred';
+}
 
 export interface ContextEvidence {
   kind: string;
@@ -122,7 +124,7 @@ export function buildContextExport(input: ContextExportInput): string {
   for (const edge of input.edges.slice(0, MAX_EDGES_LISTED)) {
     const source = nameOf(input.nodes, edge.sourceId);
     const target = nameOf(input.nodes, edge.targetId);
-    const inferred = edge.basis === 'usingInferred' ? ' · 推定' : '';
+    const inferred = isInferredBasis(edge.basis) ? ' · 推定' : '';
     lines.push(
       `- ${source} → ${target} · ${edge.kinds.join(', ') || edge.basis} · ${edge.evidenceCount} occurrence(s)${inferred}${edge.inCycle ? ' · cycle' : ''}`
     );
@@ -133,7 +135,7 @@ export function buildContextExport(input: ContextExportInput): string {
       }
       for (const [basis, count] of byBasis) {
         lines.push(
-          `  - ${basis}: ${count} occurrence(s)${basis === 'usingInferred' ? ' · inferred' : ''}`
+          `  - ${basis}: ${count} occurrence(s)${isInferredBasis(basis) ? ' · inferred' : ''}`
         );
       }
     }
@@ -294,7 +296,7 @@ export function buildMermaid(input: ContextExportInput): string {
 
   for (const edge of input.edges) {
     const label = sanitizeSingleLine(edge.kinds.join(', ') || edge.basis, 80);
-    const arrow = edge.basis === 'usingInferred' ? '-.->' : '-->';
+    const arrow = isInferredBasis(edge.basis) ? '-.->' : '-->';
     lines.push(`  ${alias(edge.sourceId)} ${arrow}|${label}| ${alias(edge.targetId)}`);
   }
 

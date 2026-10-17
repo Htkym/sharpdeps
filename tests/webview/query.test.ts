@@ -1,4 +1,4 @@
-// Query layer tests (SD-016): filters, stable sorting, page boundaries, and how a
+// Query layer tests: filters, stable sorting, page boundaries, and how a
 // search hit relates to what the view shows.
 
 import { describe, expect, it } from 'vitest';

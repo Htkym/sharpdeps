@@ -52,6 +52,7 @@ const RELATION_BASES: readonly RelationBasis[] = [
   'projectDeclared',
   'projectEvaluated',
   'usingInferred',
+  'typeReferenceInferred',
   'symbolResolved'
 ];
 
@@ -68,7 +69,8 @@ const RELATION_KINDS: readonly RelationKind[] = [
   'compileTimeName',
   'projectDeclared',
   'projectEvaluated',
-  'usingInferred'
+  'usingInferred',
+  'typeReferenceInferred'
 ];
 
 class Errors {
@@ -236,6 +238,9 @@ export function validateEvidenceRecord(input: unknown): ValidationResult<Evidenc
   requireEnum(record.confidence, '$.confidence', errors, ['resolved', 'inferred'] as const);
   requireBoolean(record.publicSurface, '$.publicSurface', errors);
   requireEnum(record.kind, '$.kind', errors, RELATION_KINDS);
+  if (record.kind === 'typeReferenceInferred' && record.confidence !== 'inferred') {
+    errors.add('$.confidence', 'typeReferenceInferred requires inferred confidence');
+  }
 
   optionalString(record.sourceTypeId, '$.sourceTypeId', errors, ID_PATTERNS.type);
   optionalString(record.sourceMemberId, '$.sourceMemberId', errors, ID_PATTERNS.member);
@@ -509,6 +514,18 @@ function validateRelations(
     );
     if (kinds && kinds.length === 0) {
       errors.add(`${path}.kinds`, 'expected at least one kind');
+    }
+    if (relation.basis === 'typeReferenceInferred' || kinds?.includes('typeReferenceInferred')) {
+      if (
+        relation.basis !== 'typeReferenceInferred' ||
+        kinds?.length !== 1 ||
+        kinds[0] !== 'typeReferenceInferred'
+      ) {
+        errors.add(path, 'typeReferenceInferred requires matching basis and its single kind');
+      }
+      if (relation.confidence !== 'inferred') {
+        errors.add(`${path}.confidence`, 'typeReferenceInferred requires inferred confidence');
+      }
     }
     const evidenceCount = requireCount(relation.evidenceCount, `${path}.evidenceCount`, errors);
     if (evidenceCount === 0) {

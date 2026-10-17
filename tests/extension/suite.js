@@ -1,4 +1,4 @@
-// End-to-end suite for the extension host (SD-027).
+// End-to-end suite for the extension host.
 //
 // VS Code's built-in test runner loads this module and calls run(). Assertions are plain
 // checks: a failure throws with every failing check listed, and the run also writes a
@@ -314,10 +314,13 @@ async function run() {
     record('generated evidence opens the read-only document provider', true);
     await vscode.commands.executeCommand('workbench.action.previousEditor');
     frame = await mapFrame();
+    // The restored evidence inspector can overlay the top bar at narrow widths.
+    await frame.locator('#sd-inspector-close').click();
+    await expect(frame.locator('.sd-inspector')).toBeHidden();
     const beforeCancel = api.getCurrentAnalysisId();
     await frame.locator('#sd-analyze').click();
-    await expect(frame.locator('#sd-stop')).toBeEnabled();
-    await frame.locator('#sd-stop').click();
+    await expect(frame.locator('#sd-analyze')).toHaveText('Cancel');
+    await frame.locator('#sd-analyze').click();
     await expect.poll(async () => (await state()).status).toBe('cancelled');
     record(
       'stop preserves the previous registered result',

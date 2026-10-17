@@ -1,5 +1,131 @@
 const { test, expect } = require('@playwright/test');
 
+test('saved table Space selects without losing scope, scroll or focus and ignores Ctrl+Space', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 900, height: 650 });
+  await page.goto('/tests/webview/fixtures/shell-fixture.html');
+  await page.evaluate(() => {
+    const app = window.sharpdepsApp;
+    const queryMetadata = {
+      provider: 'savedIndex',
+      workspaceId: 'workspace',
+      snapshotId: 'snapshot',
+      generation: 3,
+      variantIds: ['variant'],
+      coverage: 'Partial',
+      freshness: 'unverified',
+      truncated: false,
+      truncationReasons: [],
+      diagnostics: [],
+      returnedCount: 100,
+      totalKind: 'returned',
+      candidateCount: 0,
+      unresolvedCount: 0
+    };
+    app.dispatch({
+      type: 'analysisComplete',
+      analysisId: 'an_0123456789abcdef',
+      coverage: undefined,
+      completeness: 'partial',
+      queryMetadata
+    });
+    app.dispatch({ type: 'viewKindChanged', viewKind: 'table' });
+    const messages = document
+      .getElementById('app')
+      .dataset.hostMessages.split('\n')
+      .map(JSON.parse);
+    const request = messages.filter((message) => message.type === 'getProjection').at(-1);
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          type: 'projection',
+          requestId: request.requestId,
+          analysisId: request.analysisId,
+          projection: {
+            granularity: request.granularity,
+            scope: request.scope,
+            queryMetadata,
+            nodes: Array.from({ length: 100 }, (_, index) => ({
+              id: 'ty_' + (index + 1).toString(16).padStart(16, '0'),
+              name: 'Type' + String(index).padStart(3, '0'),
+              granularity: 'type',
+              kind: 'Type',
+              certainty: 'Resolved'
+            })),
+            edges: [],
+            totalNodeCount: 100,
+            totalEdgeCount: 0,
+            truncated: false
+          }
+        }
+      })
+    );
+  });
+  const entityId = 'ty_000000000000001f';
+  const row = page.locator(`.sd-table tbody tr[data-entity-id="${entityId}"]`);
+  await row.focus();
+  const before = await page.evaluate(() => ({
+    scope: window.sharpdepsApp.getState().scope,
+    scrollTop: window.sharpdepsApp.elements.mapHost.scrollTop,
+    provider: window.sharpdepsApp.getState().queryMetadata.provider
+  }));
+  expect(before.provider).toBe('savedIndex');
+  expect(before.scrollTop).toBeGreaterThan(0);
+  await row.press('Space');
+  await expect(row).toHaveAttribute('aria-selected', 'true');
+  await expect(row).toBeFocused();
+  await expect(page.locator('.sd-inspector')).toHaveClass(/\bopen\b/);
+  const after = await page.evaluate(() => ({
+    selection: window.sharpdepsApp.getState().selection,
+    scope: window.sharpdepsApp.getState().scope,
+    scrollTop: window.sharpdepsApp.elements.mapHost.scrollTop
+  }));
+  expect(after.selection).toEqual({ entityId });
+  expect(after.scope).toEqual(before.scope);
+  expect(after.scrollTop).toBe(before.scrollTop);
+
+  await page.evaluate(() => window.sharpdepsApp.dispatch({ type: 'selectionCleared' }));
+  await row.focus();
+  await row.press('Control+Space');
+  await expect(row).toHaveAttribute('aria-selected', 'false');
+  expect(await page.evaluate(() => window.sharpdepsApp.getState().selection)).toEqual({});
+});
+
+test('keeps the current status accessible in a narrow panel', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  await page.goto('/tests/webview/fixtures/shell-fixture.html');
+  await page.evaluate(() => {
+    const app = window.sharpdepsApp;
+    app.dispatch({ type: 'targetSelected', name: 'Input', relativePath: 'Input.csproj' });
+    app.dispatch({ type: 'analyzeStarted', analysisId: 'an_0000000000000001', mode: 'quick' });
+    app.dispatch({
+      type: 'analysisProgress',
+      stage: 'extract',
+      loaded: 2,
+      analyzed: 1,
+      elapsedMs: 10
+    });
+  });
+  const status = page.getByRole('banner').getByRole('status');
+  await expect(status).toHaveCount(1);
+  await expect(status).toHaveAttribute('data-status', 'analyzing');
+  await expect(status).toContainText('Collecting evidence');
+  await page.evaluate(() =>
+    window.sharpdepsApp.dispatch({
+      type: 'analysisComplete',
+      analysisId: 'an_0000000000000001',
+      completeness: 'partial',
+      coverage: { discovered: 3, loaded: 2, analyzed: 1, failed: 1, skipped: 1 }
+    })
+  );
+  await expect(status).toHaveAttribute('data-status', 'partial');
+  await expect(status).toContainText('Analysis complete (partial)');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(status).toBeVisible();
+  await expect(status).toHaveAttribute('data-status', 'partial');
+});
+
 for (const [width, theme] of [
   [1440, 'vscode-dark'],
   [900, 'vscode-light'],
@@ -374,6 +500,13 @@ for (const [width, theme] of [
     await expectPopover(page, 'profile', profileMapBounds, profileToolbarBounds);
     await page.getByLabel('Configuration', { exact: true }).fill('Release');
     await page.getByLabel('Configuration', { exact: true }).press('Tab');
+    await expect
+      .poll(async () => {
+        const panel = await page.locator('#sd-profile-panel').boundingBox();
+        const toolbar = await page.locator('.sd-topbar').boundingBox();
+        return panel.y - toolbar.y - toolbar.height;
+      })
+      .toBeGreaterThanOrEqual(0);
     await page.locator('#sd-analyze').click();
     await expect(page.locator('#sd-profile-panel')).toBeHidden();
     expect(
@@ -434,7 +567,7 @@ for (const [width, theme] of [
     expect((await messages()).filter((message) => message.type === 'analyze')).toHaveLength(
       beforeAnalysisRequests
     );
-    await expect(page.locator('#sd-analyze')).toHaveText('解析');
+    await expect(page.locator('#sd-analyze')).toHaveText('解析を更新');
     await expect(page.locator('.sd-table th').first()).toHaveText(/名前/);
     await expect(page.locator('.sd-table-footer')).toContainText('ページ');
     await page.getByRole('button', { name: 'フィルター', exact: true }).click();

@@ -45,7 +45,7 @@ export class CycleDiagnostics {
   }
 
   /**
-   * Publishes the semantic cycles at the position of a real evidence record (SD-020).
+   * Publishes the semantic cycles at the position of a real evidence record.
    * Only findings with a concrete reference are published; a group without a verified
    * cycle is reported in the output channel instead of being placed at a guessed line.
    */

@@ -1,5 +1,3 @@
-// Analysis result store (SD-013).
-//
 // The host registers an analyzer result (report v2 + evidence NDJSON) and serves
 // search, entity details, and evidence pages from it. The webview never supplies a
 // path, a byte offset, or a line number: it receives an opaque cursor that this store
@@ -471,7 +469,7 @@ export class ReportStore {
   }
 
   /**
-   * Types whose declaration contains the offset in a document (SD-019). One match per
+   * Types whose declaration contains the offset in a document. One match per
    * project variant, innermost declaration first, so a cursor is never bound to a type
    * of another project by name alone.
    */
@@ -531,7 +529,7 @@ export class ReportStore {
   }
 
   /**
-   * One evidence record by its id (SD-019). The id is opaque, so the host can open what
+   * One evidence record by its id. The id is opaque, so the host can open what
    * the webview selected without the webview ever supplying a path or a position.
    */
   async findEvidence(analysisId: string, evidenceId: string): Promise<EvidenceRecord | undefined> {
@@ -792,7 +790,7 @@ export class ReportStore {
   }
 
   /**
-   * Content of a generated document the analysis retained (SD-011), or undefined when
+   * Content of a generated document the analysis retained, or undefined when
    * the document is not generated or its content was not kept. The content lives beside
    * the report as `generated/<documentId>.cs`, so opening it never reads or writes the
    * user's repository. The id is opaque and must match the document id shape; the

@@ -1,5 +1,3 @@
-// Supporting structures for the symbol index (SD-008).
-
 namespace SharpDeps.Analysis.Roslyn.Symbols;
 
 using SharpDeps.Analysis.Contracts;
@@ -76,7 +74,7 @@ public sealed class SourceDocumentRegistry
     }
 
     /// <summary>
-    /// Registers a source-generated document (SD-011). The relative path is virtual:
+    /// Registers a source-generated document. The relative path is virtual:
     /// the workspace's obj path never reaches the report, and the generated content is
     /// read from the analysis result, not from the user's repository.
     /// </summary>

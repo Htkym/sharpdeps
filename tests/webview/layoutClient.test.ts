@@ -1,4 +1,4 @@
-// Layout worker lifecycle (SD-026): superseded responses are dropped, cancel and
+// Layout worker lifecycle: superseded responses are dropped, cancel and
 // dispose release the worker and the Blob URL, and an error rejects what is pending.
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

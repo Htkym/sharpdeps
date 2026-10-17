@@ -1,5 +1,3 @@
-// Path and text boundaries (SD-023).
-//
 // The manifest can name files outside the analysis root: linked files compiled into a
 // project are legitimate and must open. What must not happen is reading a file the
 // manifest did not really describe (for example a crafted `..\..\secret` entry) or

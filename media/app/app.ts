@@ -1,4 +1,3 @@
-// Viewer application (SD-015): renders the shell from the view state.
 //
 // Rendering is one-directional: the state is the source of truth, the DOM is derived
 // from it, and user gestures only dispatch actions. Every state the plan requires
@@ -17,6 +16,8 @@ import {
 import { resolveShortcut } from './shortcuts';
 import { translate, translator, type Translator } from './i18n';
 import type { SortState } from './query';
+import type { EntitySummary, Projection, QueryResultMetadata } from '../../src/view/protocolV2';
+import type { SourceReturnUi } from '../../src/view/protocolV2';
 import {
   buildNavigationTree,
   renderNavigationTree,
@@ -24,10 +25,12 @@ import {
 } from '../components/navigationPane';
 import {
   INITIAL_STATE,
+  queryResultSummary,
   selectBreadcrumbs,
   selectSearchPresentation,
   selectStatusFooter,
   selectStatusMessage,
+  selectPrimaryAction,
   selectTableRows,
   selectVisibleData,
   viewReducer,
@@ -39,6 +42,9 @@ export interface ViewerApp {
   dispatch(action: ViewAction): void;
   getState(): ViewState;
   elements: ShellElements;
+  captureSourceReturn(focus: SourceReturnUi['focus'], id: string): SourceReturnUi;
+  acceptsSourceReturn(): boolean;
+  searchRestoreTarget(): number | undefined;
   export(format: 'mermaid' | 'svg' | 'png' | 'json', copy?: boolean): Promise<void>;
 }
 
@@ -54,6 +60,10 @@ export interface ViewerAppOptions {
   /** Opens one evidence record in the editor (SD-019/SD-024). */
   onOpenEvidence?: (evidenceId: string) => void;
   onOpenDeclaration?: (entityId: string) => void;
+  onSourceReturnDismissed?: () => void;
+  onInvestigateCandidate?: (originId: string) => void;
+  onDismissCandidateInvestigation?: (originId: string, analysisId?: string) => void;
+  onOpenCandidateDeclaration?: (originId: string, capabilityId: string) => void;
   /**
    * Resource URI of the ELK layout worker. Without it (or when the worker fails) the
    * table stays available and the graph shows why it is missing.
@@ -71,6 +81,17 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   /** Focus returns here when the inspector drawer closes (SD-024). */
   let inspectorReturnFocus: HTMLElement | SVGElement | undefined;
   let inspectorWasOpen = false;
+  let pendingSourceUi: { pin: string; ui: SourceReturnUi } | undefined;
+  let pendingBackFocus: { pin: string; entityId?: string; count: number } | undefined;
+  let sourceReturnInteracted = false;
+  const interruptSourceReturn = () => {
+    pendingBackFocus = undefined;
+    sourceReturnInteracted = true;
+    pendingSourceUi = undefined;
+    options.onSourceReturnDismissed?.();
+  };
+  for (const event of ['pointerdown', 'keydown', 'wheel'])
+    root.addEventListener(event, interruptSourceReturn, { capture: true, passive: true });
 
   const elements = buildShell(root, {
     onLanguageToggled: () =>
@@ -91,30 +112,54 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     onMode: (mode) => dispatch({ type: 'modeChanged', mode }),
     onProfile: (profile) =>
       dispatch({ type: 'profileChanged', profile: { ...state.profile, ...profile } }),
-    onFilters: (filters) => dispatch({ type: 'filtersChanged', filters }),
+    onFilters: (filters) => {
+      const saved = !!state.queryMetadata;
+      dispatch({
+        type: 'filtersChanged',
+        filters: saved
+          ? {
+              ...(filters.resultKinds ? { resultKinds: filters.resultKinds } : {}),
+              includeExternal: filters.includeExternal !== false
+            }
+          : filters
+      });
+      if (saved) {
+        dispatch({ type: 'searchStarted', query: state.search });
+        options.onHostAction?.({ type: 'searchStarted', query: state.search });
+      }
+    },
     onBack: () => {
       dispatch({ type: 'historyBack' });
       if (state.camera) graphRuntime.view?.applyCamera(state.camera);
     },
     onDepth: (depth) => dispatch({ type: 'scopeChanged', scope: { ...state.scope, depth } }),
-    onAnalyze: () =>
-      options.onHostAction?.({ type: 'analyzeStarted', analysisId: '', mode: state.mode }),
-    onStop: () =>
-      options.onHostAction?.({
-        type: 'analysisFailed',
-        message: 'stop requested',
-        cancelled: true
-      }),
+    onAnalyze: () => {
+      const action = selectPrimaryAction(state);
+      if (action.disabled) return;
+      options.onHostAction?.(
+        action.intent === 'cancel'
+          ? { type: 'analysisFailed', message: 'stop requested', cancelled: true }
+          : action.intent === 'updateSavedIndex'
+            ? { type: 'savedUpdateRequested' }
+            : { type: 'analyzeStarted', analysisId: '', mode: state.mode }
+      );
+    },
     onGranularity: (granularity) => dispatch({ type: 'granularityChanged', granularity }),
     onViewKind: (viewKind) => dispatch({ type: 'viewKindChanged', viewKind }),
     onSearch: (search) => {
       dispatch({ type: 'searchChanged', search });
-      // The full analysis index is searched host-side; results arrive as
-      // `searchResultsReceived` (SD-013 bridge).
+      // Search uses the full host index rather than the bounded projection.
       options.onHostAction?.({ type: 'searchStarted', query: search });
     },
     onExport: (format) => void exportCurrent(format),
-    onCopyContext: () => options.onCopyContext?.(),
+    onCopyContext: () =>
+      state.queryMetadata && (!state.projection || !state.projectionRequestId)
+        ? dispatch({
+            type: 'errorRaised',
+            code: 'query.unsupportedOperation',
+            message: tr('This operation is unavailable for saved index.')
+          })
+        : options.onCopyContext?.(),
     onNavTab: (tab) => {
       activeTab = tab;
       render();
@@ -128,8 +173,24 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   elements.navPaneBody.addEventListener('sd-select', (event) => {
     const detail = (event as CustomEvent<{ entityId: string }>).detail;
     if (detail?.entityId) {
-      dispatch({ type: 'entitySelected', entityId: detail.entityId });
+      const entity = Object.values(state.tree)
+        .flatMap((page) => page.items)
+        .find((item) => item.id === detail.entityId);
+      if (state.queryMetadata && entity && entity.granularity !== 'type')
+        dispatch({
+          type: 'revealRequested',
+          entityId: entity.id,
+          scope: { kind: entity.granularity, id: entity.id, depth: 1 },
+          granularity: entity.granularity === 'project' ? 'namespace' : 'type'
+        });
+      else dispatch({ type: 'entitySelected', entityId: detail.entityId });
     }
+  });
+  elements.navPaneBody.addEventListener('sd-search-more', () => {
+    if (!state.queryMetadata || !state.searchResults.nextCursor || state.searchResults.pending)
+      return;
+    dispatch({ type: 'searchPageRequested' });
+    options.onHostAction?.({ type: 'searchPageRequested' });
   });
 
   elements.navPaneBody.addEventListener('sd-show-temporary', (event) => {
@@ -183,6 +244,16 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
       state.searchResults.items.find((node) => node.id === entityId) ??
       (state.details?.entityId === entityId ? state.details.entity : undefined);
     if (!entity) return;
+    if (state.queryMetadata && entity.certainty !== 'Resolved') {
+      dispatch({
+        type: 'errorRaised',
+        code: 'query.candidateLeaf',
+        message: tr(
+          'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+        )
+      });
+      return;
+    }
     dispatch({
       type: 'revealRequested',
       entityId,
@@ -199,6 +270,17 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     format: 'mermaid' | 'svg' | 'png' | 'json',
     copy?: boolean
   ): Promise<void> {
+    if (state.queryMetadata) {
+      if (format === 'json' && state.projection && state.projectionRequestId)
+        options.onExport?.(format, undefined, copy);
+      else
+        dispatch({
+          type: 'errorRaised',
+          code: 'query.unsupportedOperation',
+          message: tr('This operation is unavailable for saved index.')
+        });
+      return;
+    }
     try {
       if (format === 'svg' || format === 'png') {
         const view = graphView();
@@ -222,15 +304,49 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   }
 
   function dispatch(action: ViewAction): void {
+    const previousInvestigation = state.candidateInvestigation;
+    const previousAnalysisId = state.analysisId;
+    if (action.type === 'analyzeStarted' || action.type === 'analysisComplete')
+      pendingSourceUi = undefined;
+    if (action.type === 'sourceReturned') {
+      const pin = sourceReturnPin();
+      if (sourceReturnInteracted || !pin) return;
+      pendingSourceUi = { pin, ui: action.ui };
+      activeTab = action.ui.navTab;
+    }
+    if (action.type === 'historyBack') {
+      const previous = state.history.at(-1);
+      const pin = sourceReturnPin();
+      pendingBackFocus =
+        state.queryMetadata && previous && pin
+          ? { pin, entityId: previous.selectionId, count: previous.searchCount ?? 0 }
+          : undefined;
+    }
     const next = viewReducer(state, action);
     if (next === state) {
       return;
     }
 
     state = next;
-    if (action.type === 'paneResized') {
+    if (
+      pendingBackFocus &&
+      (pendingBackFocus.pin !== sourceReturnPin() ||
+        pendingBackFocus.entityId !== state.selection.entityId ||
+        action.type === 'sourceReturned')
+    )
+      pendingBackFocus = undefined;
+    if (
+      previousInvestigation &&
+      state.candidateInvestigation?.originId !== previousInvestigation.originId
+    )
+      options.onDismissCandidateInvestigation?.(previousInvestigation.originId, previousAnalysisId);
+    if (pendingSourceUi && pendingSourceUi.pin !== sourceReturnPin()) pendingSourceUi = undefined;
+    if (action.type === 'sourceReturned' && state.camera)
+      graphRuntime.view?.applyCamera(state.camera);
+    if (action.type === 'paneResized' || action.type === 'cameraChanged') {
       // Only pane CSS widths and persistence change; keep the inspector's DOM,
       // scroll position and expanded sections intact throughout the drag.
+      if (action.type === 'cameraChanged') renderTopBar(elements, state);
       options.onStateChanged?.(state);
       return;
     }
@@ -238,7 +354,7 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
   }
 
   /**
-   * Keyboard path through the whole flow (SD-024): search, view switch, selection,
+   * Keyboard path through the whole flow: search, view switch, selection,
    * inspector close, and graph zoom, all without a mouse.
    */
   window.addEventListener('keydown', (event) => {
@@ -309,11 +425,95 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     renderDetails();
     elements.footer.textContent = selectStatusFooter(state);
     options.onStateChanged?.(state);
+    restoreSourceUiWhenReady();
+    restoreBackFocusWhenReady();
+  }
+
+  function restoreBackFocusWhenReady(): void {
+    const ticket = pendingBackFocus;
+    if (!ticket || !state.projection || ticket.pin !== sourceReturnPin()) return;
+    if (
+      state.searchResults.pending ||
+      (state.searchResults.items.length < ticket.count && state.searchResults.nextCursor)
+    )
+      return;
+    const row = [
+      ...elements.mapHost.querySelectorAll<HTMLElement>('.sd-table tbody tr[data-entity-id]')
+    ].find((item) => item.dataset.entityId === ticket.entityId);
+    if (!row) {
+      pendingBackFocus = undefined;
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (pendingBackFocus !== ticket || ticket.pin !== sourceReturnPin() || !row.isConnected)
+        return;
+      pendingBackFocus = undefined;
+      row.focus();
+    });
+  }
+
+  function sourceReturnPin(): string | undefined {
+    const metadata = state.queryMetadata;
+    if (!state.analysisId || state.runningAnalysisId || state.status === 'analyzing')
+      return undefined;
+    return metadata
+      ? JSON.stringify([
+          state.analysisId,
+          metadata.workspaceId,
+          metadata.snapshotId,
+          metadata.generation,
+          [...metadata.variantIds].sort()
+        ])
+      : JSON.stringify(['report-v2', state.analysisId]);
+  }
+
+  function currentSourceUi(): SourceReturnUi | undefined {
+    return pendingSourceUi && pendingSourceUi.pin === sourceReturnPin()
+      ? pendingSourceUi.ui
+      : undefined;
+  }
+
+  function restoreSourceUiWhenReady(): void {
+    const ticket = pendingSourceUi;
+    const ui = currentSourceUi();
+    if (
+      !ui ||
+      sourceReturnInteracted ||
+      !state.projection ||
+      !state.tree.root ||
+      (state.selection.entityId && state.details?.entityId !== state.selection.entityId) ||
+      (state.selection.relationId && state.evidence?.relationId !== state.selection.relationId) ||
+      state.searchResults.pending ||
+      state.searchResults.query !== state.search ||
+      (state.searchResults.items.length < (ui.searchCount ?? 0) && state.searchResults.nextCursor)
+    )
+      return;
+    const button = [
+      ...elements.inspectorBody.querySelectorAll<HTMLButtonElement>('button[data-source-return]')
+    ].find(
+      (item) =>
+        item.dataset.sourceReturn === ui.focus && item.dataset.sourceId === ui.id && !item.disabled
+    );
+    if (!button) return;
+    requestAnimationFrame(() => {
+      if (
+        pendingSourceUi !== ticket ||
+        currentSourceUi() !== ui ||
+        sourceReturnInteracted ||
+        !button.isConnected
+      )
+        return;
+      pendingSourceUi = undefined;
+      button.focus({ preventScroll: true });
+      elements.navPaneBody.scrollTop = ui.scroll.navigation;
+      elements.inspectorBody.scrollTop = ui.scroll.inspector;
+      elements.mapHost.scrollTop = ui.scroll.map;
+    });
   }
 
   function renderDetails(): void {
     // Opening remembers the trigger; closing gives the focus back to it, so a keyboard
-    // user never lands at the top of the page (SD-024).
+    // user never lands at the top of the page.
     if (state.inspectorOpen && !inspectorWasOpen) {
       inspectorReturnFocus =
         document.activeElement instanceof HTMLElement ||
@@ -340,6 +540,10 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     const projection = state.projection;
     const selectedEdgeId = state.selection.relationId;
     const selectedEntityId = state.selection.entityId;
+    if (state.queryMetadata) {
+      renderSavedQueryInspector(elements, state, dispatch, options);
+      return;
+    }
 
     let edge: InspectorEdgeOptions | undefined;
     if (selectedEdgeId) {
@@ -404,7 +608,31 @@ export function createViewerApp(root: HTMLElement, options: ViewerAppOptions = {
     }
   }
 
-  const app: ViewerApp = { dispatch, getState: () => state, elements, export: exportCurrent };
+  const app: ViewerApp = {
+    dispatch,
+    getState: () => state,
+    elements,
+    export: exportCurrent,
+    acceptsSourceReturn: () => !sourceReturnInteracted,
+    searchRestoreTarget: () => currentSourceUi()?.searchCount ?? pendingBackFocus?.count,
+    captureSourceReturn: (focus, id) => {
+      if (graphRuntime.view)
+        dispatch({ type: 'cameraChanged', camera: graphRuntime.view.cameraState() });
+      sourceReturnInteracted = false;
+      pendingSourceUi = undefined;
+      return {
+        navTab: activeTab,
+        focus,
+        id,
+        scroll: {
+          navigation: elements.navPaneBody.scrollTop,
+          inspector: elements.inspectorBody.scrollTop,
+          map: elements.mapHost.scrollTop
+        },
+        searchCount: state.searchResults.items.length
+      };
+    }
+  };
   render();
   return app;
 
@@ -489,13 +717,18 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     elements.legend.append(item);
   }
   const meaning = document.createElement('span');
-  meaning.textContent = tr('Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external');
+  meaning.textContent = state.queryMetadata
+    ? tr(
+        'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+      )
+    : tr('Dashed: inferred · Red / ⟳: cycle · G: generated · ext: external');
   elements.legend.append(meaning);
   elements.targetName.textContent = state.target?.name ?? tr('No target');
   elements.targetPath.textContent = state.target?.relativePath ?? '';
   elements.targetPath.hidden =
     !state.target?.relativePath || state.target.relativePath === state.target.name;
   elements.modeSelect.value = state.mode;
+  elements.modeSelect.hidden = elements.profileButton.hidden = !!state.queryMetadata;
   elements.modeSelect.disabled = state.status === 'analyzing';
   elements.configuration.value = state.profile.configuration ?? 'Debug';
   elements.platform.value = state.profile.platform ?? '';
@@ -509,8 +742,32 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
   if (typeOption) {
     typeOption.disabled = !state.capabilities.typeGraph;
     typeOption.title = state.capabilities.typeGraph ? '' : tr('Type analysis requires Semantic');
+    typeOption.textContent = tr(state.queryMetadata ? 'Symbols' : 'Type');
   }
+  for (const option of elements.granularitySelect.querySelectorAll<HTMLOptionElement>('option'))
+    if (option.value !== 'type') option.disabled = !!state.queryMetadata;
+  const savedExportPending =
+    !!state.queryMetadata && (!state.projection || !state.projectionRequestId);
+  elements.exportButton.disabled = elements.copyButton.disabled = savedExportPending;
+  elements.exportButton.title = elements.copyButton.title = savedExportPending
+    ? tr('This operation is unavailable for saved index.')
+    : '';
+  for (const item of elements.exportMenu.querySelectorAll<HTMLButtonElement>('button'))
+    item.hidden = !!state.queryMetadata && item.id !== 'sd-export-json';
+  elements.imageTools.hidden = !!state.queryMetadata;
   const controls = elements.filterControls;
+  const saved = !!state.queryMetadata;
+  controls.resultKinds.parentElement!.hidden = !saved;
+  controls.resultKinds.disabled = state.queryMetadata?.resultFilterVersion !== 1;
+  controls.resultKinds.title = controls.resultKinds.disabled
+    ? tr('Filtering is unavailable in this saved reader.')
+    : '';
+  controls.resultKinds.value =
+    state.filters.resultKinds?.length === 1 ? state.filters.resultKinds[0] : 'all';
+  for (const control of [controls.tests, controls.generated]) control.parentElement!.hidden = saved;
+  for (const control of [controls.basis, controls.kinds, controls.projectKinds, controls.relations])
+    control.hidden = saved;
+  controls.external.disabled = saved && state.queryMetadata?.resultFilterVersion !== 1;
   controls.tests.checked = state.filters.includeTests !== false;
   controls.external.checked = state.filters.includeExternal !== false;
   controls.generated.checked = state.filters.includeGenerated !== false;
@@ -523,9 +780,17 @@ function renderTopBar(elements: ShellElements, state: ViewState): void {
     for (const option of input.querySelectorAll<HTMLInputElement>('input'))
       option.checked = selected?.includes(option.value as never) === true;
 
-  const analyzing = state.status === 'analyzing';
-  elements.analyzeButton.disabled = analyzing;
-  elements.stopButton.disabled = !analyzing;
+  const primary = selectPrimaryAction(state);
+  elements.analyzeButton.disabled = primary.disabled;
+  elements.analyzeButton.textContent = tr(primary.label);
+  elements.analyzeButton.setAttribute('aria-label', tr(primary.label));
+  elements.analyzeButton.title =
+    state.queryMetadata && primary.disabled && primary.intent !== 'cancel'
+      ? tr('Updating requires workspace trust and no other active saved update.')
+      : '';
+  elements.modeSelect.disabled ||= !!state.queryMetadata;
+  elements.configuration.disabled ||= !!state.queryMetadata;
+  elements.platform.disabled ||= !!state.queryMetadata;
 
   elements.breadcrumbs.replaceChildren(
     ...selectBreadcrumbs(state).map((crumb) => {
@@ -621,7 +886,7 @@ function renderStructureTab(
     entity: import('../../src/view/protocolV2').EntitySummary
   ): NavigationTreeNode => ({
     id: entity.id,
-    label: entity.name,
+    label: state.queryMetadata ? savedEntityLabel(entity) : entity.name,
     granularity: entity.granularity,
     kind: entity.kind,
     inCycle: entity.inCycle,
@@ -632,7 +897,9 @@ function renderStructureTab(
   });
   const tree = state.tree.root
     ? state.tree.root.items.map(branch)
-    : buildNavigationTree(visible.nodes);
+    : state.queryMetadata
+      ? visible.nodes.map(branch)
+      : buildNavigationTree(visible.nodes);
   const container = document.createElement('div');
   elements.navPaneBody.append(container);
   renderNavigationTree(container, {
@@ -667,7 +934,7 @@ function renderStructureTab(
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'sd-button';
-    more.textContent = tr('Load more projects');
+    more.textContent = tr(state.queryMetadata ? 'Load more symbols' : 'Load more projects');
     more.addEventListener('click', () =>
       context.requestTree('root', 'project', state.tree.root.nextCursor)
     );
@@ -678,7 +945,10 @@ function renderStructureTab(
 /** Search hits from the whole index, including entities the view does not show. */
 function renderSearchResults(elements: ShellElements, state: ViewState): void {
   const tr = translator(state.language);
-  if (state.search.trim().length === 0) {
+  if (
+    state.search.trim().length === 0 &&
+    !(state.queryMetadata && ['project', 'namespace'].includes(state.scope.kind))
+  ) {
     return;
   }
 
@@ -686,23 +956,27 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   const block = document.createElement('section');
   block.className = 'sd-search-results';
   const heading = document.createElement('h3');
-  heading.textContent =
-    results.length === 0 && !state.searchResults.pending
+  const metadata = state.searchResults.queryMetadata;
+  heading.textContent = metadata
+    ? tr('Search results ({0} returned)', metadata.returnedCount)
+    : results.length === 0 && !state.searchResults.pending
       ? tr('No match for "{0}"', state.search)
       : tr('Search results ({0} of {1})', results.length, state.searchResults.total);
   block.append(heading);
+  if (metadata) renderQueryMetadata(block, metadata, state.language);
 
   if (state.searchResults.pending && results.length === 0) {
     block.append(message(tr('Searching the analyzed index...'), 'sd-note'));
   }
 
   const list = document.createElement('ul');
-  for (const result of results.slice(0, 20)) {
+  for (const result of results.slice(0, metadata ? 500 : 20)) {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'sd-node-item';
-    button.textContent = result.entity.name;
+    if (metadata) renderSavedEntityLabel(button, result.entity, tr);
+    else button.textContent = result.entity.name;
     button.addEventListener('click', () =>
       elements.navPaneBody.dispatchEvent(
         new CustomEvent('sd-select', { detail: { entityId: result.entity.id }, bubbles: true })
@@ -733,6 +1007,17 @@ function renderSearchResults(elements: ShellElements, state: ViewState): void {
   }
 
   block.append(list);
+  if (metadata && state.searchResults.nextCursor) {
+    const more = document.createElement('button');
+    more.className = 'sd-button';
+    more.type = 'button';
+    more.textContent = tr('More results');
+    more.disabled = state.searchResults.pending;
+    more.addEventListener('click', () =>
+      elements.navPaneBody.dispatchEvent(new CustomEvent('sd-search-more'))
+    );
+    block.append(more);
+  }
 
   if (state.temporaryDisplayIds.length > 0) {
     const reset = document.createElement('button');
@@ -753,6 +1038,15 @@ function renderCyclesTab(
   state: ViewState,
   dispatch: (action: ViewAction) => void
 ): void {
+  if (state.queryMetadata) {
+    elements.navPaneBody.append(
+      message(
+        translator(state.language)('Cycle analysis is unavailable for saved index.'),
+        'sd-note'
+      )
+    );
+    return;
+  }
   const tr = translator(state.language);
   const cycles = state.cycles;
   if (cycles.length === 0) {
@@ -863,6 +1157,16 @@ function renderAnalysisTab(
   dispatch: (action: ViewAction) => void
 ): void {
   const tr = translator(state.language);
+  if (state.queryMetadata) {
+    renderQueryMetadata(elements.navPaneBody, state.queryMetadata, state.language);
+    elements.navPaneBody.append(
+      message(
+        tr('Symbols keep their original kind. Type/member aggregation is not connected.'),
+        'sd-note'
+      )
+    );
+    return;
+  }
   const rows: Array<[string, string]> = [
     ['Status', tr(state.status)],
     [
@@ -991,6 +1295,32 @@ function renderCenter(
   }
 
   const visible = selectVisibleData(state);
+  const graphStamp = JSON.stringify([
+    state.analysisId,
+    state.viewKind,
+    state.scope,
+    state.search,
+    !!state.queryMetadata,
+    state.queryMetadata && [
+      state.queryMetadata.workspaceId,
+      state.queryMetadata.snapshotId,
+      state.queryMetadata.generation,
+      [...state.queryMetadata.variantIds].sort()
+    ],
+    visible.nodes.map((node) => node.id),
+    visible.edges.map((edge) => edge.id)
+  ]);
+  const focusedTableRow =
+    state.queryMetadata &&
+    state.viewKind === 'table' &&
+    !elements.mapContent.hidden &&
+    elements.graphHost.dataset.queryRender === graphStamp &&
+    document.activeElement instanceof HTMLElement &&
+    elements.mapContent.contains(document.activeElement) &&
+    document.activeElement.matches('tr[data-entity-id]')
+      ? document.activeElement.dataset.entityId
+      : undefined;
+  elements.graphHost.dataset.queryRender = graphStamp;
   elements.mapContent.replaceChildren();
   elements.mapHost.dataset.viewKind = state.viewKind;
   elements.graphControls.hidden = state.viewKind !== 'graph';
@@ -1003,10 +1333,24 @@ function renderCenter(
     return;
   }
 
-  const summaryParts = [
-    tr('{0} node(s) shown of {1}', visible.nodes.length, visible.totalNodeCount),
-    tr('{0} relation(s) of {1}', visible.edges.length, visible.totalEdgeCount)
-  ];
+  const summaryParts = state.queryMetadata
+    ? [
+        queryResultSummary(
+          (state.viewKind === 'table' && ['project', 'namespace'].includes(state.scope.kind)
+            ? state.searchResults.queryMetadata
+            : state.projection.queryMetadata) ?? state.queryMetadata,
+          state.language
+        ),
+        tr(
+          '{0} node(s), {1} relation(s) shown from the returned graph',
+          visible.nodes.length,
+          visible.edges.length
+        )
+      ]
+    : [
+        tr('{0} node(s) shown of {1}', visible.nodes.length, visible.totalNodeCount),
+        tr('{0} relation(s) of {1}', visible.edges.length, visible.totalEdgeCount)
+      ];
   if (visible.filterCount > 0) {
     summaryParts.push(tr('{0} filter(s)', visible.filterCount));
   }
@@ -1071,10 +1415,29 @@ function renderCenter(
       elements.mapContent.hidden = true;
       // The graph shows exactly what the search and filters select, so the summary and
       // the picture can never disagree; the host's totals stay in the summary.
-      view.update(
-        { ...state.projection, nodes: visible.nodes, edges: visible.edges },
-        scopeLabel(state)
-      );
+      const renderedProjection = {
+        ...state.projection,
+        nodes: visible.nodes,
+        edges: visible.edges
+      };
+      void view
+        .update(
+          state.queryMetadata
+            ? {
+                ...renderedProjection,
+                nodes: visible.nodes.map((node) => ({ ...node, name: savedEntityLabel(node) }))
+              }
+            : renderedProjection,
+          scopeLabel(state)
+        )
+        .then(() => {
+          if (elements.graphHost.dataset.queryRender === graphStamp)
+            decorateSavedGraph(
+              elements.graphHost,
+              state.queryMetadata ? renderedProjection : undefined,
+              state.language
+            );
+        });
       // Selection and inspector state never change the layout; only the highlight.
       view.setSelection(
         state.selection.entityId ? [state.selection.entityId] : [],
@@ -1099,7 +1462,19 @@ function renderCenter(
 
   // The table is rendered even while the graph is shown, so switching views never
   // depends on the graph having succeeded.
-  renderEntityTable(elements.mapContent, tableOptions);
+  if (state.queryMetadata)
+    renderSavedQueryTable(
+      elements.mapContent,
+      state,
+      tableOptions.onSelect,
+      tableOptions.onActivate,
+      tableOptions.onPage
+    );
+  else renderEntityTable(elements.mapContent, tableOptions);
+  if (focusedTableRow && !graphShown)
+    [...elements.mapContent.querySelectorAll<HTMLElement>('tr[data-entity-id]')]
+      .find((row) => row.dataset.entityId === focusedTableRow)
+      ?.focus({ preventScroll: true });
   if (state.viewKind === 'graph' && !graphShown) {
     elements.mapContent.prepend(
       message(
@@ -1113,9 +1488,500 @@ function renderCenter(
   }
 }
 
+function savedEntityLabel(entity: EntitySummary): string {
+  return `[${entity.kind ?? 'unknown'} · ${entity.certainty ?? 'unknown'}] ${entity.name}`;
+}
+
+function renderSavedEntityLabel(button: HTMLElement, entity: EntitySummary, tr: Translator): void {
+  button.textContent = savedEntityLabel(entity);
+  const location = document.createElement('span');
+  location.className = 'sd-node-meta';
+  location.textContent = `${entity.resultKind ?? tr('unclassified')} · ${entity.path ?? tr('Location unavailable')}`;
+  const reason = document.createElement('span');
+  reason.className = 'sd-node-meta';
+  reason.textContent = `${tr('Reason')}: ${entity.reason ?? tr('Not returned')}`;
+  button.append(location, reason);
+}
+
+function renderQueryMetadata(
+  container: HTMLElement,
+  metadata: QueryResultMetadata,
+  language: ViewState['language']
+): void {
+  const tr = translator(language);
+  container.append(message(queryResultSummary(metadata, language), 'sd-note'));
+  const facts = document.createElement('dl');
+  facts.className = 'sd-facts';
+  for (const [label, value] of [
+    ['Workspace id', metadata.workspaceId],
+    ['Snapshot id', metadata.snapshotId],
+    ['Generation', String(metadata.generation)],
+    ['Variants', metadata.variantIds.join(', ') || '—']
+  ]) {
+    const term = document.createElement('dt');
+    term.textContent = tr(label);
+    const definition = document.createElement('dd');
+    definition.textContent = value;
+    facts.append(term, definition);
+  }
+  container.append(facts);
+  for (const issue of metadata.diagnostics) {
+    const note = message(`${issue.code}: ${issue.message}`, 'sd-note');
+    note.dataset.code = issue.code;
+    container.append(note);
+  }
+}
+
+/** Saved Query does not supply the legacy occurrence/cycle counters. */
+function renderSavedQueryTable(
+  container: HTMLElement,
+  state: ViewState,
+  onSelect: (id: string) => void,
+  onActivate: (id: string) => void,
+  onPage: (page: number) => void
+): void {
+  const tr = translator(state.language);
+  const page = selectTableRows(state);
+  container.replaceChildren();
+  container.dataset.role = 'entity-table';
+  const table = document.createElement('table');
+  table.className = 'sd-table';
+  table.setAttribute('aria-label', tr('Returned symbols'));
+  const head = document.createElement('thead');
+  const header = document.createElement('tr');
+  for (const label of ['Name', 'Kind', 'Certainty']) {
+    const cell = document.createElement('th');
+    cell.scope = 'col';
+    if (label === 'Name' || label === 'Kind') {
+      const key = label === 'Name' ? 'name' : 'kind';
+      if (state.tableSort.key === key)
+        cell.setAttribute(
+          'aria-sort',
+          state.tableSort.direction === 'asc' ? 'ascending' : 'descending'
+        );
+      const sort = document.createElement('button');
+      sort.type = 'button';
+      sort.textContent = tr(label);
+      sort.addEventListener('click', () =>
+        container.dispatchEvent(
+          new CustomEvent('sd-sort', {
+            bubbles: true,
+            detail: { key }
+          })
+        )
+      );
+      cell.append(sort);
+    } else cell.textContent = tr(label);
+    header.append(cell);
+  }
+  head.append(header);
+  const body = document.createElement('tbody');
+  for (const { entity, temporary } of page.rows) {
+    const row = document.createElement('tr');
+    row.dataset.entityId = entity.id;
+    row.tabIndex = 0;
+    row.setAttribute('aria-selected', String(entity.id === state.selection.entityId));
+    row.classList.toggle('sd-row-selected', entity.id === state.selection.entityId);
+    row.addEventListener('click', () => onSelect(entity.id));
+    row.addEventListener('dblclick', () => onActivate(entity.id));
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        onActivate(entity.id);
+      } else if (event.key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        onSelect(entity.id);
+      }
+    });
+    for (const value of [
+      entity.name,
+      entity.kind ?? tr('unknown'),
+      entity.certainty ?? tr('unknown')
+    ]) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    }
+    if (temporary) row.firstElementChild?.append(badge(tr('outside filters')));
+    body.append(row);
+  }
+  table.append(head, body);
+  const footer = document.createElement('div');
+  footer.className = 'sd-table-footer';
+  footer.append(
+    message(
+      tr(
+        '{0} row(s) · page {1}/{2} · 100 per page',
+        page.totalItems,
+        page.page + 1,
+        page.pageCount
+      ),
+      'sd-note'
+    )
+  );
+  if (page.pageCount > 1) {
+    for (const [label, destination] of [
+      ['Previous', page.page - 1],
+      ['Next', page.page + 1]
+    ] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sd-button';
+      button.textContent = tr(label);
+      button.disabled = destination < 0 || destination >= page.pageCount;
+      button.addEventListener('click', () => onPage(destination));
+      footer.append(button);
+    }
+  }
+  container.append(table, footer);
+}
+
+function renderSavedQueryInspector(
+  elements: ShellElements,
+  state: ViewState,
+  dispatch: (action: ViewAction) => void,
+  options: ViewerAppOptions
+): void {
+  const tr = translator(state.language);
+  const body = elements.inspectorBody;
+  body.replaceChildren();
+  const savedEvidence =
+    state.evidence?.relationId === state.selection.relationId ? state.evidence : undefined;
+  const relation =
+    savedEvidence?.relation ??
+    [
+      ...(state.details?.relations?.outgoing ?? []),
+      ...(state.details?.relations?.incoming ?? [])
+    ].find((item) => item.id === state.selection.relationId);
+  // Relation details are transient provider data, not additions to the graph/export.
+  const edge = relation
+    ? { ...relation, kinds: [relation.kind] }
+    : state.projection?.edges.find((item) => item.id === state.selection.relationId);
+  const details = state.details?.entityId === state.selection.entityId ? state.details : undefined;
+  const associated =
+    state.projection?.nodes.find((item) => item.id === state.selection.entityId) ??
+    state.searchResults.items.find((item) => item.id === state.selection.entityId);
+  const selected = details?.entity ?? associated;
+  // Resolving the symbol itself does not resolve the tentative relation that reached it.
+  const entity =
+    selected && (associated?.certainty === 'Candidate' || associated?.certainty === 'Unresolved')
+      ? { ...selected, certainty: associated.certainty }
+      : selected;
+  const metadata = edge
+    ? (savedEvidence?.queryMetadata ??
+      (relation ? state.details?.queryMetadata : state.projection?.queryMetadata))
+    : details?.queryMetadata;
+  if (state.selection.relationId) {
+    const nameOf = (id: string): string =>
+      (relation?.sourceId === id
+        ? relation.sourceName
+        : relation?.targetId === id
+          ? relation.targetName
+          : undefined) ??
+      state.projection?.nodes.find((node) => node.id === id)?.name ??
+      id;
+    elements.inspectorTitle.textContent = edge
+      ? `${nameOf(edge.sourceId)} → ${nameOf(edge.targetId)}`
+      : state.selection.relationId;
+    if (edge) {
+      for (const [label, value] of [
+        ['Kind', edge.kinds.join(', ')],
+        ['Certainty', edge.certainty ?? tr('unknown')],
+        ['Variant', edge.variantId ?? tr('unknown')],
+        ['Source occurrence', edge.sourceOccurrenceId ?? tr('unknown')],
+        ['Target occurrence', edge.targetOccurrenceId ?? tr('unknown')]
+      ])
+        body.append(message(`${tr(label)}: ${value}`, 'sd-note'));
+      if (savedEvidence) {
+        const heading = document.createElement('h3');
+        heading.textContent = tr('Saved evidence location');
+        body.append(heading);
+        for (const item of savedEvidence.items) {
+          if (typeof item.id === 'string' && item.location) {
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'sd-button';
+            open.textContent = tr('Open in editor');
+            open.dataset.sourceReturn = 'evidence';
+            open.dataset.sourceId = item.id as string;
+            open.addEventListener('click', () => options.onOpenEvidence?.(item.id as string));
+            body.append(open);
+          }
+          const location =
+            item.location && typeof item.location === 'object' && !Array.isArray(item.location)
+              ? (item.location as Record<string, unknown>)
+              : undefined;
+          const rawSpan =
+            location?.rawSpan &&
+            typeof location.rawSpan === 'object' &&
+            !Array.isArray(location.rawSpan)
+              ? (location.rawSpan as Record<string, unknown>)
+              : undefined;
+          for (const [label, value] of [
+            ['Source id', location?.sourceId],
+            ['Content hash', location?.contentHash]
+          ] as const)
+            if (typeof value === 'string')
+              body.append(message(`${tr(label)}: ${value}`, 'sd-note'));
+          if (
+            rawSpan &&
+            ['start', 'length', 'end'].every(
+              (key) =>
+                typeof rawSpan[key] === 'number' &&
+                Number.isSafeInteger(rawSpan[key]) &&
+                (rawSpan[key] as number) >= 0
+            )
+          )
+            body.append(
+              message(
+                `${tr('Raw UTF-16 span')}: [${rawSpan.start}, ${rawSpan.end}) · length ${rawSpan.length}`,
+                'sd-note'
+              )
+            );
+        }
+        if (!savedEvidence.items.length)
+          body.append(message(tr('No saved evidence location returned.'), 'sd-note'));
+      }
+    }
+  } else if (state.selection.entityId) {
+    elements.inspectorTitle.textContent = entity?.name ?? state.selection.entityId;
+    body.append(
+      message(
+        `${tr('Kind')}: ${entity?.kind ?? tr('unknown')} · ${tr('Certainty')}: ${entity?.certainty ?? tr('unknown')}`,
+        'sd-note'
+      )
+    );
+    if (!details) body.append(message(tr('Loading details...'), 'sd-note'));
+    if (entity) {
+      body.append(
+        message(`${tr('Location')}: ${entity.path ?? tr('Location unavailable')}`, 'sd-note')
+      );
+      body.append(message(`${tr('Reason')}: ${entity.reason ?? tr('Not returned')}`, 'sd-note'));
+    }
+    if (entity && ['Type', 'Member', 'Document', 'Section'].includes(entity.kind ?? '')) {
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'sd-button';
+      open.textContent = tr(
+        entity.kind === 'Document' || entity.kind === 'Section'
+          ? 'Open document'
+          : 'Open declaration'
+      );
+      open.disabled = entity.sourceLocationAvailable === false;
+      if (open.disabled) {
+        open.title = tr('Source location unavailable');
+        body.append(message(tr('Source location unavailable'), 'sd-note'));
+      }
+      open.addEventListener('click', () => options.onOpenDeclaration?.(entity.id));
+      open.dataset.sourceReturn = 'declaration';
+      open.dataset.sourceId = entity.id;
+      body.append(open);
+    }
+    for (const [kind, label, entries] of [
+      ['dependencies', 'Dependencies (returned entries)', details?.dependencies ?? []],
+      ['dependents', 'Dependents (returned entries)', details?.dependents ?? []]
+    ] as const) {
+      const heading = document.createElement('h3');
+      heading.textContent = tr(label);
+      body.append(heading);
+      for (const entry of entries) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'sd-node-item';
+        renderSavedEntityLabel(button, entry, tr);
+        button.disabled = entry.certainty !== 'Resolved';
+        if (button.disabled)
+          button.title = tr(
+            'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+          );
+        button.addEventListener('click', () =>
+          dispatch({ type: 'entitySelected', entityId: entry.id })
+        );
+        body.append(button);
+      }
+      const relations =
+        (kind === 'dependencies' ? details?.relations?.outgoing : details?.relations?.incoming) ??
+        [];
+      if (!entries.length && !relations.length)
+        body.append(message(tr('No related entries returned.'), 'sd-note'));
+      for (const relation of relations) {
+        const inspect = document.createElement('button');
+        inspect.type = 'button';
+        inspect.className = 'sd-node-item';
+        inspect.dataset.relationId = relation.id;
+        inspect.textContent = tr(
+          'Inspect relation: {0} → {1} · {2} · {3}',
+          relation.sourceName ?? relation.sourceId,
+          relation.targetName ?? relation.targetId,
+          tr(relation.kind),
+          tr(relation.certainty)
+        );
+        inspect.addEventListener('click', () =>
+          dispatch({ type: 'relationSelected', relationId: relation.id })
+        );
+        body.append(inspect);
+      }
+      const explore = document.createElement('button');
+      explore.type = 'button';
+      explore.className = 'sd-button';
+      explore.textContent = tr(
+        kind === 'dependencies' ? 'Explore dependencies' : 'Explore dependents'
+      );
+      explore.disabled = entity?.certainty !== 'Resolved';
+      explore.addEventListener('click', () =>
+        dispatch({
+          type: 'revealRequested',
+          entityId: state.selection.entityId!,
+          scope: { kind, id: state.selection.entityId, depth: 1 },
+          granularity: 'type'
+        })
+      );
+      body.append(explore);
+    }
+  } else {
+    elements.inspectorTitle.textContent = tr('Details');
+    body.append(message(tr('Select a node or relation to inspect it.'), 'sd-empty'));
+  }
+  if (
+    details?.candidateOrigins?.length &&
+    !state.selection.relationId &&
+    state.status !== 'stale'
+  ) {
+    const section = document.createElement('section');
+    section.dataset.candidateInvestigation = '';
+    section.append(
+      message(
+        tr('The relationship is unconfirmed; check declaration existence separately.'),
+        'sd-note'
+      )
+    );
+    for (const origin of details.candidateOrigins) {
+      const investigate = document.createElement('button');
+      investigate.type = 'button';
+      investigate.className = 'sd-button';
+      investigate.textContent = tr('Investigate declaration: {0}', origin.targetName);
+      investigate.dataset.candidateOrigin = origin.originId;
+      investigate.dataset.sourceReturn = 'declaration';
+      investigate.dataset.sourceId = details.entityId;
+      investigate.disabled = state.candidateInvestigation?.pending === true;
+      investigate.addEventListener('click', () => {
+        dispatch({ type: 'candidateInvestigationRequested', originId: origin.originId });
+        options.onInvestigateCandidate?.(origin.originId);
+      });
+      section.append(investigate);
+    }
+    const investigation = state.candidateInvestigation;
+    if (investigation) {
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'sd-button';
+      dismiss.textContent = tr('Close declaration investigation');
+      dismiss.dataset.candidateDismiss = '';
+      dismiss.addEventListener('click', () =>
+        dispatch({ type: 'candidateInvestigationDismissed' })
+      );
+      section.append(dismiss);
+      if (investigation.pending) section.append(message(tr('Loading declarations…'), 'sd-note'));
+      const response = investigation.response;
+      if (response) {
+        renderQueryMetadata(section, response.queryMetadata, state.language);
+        if (response.reason)
+          section.append(
+            message(
+              response.reason === 'catalog-incomplete'
+                ? tr('The symbol catalog is incomplete.')
+                : response.reason,
+              'sd-note'
+            )
+          );
+        if (response.unavailableReason)
+          section.append(message(tr(response.unavailableReason), 'sd-note'));
+        if (response.queryMetadata.truncated)
+          section.append(message(tr('Returned declaration list is truncated.'), 'sd-note'));
+        if (!response.declarations.length)
+          section.append(message(tr('Source location unavailable'), 'sd-note'));
+        response.declarations.forEach((declaration, index) => {
+          const open = document.createElement('button');
+          open.type = 'button';
+          open.className = 'sd-button';
+          open.textContent = tr('Open declaration {0}: {1}', index + 1, declaration.path);
+          open.dataset.candidateDeclaration = declaration.capabilityId;
+          open.addEventListener('click', () =>
+            options.onOpenCandidateDeclaration?.(response.originId, declaration.capabilityId)
+          );
+          section.append(open);
+        });
+      }
+    }
+    body.append(section);
+  }
+  renderQueryMetadata(body, metadata ?? state.queryMetadata!, state.language);
+  body.append(
+    message(
+      tr(
+        'Candidates and unresolved relations are leaves; they do not prove further resolved paths.'
+      ),
+      'sd-note'
+    )
+  );
+  body.append(
+    message(
+      tr(
+        'Legacy evidence aggregation/paging, context copy and exports are unavailable for saved index.'
+      ),
+      'sd-note'
+    )
+  );
+}
+
+function decorateSavedGraph(
+  host: HTMLElement,
+  projection: Projection | undefined,
+  language: ViewState['language']
+): void {
+  const tr = translator(language);
+  const edges = new Map(projection?.edges.map((edge) => [edge.id, edge]));
+  for (const group of host.querySelectorAll<SVGGElement>('g.edge')) {
+    group.querySelector('.sd-query-certainty')?.remove();
+    group.querySelector('.sd-query-title')?.remove();
+    const edge = edges.get(group.getAttribute('data-id') ?? '');
+    if (!edge) continue;
+    const certainty = edge.certainty ?? tr('unknown');
+    const label = `${edge.kinds.join(', ')} · ${tr('Certainty')}: ${certainty}`;
+    group.setAttribute('aria-label', label);
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.setAttribute('class', 'sd-query-title');
+    title.textContent = label;
+    group.append(title);
+    const path = group.querySelector<SVGPathElement>('path.edge-line');
+    if (
+      path &&
+      typeof path.getTotalLength === 'function' &&
+      typeof path.getPointAtLength === 'function'
+    ) {
+      const position = path.getPointAtLength(path.getTotalLength() / 2);
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('class', 'sd-query-certainty');
+      text.setAttribute('x', String(position.x));
+      text.setAttribute('y', String(position.y - 4));
+      text.setAttribute('fill', 'var(--vscode-foreground)');
+      text.setAttribute('font-size', '10');
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('pointer-events', 'none');
+      text.textContent = certainty;
+      group.append(text);
+    }
+  }
+}
+
 /** Human-readable scope label for the graph header/exports. */
 export function imageMetadata(state: ViewState): string[] {
   const tr = translator(state.language);
+  if (state.queryMetadata)
+    return [
+      queryResultSummary(state.queryMetadata, state.language),
+      tr('This operation is unavailable for saved index.')
+    ];
   const notes: string[] = [];
   const visible = selectVisibleData(state);
   if (state.imageOptions.profile) {
@@ -1180,7 +2046,7 @@ function scopeLabel(state: ViewState, language: ViewState['language'] = 'en'): s
   const tr = translator(language);
   const scope = state.scope;
   if (!scope || scope.kind === 'root') {
-    return tr('all {0}', tr(state.granularity));
+    return state.queryMetadata ? tr('Returned symbols') : tr('all {0}', tr(state.granularity));
   }
 
   const origin = state.projection?.nodes.find((node) => node.id === scope.id);

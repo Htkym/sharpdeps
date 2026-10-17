@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using SharpDeps.Analysis.Core.Graph;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Analysis.Roslyn.Evidence;
@@ -168,7 +169,21 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
 
         // External collection types are still referenced (List/Dictionary/string), but
         // they are not part of the index.
-        Assert.Contains(collected.Evidence, entry => entry.TargetIsExternal);
+        var external = collected.Evidence.Where(entry => entry.TargetIsExternal).ToArray();
+        Assert.NotEmpty(external);
+        Assert.All(external, entry =>
+        {
+            var symbol = Assert.IsType<HarnessTargetSymbol>(entry.TargetSymbol);
+            Assert.Equal("type", symbol.Kind);
+            Assert.Equal(entry.Evidence.TargetTypeId, symbol.LegacyTypeId);
+            Assert.Null(symbol.LegacyMemberId);
+            Assert.Equal(symbol.TypeCanonicalSignature, symbol.CanonicalSignature);
+            Assert.Equal(symbol.TypeName, symbol.Name);
+            Assert.Contains("Version=", symbol.AssemblyIdentity, StringComparison.Ordinal);
+            Assert.Equal("roslyn-declaration", entry.Producer);
+            Assert.Equal(method.Id, entry.CanonicalSourceMemberId);
+        });
+        Assert.All(references, entry => Assert.Null(entry.TargetSymbol));
     }
 
     [Fact]
@@ -390,6 +405,41 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
         Assert.Equal(4, implementation.Evidence.PhysicalSpan!.StartLine);
         Assert.EndsWith("Infrastructure/OrderStore.cs", index.Documents
             .First(document => document.Id == implementation.Evidence.DocumentId).RelativePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void KeepsEveryFieldAndEventOwnerWithoutIncreasingLegacyEvidenceCounts()
+    {
+        var collected = Collect(("Multiple.cs", """
+            public delegate void D();
+            public class C
+            {
+                public D a, b;
+                public event D Changed, Other;
+            }
+            """));
+        var legacy = collected.For("C", "D").ToArray();
+        Assert.Equal(2, legacy.Length); // One shared type token per declaration in report v2.
+        var members = collected.Index.Members.ToDictionary(m => m.Id, m => m.Name);
+        Assert.Equal(new[] { "a", "Changed" }, legacy.Select(e => members[e.Evidence.SourceMemberId!]).ToArray());
+        Assert.Equal(new[] { "Changed", "Other", "a", "b" }, legacy
+            .SelectMany(e => e.HarnessDeclarationOwners!)
+            .Select(o => members[o.SourceMemberId!]).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        var relation = Assert.Single(AnalysisGraphBuilder.Build(legacy.Select(e => e.ToGraphEvidence()).ToArray(),
+            GraphGranularity.Type).Relations);
+        Assert.Equal(2, relation.EvidenceCount);
+        Assert.Equal(2, relation.DistinctSourceMemberCount);
+        Assert.Equal(2, relation.PublicSurfaceEvidenceCount);
+        Assert.Equal(new[] { "signature" }, relation.Kinds);
+        Assert.All(legacy, entry =>
+        {
+            Assert.Equal(2, entry.HarnessDeclarationOwners!.Count);
+            Assert.All(entry.HarnessDeclarationOwners, owner => Assert.True(owner.PublicSurface));
+            Assert.Equal(entry.Evidence.SourceMemberId, entry.ToGraphEvidence().SourceMemberId);
+            var span = entry.Evidence.PhysicalSpan!;
+            Assert.Equal(Identity.EvidenceId(entry.Evidence.RelationId, "signature", entry.Evidence.DocumentId,
+                $"{span.StartLine}:{span.StartCharacter}:{span.Length}"), entry.Evidence.Id);
+        });
     }
 
     private static MetadataReference[] PlatformReferences()

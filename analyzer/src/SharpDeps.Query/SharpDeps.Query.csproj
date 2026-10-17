@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><RootNamespace>SharpDeps.Query</RootNamespace></PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\SharpDeps.Index\SharpDeps.Index.csproj" /></ItemGroup>
+</Project>

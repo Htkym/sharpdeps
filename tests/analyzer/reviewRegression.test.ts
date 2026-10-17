@@ -7,7 +7,7 @@ import { validateSnapshot } from '../../src/analyzer/reportV2Validation';
 import type { AnalysisSnapshot, EvidenceRecord } from '../../src/analyzer/reportV2';
 import { buildProjection } from '../../src/analyzer/graphProjection';
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sharpdeps-review-'));
+const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'sharpdeps-review-'));
 const quick = path.resolve('analyzer/bin/quick/code-map.dll');
 const semantic = path.resolve('analyzer/bin/semantic/sharpdeps-semantic-host.dll');
 const dotnet = process.env.SHARPDEPTS_DOTNET ?? 'dotnet';
@@ -133,7 +133,12 @@ describe('review regressions through the published analyzers', () => {
       'release/All.slnx',
       '<Solution><Project Path="A/A.csproj"/><Project Path="B/B.csproj"/></Solution>'
     );
-    execFileSync(dotnet, ['restore', solution], { encoding: 'utf8', timeout: 60000 });
+    // Preserve restore diagnostics in CI; the JSON reporter omits captured child-process output.
+    execFileSync(dotnet, ['restore', solution], {
+      encoding: 'utf8',
+      timeout: 60000,
+      stdio: 'inherit'
+    });
     const { snapshot, evidence } = run(solution, 'semantic');
     const evaluated = snapshot.relations.filter(
       (relation) => relation.basis === 'projectEvaluated'

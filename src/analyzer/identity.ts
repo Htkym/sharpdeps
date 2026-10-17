@@ -1,5 +1,3 @@
-// Identity rules for the v2 analysis model (SD-002, plan section 5.2).
-//
 // Every shared id is an opaque, prefixed, truncated SHA-256 hash. Ids never
 // contain absolute host paths, so exports can be shared without leaking the
 // local directory layout. The same logical inputs must always produce the same

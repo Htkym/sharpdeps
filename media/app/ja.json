@@ -45,6 +45,9 @@
   "projectDeclared": "プロジェクトの宣言",
   "projectEvaluated": "評価済みのプロジェクト依存",
   "usingInferred": "using からの推定",
+  "typeReferenceInferred": "型の構文参照からの推定",
+  "Quick (syntax type references)": "Quick（型の構文参照）",
+  "References written in type base lists; symbol binding and inheritance are unverified.": "型の基底リストに記述された参照です。シンボルの結び付けと継承は未確認です。",
   "symbolResolved": "解決済みのシンボル参照",
   "app": "アプリ",
   "web": "Web",
@@ -209,6 +212,7 @@
   "Incoming occurrences": "依存元からの参照回数",
   "{0} ({1} relation(s))": "{0} 回（依存関係 {1} 件）",
   "Open declaration": "宣言を開く",
+  "Open document": "文書を開く",
   "Drill down": "内訳を表示",
   "Dependencies": "依存先",
   "Dependents": "依存元",
@@ -271,5 +275,11 @@
   "Layout cancelled. Retry layout or use the table.": "配置を中止しました。再試行するか、表で確認してください。",
   "The graph layout failed.": "グラフの配置に失敗しました。",
   "The layout worker is not available in this build.": "このビルドではグラフの配置処理を利用できません。",
-  "skipped": "スキップ"
+  "skipped": "スキップ",
+  "Results": "検索対象",
+  "All results": "すべて",
+  "Code": "コード",
+  "Documents": "文書",
+  "Result kinds": "検索対象の分類",
+  "Inspect relation: {0} → {1} · {2} · {3}": "関係を確認: {0} → {1} · {2} · {3}"
 }

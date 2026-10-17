@@ -1,5 +1,3 @@
-// Trust decisions (SD-023).
-//
 // Pure so the policy is testable without VS Code: an untrusted workspace must not run
 // the analyzer (it evaluates MSBuild and project logic) or restore anything executable.
 // Reading a stored result and showing it is data-only and stays allowed.

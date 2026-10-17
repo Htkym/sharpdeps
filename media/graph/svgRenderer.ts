@@ -1,4 +1,3 @@
-// Pure SVG renderer for the dependency graph (SD-004).
 //
 // Renders the projection + layout as SVG elements with keyed updates: the same
 // ids reuse the same DOM elements, so selection and camera are not disturbed by a
@@ -312,7 +311,11 @@ function edgeClass(edge: GraphEdgeInput, state: RenderState): string {
   const classes = ['edge'];
   // The styling class follows what the edge means, not the exact basis value: inferred
   // bases share the dashed style, the resolved basis stays solid.
-  classes.push(edge.basis === 'usingInferred' ? 'edge-inferred' : `edge-${edge.basis}`);
+  classes.push(
+    edge.basis === 'usingInferred' || edge.basis === 'typeReferenceInferred'
+      ? 'edge-inferred'
+      : `edge-${edge.basis}`
+  );
   if (edge.inCycle) {
     classes.push('in-cycle');
   }

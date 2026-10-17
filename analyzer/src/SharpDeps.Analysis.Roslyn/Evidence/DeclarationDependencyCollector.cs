@@ -1,5 +1,3 @@
-// Declaration-based dependency collector (SD-009).
-//
 // Collects the relations that a declaration states about itself: inheritance,
 // interface implementation, member signatures, generic constraints, and attributes.
 // Only what the source writes is collected: implicit bases (System.Object), compiler
@@ -8,7 +6,7 @@
 //
 // Type references are normalized so type arguments, tuple elements, and array
 // elements each become their own reference with their own span (see
-// docs/analysis-semantics.md). typeof/casts/patterns are SD-010's `typeUse`, not here.
+// docs/analysis-semantics.md). typeof/casts/patterns belong to operation `typeUse`.
 
 namespace SharpDeps.Analysis.Roslyn.Evidence;
 
@@ -28,6 +26,7 @@ public sealed class DeclarationDependencyCollector
     private readonly Dictionary<string, IndexedType> _typesById;
     private readonly Dictionary<string, string> _contentHashByDocument;
     private readonly HashSet<string> _seen;
+    private readonly Dictionary<string, HashSet<HarnessDeclarationOwner>> _harnessOwners = new(StringComparer.Ordinal);
 
     private readonly ExternalTypeRegistry? _externalTypes;
 
@@ -56,6 +55,7 @@ public sealed class DeclarationDependencyCollector
         CancellationToken cancellationToken = default)
     {
         var results = new List<CollectedEvidence>();
+        _harnessOwners.Clear();
 
         foreach (var input in inputs)
         {
@@ -80,7 +80,13 @@ public sealed class DeclarationDependencyCollector
             }
         }
 
-        return results;
+        // Legacy evidence/counts keep the first owner; Harness retains every owner
+        // sharing a declaration type/attribute token (e.g. D a, b).
+        return results.Select(entry => entry with
+        {
+            HarnessDeclarationOwners = Array.AsReadOnly(_harnessOwners[entry.Evidence.Id]
+                .OrderBy(owner => owner.SourceMemberId, StringComparer.Ordinal).ToArray())
+        }).ToArray();
     }
 
     private void CollectTypeDeclaration(
@@ -564,6 +570,12 @@ public sealed class DeclarationDependencyCollector
 
         var relationId = Identity.RelationId("symbolResolved", sourceTypeId, targetTypeId, _profileHash);
         var evidenceId = Identity.EvidenceId(relationId, kind, document.Id, spanKey);
+        if (!_harnessOwners.TryGetValue(evidenceId, out var owners))
+        {
+            owners = [];
+            _harnessOwners.Add(evidenceId, owners);
+        }
+        owners.Add(new(sourceMemberId, publicSurface));
         if (!_seen.Add(evidenceId))
         {
             return;
@@ -596,7 +608,11 @@ public sealed class DeclarationDependencyCollector
             SourceNamespaceId: NamespaceOf(sourceTypeId),
             TargetVariantId: TargetVariantOf(targetTypeId),
             TargetNamespaceId: NamespaceOf(targetTypeId),
-            TargetIsExternal: !_typesById.ContainsKey(targetTypeId)));
+            TargetIsExternal: !_typesById.ContainsKey(targetTypeId),
+            CanonicalSourceMemberId: sourceMemberId,
+            TargetSymbol: !_typesById.ContainsKey(targetTypeId)
+                ? _resolver.DescribeHarnessTarget(target, null, input.VariantId) : null,
+            Producer: "roslyn-declaration"));
     }
 
     private string? NamespaceOf(string typeId)

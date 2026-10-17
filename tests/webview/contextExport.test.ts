@@ -1,4 +1,4 @@
-// Export builders (SD-022): the context text, JSON, and Mermaid describe the same
+// Export builders: the context text, JSON, and Mermaid describe the same
 // selection, never leak absolute paths, and state what must not be asserted.
 
 import { describe, expect, it } from 'vitest';
@@ -96,37 +96,42 @@ function input(overrides: Partial<ContextExportInput> = {}): ContextExportInput 
 }
 
 describe('buildContextExport', () => {
-  it('keeps inferred occurrence counts distinct inside a solid aggregated connection', () => {
-    const mixed = input();
-    mixed.edges = [
-      {
-        ...mixed.edges[0],
-        basis: 'projectDeclared',
-        evidenceCount: 11,
-        underlyingRelations: [
-          {
-            id: 'rel_1111111111111111',
-            basis: 'projectDeclared',
-            kinds: ['projectReference'],
-            evidenceCount: 1
-          },
-          {
-            id: 'rel_2222222222222222',
-            basis: 'usingInferred',
-            kinds: ['typeUse'],
-            evidenceCount: 10
-          }
-        ]
-      }
-    ];
-    const text = buildContextExport(mixed);
-    expect(text).toContain('projectDeclared: 1 occurrence(s)');
-    expect(text).toContain('usingInferred: 10 occurrence(s) · inferred');
-    const json = JSON.parse(buildExportJson(mixed));
-    expect(json.selection.edges[0].underlyingRelations).toEqual(mixed.edges[0].underlyingRelations);
-    expect(buildMermaid(mixed)).toContain('-->');
-    expect(buildMermaid(mixed)).not.toContain('-.->');
-  });
+  it.each(['usingInferred', 'typeReferenceInferred'] as const)(
+    'keeps %s occurrence counts distinct inside a solid aggregated connection',
+    (basis) => {
+      const mixed = input();
+      mixed.edges = [
+        {
+          ...mixed.edges[0],
+          basis: 'projectDeclared',
+          evidenceCount: 11,
+          underlyingRelations: [
+            {
+              id: 'rel_1111111111111111',
+              basis: 'projectDeclared',
+              kinds: ['projectReference'],
+              evidenceCount: 1
+            },
+            {
+              id: 'rel_2222222222222222',
+              basis,
+              kinds: [basis],
+              evidenceCount: 10
+            }
+          ]
+        }
+      ];
+      const text = buildContextExport(mixed);
+      expect(text).toContain('projectDeclared: 1 occurrence(s)');
+      expect(text).toContain(`${basis}: 10 occurrence(s) · inferred`);
+      const json = JSON.parse(buildExportJson(mixed));
+      expect(json.selection.edges[0].underlyingRelations).toEqual(
+        mixed.edges[0].underlyingRelations
+      );
+      expect(buildMermaid(mixed)).toContain('-->');
+      expect(buildMermaid(mixed)).not.toContain('-.->');
+    }
+  );
 
   it('carries the target, conditions, evidence, cycles, and the do-not-assert list', () => {
     const text = buildContextExport(input());
@@ -148,8 +153,16 @@ describe('buildContextExport', () => {
   });
 
   it('marks Quick results as not proof and keeps snippets opt-in', () => {
-    const quick = buildContextExport(input({ mode: 'quick', includeSnippets: false }));
+    const syntax = input({ mode: 'quick', includeSnippets: false });
+    syntax.edges[1] = {
+      ...syntax.edges[1],
+      basis: 'typeReferenceInferred',
+      kinds: ['typeReferenceInferred']
+    };
+    const quick = buildContextExport(syntax);
     expect(quick).toContain('declared or inferred');
+    expect(quick).toContain('typeReferenceInferred · 1 occurrence(s) · 推定');
+    expect(buildMermaid(syntax)).toContain('-.->|typeReferenceInferred|');
     expect(quick).not.toContain('snippet:');
 
     const withSnippet = buildContextExport(

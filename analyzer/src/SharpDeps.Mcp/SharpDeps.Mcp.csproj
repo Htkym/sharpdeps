@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>sharpdeps-mcp</ToolCommandName>
+    <PackageId>SharpDeps.Mcp</PackageId>
+    <Version>0.2.0</Version>
+    <Description>Optional stdio adapter for SharpDeps saved Query and explicitly trusted updates.</Description>
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.Core" />
+    <ProjectReference Include="..\SharpDeps.Cli\SharpDeps.Cli.csproj" />
+  </ItemGroup>
+</Project>

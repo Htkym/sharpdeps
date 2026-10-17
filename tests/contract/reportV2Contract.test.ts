@@ -94,6 +94,39 @@ describe('report v2 schema', () => {
     expect(validateReport(snapshot)).toBe(false);
     expect(validateSnapshot(snapshot).ok).toBe(false);
   });
+
+  it('keeps Quick type references inferred in the schema and runtime contract', () => {
+    const snapshot = makeSnapshot();
+    snapshot.types = snapshot.types.map((type) => ({ ...type, memberCount: null }));
+    const relation = {
+      ...snapshot.relations[0],
+      basis: 'typeReferenceInferred' as const,
+      kinds: ['typeReferenceInferred' as const],
+      confidence: 'inferred' as const
+    };
+    snapshot.relations[0] = relation;
+    expect(validateReport(snapshot), describeAjvErrors()).toBe(true);
+    expect(validateSnapshot(snapshot).ok).toBe(true);
+
+    for (const invalid of [
+      { ...relation, confidence: 'resolved' as const },
+      { ...relation, confidence: undefined },
+      { ...relation, kinds: ['calls' as const] },
+      { ...relation, basis: 'symbolResolved' as const },
+      { ...relation, kinds: ['typeReferenceInferred' as const, 'calls' as const] }
+    ]) {
+      snapshot.relations[0] = invalid;
+      expect(validateReport(snapshot)).toBe(false);
+      expect(validateSnapshot(snapshot).ok).toBe(false);
+    }
+
+    const evidence = makeEvidence({ kind: 'typeReferenceInferred', confidence: 'inferred' });
+    expect(validateEvidence(evidence)).toBe(true);
+    expect(validateEvidenceRecord(evidence).ok).toBe(true);
+    evidence.confidence = 'resolved';
+    expect(validateEvidence(evidence)).toBe(false);
+    expect(validateEvidenceRecord(evidence).ok).toBe(false);
+  });
 });
 
 describe('evidence v2 schema', () => {
@@ -211,6 +244,26 @@ describe('protocol v2 schema', () => {
 
   it('rejects a mismatched protocol version', () => {
     expect(validateProtocol({ type: 'ready', protocolVersion: 1 })).toBe(false);
+  });
+
+  it('agrees with the runtime validator on source-return evidence anchors', () => {
+    const message = {
+      type: 'sourceReturn',
+      requestId: 'req_0123456789abcdef',
+      analysisId: 'an_0123456789abcdef',
+      state: { version: 1 },
+      ui: {
+        navTab: 'structure',
+        focus: 'evidence',
+        id: 'ev_0123456789abcdef',
+        scroll: { navigation: 140, inspector: 20, map: 0 }
+      }
+    };
+    expect(validateProtocol(message)).toBe(true);
+    expect(validateHostMessage(message).ok).toBe(true);
+    const wrongRole = { ...message, ui: { ...message.ui, id: 'ty_0123456789abcdef' } };
+    expect(validateProtocol(wrongRole)).toBe(false);
+    expect(validateHostMessage(wrongRole).ok).toBe(false);
   });
 });
 

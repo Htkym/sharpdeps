@@ -1,0 +1,25 @@
+{
+  "task": "SD2-03",
+  "source": "Accepted MD-05 fixed runtime/source full normalized facts comparison",
+  "parserVersion": "1/02ce256eca6797e2c3a77eae5b1c1c1045a0a874b0936c61ec3dd08385fe0480",
+  "scopeId": "pair-scope",
+  "sourceId": "same.md",
+  "sourceVersion": null,
+  "fixtures": [
+    {
+      "rawText": "# A &amp; 😀\r\n\r\n[link](target.md)\r\n",
+      "utf16Length": 35,
+      "lithoRuntimeSourceFactsSha256": "7aceae8bbf1001f84762220a9fbcf7c7cc88684f51fbe1e6d05233afad82eb29"
+    },
+    {
+      "rawText": "﻿---\r\ntitle: x\r\n---\r\n## Y\r\n\r\n~~~csharp\r\nx\r\n~~~\r\n",
+      "utf16Length": 48,
+      "lithoRuntimeSourceFactsSha256": "aba3d481de0dbe74207b1b2521768746c3870aabd812c76a8d1d5a4f83d7cd08"
+    },
+    {
+      "rawText": "# Same\n# Same\n\n[link][missing]\n",
+      "utf16Length": 31,
+      "lithoRuntimeSourceFactsSha256": "7b0ac91f940cc7b96dc89a1c003ec242299abd85ffdd3de016da7e9694790fe1"
+    }
+  ]
+}

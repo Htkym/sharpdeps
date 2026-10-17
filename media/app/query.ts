@@ -1,4 +1,3 @@
-// Query helpers for the table, tree, and search (SD-016).
 //
 // Pure functions only: filters, sorting, paging, and the classification of a search
 // result against what the current view shows. Keeping them pure makes "same input →

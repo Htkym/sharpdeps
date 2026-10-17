@@ -6,8 +6,19 @@
     <Project Path="src/SharpDeps.Analysis.Roslyn/SharpDeps.Analysis.Roslyn.csproj" />
     <Project Path="src/SharpDeps.QuickHost/SharpDeps.QuickHost.csproj" />
     <Project Path="src/SharpDeps.SemanticHost/SharpDeps.SemanticHost.csproj" />
+    <Project Path="src/SharpDeps.Index/SharpDeps.Index.csproj" />
+    <Project Path="src/SharpDeps.Query/SharpDeps.Query.csproj" />
+    <Project Path="src/SharpDeps.Cli/SharpDeps.Cli.csproj" />
+    <Project Path="src/SharpDeps.QueryHost/SharpDeps.QueryHost.csproj" />
+    <Project Path="src/SharpDeps.Mcp/SharpDeps.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SharpDeps.Analysis.Tests/SharpDeps.Analysis.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Index.Tests/SharpDeps.Index.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Index.Tests/WriterLockProbe/WriterLockProbe.csproj" />
+    <Project Path="tests/SharpDeps.Query.Tests/SharpDeps.Query.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Mcp.Tests/SharpDeps.Mcp.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj" />
   </Folder>
 </Solution>

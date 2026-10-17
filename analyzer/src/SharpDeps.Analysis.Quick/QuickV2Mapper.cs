@@ -1,7 +1,5 @@
-// Maps the Quick analysis (v1 report + source index) to the v2 model (SD-006).
-//
-// Quick knows declaration sites only, so every relation is `projectDeclared` or
-// `usingInferred` and every evidence record is `inferred`. Namespaces are keyed by
+// Quick knows syntax sites only: relations are projectDeclared, usingInferred or
+// typeReferenceInferred and every evidence record is inferred. Namespaces are keyed by
 // project variant; when a using matches the same namespace name in several
 // projects the mapper keeps every candidate and marks the relation as ambiguous
 // instead of picking one. Cycle groups are computed over the full analyzed graph
@@ -22,7 +20,7 @@ public static class QuickV2Mapper
     private const string Configuration = "Debug";
     private const string Mode = "quick";
 
-    public sealed record Result(AnalysisSnapshot Snapshot, string EvidenceNdjson);
+    public sealed record Result(AnalysisSnapshot Snapshot, string EvidenceNdjson, string DeclarationsNdjson = "");
 
     public static Result Map(
         CodeMapReport report,
@@ -35,7 +33,7 @@ public static class QuickV2Mapper
         var rootId = Identity.WorkspaceRootId(solutionDirectory);
         var createdAtText = createdAt.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
 
-                var projectIdByPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        var projectIdByPath = new Dictionary<string, string>(StringComparer.Ordinal);
         var variantIdByProject = new Dictionary<string, string>(StringComparer.Ordinal);
         var projectNameById = new Dictionary<string, string>(StringComparer.Ordinal);
         var variants = new List<ProjectVariant>();
@@ -107,6 +105,16 @@ public static class QuickV2Mapper
                 group.OrderBy(declaration => declaration.Span.Start).First().DocumentId));
         }
 
+        var typeMap = QuickTypeMapper.Map(index, variantIdByProject, (projectPath, name) =>
+            name.Length == 0 ? null : namespaceIdByProjectAndName.GetValueOrDefault((projectPath, name)));
+        var typeCounts = typeMap.Types.Where(type => type.NamespaceId is not null)
+            .GroupBy(type => type.NamespaceId!).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        namespaces = namespaces.Select(node => node with
+        {
+            TypeCount = typeCounts.GetValueOrDefault(node.Id)
+        }).ToList();
+        var (declarationsNdjson, declarationIndex) = QuickTypeMapper.WriteDeclarations(typeMap.Declarations);
+
         var namespaceCandidatesByName = namespaces
             .GroupBy(node => node.Name, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
@@ -118,7 +126,8 @@ public static class QuickV2Mapper
         var conditionalReferences = 0;
         var ambiguousRelations = 0;
 
-        void AddEvidence(string relationId, string kind, QuickDocument? document, QuickSpan? span)
+        void AddEvidence(string relationId, string kind, QuickDocument? document, QuickSpan? span,
+            string? sourceTypeId = null, string? targetTypeId = null)
         {
             if (document is null)
             {
@@ -130,9 +139,9 @@ public static class QuickV2Mapper
                 relationId,
                 relations[relationId].SourceEntityId,
                 relations[relationId].TargetEntityId,
+                sourceTypeId,
                 null,
-                null,
-                null,
+                targetTypeId,
                 null,
                 kind,
                 document.Origin,
@@ -267,6 +276,13 @@ public static class QuickV2Mapper
             }
         }
 
+        foreach (var reference in typeMap.References)
+        {
+            var relationId = AddRelation(reference.SourceId, reference.TargetId, "typeReferenceInferred", "typeReferenceInferred", false);
+            documentById.TryGetValue(reference.Syntax.DocumentId, out var document);
+            AddEvidence(relationId, "typeReferenceInferred", document, reference.Syntax.Span, reference.SourceId, reference.TargetId);
+        }
+
         var projectRelations = relations.Values.Where(relation => relation.Basis == "projectDeclared").ToArray();
         var namespaceRelations = relations.Values.Where(relation => relation.Basis == "usingInferred").ToArray();
 
@@ -308,7 +324,19 @@ public static class QuickV2Mapper
             externalReferences,
             conditionalReferences,
             ambiguousRelations,
-            index.Skips);
+            index.Skips,
+            typeMap.Types.Count > 0).ToList();
+        limitations.Add(new Limitation("quick.typeReferenceInferred",
+            "Types are syntax groups. BaseList references match only supported same-variant names; no compiler binding, build file inclusion, calls or legal partial/inheritance proof is supplied."));
+        foreach (var group in typeMap.Issues.GroupBy(issue => issue.Code).OrderBy(group => group.Key, StringComparer.Ordinal))
+            limitations.Add(new Limitation(group.Key, group.First().Message, Count: group.Count()));
+        if (index.TypeDeclarationsOmitted > 0)
+            limitations.Add(new Limitation("quick.typeDeclarationsOmitted", $"Type declarations exceeded a retention bound: {QuickSourceIndexCollector.MaxTypeDeclarations} records, type depth {QuickSourceIndexCollector.MaxTypeDepth}, {QuickSourceIndexCollector.MaxNamespaceParts} namespace parts or {QuickSourceIndexCollector.MaxRetainedTypeNameUnits} shared UTF-16 name units. Name binding was withheld.", Count: index.TypeDeclarationsOmitted));
+        if (index.TypeReferencesOmitted > 0)
+            limitations.Add(new Limitation("quick.typeReferencesOmitted", $"BaseList references exceeded a retention bound: {QuickSourceIndexCollector.MaxTypeReferences} records or {QuickSourceIndexCollector.MaxRetainedTypeNameUnits} shared UTF-16 name units. References were omitted.", Count: index.TypeReferencesOmitted));
+        const int maxTypeDiagnostics = 64;
+        if (typeMap.Issues.Count > maxTypeDiagnostics)
+            limitations.Add(new Limitation("quick.typeDiagnosticsOmitted", "Only the first 64 type diagnostics are included; limitation counts retain all observed issues.", Count: typeMap.Issues.Count - maxTypeDiagnostics));
 
         // The caller (extension host) may fix the id up front so progress messages and
         // the stored result refer to the same analysis.
@@ -323,7 +351,7 @@ public static class QuickV2Mapper
             Mode: Mode,
             Profile: new AnalysisProfile(Configuration, null, variants, profileHash),
             Capabilities: new AnalysisCapabilities(
-                TypeGraph: false,
+                TypeGraph: typeMap.Types.Count > 0,
                 Evidence: true,
                 GeneratedDocuments: false,
                 CycleWitness: false,
@@ -335,10 +363,10 @@ public static class QuickV2Mapper
                 Analyzed: report.Projects.Count,
                 Failed: Math.Max(0, Math.Max(report.ProjectCount, report.Projects.Count) - report.Projects.Count),
                 Skipped: skipped,
-                Unresolved: 0),
+                Unresolved: typeMap.Issues.Count(issue => issue.Code.StartsWith("quick.typeReference", StringComparison.Ordinal))),
             Projects: projects,
             Namespaces: namespaces,
-            Types: [],
+            Types: typeMap.Types,
             Relations: mappedRelations,
             CycleGroups: cycleGroups,
             Diagnostics: report.Warnings
@@ -350,9 +378,12 @@ public static class QuickV2Mapper
                     null,
                     null,
                     resolvedAnalysisId))
+                .Concat(typeMap.Issues.Take(maxTypeDiagnostics).Select((issue, ordinal) => new AnalysisDiagnostic(
+                    Identity.DiagnosticId(issue.Code, issue.TypeId, ordinal.ToString(CultureInfo.InvariantCulture)),
+                    "warning", issue.Code, issue.Message, issue.TypeId, null, resolvedAnalysisId)))
                 .ToArray(),
             EvidenceIndex: evidenceIndex,
-            DeclarationIndex: null,
+            DeclarationIndex: declarationIndex,
             SourceManifest: index.Documents
                 .Select(document => new SourceDocument(
                     document.Id,
@@ -364,7 +395,7 @@ public static class QuickV2Mapper
                 .ToArray(),
             Limitations: limitations);
 
-        return new Result(snapshot, evidenceNdjson);
+        return new Result(snapshot, evidenceNdjson, declarationsNdjson);
     }
 
     private sealed record PendingRelation(
@@ -458,19 +489,17 @@ public static class QuickV2Mapper
         int externalReferences,
         int conditionalReferences,
         int ambiguousRelations,
-        IReadOnlyList<QuickFileSkip> skips)
+        IReadOnlyList<QuickFileSkip> skips,
+        bool hasTypes)
     {
         var limitations = new List<Limitation>
         {
-            new(
-                "quick.typeGraphUnavailable",
-                "Quick analysis reads project files and C# syntax only; it cannot resolve symbol usage, so the model has no types and no type-level relations."),
             new(
                 "quick.usingInferred",
                 "Namespace relations come from using directives. They are inferred dependencies and are not usage counts."),
             new(
                 "quick.evidenceIsDeclarationOnly",
-                "Evidence positions point at the declaration site (using directive or ProjectReference item), not at code that uses the dependency."),
+                "Evidence positions point at a syntax declaration (using, ProjectReference or BaseList), not at resolved symbol usage."),
             new(
                 "quick.witnessUnavailable",
                 "Cycle groups come from strongly connected components of inferred relations; no verified cycle path is available."),
@@ -478,6 +507,9 @@ public static class QuickV2Mapper
                 "quick.xmlSpanIsDeclarationLine",
                 "ProjectReference spans cover the declaration line in the project file; the exact attribute range is not recorded.")
         };
+
+        if (!hasTypes)
+            limitations.Add(new Limitation("quick.typeGraphUnavailable", "No syntax type declarations are available in the analyzed inputs."));
 
         if (ambiguousRelations > 0)
         {

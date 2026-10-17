@@ -1,0 +1,164 @@
+{
+  "task": "SD2-03",
+  "state": "LOCAL_CHECKS_PASS_BOCCHI_REVIEW_PENDING",
+  "baseSha": "fdadba7620f0c22e00690ede73df63a2d840aea1",
+  "branch": "feature/0.2.0",
+  "selectedBecause": "IN-01 requires SD2-03. SD2-01 all9 + formatting followup all2 accepted by Bocchi and corrected CI passed. MD-05 accepted. Prioritize actual SharpDeps Markdown consumer.",
+  "predecessors": {
+    "SD201": "Bocchi PASS all9+formatting2; corrected CI success",
+    "MD05": "15edc2765198e48ba9200bae8d3fd6d4ae127eb8 Bocchi PASS all11"
+  },
+  "scope": "Independent Markdown runtime adapter/test project; exact package/artifact guard; source DTO graph projection",
+  "defaultSolution": "Unchanged until IN-01 supplies fixed candidate to existing build/CI",
+  "quickContractsCore": "No modifications or Markdown/MSBuild dependency",
+  "immutablePair": {
+    "runtime": {
+      "packageId": "LithoSharp.Markdown",
+      "componentVersion": "2.0.0-preview.1",
+      "fileName": "LithoSharp.Markdown.2.0.0-preview.1.nupkg",
+      "sha256": "554a4c71de4fb8c55872895a985cf8f66e9518346e451e91a2607d69d17fb8ed",
+      "byteLength": 77332,
+      "assemblySha256": "1208ca8b32332ef58ea68838a6c672e3ea760257f84728e0a7e20b353d8389a5"
+    },
+    "source": {
+      "packageId": "LithoSharp.Markdown.Source",
+      "componentVersion": "2.0.0-preview.1",
+      "fileName": "LithoSharp.Markdown.Source.2.0.0-preview.1.nupkg",
+      "sha256": "537bd22998e5a2560a8cffea2f829b3bfae79179b91572671fbf66d0a46d9a06",
+      "byteLength": 54966
+    }
+  },
+  "conformanceFixtures": 3,
+  "localChecks": {
+    "restore": "r1 PASS",
+    "artifactGate": "r4 PASS",
+    "adapterTests": "r4 8 PASS 0 warnings",
+    "format": "r4 PASS",
+    "lint": "r4 PASS",
+    "conformance": "All3 full normalized facts SHA match accepted MD05 runtime/source golden",
+    "corrections": [
+      "Artifact helper declaration order before initial test",
+      "xUnit2000/2031 assert styles only; production code unchanged after initial8PASS"
+    ],
+    "additionalCollisionRegression": "PASS in final same8tests: existing actual2heading fixture rejects duplicate persisted section token",
+    "wrongArtifactPin": "Expected exit1 and parserVersion diagnostic PASS",
+    "metadataPropertyOrder": "PASS; semantic equality retains exact values and artifact hashes",
+    "existingQuickBoundary": "3 PASS 0 warnings, no-build",
+    "finalRoundSeconds": 10.18,
+    "IN01": "Actual Roslyn+bothrepo matrix NOT_RUN"
+  },
+  "fastTier": false,
+  "publicationAuthorized": false,
+  "nextTasks": "WAIT_BOCCHI_FULL_DIFF_REVIEW",
+  "MD06": "WAIT_IN01_PASS",
+  "cliReviews": {
+    "task": "SD2-03",
+    "copilot": {
+      "modelBefore": {
+        "modelId": "claude-opus-5.5",
+        "reasoningEffort": "high"
+      },
+      "modelAfter": {
+        "modelId": "claude-opus-5.5",
+        "reasoningEffort": "high"
+      },
+      "modelMatch": true,
+      "scopeFiles": 12,
+      "outcome": "completed",
+      "conclusion": "No important actual defect found",
+      "quotaBefore": {
+        "used": 880,
+        "entitlement": 20000,
+        "remaining": 19120
+      },
+      "quotaAfter": {
+        "used": 880,
+        "entitlement": 20000,
+        "remaining": 19120
+      },
+      "sessionUsage": [
+        {
+          "model": "claude-opus-5.5",
+          "reasoningEffort": "high",
+          "inputTokens": 20493,
+          "outputTokens": 12962,
+          "reasoningTokens": 11638,
+          "cost": 15,
+          "isAuto": false,
+          "availableToolCount": 0,
+          "numToolCalls": 0,
+          "copilotUsage": {
+            "tokenDetails": [
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 400000000000,
+                "tokenCount": 4,
+                "tokenType": "input",
+                "model": "claude-opus-5.5"
+              },
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 20000000000,
+                "tokenCount": 0,
+                "tokenType": "cache_read",
+                "model": "claude-opus-5.5"
+              },
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 500000000000,
+                "tokenCount": 20489,
+                "tokenType": "cache_write",
+                "model": "claude-opus-5.5"
+              },
+              {
+                "batchSize": 1000000,
+                "costPerBatch": 2000000000000,
+                "tokenCount": 12962,
+                "tokenType": "output",
+                "model": "claude-opus-5.5"
+              }
+            ],
+            "totalNanoAiu": 36170100000
+          }
+        }
+      ],
+      "cumulativeCaution": "Cumulative quota unchanged does not mean free; session usage recorded",
+      "tools": 0,
+      "permissions": 0,
+      "additionalCheck": "Informational comment: single-section conditional collision check may not execute. Added collision rejection to existing actual2heading fixture; no new test cases or production change."
+    },
+    "muse": {
+      "actualModel": {
+        "id": "muse-spark-1.3-contributor",
+        "providerID": "opencode-go",
+        "variant": "default"
+      },
+      "actualAgent": "sd203-muse",
+      "sessionId": "ses_ee46ca81afferYxCHD3DBb2z6E",
+      "outcome": "succeeded",
+      "classification": "35,48,31; same text different document UUID should not share durable document ID",
+      "toolEvents": 0,
+      "steps1Notice": "Output reported maximum steps; observed only step_start/text, permissions deny"
+    },
+    "agy": {
+      "actualModel": "gemini-3.8-flash-high",
+      "status": "SUCCESS",
+      "numTurns": 1,
+      "stepTypes": ["user_input", "agent_response"],
+      "yomiyasu": "Full local SKILL.md supplied",
+      "editsApplied": 2,
+      "oneSuggestionDeclined": "Preserve contract title: contract->spec wording is not needed for this normative contract",
+      "isolation": "No observed tool steps; init exposes tools/always-proceed, no hard isolation claim"
+    },
+    "fastTier": false
+  },
+  "ownedProcesses": {
+    "activeOwnedCount": 0,
+    "orphanCandidates": 0,
+    "recordedRoots": 21,
+    "verifiedAt": "2026-10-08T13:10:55.5626139Z",
+    "guard": "PID plus UTC creation time; unrelated processes untouched"
+  },
+  "defaultCi": "Checked after commit; local opt-in project tests are not included in unchanged default solution",
+  "evidenceDirectory": "D:/DevData/AgentOps/work-cli-20261007/runs/sharpdeps-sd203-20261008-1791461245729"
+}

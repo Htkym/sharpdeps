@@ -1,4 +1,4 @@
-// Security boundaries (SD-023): trust policy, path containment, single-line text, the
+// Security boundaries: trust policy, path containment, single-line text, the
 // webview CSP, the bounded search query, and hostile names in the export formats.
 
 import { describe, expect, it } from 'vitest';

@@ -1,5 +1,3 @@
-// Webview protocol v2 (SD-002, plan section 5.5).
-//
 // The normative definition is schemas/protocol-v2.schema.json. This module holds
 // the compile-time shapes plus the runtime validation the receivers use:
 // unknown message types are rejected, ids and cursors are pattern-checked, and
@@ -12,6 +10,16 @@ import type { Granularity, RelationKind } from '../analyzer/reportV2';
 
 export const PROTOCOL_VERSION = 2;
 
+export const SAVED_UPDATE_PHASES = [
+  'idle',
+  'selecting',
+  'updating',
+  'cancelling',
+  'cancelled',
+  'failed'
+] as const;
+export type SavedUpdatePhase = (typeof SAVED_UPDATE_PHASES)[number];
+
 export type ExportFormat = 'mermaid' | 'svg' | 'png' | 'json';
 
 export interface Scope {
@@ -21,6 +29,8 @@ export interface Scope {
 }
 
 export interface Filters {
+  /** Saved Query display classification; independent of legacy code kinds. */
+  resultKinds?: ('code' | 'docs')[];
   kinds?: string[];
   projectKinds?: string[];
   relationKinds?: RelationKind[];
@@ -73,6 +83,68 @@ export interface EntitySummary {
   analysisLimitations?: string[];
   dependencyCount?: number;
   dependentCount?: number;
+  certainty?: 'Resolved' | 'Candidate' | 'Unresolved';
+  /** Display-only snapshot attributes; source requests still carry only opaque IDs. */
+  path?: string;
+  reason?: string;
+  resultKind?: 'code' | 'docs' | 'other';
+  sourceLocationAvailable?: boolean;
+}
+
+/** Saved Query bounds describe the returned page, never a complete legacy report. */
+export interface QueryResultMetadata {
+  provider: 'savedIndex';
+  workspaceId: string;
+  snapshotId: string;
+  generation: number;
+  variantIds: string[];
+  coverage: 'CompleteWithinScope' | 'Partial' | 'Failed';
+  freshness: string;
+  truncated: boolean;
+  truncationReasons: string[];
+  diagnostics: { code: string; message: string }[];
+  returnedCount: number;
+  totalKind: 'returned';
+  candidateCount: number;
+  unresolvedCount: number;
+  resultFilterVersion?: number;
+}
+
+/** An issued candidate relation action; independent of declaration availability. */
+export interface CandidateOriginAction {
+  originId: string;
+  relationId: string;
+  targetEntityId: string;
+  targetName: string;
+}
+
+/** One provider-owned, returned relation; metadata on its reply owns the saved pin. */
+export interface SavedRelation {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  sourceName?: string;
+  targetName?: string;
+  kind: string;
+  certainty: 'Resolved' | 'Candidate' | 'Unresolved';
+  evidenceCount: number;
+  sourceOccurrenceId?: string | null;
+  targetOccurrenceId?: string | null;
+  variantId?: string | null;
+}
+
+/** Groups describe the Impact traversal direction, not a complete incident-edge set. */
+export interface SavedRelations {
+  outgoing: SavedRelation[];
+  incoming: SavedRelation[];
+}
+
+/** Display attributes of one exact occurrence; only capabilityId authorizes source lookup. */
+export interface CandidateDeclarationSummary {
+  capabilityId: string;
+  occurrenceId: string;
+  variantId: string;
+  path: string;
 }
 
 export interface ProjectionEdge {
@@ -83,6 +155,10 @@ export interface ProjectionEdge {
   kinds: string[];
   evidenceCount: number;
   inCycle: boolean;
+  certainty?: 'Resolved' | 'Candidate' | 'Unresolved';
+  sourceOccurrenceId?: string | null;
+  targetOccurrenceId?: string | null;
+  variantId?: string | null;
   generatedEvidenceCount?: number;
   publicSurfaceEvidenceCount?: number;
   /**
@@ -120,6 +196,7 @@ export interface Projection {
   totalNodeCount: number;
   totalEdgeCount: number;
   truncated: boolean;
+  queryMetadata?: QueryResultMetadata;
   includedOutOfFilterIds?: string[];
   /**
    * SCC groups and their verified cycles, sent with the projection so the cycle view has
@@ -149,6 +226,7 @@ export type WebviewToHostMessage =
       profile?: ProfileRequest;
     }
   | { type: 'cancelAnalysis'; requestId: string; analysisId: string }
+  | { type: 'updateSavedIndex'; requestId: string; analysisId: string }
   | {
       type: 'getProjection';
       requestId: string;
@@ -170,7 +248,13 @@ export type WebviewToHostMessage =
       limit?: number;
       cursor?: string;
     }
-  | { type: 'getEntityDetails'; requestId: string; analysisId: string; entityId: string }
+  | {
+      type: 'getEntityDetails';
+      requestId: string;
+      analysisId: string;
+      entityId: string;
+      filters?: Filters;
+    }
   | {
       type: 'getEvidencePage';
       requestId: string;
@@ -180,19 +264,44 @@ export type WebviewToHostMessage =
       cursor?: string;
     }
   | { type: 'getCycleWitness'; requestId: string; analysisId: string; cycleGroupId: string }
-  | { type: 'openEvidence'; requestId: string; analysisId: string; evidenceId: string }
+  | { type: 'sourceReturnDismissed'; analysisId: string }
+  | { type: 'investigateCandidate'; requestId: string; analysisId: string; originId: string }
+  | {
+      type: 'dismissCandidateInvestigation';
+      requestId: string;
+      analysisId: string;
+      originId: string;
+    }
+  | {
+      type: 'openCandidateDeclaration';
+      requestId: string;
+      analysisId: string;
+      originId: string;
+      capabilityId: string;
+      returnUi?: SourceReturnUi;
+    }
+  | {
+      type: 'openEvidence';
+      requestId: string;
+      analysisId: string;
+      evidenceId: string;
+      returnUi?: SourceReturnUi;
+    }
   | {
       type: 'openDeclaration';
       requestId: string;
       analysisId: string;
       entityId: string;
       declarationIndex?: number;
+      returnUi?: SourceReturnUi;
     }
   | {
       type: 'copyContext';
       requestId: string;
       analysisId: string;
       scope: Scope;
+      /** Saved exports must identify the projection received by the webview. */
+      projectionRequestId?: string;
       includeSnippets?: boolean;
       granularity?: Granularity;
       filters?: Filters;
@@ -206,6 +315,7 @@ export type WebviewToHostMessage =
       format: ExportFormat;
       copy?: boolean;
       scope: Scope;
+      projectionRequestId?: string;
       /** Rendered SVG text or PNG data URL, when the webview produced it (SD-022). */
       data?: string;
       granularity?: Granularity;
@@ -217,6 +327,13 @@ export type WebviewToHostMessage =
 
 // Extension host -> webview
 export type HostToWebviewMessage =
+  | {
+      type: 'sourceReturn';
+      requestId: string;
+      analysisId: string;
+      state: Record<string, unknown>;
+      ui: SourceReturnUi;
+    }
   | {
       type: 'capabilities';
       protocolVersion: number;
@@ -242,6 +359,7 @@ export type HostToWebviewMessage =
       target?: { name: string; relativePath: string };
       profile?: ProfileRequest;
       variantOptions?: { projectLogicalId: string; targetFramework: string; projectPath: string }[];
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'analysisFailed';
@@ -249,6 +367,12 @@ export type HostToWebviewMessage =
       message: string;
       detail?: string;
       cancelled?: boolean;
+    }
+  | {
+      type: 'savedUpdateState';
+      analysisId: string;
+      phase: SavedUpdatePhase;
+      canUpdate: boolean;
     }
   | { type: 'projection'; requestId: string; analysisId: string; projection: Projection }
   | {
@@ -271,6 +395,7 @@ export type HostToWebviewMessage =
       total: number;
       items: EntitySummary[];
       nextCursor?: string | null;
+      queryMetadata?: QueryResultMetadata;
     }
   | {
       type: 'details';
@@ -279,6 +404,24 @@ export type HostToWebviewMessage =
       entity: Record<string, unknown>;
       dependencies?: EntitySummary[];
       dependents?: EntitySummary[];
+      queryMetadata?: QueryResultMetadata;
+      candidateOrigins?: CandidateOriginAction[];
+      relations?: SavedRelations;
+    }
+  | {
+      type: 'candidateInvestigation';
+      requestId: string;
+      analysisId: string;
+      originId: string;
+      relationId: string;
+      targetEntityId: string;
+      certainty: 'Candidate';
+      relationKind: string;
+      reason: string;
+      message: string;
+      queryMetadata: QueryResultMetadata;
+      declarations: CandidateDeclarationSummary[];
+      unavailableReason?: string;
     }
   | {
       type: 'evidencePage';
@@ -288,6 +431,8 @@ export type HostToWebviewMessage =
       total: number;
       items: Record<string, unknown>[];
       nextCursor?: string | null;
+      queryMetadata?: QueryResultMetadata;
+      relation?: SavedRelation;
     }
   | {
       type: 'cycleWitness';
@@ -321,6 +466,15 @@ export type ProtocolValidationResult<T> = { ok: true; value: T } | ProtocolValid
 /** Query text is echoed back to the UI; it must not be an unbounded payload. */
 export const MAX_QUERY_LENGTH = 200;
 
+/** One transient source-button anchor; never a path or an arbitrary DOM selector. */
+export interface SourceReturnUi {
+  navTab: 'structure' | 'cycles' | 'analysis';
+  focus: 'declaration' | 'evidence';
+  id: string;
+  scroll: { navigation: number; inspector: number; map: number };
+  searchCount?: number;
+}
+
 const PATTERNS = {
   requestId: /^req_[0-9a-f]{16}$/,
   analysisId: /^an_[0-9a-f]{16}$/,
@@ -328,8 +482,77 @@ const PATTERNS = {
   entityId: /^(prj|var|ns|ty|mb)_[0-9a-f]{16}$/,
   relationId: /^rel_[0-9a-f]{16}$/,
   evidenceId: /^ev_[0-9a-f]{16}$/,
+  candidateOriginId: /^ci_[0-9a-f]{32}$/,
+  candidateDeclarationId: /^cd_[0-9a-f]{32}$/,
+  candidateTargetId: /^ty_[0-9a-f]{16}$/,
+  occurrenceId: /^hocc_[0-9a-f]{64}$/,
+  variantId: /^hvar_[0-9a-f]{64}$/,
   cycleGroupId: /^cyc_[0-9a-f]{16}$/
 } as const;
+
+export function readSavedRelation(value: unknown): SavedRelation | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.id !== 'string' ||
+    !PATTERNS.relationId.test(item.id) ||
+    typeof item.sourceId !== 'string' ||
+    !PATTERNS.entityId.test(item.sourceId) ||
+    typeof item.targetId !== 'string' ||
+    !PATTERNS.entityId.test(item.targetId) ||
+    typeof item.kind !== 'string' ||
+    !item.kind.length ||
+    item.kind.length > 128 ||
+    (item.certainty !== 'Resolved' &&
+      item.certainty !== 'Candidate' &&
+      item.certainty !== 'Unresolved') ||
+    (item.evidenceCount !== 0 && item.evidenceCount !== 1)
+  )
+    return undefined;
+  for (const field of ['sourceName', 'targetName'])
+    if (item[field] !== undefined && typeof item[field] !== 'string') return undefined;
+  for (const field of ['sourceOccurrenceId', 'targetOccurrenceId', 'variantId']) {
+    const value = item[field];
+    if (value !== undefined && value !== null && (typeof value !== 'string' || value.length > 256))
+      return undefined;
+  }
+  const nullableText = (field: string) => {
+    const value = item[field];
+    return value === null ? null : typeof value === 'string' ? value : undefined;
+  };
+  return {
+    id: item.id,
+    sourceId: item.sourceId,
+    targetId: item.targetId,
+    sourceName: typeof item.sourceName === 'string' ? item.sourceName : undefined,
+    targetName: typeof item.targetName === 'string' ? item.targetName : undefined,
+    kind: item.kind,
+    certainty: item.certainty,
+    evidenceCount: item.evidenceCount,
+    sourceOccurrenceId: nullableText('sourceOccurrenceId'),
+    targetOccurrenceId: nullableText('targetOccurrenceId'),
+    variantId: nullableText('variantId')
+  };
+}
+
+export function readSavedRelations(value: unknown): SavedRelations | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const groups = value as Record<string, unknown>;
+  if (
+    !Array.isArray(groups.outgoing) ||
+    !Array.isArray(groups.incoming) ||
+    groups.outgoing.length > 1000 ||
+    groups.incoming.length > 1000
+  )
+    return undefined;
+  const outgoing = groups.outgoing.map(readSavedRelation);
+  const incoming = groups.incoming.map(readSavedRelation);
+  if (outgoing.some((item) => !item) || incoming.some((item) => !item)) return undefined;
+  return {
+    outgoing: outgoing.filter((item): item is SavedRelation => !!item),
+    incoming: incoming.filter((item): item is SavedRelation => !!item)
+  };
+}
 
 type FieldKind =
   | keyof typeof PATTERNS
@@ -345,7 +568,17 @@ type FieldKind =
   | 'profile'
   | 'exportFormat'
   | 'mode'
-  | 'viewState';
+  | 'savedUpdatePhase'
+  | 'viewState'
+  | 'sourceReturnUi'
+  | 'candidateOrigins'
+  | 'candidateDeclarations'
+  | 'candidateCertainty'
+  | 'candidateQueryMetadata'
+  | 'candidateText'
+  | 'candidateRelationKind'
+  | 'savedRelation'
+  | 'savedRelations';
 
 interface MessageRule {
   required: Record<string, FieldKind>;
@@ -375,6 +608,10 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
     optional: { targetId: 'string', profile: 'profile' }
   },
   cancelAnalysis: { required: { requestId: 'requestId', analysisId: 'analysisId' }, optional: {} },
+  updateSavedIndex: {
+    required: { requestId: 'requestId', analysisId: 'analysisId' },
+    optional: {}
+  },
   getProjection: {
     required: {
       requestId: 'requestId',
@@ -396,7 +633,7 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   },
   getEntityDetails: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
-    optional: {}
+    optional: { filters: 'filters' }
   },
   getEvidencePage: {
     required: { requestId: 'requestId', analysisId: 'analysisId', relationId: 'relationId' },
@@ -408,15 +645,37 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
   },
   openEvidence: {
     required: { requestId: 'requestId', analysisId: 'analysisId', evidenceId: 'evidenceId' },
+    optional: { returnUi: 'sourceReturnUi' }
+  },
+  sourceReturnDismissed: {
+    required: { analysisId: 'analysisId' },
     optional: {}
+  },
+  investigateCandidate: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', originId: 'candidateOriginId' },
+    optional: {}
+  },
+  dismissCandidateInvestigation: {
+    required: { requestId: 'requestId', analysisId: 'analysisId', originId: 'candidateOriginId' },
+    optional: {}
+  },
+  openCandidateDeclaration: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      originId: 'candidateOriginId',
+      capabilityId: 'candidateDeclarationId'
+    },
+    optional: { returnUi: 'sourceReturnUi' }
   },
   openDeclaration: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entityId: 'entityId' },
-    optional: { declarationIndex: 'positiveInteger' }
+    optional: { declarationIndex: 'positiveInteger', returnUi: 'sourceReturnUi' }
   },
   copyContext: {
     required: { requestId: 'requestId', analysisId: 'analysisId', scope: 'scope' },
     optional: {
+      projectionRequestId: 'requestId',
       includeSnippets: 'boolean',
       granularity: 'granularity',
       filters: 'filters',
@@ -432,6 +691,7 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
       scope: 'scope'
     },
     optional: {
+      projectionRequestId: 'requestId',
       data: 'string',
       copy: 'boolean',
       granularity: 'granularity',
@@ -444,6 +704,10 @@ const WEBVIEW_RULES: Record<string, MessageRule> = {
 };
 
 const HOST_RULES: Record<string, MessageRule> = {
+  savedUpdateState: {
+    required: { analysisId: 'analysisId', phase: 'savedUpdatePhase', canUpdate: 'boolean' },
+    optional: {}
+  },
   analysisStarted: {
     required: { analysisId: 'analysisId', mode: 'mode', target: 'object' },
     optional: {}
@@ -459,6 +723,15 @@ const HOST_RULES: Record<string, MessageRule> = {
   },
   viewState: {
     required: { state: 'object' },
+    optional: {}
+  },
+  sourceReturn: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      state: 'viewState',
+      ui: 'sourceReturnUi'
+    },
     optional: {}
   },
   analysisProgress: {
@@ -479,7 +752,8 @@ const HOST_RULES: Record<string, MessageRule> = {
       capabilities: 'object',
       target: 'object',
       profile: 'profile',
-      variantOptions: 'array'
+      variantOptions: 'array',
+      queryMetadata: 'object'
     }
   },
   analysisFailed: {
@@ -497,11 +771,33 @@ const HOST_RULES: Record<string, MessageRule> = {
       total: 'positiveInteger',
       items: 'array'
     },
-    optional: { nextCursor: 'cursor' }
+    optional: { nextCursor: 'cursor', queryMetadata: 'object' }
   },
   details: {
     required: { requestId: 'requestId', analysisId: 'analysisId', entity: 'object' },
-    optional: { dependencies: 'array', dependents: 'array' }
+    optional: {
+      dependencies: 'array',
+      dependents: 'array',
+      queryMetadata: 'object',
+      candidateOrigins: 'candidateOrigins',
+      relations: 'savedRelations'
+    }
+  },
+  candidateInvestigation: {
+    required: {
+      requestId: 'requestId',
+      analysisId: 'analysisId',
+      originId: 'candidateOriginId',
+      relationId: 'relationId',
+      targetEntityId: 'candidateTargetId',
+      certainty: 'candidateCertainty',
+      relationKind: 'candidateRelationKind',
+      reason: 'candidateText',
+      message: 'candidateText',
+      queryMetadata: 'candidateQueryMetadata',
+      declarations: 'candidateDeclarations'
+    },
+    optional: { unavailableReason: 'candidateText' }
   },
   evidencePage: {
     required: {
@@ -511,7 +807,7 @@ const HOST_RULES: Record<string, MessageRule> = {
       total: 'positiveInteger',
       items: 'array'
     },
-    optional: { nextCursor: 'cursor' }
+    optional: { nextCursor: 'cursor', queryMetadata: 'object', relation: 'savedRelation' }
   },
   cycleWitness: {
     required: {
@@ -541,7 +837,7 @@ export function validateWebviewMessage(
     return result;
   }
 
-  // Search text is echoed back to the UI and the host: keep it bounded (SD-023).
+  // Search text is echoed back to the UI and the host: keep it bounded.
   if (result.value.type === 'searchEntities' && result.value.query.length > MAX_QUERY_LENGTH) {
     return {
       ok: false,
@@ -614,6 +910,14 @@ function checkField(
   errors: string[],
   required: boolean
 ): boolean {
+  if (value === null && (kind === 'savedRelation' || kind === 'savedRelations')) {
+    errors.push(`${path}: expected saved relation data, not null`);
+    return false;
+  }
+  if (value === null && (kind === 'candidateOrigins' || kind === 'candidateText')) {
+    errors.push(`${path}: expected a candidate field, not null`);
+    return false;
+  }
   if (value === undefined || value === null) {
     if (required) {
       errors.push(`${path}: missing required field`);
@@ -627,6 +931,104 @@ function checkField(
   };
 
   switch (kind) {
+    case 'savedRelation':
+      return !!readSavedRelation(value) || fail('expected a bounded saved relation');
+    case 'savedRelations':
+      return !!readSavedRelations(value) || fail('expected bounded saved relation groups');
+    case 'candidateOriginId':
+    case 'candidateDeclarationId':
+    case 'candidateTargetId':
+    case 'occurrenceId':
+    case 'variantId':
+      return typeof value === 'string' && PATTERNS[kind].test(value)
+        ? true
+        : fail(`value does not match ${PATTERNS[kind]}`);
+    case 'candidateText':
+      return typeof value === 'string' && value.length <= 4096
+        ? true
+        : fail('expected at most 4096 characters');
+    case 'candidateRelationKind':
+      return typeof value === 'string' && value.length >= 1 && value.length <= 128
+        ? true
+        : fail('expected a nonempty relation kind of at most 128 characters');
+    case 'candidateCertainty':
+      return value === 'Candidate'
+        ? true
+        : fail('candidate relation certainty must remain Candidate');
+    case 'candidateOrigins':
+    case 'candidateDeclarations': {
+      const origins = kind === 'candidateOrigins';
+      const limit = origins ? 8 : 16;
+      if (!Array.isArray(value) || value.length > limit)
+        return fail(`expected at most ${limit} candidate entries`);
+      const fields: Record<string, RegExp> = origins
+        ? {
+            originId: PATTERNS.candidateOriginId,
+            relationId: PATTERNS.relationId,
+            targetEntityId: PATTERNS.candidateTargetId
+          }
+        : {
+            capabilityId: PATTERNS.candidateDeclarationId,
+            occurrenceId: PATTERNS.occurrenceId,
+            variantId: PATTERNS.variantId
+          };
+      const textKey = origins ? 'targetName' : 'path';
+      return value.every(
+        (item) =>
+          item &&
+          typeof item === 'object' &&
+          !Array.isArray(item) &&
+          Object.entries(fields).every(
+            ([key, pattern]) => typeof item[key] === 'string' && pattern.test(item[key])
+          ) &&
+          typeof item[textKey] === 'string' &&
+          item[textKey].length >= 1 &&
+          item[textKey].length <= 4096
+      )
+        ? true
+        : fail('expected candidate entries with exact role IDs and bounded display text');
+    }
+    case 'candidateQueryMetadata': {
+      if (typeof value !== 'object' || Array.isArray(value))
+        return fail('expected saved Query metadata');
+      const metadata = value as Record<string, unknown>;
+      const text = (item: unknown, max: number): item is string =>
+        typeof item === 'string' && item.length >= 1 && item.length <= max;
+      const count = (item: unknown): boolean =>
+        typeof item === 'number' && Number.isSafeInteger(item) && item >= 0;
+      return metadata.provider === 'savedIndex' &&
+        metadata.totalKind === 'returned' &&
+        text(metadata.workspaceId, 4096) &&
+        text(metadata.snapshotId, 4096) &&
+        count(metadata.generation) &&
+        Array.isArray(metadata.variantIds) &&
+        metadata.variantIds.length === 1 &&
+        typeof metadata.variantIds[0] === 'string' &&
+        PATTERNS.variantId.test(metadata.variantIds[0]) &&
+        ['CompleteWithinScope', 'Partial', 'Failed'].includes(String(metadata.coverage)) &&
+        ['unverified', 'dirty', 'verified-current'].includes(String(metadata.freshness)) &&
+        typeof metadata.truncated === 'boolean' &&
+        Array.isArray(metadata.truncationReasons) &&
+        metadata.truncationReasons.length <= 64 &&
+        metadata.truncationReasons.every((reason) => text(reason, 128)) &&
+        Array.isArray(metadata.diagnostics) &&
+        metadata.diagnostics.length <= 64 &&
+        metadata.diagnostics.every(
+          (issue) =>
+            issue &&
+            typeof issue === 'object' &&
+            !Array.isArray(issue) &&
+            text(issue.code, 128) &&
+            text(issue.message, 4096)
+        ) &&
+        ['returnedCount', 'candidateCount', 'unresolvedCount'].every((key) =>
+          count(metadata[key])
+        ) &&
+        (metadata.resultFilterVersion === undefined ||
+          (count(metadata.resultFilterVersion) && (metadata.resultFilterVersion as number) >= 1))
+        ? true
+        : fail('expected bounded metadata for one saved variant');
+    }
     case 'string':
       return typeof value === 'string' ? true : fail('expected a string');
     case 'boolean':
@@ -649,6 +1051,10 @@ function checkField(
       return MODES.includes(value as (typeof MODES)[number])
         ? true
         : fail(`expected one of ${MODES.join(', ')}`);
+    case 'savedUpdatePhase':
+      return SAVED_UPDATE_PHASES.includes(value as SavedUpdatePhase)
+        ? true
+        : fail(`expected one of ${SAVED_UPDATE_PHASES.join(', ')}`);
     case 'granularity':
       return GRANULARITIES.includes(value as (typeof GRANULARITIES)[number])
         ? true
@@ -684,6 +1090,14 @@ function checkField(
     case 'filters': {
       if (typeof value !== 'object' || Array.isArray(value)) return fail('expected an object');
       const filters = value as Record<string, unknown>;
+      if (
+        filters.resultKinds !== undefined &&
+        (!Array.isArray(filters.resultKinds) ||
+          filters.resultKinds.length < 1 ||
+          filters.resultKinds.length > 2 ||
+          filters.resultKinds.some((item) => item !== 'code' && item !== 'docs'))
+      )
+        return fail('resultKinds must contain code and/or docs');
       for (const key of ['includeGenerated', 'includeExternal', 'includeTests'])
         if (filters[key] !== undefined && typeof filters[key] !== 'boolean')
           return fail(`${key} must be a boolean`);
@@ -727,6 +1141,32 @@ function checkField(
     }
     case 'viewState':
       return typeof value === 'object' && !Array.isArray(value) ? true : fail('expected an object');
+    case 'sourceReturnUi': {
+      if (typeof value !== 'object' || Array.isArray(value))
+        return fail('expected source return UI');
+      const ui = value as Record<string, unknown>;
+      const scroll = ui.scroll as Record<string, unknown> | undefined;
+      return ['structure', 'cycles', 'analysis'].includes(String(ui.navTab)) &&
+        (ui.focus === 'declaration' || ui.focus === 'evidence') &&
+        typeof ui.id === 'string' &&
+        (ui.focus === 'declaration' ? PATTERNS.entityId : PATTERNS.evidenceId).test(ui.id) &&
+        !!scroll &&
+        typeof scroll === 'object' &&
+        !Array.isArray(scroll) &&
+        ['navigation', 'inspector', 'map'].every(
+          (key) =>
+            typeof scroll[key] === 'number' &&
+            Number.isFinite(scroll[key]) &&
+            (scroll[key] as number) >= 0 &&
+            (scroll[key] as number) <= 10000000
+        ) &&
+        (ui.searchCount === undefined ||
+          (Number.isSafeInteger(ui.searchCount) &&
+            (ui.searchCount as number) >= 0 &&
+            (ui.searchCount as number) <= 500))
+        ? true
+        : fail('expected a bounded source button anchor and scroll position');
+    }
     default:
       return PATTERNS[kind].test(String(value))
         ? true

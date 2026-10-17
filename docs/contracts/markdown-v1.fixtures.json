@@ -1,0 +1,199 @@
+{
+  "contractVersion": "1.0",
+  "profileId": "lithosharp-markdown/1",
+  "kind": "desk-contract-not-parser-test",
+  "spanEncoding": "UTF-16 zero-based half-open [start,end)",
+  "note": "Expected contract examples. Raw lengths, slices and strict UTF-8 hashes were checked without running the parser. Cross-host parsing remains a later task. Invalid Unicode is represented as numeric UTF-16 code units so standard JSON readers can read the fixture without normalizing or rejecting the raw test input.",
+  "cases": [
+    {
+      "id": "bom-crlf-frontmatter",
+      "raw": "\uFEFF---\r\ntitle: A\r\n---\r\n# A\r\n",
+      "expected": {
+        "rawUtf16Length": 26,
+        "status": "Complete",
+        "rawSpans": {
+          "opening": [1, 4],
+          "yaml": [6, 16],
+          "key": [6, 11],
+          "value": [13, 14],
+          "closing": [16, 19],
+          "body": [21, 26],
+          "heading": [21, 24],
+          "headingText": [23, 24],
+          "section": [21, 26],
+          "directBody": [26, 26]
+        },
+        "rawSlices": {
+          "opening": "---",
+          "yaml": "title: A\r\n",
+          "key": "title",
+          "value": "A",
+          "closing": "---",
+          "body": "# A\r\n",
+          "heading": "# A",
+          "headingText": "A",
+          "section": "# A\r\n",
+          "directBody": ""
+        },
+        "textHash": "dd4912570ba5d83a5629e11798ccf3d378862ec206fbd2ece9bd14609b889930"
+      },
+      "absentFrontMatterVariant": {
+        "raw": "\uFEFF# A\r\n",
+        "expected": {
+          "rawUtf16Length": 6,
+          "status": "Complete",
+          "bodySpan": [1, 6],
+          "headingSpan": [1, 4],
+          "preambleSpan": [1, 1],
+          "textHash": "d68ba92f18276b7a0c5c70df0ba31a4e2dfbd210153b3f7e539d1684b27ee7cd"
+        }
+      }
+    },
+    {
+      "id": "entity-escape-surrogate-pair",
+      "raw": "# A&amp;\\*😀\r\n",
+      "decoded": "A&*😀",
+      "expected": {
+        "rawUtf16Length": 14,
+        "decodedUtf16Length": 5,
+        "headingSpan": [0, 12],
+        "segments": [
+          {
+            "decoded": [0, 1],
+            "raw": [2, 3],
+            "kind": "Linear"
+          },
+          {
+            "decoded": [1, 2],
+            "raw": [3, 8],
+            "kind": "Atomic"
+          },
+          {
+            "decoded": [2, 3],
+            "raw": [8, 10],
+            "kind": "Atomic"
+          },
+          {
+            "decoded": [3, 5],
+            "raw": [10, 12],
+            "kind": "Linear"
+          }
+        ],
+        "query": {
+          "decoded": [1, 2],
+          "rawFragments": [[3, 8]],
+          "accuracy": "CoveringTokens"
+        },
+        "textHash": "989c2ff278aab0c13a906dab916a01dc20099f2c1a861cbb6a537d07be998346"
+      }
+    },
+    {
+      "id": "stripped-quote-prefix",
+      "raw": "> a\r\n> b",
+      "decoded": "a\nb",
+      "expected": {
+        "rawUtf16Length": 8,
+        "decodedUtf16Length": 3,
+        "segments": [
+          {
+            "decoded": [0, 1],
+            "raw": [2, 3],
+            "kind": "Linear"
+          },
+          {
+            "decoded": [1, 2],
+            "raw": [3, 5],
+            "kind": "Atomic"
+          },
+          {
+            "decoded": [2, 3],
+            "raw": [7, 8],
+            "kind": "Linear"
+          }
+        ],
+        "query": {
+          "decoded": [0, 3],
+          "rawFragments": [
+            [2, 5],
+            [7, 8]
+          ],
+          "accuracy": "CoveringTokens"
+        },
+        "excludedRawGap": [5, 7],
+        "textHash": "7986b41b210baac3f207a11ff9565d96fd2b0894cfba5142cf02fc8e536a20e6"
+      }
+    },
+    {
+      "id": "same-text-distinct-binding",
+      "raw": "# Same\n",
+      "expected": {
+        "rawUtf16Length": 7,
+        "bindings": [
+          {
+            "scopeId": "workspace-a",
+            "sourceId": "document-a",
+            "sourceVersion": "1"
+          },
+          {
+            "scopeId": "workspace-a",
+            "sourceId": "document-b",
+            "sourceVersion": "1"
+          },
+          {
+            "scopeId": "workspace-b",
+            "sourceId": "document-a",
+            "sourceVersion": "1"
+          },
+          {
+            "scopeId": "workspace-a",
+            "sourceId": "document-a",
+            "sourceVersion": "2"
+          }
+        ],
+        "sameTextHash": true,
+        "distinctBoundCacheKeys": true,
+        "otherKeyFieldsEqual": ["parserVersion", "contractVersion", "profileId", "optionsHash"],
+        "publicationCases": [
+          {
+            "reserved": [
+              {
+                "generation": 1,
+                "version": 2
+              },
+              {
+                "generation": 2,
+                "version": 1
+              }
+            ],
+            "completion": {
+              "generation": 1,
+              "version": 2
+            },
+            "publish": false
+          },
+          {
+            "capturedEpoch": 1,
+            "currentEpochAfterRemove": 2,
+            "publish": false
+          }
+        ],
+        "textHash": "f031d1f0785a9071765aa4fb9b8c8171e93aa61348602493367e912993ff96c3"
+      }
+    },
+    {
+      "id": "unpaired-surrogate-strict-entry",
+      "expected": {
+        "rawUtf16Length": 1,
+        "status": "Failed",
+        "textHash": null,
+        "diagnostic": {
+          "id": "LMD001",
+          "rawSpan": [0, 1]
+        },
+        "cache": false,
+        "legacyFacadeBehavior": "Separate compatibility policy; this fixture specifies only the new strict entry."
+      },
+      "rawUtf16CodeUnits": [55296]
+    }
+  ]
+}

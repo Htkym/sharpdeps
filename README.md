@@ -21,6 +21,38 @@ VS Code 1.90 or later and a trusted workspace are required to run analysis.
 
 The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) is installed as an extension dependency. SharpDeps does not acquire an SDK or restore project packages automatically.
 
+## CLI and optional MCP
+
+Use an available exact package version in place of `<version>`. Both tools require the .NET 10 runtime. Install them from NuGet, or use the nupkg downloads from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) with a local NuGet feed.
+
+```bash
+dotnet tool install --global SharpDeps.Cli --version <version>
+dotnet tool install --global SharpDeps.Mcp --version <version>
+```
+
+[dnx](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-exec) runs a tool without permanent installation and requires .NET SDK 10.0.100 or later:
+
+```bash
+dnx SharpDeps.Cli@<version> --verbosity quiet -- help
+dnx SharpDeps.Mcp@<version> --verbosity quiet -- --root /absolute/workspace
+```
+
+For unattended use with .NET SDK 11 or later, add `--yes` before `--`. The .NET 10 launcher does not accept that option.
+
+An MCP client can launch the optional read-only host with:
+
+```json
+{
+  "mcpServers": {
+    "sharpdeps": {
+      "command": "dnx",
+      "args": ["SharpDeps.Mcp@<version>", "--verbosity", "quiet", "--", "--root", "/absolute/workspace"],
+      "env": { "DOTNET_NOLOGO": "1" }
+    }
+  }
+}
+```
+
 ## Open your first map
 
 1. Open your solution folder in VS Code.

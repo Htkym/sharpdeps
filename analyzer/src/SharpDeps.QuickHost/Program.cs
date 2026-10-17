@@ -12,6 +12,7 @@
 // model next to it:
 //   <output directory>/report-v2.json   AnalysisSnapshot (schemas/report-v2.schema.json)
 //   <output directory>/evidence.ndjson  one evidence record per line
+//   <output directory>/declarations.ndjson one type declaration per line
 //
 // This host must not reference MSBuild or the Roslyn workspace packages: it has to
 // run with a .NET runtime and no SDK installed.
@@ -82,5 +83,6 @@ await File.WriteAllTextAsync(
     Path.Combine(outputDirectory, "report-v2.json"),
     JsonSerializer.Serialize(v2.Snapshot, CodeMapJsonContext.Default.AnalysisSnapshot));
 await File.WriteAllTextAsync(Path.Combine(outputDirectory, "evidence.ndjson"), v2.EvidenceNdjson);
+await File.WriteAllTextAsync(Path.Combine(outputDirectory, "declarations.ndjson"), v2.DeclarationsNdjson);
 
 return 0;

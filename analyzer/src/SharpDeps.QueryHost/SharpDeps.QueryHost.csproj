@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SharpDeps.QueryHost</RootNamespace>
+    <AssemblyName>sharpdeps-query-host</AssemblyName>
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SharpDeps.Index\SharpDeps.Index.csproj" />
+    <ProjectReference Include="..\SharpDeps.Query\SharpDeps.Query.csproj" />
+  </ItemGroup>
+</Project>

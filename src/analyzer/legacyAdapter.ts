@@ -1,5 +1,3 @@
-// Adapter from the legacy v1 Quick report to the v2 analysis model (SD-002).
-//
 // A legacy report only knows declaration sites (ProjectReference, using) and
 // never resolved symbol usage, and it does not record evidence positions. The
 // adapter therefore:

@@ -23,3 +23,24 @@ and the SDK's MSBuild implementation are not bundled; Semantic locates the insta
 These components use the MIT licence. Their upstream package metadata and source links
 are available in the analyzer's NuGet assets and dependency manifests. Quick and Semantic
 run in separate processes and use their respective published Roslyn versions.
+
+## SQLite saved-index reader
+
+The saved Query host includes Microsoft.Data.Sqlite (MIT) and SQLitePCLRaw
+(Apache-2.0, copyright 2014-2024 SourceGear, LLC), including its `e_sqlite3` native
+SQLite builds. They are dependencies of the read-only index reader. SQLite itself
+is in the public domain.
+
+Full Apache licence text: [resources/APACHE-2.0-LICENSE.txt](resources/APACHE-2.0-LICENSE.txt).
+
+The upstream package metadata records the licences and sources:
+https://github.com/dotnet/dotnet and https://github.com/ericsink/SQLitePCL.raw.
+SQLite's public-domain dedication is available at https://sqlite.org/copyright.html.
+
+## Optional stdio MCP tool
+
+The separate SharpDeps.Mcp tool uses the official ModelContextProtocol.Core 2.2.0
+SDK (Apache-2.0), maintained at https://github.com/modelcontextprotocol/csharp-sdk.
+It is not added to the VSIX or the existing CLI package. Its NuGet dependency
+metadata records the SDK's dependencies and licences. Full Apache licence text
+is linked above.

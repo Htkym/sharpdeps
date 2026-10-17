@@ -1,4 +1,3 @@
-// Evidence presentation (SD-018).
 //
 // Evidence records arrive as plain objects from the host and are never trusted: every
 // field is read defensively. Lines and characters are stored 0-based (Roslyn
@@ -104,6 +103,14 @@ export function describeBasis(basis: string, language: Language = 'en'): BasisDe
       return {
         label: tr('Quick (inferred)'),
         detail: tr('Dependencies inferred from using directives; actual use is not guaranteed.'),
+        resolved: false
+      };
+    case 'typeReferenceInferred':
+      return {
+        label: tr('Quick (syntax type references)'),
+        detail: tr(
+          'References written in type base lists; symbol binding and inheritance are unverified.'
+        ),
         resolved: false
       };
     default:

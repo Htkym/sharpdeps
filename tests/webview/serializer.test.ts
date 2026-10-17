@@ -1,7 +1,7 @@
-// View state persistence (SD-021): round trip, version guard, and clamped restore.
+// View state persistence: round trip, version guard, and clamped restore.
 
 import { describe, expect, it } from 'vitest';
-import { INITIAL_STATE } from '../../media/app/state';
+import { INITIAL_STATE, viewReducer } from '../../media/app/state';
 import {
   VIEW_STATE_VERSION,
   deserializeViewState,
@@ -10,9 +10,106 @@ import {
 } from '../../media/app/serializer';
 
 describe('view state serialization', () => {
+  it('round-trips relation history and preserves old entity-only history', () => {
+    const relationId = 'rel_1111111111111111';
+    const selected = viewReducer(INITIAL_STATE, { type: 'relationSelected', relationId });
+    const scoped = viewReducer(selected, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const restored = deserializeViewState(JSON.parse(JSON.stringify(serializeViewState(scoped))));
+    expect(
+      viewReducer({ ...INITIAL_STATE, ...restored.state }, { type: 'historyBack' }).selection
+    ).toEqual({ relationId });
+    for (const relation of [undefined, '', { id: relationId }, 'x'.repeat(65)]) {
+      const legacy = deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        history: [
+          {
+            scope: { kind: 'root' },
+            granularity: 'type',
+            selectionId: 'ty_1111111111111111',
+            relationId: relation
+          }
+        ]
+      });
+      expect(legacy.state.history?.[0].relationId).toBeUndefined();
+      expect(
+        viewReducer({ ...INITIAL_STATE, ...legacy.state }, { type: 'historyBack' }).selection
+      ).toEqual({ entityId: 'ty_1111111111111111' });
+    }
+  });
+
+  it('keeps empty source-return searches and history when replacing a nonempty search', () => {
+    const stored = serializeViewState({
+      ...INITIAL_STATE,
+      history: [{ scope: { kind: 'root' }, granularity: 'type', search: '' }]
+    });
+    const restored = restoreViewState(JSON.parse(JSON.stringify(stored))).state;
+    const next = viewReducer(
+      { ...INITIAL_STATE, search: 'previous query' },
+      {
+        type: 'sourceReturned',
+        state: restored,
+        ui: {
+          navTab: 'structure',
+          focus: 'declaration',
+          id: 'ty_1111111111111111',
+          scroll: { navigation: 0, inspector: 0, map: 0 }
+        }
+      }
+    );
+    expect(next.search).toBe('');
+    expect(next.history).toHaveLength(1);
+    expect(next.history[0].search).toBe('');
+    expect(
+      deserializeViewState({ version: VIEW_STATE_VERSION, search: 'x'.repeat(201) }).state.search
+    ).toBeUndefined();
+  });
+
+  it('restores only finite saved result groups and keeps display metadata out of persisted state', () => {
+    const state = {
+      ...INITIAL_STATE,
+      filters: { resultKinds: ['docs' as const], includeExternal: false },
+      searchResults: {
+        query: '調査',
+        total: 1,
+        pending: false,
+        items: [
+          {
+            id: 'ty_1111111111111111',
+            name: '調査',
+            granularity: 'type' as const,
+            path: 'SECRET_PATH',
+            reason: 'SECRET_REASON',
+            resultKind: 'docs' as const,
+            sourceLocationAvailable: false
+          }
+        ]
+      }
+    };
+    const serialized = serializeViewState(state);
+    expect(restoreViewState(serialized).state.filters).toEqual({
+      resultKinds: ['docs'],
+      includeExternal: false
+    });
+    expect(JSON.stringify(serialized)).not.toContain('SECRET_');
+    expect(
+      deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        filters: { resultKinds: ['docs', 'Document'], includeExternal: false }
+      }).state.filters
+    ).toEqual({ resultKinds: ['docs'], includeExternal: false });
+    expect(
+      deserializeViewState({ version: VIEW_STATE_VERSION, filters: { resultKinds: ['Other'] } })
+        .state.filters
+    ).toEqual({});
+  });
+
   it('round-trips the small state and the camera', () => {
     const state = {
       ...INITIAL_STATE,
+      projectionRequestId: 'req_0000000000001234',
       target: { name: 'Sample.sln', relativePath: 'src/Sample.sln' },
       selection: { entityId: 'ty_1111111111111111' },
       filters: { includeGenerated: false, kinds: ['class'] },
@@ -22,11 +119,15 @@ describe('view state serialization', () => {
       search: 'Order',
       paneWidths: { navigation: 260, inspector: 400 },
       tablePage: 2,
+      tableSort: { key: 'dependencies' as const, direction: 'desc' as const },
       layout: { direction: 'DOWN' as const, nodeSpacing: 40, rankSpacing: 80 }
     };
 
     const stored = serializeViewState(state, { zoom: 1.4, scrollLeft: 30, scrollTop: 12 });
     const restored = deserializeViewState(stored);
+
+    expect(stored).not.toHaveProperty('projectionRequestId');
+    expect(restored.state).not.toHaveProperty('projectionRequestId');
 
     expect(restored.versionMismatch).toBe(false);
     expect(restored.state).toMatchObject({
@@ -39,11 +140,55 @@ describe('view state serialization', () => {
       search: 'Order',
       paneWidths: { navigation: 260, inspector: 400 },
       tablePage: 2,
+      tableSort: { key: 'dependencies', direction: 'desc' },
       layout: { direction: 'DOWN', nodeSpacing: 40, rankSpacing: 80 }
     });
 
     const withCamera = restoreViewState(stored);
     expect(withCamera.state.camera).toEqual({ zoom: 1.4, scrollLeft: 30, scrollTop: 12 });
+  });
+
+  it('retains table history across serialization and rejects malformed position fields', () => {
+    const original = {
+      ...INITIAL_STATE,
+      viewKind: 'table' as const,
+      tablePage: 3,
+      tableSort: { key: 'project' as const, direction: 'desc' as const }
+    };
+    const scoped = viewReducer(original, {
+      type: 'scopeChanged',
+      scope: { kind: 'dependencies', id: 'ty_1111111111111111', depth: 1 }
+    });
+    const restored = restoreViewState(JSON.parse(JSON.stringify(serializeViewState(scoped))));
+    const back = viewReducer(
+      { ...INITIAL_STATE, ...restored.state, viewKind: 'graph', tablePage: 0 },
+      { type: 'historyBack' }
+    );
+    expect(back).toMatchObject({ viewKind: 'table', tablePage: 3, tableSort: original.tableSort });
+    for (const invalid of [
+      { viewKind: 'dashboard', tablePage: -1, tableSort: { key: 'path', direction: 'desc' } },
+      { viewKind: false, tablePage: Infinity, tableSort: { key: 'name', direction: 'sideways' } },
+      {}
+    ]) {
+      const malformed = deserializeViewState({
+        version: VIEW_STATE_VERSION,
+        ...invalid,
+        history: [{ scope: { kind: 'root' }, granularity: 'type', ...invalid }]
+      }).state;
+      expect(malformed.tableSort).toBeUndefined();
+      expect(malformed.history?.[0]).toMatchObject({
+        viewKind: undefined,
+        tablePage: undefined,
+        tableSort: undefined
+      });
+      expect(
+        viewReducer({ ...INITIAL_STATE, ...malformed }, { type: 'historyBack' })
+      ).toMatchObject({
+        viewKind: INITIAL_STATE.viewKind,
+        tablePage: INITIAL_STATE.tablePage,
+        tableSort: INITIAL_STATE.tableSort
+      });
+    }
   });
 
   it('restores old or invalid direction settings as horizontal', () => {

@@ -1,15 +1,4 @@
-// Publishes the analyzer hosts from the analyzer solution (analyzer/SharpDeps.Analyzer.slnx):
-//
-//   analyzer/bin/quick/code-map.dll
-//     SDK-free Quick analysis. Runs with a .NET runtime and no SDK installed, and is
-//     shipped in the VSIX.
-//
-//   analyzer/bin/semantic/sharpdeps-semantic-host.dll
-//     MSBuild/Roslyn semantic analysis. Needs a .NET SDK at run time; MSBuild itself
-//     is loaded from the located SDK (never published here).
-//
-// The file-based app (analyzer/code-map.cs) is gone as of SD-005: the only build
-// path is this explicit project publish.
+// Quick ships runtime-only; Semantic loads MSBuild from the installed SDK.
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -32,6 +21,14 @@ const quickOutDir = path.join(analyzerDir, 'bin', 'quick');
 const semanticOutDir = path.join(analyzerDir, 'bin', 'semantic');
 const quickDll = path.join(quickOutDir, 'code-map.dll');
 const semanticDll = path.join(semanticOutDir, 'sharpdeps-semantic-host.dll');
+const queryProject = path.join(
+  analyzerDir,
+  'src',
+  'SharpDeps.QueryHost',
+  'SharpDeps.QueryHost.csproj'
+);
+const queryOutDir = path.join(analyzerDir, 'bin', 'query');
+const queryDll = path.join(queryOutDir, 'sharpdeps-query-host.dll');
 
 function run(command, args, cwd) {
   console.log(`> ${command} ${args.join(' ')}`);
@@ -69,6 +66,15 @@ function main() {
   }
 
   console.log(`Semantic analyzer host built: ${semanticDll}`);
+  // A separate runtime-only reader host: no Roslyn, CLI PackAsTool, SDK or writer.
+  if (path.relative(analyzerDir, queryOutDir) !== path.join('bin', 'query'))
+    throw new Error('Query output directory escaped the analyzer directory.');
+  fs.rmSync(queryOutDir, { recursive: true, force: true });
+  if (!publish(queryProject, queryOutDir) || !fs.existsSync(queryDll)) {
+    console.error('Failed to build the saved Query host.');
+    process.exit(1);
+  }
+  console.log(`Saved Query host built: ${queryDll}`);
 }
 
 main();

@@ -1,4 +1,3 @@
-// Keyboard shortcuts (SD-024).
 //
 // Pure so the key map is testable: the resolver only decides which action a key means
 // in the current context (where focus is, whether the inspector is open). Nothing here

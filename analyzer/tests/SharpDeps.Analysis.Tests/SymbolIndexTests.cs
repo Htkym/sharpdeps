@@ -72,8 +72,8 @@ public sealed class SymbolIndexTests : IDisposable
     public void MergesPartialDeclarationsIntoOneTypeWithSeveralLocations()
     {
         var index = BuildFromSource(
-            ("Partial.cs", "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string First { get; set; } = string.Empty;\n}\n"),
-            ("Partial.Second.cs", "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string Second { get; set; } = string.Empty;\n}\n"));
+            ("Partial.cs", "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string First { get; set; } = string.Empty;\n    partial void Update(ref int value);\n}\n"),
+            ("Partial.Second.cs", "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string Second { get; set; } = string.Empty;\n    partial void Update(ref int value) { value++; }\n}\n"));
 
         var type = Assert.Single(index.Types, entry => entry.Name == "PartialThing");
 
@@ -86,6 +86,11 @@ public sealed class SymbolIndexTests : IDisposable
         Assert.Contains(
             index.Members,
             member => member.TypeId == type.Id && member.Name == "Second");
+        var method = Assert.Single(index.Members, member => member.Name == "Update");
+        Assert.StartsWith("M:Sample.PartialThing.Update(System.Int32@)|", method.HarnessSignature);
+        Assert.Contains("ref ", method.HarnessSignature, StringComparison.Ordinal);
+        Assert.Equal(2, method.HarnessDeclarations!.Count);
+        Assert.Equal(2, method.HarnessDeclarations.Select(location => location.DocumentId).Distinct().Count());
     }
 
     [Fact]

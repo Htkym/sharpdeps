@@ -1,5 +1,3 @@
-// SD-003 semantic loading prototype.
-//
 // Contract with the extension host:
 //   stdout : machine-readable progress lines, prefixed with `sharpdeps:progress `
 //   stderr : human-readable log lines

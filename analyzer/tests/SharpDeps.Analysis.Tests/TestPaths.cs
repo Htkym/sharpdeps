@@ -11,6 +11,19 @@ internal static class TestPaths
 
     private static string FindRepositoryRoot()
     {
+        var explicitRoot = Environment.GetEnvironmentVariable("SHARPDEPS_TEST_REPOSITORY_ROOT");
+        if (!string.IsNullOrWhiteSpace(explicitRoot))
+        {
+            if (!Path.IsPathFullyQualified(explicitRoot) ||
+                !Directory.Exists(Path.Combine(explicitRoot, "tests", "fixtures")) ||
+                !Directory.Exists(Path.Combine(explicitRoot, "analyzer", "src")))
+            {
+                throw new InvalidOperationException("SHARPDEPS_TEST_REPOSITORY_ROOT must identify the repository root.");
+            }
+
+            return Path.GetFullPath(explicitRoot);
+        }
+
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {

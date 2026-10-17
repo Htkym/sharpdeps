@@ -1,4 +1,4 @@
-// Evidence presentation (SD-018): locations, origin, confidence, and the edge summary
+// Evidence presentation: locations, origin, confidence, and the edge summary
 // that reconciles an aggregated edge's occurrence count with the paged evidence.
 
 import { describe, expect, it } from 'vitest';
@@ -58,6 +58,9 @@ describe('describeBasis', () => {
     expect(describeBasis('usingInferred')).toMatchObject({ resolved: false });
     expect(describeBasis('usingInferred').label).toContain('inferred');
     expect(describeBasis('usingInferred', 'ja').label).toContain('推定');
+    expect(describeBasis('typeReferenceInferred')).toMatchObject({ resolved: false });
+    expect(describeBasis('typeReferenceInferred').detail).toContain('unverified');
+    expect(describeBasis('typeReferenceInferred', 'ja').detail).toContain('未確認');
     expect(describeBasis('projectDeclared')).toMatchObject({ resolved: false });
   });
 });

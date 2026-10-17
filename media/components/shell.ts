@@ -1,4 +1,3 @@
-// Shell: the DOM skeleton of the new viewer (SD-015).
 //
 // The shell builds elements and wires user gestures to callbacks. It never reads the
 // state from the DOM and never decides what to show: rendering is driven by the state
@@ -11,7 +10,6 @@ export type NavTab = 'structure' | 'cycles' | 'analysis';
 export interface ShellHandlers {
   onLanguageToggled: () => void;
   onAnalyze: () => void;
-  onStop: () => void;
   onCancelLayout: () => void;
   onRetryLayout: () => void;
   onZoom: (zoom: number | 'in' | 'out' | 'fit') => void;
@@ -44,6 +42,7 @@ export interface ShellElements {
   targetName: HTMLElement;
   targetPath: HTMLElement;
   modeSelect: HTMLSelectElement;
+  profileButton: HTMLButtonElement;
   configuration: HTMLInputElement;
   platform: HTMLInputElement;
   backButton: HTMLButtonElement;
@@ -58,7 +57,9 @@ export interface ShellElements {
     omissions: HTMLInputElement;
     legend: HTMLInputElement;
   };
+  imageTools: HTMLElement;
   filterControls: {
+    resultKinds: HTMLSelectElement;
     tests: HTMLInputElement;
     external: HTMLInputElement;
     generated: HTMLInputElement;
@@ -68,7 +69,6 @@ export interface ShellElements {
     relations: HTMLFieldSetElement;
   };
   analyzeButton: HTMLButtonElement;
-  stopButton: HTMLButtonElement;
   exportButton: HTMLButtonElement;
   exportMenu: HTMLElement;
   copyButton: HTMLButtonElement;
@@ -138,8 +138,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
       })
     );
   }
-  const stopButton = button('sd-stop', 'Stop', 'danger');
-  stopButton.disabled = true;
 
   const { trigger: exportButton, panel: exportMenu } = toolbarPopover('export', 'Export ▾');
   exportMenu.classList.add('sd-menu');
@@ -176,7 +174,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     profileSummary,
     profilePicker,
     analyzeButton,
-    stopButton,
     overflow,
     languageToggle,
     topBarMeta
@@ -302,7 +299,25 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     filterPicker.append(category);
     return group;
   };
+  const resultKindLabel = element('label', 'sd-result-kinds');
+  resultKindLabel.textContent = 'Results';
+  const resultKinds = document.createElement('select');
+  resultKinds.setAttribute('aria-label', 'Result kinds');
+  for (const [value, text] of [
+    ['all', 'All results'],
+    ['code', 'Code'],
+    ['docs', 'Documents']
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    resultKinds.append(option);
+  }
+  resultKindLabel.append(resultKinds);
+  filterPicker.append(resultKindLabel);
+  resultKindLabel.hidden = true;
   const filterControls = {
+    resultKinds,
     tests: checkbox('Include tests'),
     external: checkbox('Include external'),
     generated: checkbox('Include generated'),
@@ -310,6 +325,7 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
       'projectDeclared',
       'projectEvaluated',
       'usingInferred',
+      'typeReferenceInferred',
       'symbolResolved'
     ]),
     projectKinds: multiple('Project kinds', ['app', 'web', 'library', 'test', 'desktop']),
@@ -341,7 +357,15 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   };
   const values = (group: HTMLFieldSetElement) =>
     [...group.querySelectorAll<HTMLInputElement>('input:checked')].map((input) => input.value);
-  for (const input of Object.values(filterControls))
+  resultKinds.addEventListener('change', () =>
+    handlers.onFilters({
+      ...(resultKinds.value === 'all'
+        ? {}
+        : { resultKinds: [resultKinds.value as 'code' | 'docs'] }),
+      includeExternal: filterControls.external.checked
+    })
+  );
+  for (const input of Object.values(filterControls).filter((input) => input !== resultKinds))
     input.addEventListener('change', () =>
       handlers.onFilters({
         includeTests: filterControls.tests.checked,
@@ -350,7 +374,10 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
         basis: values(filterControls.basis),
         kinds: values(filterControls.kinds),
         projectKinds: values(filterControls.projectKinds),
-        relationKinds: values(filterControls.relations) as Filters['relationKinds']
+        relationKinds: values(filterControls.relations) as Filters['relationKinds'],
+        ...(!resultKindLabel.hidden && resultKinds.value !== 'all'
+          ? { resultKinds: [resultKinds.value as 'code' | 'docs'] }
+          : {})
       })
     );
   mapToolbar.append(backButton, depthSelect, filterSummary, filterPicker);
@@ -500,7 +527,6 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
   topBar.append(inspectorToggle);
 
   analyzeButton.addEventListener('click', () => handlers.onAnalyze());
-  stopButton.addEventListener('click', () => handlers.onStop());
   modeSelect.addEventListener('change', () =>
     handlers.onMode(modeSelect.value as 'quick' | 'semantic')
   );
@@ -526,14 +552,15 @@ export function buildShell(root: HTMLElement, handlers: ShellHandlers): ShellEle
     targetPath,
     modeSelect,
     configuration,
+    profileButton: profileSummary,
     platform,
     backButton,
     depthSelect,
     filterControls,
     analyzeButton,
-    stopButton,
     exportButton,
     exportMenu,
+    imageTools,
     copyButton,
     breadcrumbs,
     navTabs,
@@ -654,19 +681,34 @@ function toolbarPopover(
   panel.setAttribute('aria-label', label);
   trigger.setAttribute('popovertarget', panel.id);
   trigger.setAttribute('aria-expanded', 'false');
-  panel.addEventListener('beforetoggle', (event) => {
-    const open = (event as ToggleEvent).newState === 'open';
-    trigger.setAttribute('aria-expanded', String(open));
-    if (!open) return;
+  const positionPanel = (): void => {
     const anchor = trigger.getBoundingClientRect();
     const width = Math.min(320, window.innerWidth - 16);
-    const top = Math.min(anchor.bottom + 4, window.innerHeight - 80);
+    // A wrapped top bar can put actions below the trigger. Keep them clickable.
+    const toolbarBottom = trigger.closest('.sd-topbar')?.getBoundingClientRect().bottom;
+    const top = Math.min((toolbarBottom ?? anchor.bottom) + 4, window.innerHeight - 80);
     panel.style.width = `${width}px`;
     panel.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8))}px`;
     panel.style.top = placement === 'above' ? 'auto' : `${Math.max(8, top)}px`;
     panel.style.bottom =
       placement === 'above' ? `${window.innerHeight - anchor.top + 4}px` : 'auto';
     panel.style.maxHeight = `${Math.max(0, placement === 'above' ? anchor.top - 12 : window.innerHeight - top - 8)}px`;
+  };
+  let toolbarObserver: ResizeObserver | undefined;
+  panel.addEventListener('beforetoggle', (event) => {
+    const open = (event as ToggleEvent).newState === 'open';
+    trigger.setAttribute('aria-expanded', String(open));
+    toolbarObserver?.disconnect();
+    toolbarObserver = undefined;
+    if (!open) return;
+    positionPanel();
+    const toolbar = trigger.closest('.sd-topbar');
+    if (toolbar && placement === 'below') {
+      toolbarObserver = new ResizeObserver(() => {
+        if (panel.matches(':popover-open')) positionPanel();
+      });
+      toolbarObserver.observe(toolbar);
+    }
   });
   window.addEventListener('resize', () => panel.hidePopover());
   return { trigger, panel };

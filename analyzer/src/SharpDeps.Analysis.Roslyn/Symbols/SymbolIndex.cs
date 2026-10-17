@@ -1,9 +1,7 @@
-// Symbol index for the semantic model (SD-008).
-//
 // Collects namespace/type/member declarations with their owning project variant,
 // containment, flags (partial, nested, file-local, generic, top-level), declaration
 // locations, and the source documents they live in. The position index answers
-// "which type is at this offset" for editor-driven lookups (SD-019).
+// "which type is at this offset" for editor-driven lookups.
 
 namespace SharpDeps.Analysis.Roslyn.Symbols;
 
@@ -62,7 +60,9 @@ public sealed record IndexedMember(
     string? DocumentationId,
     int Arity,
     string Signature,
-    IReadOnlyList<SymbolDeclarationLocation> Declarations);
+    IReadOnlyList<SymbolDeclarationLocation> Declarations,
+    string? HarnessSignature = null,
+    IReadOnlyList<SymbolDeclarationLocation>? HarnessDeclarations = null);
 
 public sealed record SymbolIndexSummary(
     int ProjectVariantCount,
@@ -212,7 +212,12 @@ public static class SymbolIndexBuilder
                         DocumentationId: member.GetDocumentationCommentId(),
                         Arity: member is IMethodSymbol named ? named.Arity : 0,
                         Signature: MemberSignatureOf(member),
-                        Declarations: memberDeclarations));
+                        Declarations: memberDeclarations,
+                        HarnessSignature: SymbolResolver.HarnessSignatureOf(SymbolResolver.NormalizeHarnessMember(member)!),
+                        HarnessDeclarations: member is IMethodSymbol { PartialImplementationPart: not null } partial
+                            ? memberDeclarations.Concat(CollectDeclarations(partial.PartialImplementationPart, documents, cancellationToken))
+                                .Distinct().OrderBy(location => location.DocumentId, StringComparer.Ordinal).ThenBy(location => location.Start).ToArray()
+                            : memberDeclarations));
                 }
             }
 

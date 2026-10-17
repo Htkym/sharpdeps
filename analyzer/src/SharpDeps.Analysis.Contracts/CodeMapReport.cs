@@ -1,5 +1,4 @@
-// Legacy v1 Quick report contract. The v2 analysis model is added in SD-006; this
-// shape is kept so the extension and its snapshot test keep working meanwhile.
+// Legacy Quick wire contract; report v2 uses AnalysisSnapshot.
 namespace SharpDeps.Analysis.Contracts;
 
 using System.Text.Json.Serialization;
