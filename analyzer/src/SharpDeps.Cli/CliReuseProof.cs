@@ -1,5 +1,6 @@
 namespace SharpDeps.Cli;
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections;
 using System.Runtime.InteropServices;
@@ -118,7 +119,7 @@ internal static partial class CliReuseProof
             return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant(), package?.Root);
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { return null; }
+        catch (Exception) { token.ThrowIfCancellationRequested(); return null; }
     }
 
     internal static bool Matches(IndexReuseProof proof, CliReuseFingerprint? current,
@@ -468,7 +469,7 @@ internal static partial class CliReuseProof
         return attributes;
     }
 
-    private static void AddTree(string directory, string label, IncrementalHash hash, ProofBudget budget)
+    internal static void AddTree(string directory, string label, IncrementalHash hash, ProofBudget budget)
     {
         Append(hash, label);
         if (!Exists(directory)) { Append(hash, "absent"); return; }
@@ -477,27 +478,56 @@ internal static partial class CliReuseProof
         while (directories.TryPop(out var current))
         {
             Append(hash, Path.GetRelativePath(directory, current));
+            var files = new List<string>();
             foreach (var entry in Entries(current, budget))
             {
                 if ((Attributes(entry) & FileAttributes.Directory) != 0) directories.Push(entry);
-                else AddFile(entry, Path.GetRelativePath(directory, entry), hash, budget);
+                else files.Add(entry);
             }
+            if (files.Count <= 1)
+            {
+                foreach (var file in files) AddFile(file, Path.GetRelativePath(directory, file), hash, budget);
+                continue;
+            }
+            var fingerprints = new (long Length, string Digest)[files.Count];
+            Parallel.For(0, files.Count, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = budget.Token },
+                () => ArrayPool<byte>.Shared.Rent(65536),
+                (index, _, buffer) =>
+                {
+                    fingerprints[index] = ReadFile(files[index], budget, buffer);
+                    return buffer;
+                }, buffer => ArrayPool<byte>.Shared.Return(buffer));
+            // Only the owning thread appends to the ordered proof hash.
+            for (var index = 0; index < files.Count; index++)
+                AppendFile(hash, Path.GetRelativePath(directory, files[index]), fingerprints[index]);
         }
     }
 
     private static string AddFile(string path, string label, IncrementalHash hash, ProofBudget budget)
+    {
+        var fingerprint = ReadFile(path, budget);
+        AppendFile(hash, label, fingerprint);
+        return fingerprint.Digest;
+    }
+
+    private static void AppendFile(IncrementalHash hash, string label, (long Length, string Digest) fingerprint)
+    {
+        Append(hash, label);
+        Append(hash, fingerprint.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Append(hash, fingerprint.Digest);
+    }
+
+    private static (long Length, string Digest) ReadFile(string path, ProofBudget budget, byte[]? buffer = null)
     {
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         var length = input.Length;
         budget.Bytes(length);
-        Append(hash, label);
-        Append(hash, length.ToString(System.Globalization.CultureInfo.InvariantCulture));
         using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = budget.ReadBuffer;
+        buffer ??= budget.ReadBuffer;
         long read = 0;
-        for (int count; (count = input.Read(buffer)) != 0;)
+        for (int count; (count = input.Read(buffer.AsSpan(0, 65536))) != 0;)
         {
             budget.Check();
             read = checked(read + count);
@@ -507,9 +537,7 @@ internal static partial class CliReuseProof
         if (read != length || input.Length != length) throw new IOException("Reuse input changed.");
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
-        var digest = Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant();
-        Append(hash, digest);
-        return digest;
+        return (length, Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant());
     }
 
     private static void Append(IncrementalHash hash, string text)
@@ -520,7 +548,7 @@ internal static partial class CliReuseProof
         hash.AppendData(size); hash.AppendData(bytes);
     }
 
-    private sealed class ProofBudget(CancellationToken token, ProofBudget? parent = null, bool git = false)
+    internal sealed class ProofBudget(CancellationToken token, ProofBudget? parent = null, bool git = false)
     {
         private int entries;
         private long bytes;
@@ -544,9 +572,12 @@ internal static partial class CliReuseProof
         internal void Bytes(long length)
         {
             Check();
-            if (length < 0 || length > IndexSnapshotValidator.MaximumInputFileBytes
-                || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes)) throw new IOException("Reuse proof byte budget exceeded.");
-            parent?.Bytes(length);
+            lock (this)
+            {
+                if (length < 0 || length > IndexSnapshotValidator.MaximumInputFileBytes
+                    || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes)) throw new IOException("Reuse proof byte budget exceeded.");
+                parent?.Bytes(length);
+            }
         }
     }
 }

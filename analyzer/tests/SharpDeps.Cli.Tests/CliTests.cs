@@ -14,6 +14,52 @@ using Xunit;
 public sealed class CliTests
 {
     [Fact]
+    public void ReuseTreePreservesLegacyOrderAndDetectsSameLengthTailChanges()
+    {
+        using var fixture = new Fixture(seed: false);
+        var tree = Path.Combine(fixture.Root, "tree");
+        Directory.CreateDirectory(Path.Combine(tree, "A"));
+        Directory.CreateDirectory(Path.Combine(tree, "z"));
+        for (var index = 0; index < 17; index++)
+            File.WriteAllBytes(Path.Combine(tree, $"file-{index:D2}.bin"),
+                Enumerable.Repeat((byte)(index + 1), 65537 + index * 97).ToArray());
+        File.WriteAllBytes(Path.Combine(tree, "A", "first.bin"), Enumerable.Repeat((byte)5, 17).ToArray());
+        File.WriteAllBytes(Path.Combine(tree, "A", "second.bin"), Enumerable.Repeat((byte)0xA5, 131075).ToArray());
+        File.WriteAllBytes(Path.Combine(tree, "z", "tail.bin"), Enumerable.Repeat((byte)0xCC, 65539).ToArray());
+        string Fingerprint()
+        {
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            CliReuseProof.AddTree(tree, "fixture", hash, new CliReuseProof.ProofBudget(default));
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+        // Preserve v0.2.0's OS-specific relative-path encoding.
+        var expected = OperatingSystem.IsWindows()
+            ? "63e01836853939132b90a6f96200e37afd7e7603e6fed62472436279f24e074e"
+            : "9460bb62ff093124919eac35b22fb740f94a87f2290219dd0fd5e97358bcf6be";
+        Assert.Equal(expected, Fingerprint());
+        Assert.Equal(expected, Fingerprint());
+        var changed = Path.Combine(tree, "file-08.bin");
+        var timestamp = File.GetLastWriteTimeUtc(changed);
+        using (var output = new FileStream(changed, FileMode.Open, FileAccess.Write, FileShare.None))
+        {
+            output.Seek(-1, SeekOrigin.End);
+            output.WriteByte(0xEF);
+        }
+        File.SetLastWriteTimeUtc(changed, timestamp);
+        Assert.NotEqual(expected, Fingerprint());
+    }
+
+    [Fact]
+    public void ConcurrentProofReadersCannotLoseByteCharges()
+    {
+        var budget = new CliReuseProof.ProofBudget(default, new(default), git: true);
+        for (var index = 0; index < 63; index++) budget.Bytes(1024 * 1024);
+        Parallel.For(0, 1000, _ => budget.Bytes(1024));
+        Assert.Equal("Reuse proof byte budget exceeded.",
+            Assert.Throws<IOException>(() => budget.Bytes(25000)).Message);
+    }
+
+    [Fact]
     public void MarkdownContainmentReachesCandidatesWithoutExpandingThemOrBridgingVariants()
     {
         using var fixture = new Fixture();

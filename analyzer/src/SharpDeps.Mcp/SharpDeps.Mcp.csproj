@@ -5,7 +5,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps-mcp</ToolCommandName>
     <PackageId>SharpDeps.Mcp</PackageId>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <Description>Optional stdio adapter for SharpDeps saved Query and explicitly trusted updates.</Description>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>

@@ -2,7 +2,7 @@
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
   "description": "Explore .NET project, namespace, and type dependencies with source evidence and cycle detection.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
