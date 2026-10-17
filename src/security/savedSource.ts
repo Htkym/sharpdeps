@@ -136,9 +136,9 @@ export function savedEditorSpan(
         ? 1
         : -1;
   if (offset < 0) throw new SavedSourceError('QUERY_SOURCE_CHANGED');
-  if (span.start < offset || span.end > sourceText.length)
+  if (span.start < 0 || span.end < span.start || span.end > sourceText.length)
     throw new SavedSourceError('QUERY_SOURCE_SPAN');
-  return { start: span.start - offset, end: span.end - offset };
+  return { start: Math.max(0, span.start - offset), end: Math.max(0, span.end - offset) };
 }
 
 function samePath(left: string, right: string): boolean {

@@ -38,6 +38,17 @@ describe('saved physical source boundary', () => {
       start: start - 1,
       end: start + 4
     });
+    const documentSpan = { start: 0, length: text.length, end: text.length };
+    await readSavedSource({ ...location, span: documentSpan });
+    expect(savedEditorSpan(text, text.slice(1), documentSpan)).toEqual({
+      start: 0,
+      end: text.length - 1
+    });
+    for (const start of [0, 1])
+      expect(savedEditorSpan(text, text.slice(1), { start, length: 0, end: start })).toEqual({
+        start: 0,
+        end: 0
+      });
     expect(() => savedEditorSpan(text, text.replace('\r\n', '\n'), location.span)).toThrow(
       SavedSourceError
     );

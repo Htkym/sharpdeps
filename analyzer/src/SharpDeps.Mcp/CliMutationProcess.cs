@@ -20,7 +20,9 @@ internal static class CliMutationProcess
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true
         };
-        foreach (var argument in new[] { assembly, "--cli-mutation-helper" }.Concat(arguments))
+        if (string.Equals(Path.GetFileNameWithoutExtension(start.FileName), "dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(assembly);
+        foreach (var argument in new[] { "--cli-mutation-helper" }.Concat(arguments))
             start.ArgumentList.Add(argument);
         Process started;
         try { started = Process.Start(start) ?? throw Failure(); }

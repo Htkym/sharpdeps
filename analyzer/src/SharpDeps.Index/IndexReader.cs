@@ -11,6 +11,7 @@ public sealed class IndexReader : IDisposable
     private readonly SqliteConnection connection;
     private readonly SqliteTransaction transaction;
     private readonly HarnessGraphEnvelope header;
+    private IndexSnapshot? cachedSnapshot;
     private bool disposed;
     private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash)
     { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash; }
@@ -39,6 +40,7 @@ public sealed class IndexReader : IDisposable
     public IndexSnapshot Snapshot()
     {
         ObjectDisposedException.ThrowIf(disposed,this);
+        if(cachedSnapshot is not null)return cachedSnapshot;
         var graph=header with {Nodes=Read<HarnessNode>("nodes"),Variants=Read<HarnessVariant>("variants"),
             SymbolOccurrences=Read<HarnessSymbolOccurrence>("occurrences"),Edges=Read<HarnessEdge>("edges"),LegacyReferences=Read<HarnessLegacyReference>("legacy_references")};
         var search=new List<IndexSearchText>();
@@ -49,7 +51,7 @@ public sealed class IndexReader : IDisposable
         IndexSnapshotValidator.Validate(snapshot);
         if(IndexStage.ComputeManifestHash(snapshot.Files)!=ManifestHash)
             throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved input manifest hash differs.");
-        return snapshot;
+        return cachedSnapshot=snapshot;
     }
     private IReadOnlyList<T> Read<T>(string table)
     {
