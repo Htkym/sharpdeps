@@ -5,11 +5,13 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps-mcp</ToolCommandName>
     <PackageId>SharpDeps.Mcp</PackageId>
-    <Version>0.2.1</Version>
+    <Version>0.2.2</Version>
+    <PackageIcon>icon.png</PackageIcon>
     <Description>Optional stdio adapter for SharpDeps saved Query and explicitly trusted updates.</Description>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="..\..\..\resources\icon.png" Pack="true" PackagePath="/" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <ProjectReference Include="..\SharpDeps.Cli\SharpDeps.Cli.csproj" />
   </ItemGroup>

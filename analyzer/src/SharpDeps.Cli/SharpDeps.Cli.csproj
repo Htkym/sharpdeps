@@ -7,11 +7,13 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps</ToolCommandName>
     <PackageId>SharpDeps.Cli</PackageId>
-    <Version>0.2.1</Version>
+    <Version>0.2.2</Version>
+    <PackageIcon>icon.png</PackageIcon>
     <Description>Explicit trusted indexing and saved graph queries for SharpDeps.</Description>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="..\..\..\resources\icon.png" Pack="true" PackagePath="/" />
     <ProjectReference Include="..\SharpDeps.Query\SharpDeps.Query.csproj" />
     <ProjectReference Include="..\SharpDeps.Analysis.Roslyn\SharpDeps.Analysis.Roslyn.csproj" />
     <ProjectReference Include="..\SharpDeps.Analysis.Markdown\SharpDeps.Analysis.Markdown.csproj" />

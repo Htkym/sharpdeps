@@ -7,6 +7,8 @@ on:
 
 env:
   DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  # Select nuget-only or all in reviewed main before tagging.
+  RELEASE_TARGET: nuget-only
 
 permissions:
   contents: write
@@ -27,6 +29,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
+
+      - name: Validate publication target
+        id: targets
+        run: |
+          case "$RELEASE_TARGET" in
+            nuget-only|all) echo "target=$RELEASE_TARGET" >> "$GITHUB_OUTPUT" ;;
+            *) echo 'Select RELEASE_TARGET as nuget-only or all in reviewed main.' >&2; exit 1 ;;
+          esac
 
       - name: Check release version
         run: |
@@ -70,6 +80,7 @@ jobs:
         run: npm test
 
       - name: Check and package VSIX
+        if: steps.targets.outputs.target == 'all'
         run: |
           npm run check:vsix
           mv sharpdeps-check.vsix "$VSIX_PATH"
@@ -80,7 +91,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           dotnet pack analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-cli" -o artifacts/release-tools
           dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/release-tools
-          node scripts/check-release.js --tag "$GITHUB_REF_NAME" --vsix "$VSIX_PATH" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-tools/release-identity.json
+          vsix_args=()
+          if [ "$RELEASE_TARGET" = all ]; then vsix_args=(--vsix "$VSIX_PATH"); fi
+          node scripts/check-release.js --tag "$GITHUB_REF_NAME" "${vsix_args[@]}" --cli-package "artifacts/release-tools/SharpDeps.Cli.$version.nupkg" --mcp-package "artifacts/release-tools/SharpDeps.Mcp.$version.nupkg" > artifacts/release-tools/release-identity.json
           (cd artifacts/release-tools && sha256sum *.nupkg > SHA256SUMS)
 
       - name: Preserve verified tools for NuGet publication
@@ -97,11 +110,11 @@ jobs:
         run: ./scripts/Test-MainRelease.ps1 -CiWorkflow ci.yml -ReleaseTag $env:GITHUB_REF_NAME -RequireTag
 
       - name: Publish to Visual Studio Marketplace
-        if: ${{ env.VSCE_PAT != '' }}
+        if: ${{ steps.targets.outputs.target == 'all' && env.VSCE_PAT != '' }}
         run: npx --no-install vsce publish --packagePath "$VSIX_PATH" --pat "$VSCE_PAT"
 
       - name: Publish to Open VSX
-        if: ${{ env.OVSX_PAT != '' }}
+        if: ${{ steps.targets.outputs.target == 'all' && env.OVSX_PAT != '' }}
         run: npx --yes ovsx publish "$VSIX_PATH" --pat "$OVSX_PAT"
 
       - name: Create GitHub Release
@@ -116,7 +129,9 @@ jobs:
             END { if (!found) exit 1 }
           ' CHANGELOG.md > .local/release-notes.md
           grep -q '[^[:space:]]' .local/release-notes.md
-          gh release create "$GITHUB_REF_NAME" "$VSIX_PATH" "$VSIX_PATH.sha256" artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS --verify-tag --title "SharpDeps $version" --notes-file .local/release-notes.md
+          assets=(artifacts/release-tools/*.nupkg artifacts/release-tools/SHA256SUMS)
+          if [ "$RELEASE_TARGET" = all ]; then assets+=("$VSIX_PATH" "$VSIX_PATH.sha256"); fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --title "SharpDeps $version" --notes-file .local/release-notes.md
 
   publish-nuget:
     needs: release
