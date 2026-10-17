@@ -12,6 +12,25 @@ using Xunit;
 public sealed class IndexStoreTests
 {
     [Fact]
+    public void FilesystemRootWorkspaceCommitsAnOwnedInput()
+    {
+        using var fixture = new StoreFixture();
+        var root = Path.GetPathRoot(fixture.Root)!;
+        var relative = Path.GetRelativePath(root, fixture.CodePath).Replace('\\', '/');
+        var bytes = File.ReadAllBytes(fixture.CodePath);
+        var workspace = HarnessIdentity.WorkspaceId(fixture.Workspace);
+        var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
+            HarnessGraphContract.IdentityVersion, workspace, "root-workspace", 1, HarnessCoverage.Partial,
+            [], [new(workspace, HarnessNodeKind.Workspace, "Workspace", null, null)], [], [], [], null);
+        var snapshot = new IndexSnapshot(graph, [new("owned-input", relative, "code",
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.Length, StoreFixture.Code.Length)], [], [], []);
+        using (var writer = IndexWriter.Open(root, fixture.IndexPath, fixture.Workspace, isTrusted: true))
+            writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        Assert.Equal(relative, Assert.Single(reader.Snapshot().Files).RelativePath);
+    }
+
+    [Fact]
     public void FrozenStagingSurvivesProducerMutationReopenAndBackupWithDurableEvidence()
     {
         using var fixture = new StoreFixture();

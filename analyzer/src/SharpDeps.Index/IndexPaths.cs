@@ -23,13 +23,14 @@ internal static class IndexPaths
     }
     public static void VerifyInputs(string root, IReadOnlyList<IndexFile> files, CancellationToken token)
     {
+        var rootPrefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
         foreach (var input in files)
         {
             token.ThrowIfCancellationRequested();
             IndexSnapshotValidator.ValidateRelativePath(input.RelativePath);
             var path = Path.GetFullPath(Path.Combine(root, input.RelativePath));
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            if (!path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison))
+            if (!path.StartsWith(rootPrefix, comparison))
                 throw new IndexStoreException("INDEX_INVALID_PATH", "Input is outside the declared workspace.");
             RejectLinks(path);
             if (input.Deleted)
