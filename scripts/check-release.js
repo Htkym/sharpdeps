@@ -156,13 +156,23 @@ async function checkTool(file, version, definition, packageId, command, extraReq
   ];
   const entries = await readArchive(
     file,
-    (name) => /^[^/]+\.nuspec$/.test(name) || required.some((item) => name === prefix + item)
+    (name) =>
+      name === 'icon.png' ||
+      /^[^/]+\.nuspec$/.test(name) ||
+      required.some((item) => name === prefix + item)
   );
   const specs = Object.keys(entries).filter((name) => name.endsWith('.nuspec'));
   assert.equal(specs.length, 1, `${packageId} nuspec`);
   const spec = entries[specs[0]].toString('utf8');
   assert.equal(xmlValue(spec, 'id'), packageId);
   assert.equal(xmlValue(spec, 'version'), version);
+  assert.equal(xmlValue(spec, 'icon'), 'icon.png', `${packageId} icon metadata`);
+  assert.ok(entries['icon.png'], `${packageId} icon payload`);
+  assert.deepEqual(
+    entries['icon.png'],
+    fs.readFileSync(path.join(root, definition.manifest.icon)),
+    `${packageId} icon must match the extension source bytes`
+  );
   assert.equal(path.basename(file), `${packageId}.${version}.nupkg`);
   for (const name of required) assert.ok(entries[prefix + name], `${packageId} ${name}`);
   assert.match(

@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.2.2
+
+- Add the existing VS Code extension icon to the SharpDeps.Cli and SharpDeps.Mcp NuGet packages.
+- Publish only the NuGet tools as 0.2.2. The Visual Studio Marketplace and Open VSX extensions remain at 0.2.1; this release includes no new VSIX.
+
 ## 0.2.1 (2026-10-17)
 
 - Read freshness-proof files with at most four workers while preserving full byte hashing, path/link checks, byte budgets, deterministic proof ordering, and cancellation.
