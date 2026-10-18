@@ -21,7 +21,7 @@ SharpDeps は、.NET ソリューションの依存関係を VS Code のエデ�
 
 [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) は拡張機能の依存関係としてインストールされます。SharpDeps が SDK を取得したり、対象パッケージを自動で復元したりすることはありません。
 
-NuGet の SharpDeps.Cli と SharpDeps.Mcp 0.2.2 には、VS Code 拡張と同じアイコンを同梱しています。Visual Studio Marketplace と Open VSX の公開拡張は 0.2.1 のままです。0.2.2 のリリースにはツールのパッケージとチェックサムを含み、新しい VSIX は含めません。
+NuGet の SharpDeps.Cli と SharpDeps.Mcp 0.2.2 には、VS Code 拡張と同じアイコンを同梱しています。Visual Studio Marketplace の公開拡張は 0.2.1 のままです。0.2.2 のリリースにはツールのパッケージとチェックサムを含み、新しい VSIX は含めません。今回は Open VSX への拡張公開は行いません。
 
 ## 最初のマップを開く
 
