@@ -144,7 +144,9 @@ public sealed class CliMarkdownInputTests
 
     private sealed class Fixture : IDisposable
     {
-        public string Root { get; } = Path.Combine(Path.GetTempPath(), "sharpdeps-markdown-" + Guid.NewGuid().ToString("N"));
+        private static readonly string Base = OperatingSystem.IsMacOS()
+            ? "/private/tmp/sharpdeps-markdown-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-markdown-fixtures");
+        public string Root { get; } = Path.Combine(Base, Guid.NewGuid().ToString("N"));
         public string MarkdownPath => Path.Combine(Root, "README.md");
         public CliIndexOptions Options { get; }
 
@@ -186,7 +188,7 @@ public sealed class CliMarkdownInputTests
 
         public void Dispose()
         {
-            if (Path.GetDirectoryName(Path.GetFullPath(Root)) != Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())))
+            if (Path.GetDirectoryName(Path.GetFullPath(Root)) != Path.TrimEndingDirectorySeparator(Path.GetFullPath(Base)))
                 throw new InvalidOperationException("Fixture cleanup escaped the temporary directory.");
             Directory.Delete(Root, recursive: true);
         }
