@@ -112,7 +112,7 @@ public sealed class MarkdownGraphAdapterTests
     [Fact]
     public void OpaqueGenericInputKeepsPartialFactsAndDurableRawSectionBindings()
     {
-        // Original full-root failure trigger: frozen evaluation bug-handoff.txt:20-25.
+        // Bare generic syntax can leave decoded mapping Partial while raw section positions remain complete.
         var request = Request("IReadOnlyState<T>");
         var adapter = new LithoSharpMarkdownAdapter();
         var parsed = adapter.Analyze(request, true);
