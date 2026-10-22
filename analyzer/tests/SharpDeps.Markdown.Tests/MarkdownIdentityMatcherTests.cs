@@ -91,6 +91,50 @@ public sealed class MarkdownIdentityMatcherTests
     }
 
     [Fact]
+    public void MappingPartialFactsKeepRawSectionIdentityAndUnknownHeadingKeysConservative()
+    {
+        const string complete = "# API\n`IReadOnlyState<T>`\n";
+        const string partial = "# API\nIReadOnlyState<T>\n";
+        var before = Match(complete);
+        var facts = Facts(partial);
+        Assert.Equal(MarkdownParseStatus.Partial, facts.Status);
+        Assert.Equal(MarkdownCoverageState.Complete, facts.Coverage.RawPositions);
+        Assert.Equal(MarkdownCoverageState.Partial, facts.Coverage.DecodedMapping);
+        Assert.True(MarkdownIdentityMatcher.HasCompleteSectionStructure(facts));
+        var changed = Match(partial, before.Snapshot);
+        Assert.Equal(Token(before, "API"), Token(changed, "API"));
+        var unchanged = Match(partial, changed.Snapshot);
+        Assert.All(unchanged.Matches, match => Assert.True(match.Retained));
+        Assert.Equal(changed.Snapshot.Sections.Select(s => s.Token), unchanged.Snapshot.Sections.Select(s => s.Token));
+
+        var unknownHeading = Match("# IReadOnlyState<T>\nbody\n");
+        Assert.Null(unknownHeading.Snapshot.Sections.Single(s => s.LocalKey != "preamble").HeadingKey);
+        Assert.NotNull(unknownHeading.Snapshot.Sections.Single(s => s.LocalKey != "preamble").BodyHash);
+        const string emptyHeading = "#\nbody\n";
+        var empty = Match(emptyHeading);
+        Assert.Contains(empty.Snapshot.Sections, s => s.HeadingKey == "1:");
+        Assert.All(Match(emptyHeading, empty.Snapshot).Matches, match => Assert.True(match.Retained));
+    }
+
+    [Fact]
+    public void InvalidOrStructurallyIncompleteFactsStillCannotMatchSections()
+    {
+        foreach (var raw in new[] { "\uD800", "---\na: [\n---\n# A\nbody\n" })
+        {
+            var facts = Facts(raw);
+            Assert.False(MarkdownIdentityMatcher.HasCompleteSectionStructure(facts));
+            Assert.ThrowsAny<ArgumentException>(() => MarkdownIdentityMatcher.MatchSections(Workspace, Document,
+                raw, facts, null, () => throw new InvalidOperationException("must not allocate")));
+        }
+        const string limitedRaw = "# One\nbody\n# Two\nbody\n";
+        var limited = new LithoSharpMarkdownAdapter().Analyze(new(limitedRaw, Workspace, Document, "scope", "readme.md", null,
+            "limited", 1, Options: new MarkdownParseOptions(maxInputUtf16: 1)), true).Facts;
+        Assert.False(MarkdownIdentityMatcher.HasCompleteSectionStructure(limited));
+        Assert.Throws<ArgumentException>(() => MarkdownIdentityMatcher.MatchSections(Workspace, Document,
+            limitedRaw, limited, null, () => "must-not-allocate"));
+    }
+
+    [Fact]
     public void RejectsWrongSourceSnapshotAndTokensThatWouldCollideAfterIdentityNormalization()
     {
         const string raw = "# One\nbody\n";

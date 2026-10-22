@@ -2,6 +2,7 @@ namespace SharpDeps.Cli;
 
 using System.Security.Cryptography;
 using System.Text;
+using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Markdown;
@@ -322,6 +323,8 @@ public static class CliIndexer
             input.File.Kind == "project" ? input.File.SourceId : workspaceId,
             new(input.File.SourceId, null, input.File.ContentHash, new(0, input.Text.Length)))).ToArray();
         graph = graph with { Nodes = Array.AsReadOnly(graph.Nodes.Concat(sourceNodes).ToArray()) };
+        // Document projection coverage must not change the completeness of the supplied code catalog.
+        var codeCatalog = graph;
         var adapter = new LithoSharpMarkdownAdapter();
         var markdown = new List<(InputText Input, MarkdownGraphProjection Projection, string? ExplicitId)>();
         foreach (var input in manifest.Values.Where(i => i.File.Kind == "markdown").OrderBy(i => i.File.RelativePath, StringComparer.Ordinal))
@@ -329,6 +332,7 @@ public static class CliIndexer
             var request = new MarkdownGraphRequest(input.Text, options.WorkspaceUuid, Guid.NewGuid(), workspaceId,
                 input.File.SourceId, input.File.ContentHash, snapshotId, generation);
             var projection = adapter.Analyze(request, isTrusted: true, token);
+            RequireIndexableMarkdownFacts(projection.Facts, input.File.RelativePath);
             var ids = projection.Attributes.Where(a => a.Key == "sharpdeps.id").ToArray();
             if (ids.Length > 1 || (ids.Length == 1 && string.IsNullOrWhiteSpace(ids[0].Source.Scalar.Text)))
                 throw new CliIndexException("CLI_MARKDOWN_ID_INVALID");
@@ -371,7 +375,7 @@ public static class CliIndexer
         foreach (var (input, projection) in projections)
         {
             var aliases = CodeAliases(Path.GetDirectoryName(input.AbsolutePath)!, manifest.Values.Where(i => i.File.Kind == "source"));
-            var resolution = MarkdownSymbolResolver.Resolve(projection, input.Text, new(graph, catalogSymbols, aliases),
+            var resolution = MarkdownSymbolResolver.Resolve(projection, input.Text, new(codeCatalog, catalogSymbols, aliases),
                 cancellationToken: token);
             graph = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
             foreach (var reason in projection.ProjectionReasons.Concat(resolution.Reasons).Distinct(StringComparer.Ordinal))
@@ -662,6 +666,13 @@ public static class CliIndexer
         var current = await ReadInput(InsideRoot(root, input.AbsolutePath), token);
         if (current.Hash != input.File.ContentHash || current.Bytes != input.File.ByteLength || current.Text != input.Text)
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+    }
+
+    internal static void RequireIndexableMarkdownFacts(MarkdownDocument facts, string relativePath)
+    {
+        if (!MarkdownIdentityMatcher.HasCompleteSectionStructure(facts))
+            throw new CliIndexException("CLI_MARKDOWN_FACTS_INCOMPLETE",
+                $"Markdown input '{relativePath}' has {facts.Status} facts, {facts.Coverage.RawPositions} raw positions and {facts.Coverage.DecodedMapping} decoded mapping.");
     }
 
     private static string InsideRoot(string root, string path) => CliPaths.InRoot(root, path);

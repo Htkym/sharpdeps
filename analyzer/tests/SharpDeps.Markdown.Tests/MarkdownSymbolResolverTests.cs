@@ -290,6 +290,61 @@ public sealed class MarkdownSymbolResolverTests
     }
 
     [Fact]
+    public void PartialDocumentDoesNotDowngradeAnIndependentCodeCatalogOrInventVariantBindings()
+    {
+        var raw = "---\nsharpdeps:\n  symbols:\n    - fullName: App.Service\n      variant: " + Net10
+            + "\n---\n# API\nIReadOnlyState<T>\nApp.Service\n";
+        var parsed = Parse(raw);
+        var sections = MarkdownIdentityMatcher.MatchSections(Workspace, Document, raw, parsed.Facts, null,
+            () => Guid.NewGuid().ToString("N"));
+        var projection = new LithoSharpMarkdownAdapter().Analyze(new(raw, Workspace, Document, "scope", "readme.md", "version-a",
+            "snapshot-a", 1, sections.SectionTokens, sections.TextHash), true);
+        Assert.Equal(MarkdownParseStatus.Partial, projection.Facts.Status);
+        Assert.Equal(HarnessCoverage.Partial, projection.Graph.Coverage);
+        var symbol = Symbol("App.Service", "Service", "T:App.Service", "App", Net10);
+        var catalog = Catalog(projection, symbol, symbol with { VariantId = Net9 });
+        var resolution = MarkdownSymbolResolver.Resolve(projection, raw, catalog);
+        var metadata = Assert.Single(resolution.Mentions, mention => mention.Origin == MarkdownMentionOrigin.ExplicitMetadata);
+        Assert.Equal("documents_symbol", metadata.Relation);
+        Assert.Equal(HarnessCertainty.Resolved, metadata.Certainty);
+        Assert.Equal(symbol.NodeId, metadata.TargetNodeId);
+        Assert.Equal(Net10, metadata.Scope.VariantId);
+        var body = Assert.Single(resolution.Mentions, mention => mention.Origin == MarkdownMentionOrigin.BodyText && mention.Token == "App.Service");
+        Assert.Equal("mentions_symbol", body.Relation);
+        Assert.Equal(HarnessCertainty.Candidate, body.Certainty);
+        Assert.Null(body.Scope.VariantId);
+        var merged = projection.Graph with
+        {
+            Nodes = projection.Graph.Nodes.Concat(catalog.Graph.Nodes).ToArray(),
+            Variants = catalog.Graph.Variants, SymbolOccurrences = catalog.Graph.SymbolOccurrences
+        };
+        var projected = MarkdownSymbolResolver.ProjectGraph(merged, resolution);
+        Assert.Equal(HarnessCoverage.Partial, projected.Coverage);
+        var explicitEdge = Assert.Single(projected.Edges, edge => edge.SourceNodeId == metadata.Id);
+        Assert.Equal(Net10, explicitEdge.VariantId);
+        Assert.Equal(HarnessIdentity.SymbolOccurrenceId(Workspace, symbol.NodeId, Net10), explicitEdge.TargetOccurrenceId);
+        var bodyEdge = Assert.Single(projected.Edges, edge => edge.SourceNodeId == body.Id);
+        Assert.Equal(HarnessCertainty.Candidate, bodyEdge.Certainty);
+        Assert.Null(bodyEdge.TargetOccurrenceId);
+        Assert.Null(bodyEdge.VariantId);
+        Assert.DoesNotContain(projected.Edges, edge => edge.SourceNodeId == metadata.Id && edge.VariantId == Net9);
+
+        var incomplete = MarkdownSymbolResolver.Resolve(projection, raw,
+            catalog with { Graph = catalog.Graph with { Coverage = HarnessCoverage.Partial } });
+        Assert.All(incomplete.Mentions.Where(mention => mention.CandidateNodeIds.Count > 0),
+            mention => Assert.Equal(HarnessCertainty.Candidate, mention.Certainty));
+        Assert.Null(incomplete.Mentions.Single(mention => mention.Id == metadata.Id).TargetNodeId);
+        Assert.Contains("catalog-incomplete", incomplete.Reasons);
+
+        var changedRaw = raw.Replace(Net10, Net9, StringComparison.Ordinal);
+        var changedProjection = Parse(changedRaw);
+        Assert.NotEqual(projection.Facts.TextHash, changedProjection.Facts.TextHash);
+        var changedResolution = MarkdownSymbolResolver.Resolve(changedProjection, changedRaw, catalog);
+        Assert.Equal(Net9, changedResolution.Mentions.Single(mention => mention.Origin == MarkdownMentionOrigin.ExplicitMetadata).Scope.VariantId);
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.ProjectGraph(projected, changedResolution));
+    }
+
+    [Fact]
     public void RejectsStaleRawSourceWrongBindingAndUnownedCatalogIds()
     {
         var raw = "```csharp\nApp.Service\n```\n";

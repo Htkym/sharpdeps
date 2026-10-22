@@ -22,6 +22,24 @@ public static class MarkdownIdentityMatcher
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
+    /// <summary>The pinned parser completed its raw section inventory; decoded opaque regions can remain unknown.</summary>
+    public static bool HasCompleteSectionStructure(MarkdownDocument facts)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        MarkdownRuntimePin.RequireFacts(facts);
+        if (facts.Coverage.RawPositions != MarkdownCoverageState.Complete) return false;
+        if (facts.Status == MarkdownParseStatus.Complete)
+            return facts.Coverage.DecodedMapping == MarkdownCoverageState.Complete;
+        // The fixed parser finishes MakeSections before reporting mapping-only Partial facts.
+        // Resource limits/invalid input/YAML are separate diagnostics and cannot enter this path.
+        return facts.Status == MarkdownParseStatus.Partial
+            && facts.Coverage.DecodedMapping == MarkdownCoverageState.Partial
+            && facts.Coverage.Reasons.Contains("decodedMapping", StringComparer.Ordinal)
+            && facts.Coverage.Reasons.All(reason => reason is "decodedMapping" or "rawHtmlOrMdx")
+            && facts.Diagnostics.Count > 0
+            && facts.Diagnostics.All(d => d.Id == "LMD006" && d.Origin == "mapping" && d.Reason == "decodedMapping");
+    }
+
     public static IReadOnlyList<MarkdownDocumentMatch> MatchDocuments(IReadOnlyList<MarkdownDocumentIdentity> previous,
         IReadOnlyList<MarkdownDocumentMatchInput> current, CancellationToken cancellationToken = default)
     {
@@ -100,9 +118,8 @@ public static class MarkdownIdentityMatcher
         MarkdownRuntimePin.RequireFacts(facts);
         var documentId = HarnessIdentity.DocumentId(workspaceUuid,documentUuid);
         var hash = Hash(rawText);
-        if (facts.TextHash != hash || facts.Status != MarkdownParseStatus.Complete
-            || facts.Coverage.RawPositions != MarkdownCoverageState.Complete || facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete)
-            throw new ArgumentException("Matching requires complete facts bound to the exact supplied raw text.");
+        if (facts.TextHash != hash || !HasCompleteSectionStructure(facts))
+            throw new ArgumentException("Matching requires complete raw section structure bound to the exact supplied raw text.");
         if (previous is not null && (previous.DocumentId != documentId || previous.ScopeId != facts.ScopeId))
             throw new ArgumentException("Section tokens belong to another document or workspace scope.");
         if (previous is not null) ValidateHash(previous.TextHash);
@@ -111,7 +128,9 @@ public static class MarkdownIdentityMatcher
         {
             cancellationToken.ThrowIfCancellationRequested();
             var heading = section.HeadingLocalKey is { } key ? headings.GetValueOrDefault(key) : null;
-            var headingKey = heading is null ? "preamble" : heading.Text.Text is { } text ? heading.RawLevel + ":" + text : null;
+            var headingKey = heading is null ? "preamble" : heading.Text.Text is { } text
+                && (text.Length == 0 || heading.Text.Map(new RawSpan(0, text.Length)).Precision is MarkdownMappingPrecision.Exact or MarkdownMappingPrecision.CoveringTokens)
+                    ? heading.RawLevel + ":" + text : null;
             string? bodyHash = null;
             if (section.DirectBodySpan is { } span)
             {

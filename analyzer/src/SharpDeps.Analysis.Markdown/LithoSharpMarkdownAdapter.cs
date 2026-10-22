@@ -124,6 +124,10 @@ public sealed class LithoSharpMarkdownAdapter
             cancellationToken.ThrowIfCancellationRequested();
             search.Add(new(region.RawSpan is { } span ? Owner(span) : documentId, region.Kind, region.Content));
         }
+        if (facts.Status != MarkdownParseStatus.Complete) reasons.Add("parser-" + facts.Status.ToString().ToLowerInvariant());
+        if (facts.Coverage.RawPositions != MarkdownCoverageState.Complete) reasons.Add("raw-positions-incomplete");
+        if (facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete) reasons.Add("decoded-mapping-incomplete");
+        foreach (var diagnostic in facts.Diagnostics) reasons.Add("parser-diagnostic." + diagnostic.Id);
         var coverage = facts.Status == MarkdownParseStatus.Failed ? HarnessCoverage.Failed
             : facts.Status != MarkdownParseStatus.Complete || facts.Coverage.RawPositions != MarkdownCoverageState.Complete
                 || facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete || reasons.Count > 0

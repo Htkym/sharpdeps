@@ -73,6 +73,8 @@ Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま
 
 exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialをResolved/Completeへ補完せず、複数TFMのoccurrenceを混ぜない。truncatedなら返却件数を全件数と呼ばない。errorや打切りを、stdoutにJSONがあることだけで成功扱いしない。
 
+`CLI_MARKDOWN_FACTS_INCOMPLETE` (exit 4) rejects invalid, truncated or unsupported Markdown source structure. Index/update publishes no new generation and retains any previously committed snapshot. Supported opaque/decoded-mapping Partial facts with complete raw structure are indexable and retain Partial coverage; individual heading projections must be reliable before contributing decoded identity keys. The error includes a bounded recovery message without forwarding parser exception text or source contents through IPC. Inputs are not silently omitted. Exact hash, runtime pin and durable section identity checks remain required.
+
 [応答schema](../schemas/cli-response-v1.schema.json)はCLI envelopeと実Query DTOのwire構造を記述する。command別result内部は拡張可能なJSON objectで、各commandの成功条件、hash/spanの整合、状態の正しさ、最終JSONのUTF-8 byte予算はschemaだけで証明しない。JSON Schemaの文字長とQueryのUTF-16計測も区別する。
 
 ## 鮮度、sourceと権限
