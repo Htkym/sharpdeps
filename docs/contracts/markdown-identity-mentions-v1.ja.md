@@ -8,7 +8,7 @@ SD2-04では、Syntamarkの公開factsを使う純粋な照合・解決APIを追
 
 重複する明示IDは`duplicate-explicit-id`として拒否する。同じ内容の複数文書、copyと移動を区別できない場合は候補UUIDと理由を返し、自動で統合しない。未確定の文書にはUUIDを割り当てず、ownerが新しいUUIDを採番して後続transactionで保存する。renameの引数にはMarkdown内の移動申告をそのまま渡さない。pathの変更履歴を保持しても、実際の壊れたlinkを修復したことにはならない。
 
-`MatchSections`は、文書UUID、workspace UUID、原文とその原文hashに一致する完全なfacts、保存済みsnapshot、ownerのtoken採番関数を受け取る。parse・原文位置・decoded mappingが不完全な場合は照合を拒否する。保存済みsnapshotは文書・scopeと結びつけ、parser、contract、profile、optionsの一致も検査する。
+`MatchSections` requires an exact source hash and complete raw section structure from the pinned facts contract. Complete facts and the supported mapping/opaque Partial case (LMD006 with decodedMapping/rawHtmlOrMdx reasons) are accepted; Failed, truncated, invalid or unsupported structural facts are rejected. Partial status and unknown decoded regions remain Partial/unknown. A nonempty heading contributes a decoded identity key only when its individual full projection has Exact/CoveringTokens mapping; known empty headings keep their existing key. Raw body hashes still use the original DirectBodySpan. Saved snapshots remain bound to document/scope and matching parser, contract, profile and options.
 
 原文hashと上記の版がすべて同じ再解析では、LocalKeyと見出し・本文のdescriptor一致を検証し、重複節を含めて保存済みtokenを再bindする。原文が変わったときは、見出しと直接本文hashの組、一意な見出し、一意な直接本文hashの順で照合する。弱い見出し・本文の一意性は、照合済みの節を除く前の一覧全体で確認する。見出しと本文が両方変わった場合や、重複して識別できない場合は新しいtokenと候補・理由を返す。
 
@@ -27,6 +27,8 @@ tokenは空値・前後空白・過去tokenとの重複を拒否する。採番�
 variantを絞ってから同じlogical symbol IDをまとめる。候補が一つでも本文の推測や未知・部分的な位置は`Candidate`にする。複数候補はすべて保持し、`TargetNodeId`を確定しない。候補がない場合は`Unresolved`を保持する。Syntamarkの現行公開DTOにはinline code専用kindがなく、paragraph/tableCellのdecoded textに混在するため、本文は推測として扱い、この制約を結果にも記録する。
 
 symbol catalogのcoverageはMarkdownのcoverageと別に検査し、結果の`CatalogCoverage`へ保持する。catalogが`Partial`または`Failed`の場合は、明示metadataやFQNでも一候補の一意性を確定せず、`Candidate`と`catalog-incomplete`を残す。mentionが0件でも不足理由を保持し、完全なMarkdown graphへ投影した際に`Partial`を伝播する。catalogのcoverageが変わった場合は、変更token一覧が空でも全mentionを再解決する。`CompleteWithinScope`へ戻った際は不足理由を除去し、完全なcatalogと原文根拠から再確定する。
+
+The CLI supplies code-catalog coverage before merging document projections. A partly mapped document does not change code-catalog completeness. Exact metadata with individually known mapping can resolve against a complete scoped catalog; unknown mappings and inferred body mentions remain Candidate. A genuinely Partial Roslyn catalog still retains the existing conservative Candidate policy and actual occurrence/variant boundaries.
 
 根拠は共有projectionの`Map`が返すraw fragments、位置精度、原文sliceから作るsnippet、source/version/hashを保持する。entityやescapeの位置をdecoded文字数から逆算しない。raw mappingがない場合はsnippetを捏造せず、未確定の根拠として扱う。
 

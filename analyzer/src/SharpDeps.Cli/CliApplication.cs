@@ -196,8 +196,11 @@ public static class CliApplication
     }
     private static async Task<int> Error(TextWriter output, CliArguments? options, string code, int exitCode)
     {
+        var message = code == "CLI_MARKDOWN_FACTS_INCOMPLETE"
+            ? "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying."
+            : "See CLI contract for the recovery action.";
         await output.WriteLineAsync(JsonSerializer.Serialize(new { apiVersion = "1", command = options?.Command ?? "unknown",
-            requestId = options?.RequestId ?? "cli", errors = new[] { new QueryIssue(code, "See CLI contract for the recovery action.") } }, QueryJson.Options));
+            requestId = options?.RequestId ?? "cli", errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options));
         return exitCode;
     }
 }

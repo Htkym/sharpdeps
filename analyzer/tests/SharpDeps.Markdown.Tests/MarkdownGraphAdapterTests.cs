@@ -108,4 +108,30 @@ public sealed class MarkdownGraphAdapterTests
         Assert.Throws<InvalidOperationException>(() => adapter.Analyze(Request("# A\n") with { ExpectedParserVersion = "1/" + new string('0', 64) }, true));
         Assert.Throws<OperationCanceledException>(() => adapter.Analyze(Request("# A\n"), true, new CancellationToken(true)));
     }
+
+    [Fact]
+    public void OpaqueGenericInputKeepsPartialFactsAndDurableRawSectionBindings()
+    {
+        // Bare generic syntax can leave decoded mapping Partial while raw section positions remain complete.
+        var request = Request("IReadOnlyState<T>");
+        var adapter = new LithoSharpMarkdownAdapter();
+        var parsed = adapter.Analyze(request, true);
+        var sections = MarkdownIdentityMatcher.MatchSections(Workspace, Document, request.RawText, parsed.Facts, null,
+            () => Guid.NewGuid().ToString("N"));
+        var projected = adapter.Analyze(request with { SectionTokens = sections.SectionTokens,
+            SectionIdentityTextHash = sections.TextHash }, true);
+
+        Assert.Equal(MarkdownParseStatus.Partial, projected.Facts.Status);
+        Assert.Equal(MarkdownCoverageState.Complete, projected.Facts.Coverage.RawPositions);
+        Assert.Equal(MarkdownCoverageState.Partial, projected.Facts.Coverage.DecodedMapping);
+        Assert.NotEmpty(projected.Facts.Coverage.UnprojectedRegions);
+        Assert.Contains(projected.Facts.Diagnostics, diagnostic => diagnostic.Id == "LMD006");
+        Assert.Contains("parser-diagnostic.LMD006", projected.ProjectionReasons);
+        Assert.Contains("decoded-mapping-incomplete", projected.ProjectionReasons);
+        Assert.Equal(HarnessCoverage.Partial, projected.Graph.Coverage);
+        Assert.All(projected.Sections, section => Assert.True(section.Durable));
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.RawText))).ToLowerInvariant(), projected.Facts.TextHash);
+        var document = Assert.Single(projected.Graph.Nodes, node => node.Kind == HarnessNodeKind.Document);
+        Assert.Equal(new HarnessRawSpan(0, request.RawText.Length), document.Location!.RawSpan);
+    }
 }

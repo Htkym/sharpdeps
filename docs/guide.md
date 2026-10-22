@@ -164,3 +164,4 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | Graph layout failed or was cancelled | Use Table to inspect the result; use Spacing → Retry layout to try placement again. |
 | Result is stale | Save intended edits. Analyze again for legacy, or explicitly update then Refresh for savedIndex. |
 | Analysis failed or was stopped | Check Analysis limitations and the **SharpDeps** channel in VS Code's Output panel. The last successful result remains available. |
+| CLI index/update reports `CLI_MARKDOWN_FACTS_INCOMPLETE` | Markdown facts contain invalid, truncated, or unsupported source structure. No new generation is published; a previous snapshot remains available and may be stale. Review the input and parser limits. Supported opaque/decoded-mapping Partial facts with complete raw structure can be indexed while retaining Partial coverage. Markdown is not silently excluded. |
