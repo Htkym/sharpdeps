@@ -1,5 +1,11 @@
 # Change Log
 
+## 0.2.3
+
+- Fix root indexing when Markdown has a partial decoded-text mapping but complete raw source positions. Preserve Partial coverage, section identities, and parser diagnostics.
+- Resolve Markdown symbol links using code catalog coverage independently of document coverage, and report actionable CLI indexing errors.
+- Publish only the NuGet tools as 0.2.3. The Visual Studio Marketplace extension remains at 0.2.1. This release includes no new VSIX and does not publish an extension to Open VSX.
+
 ## 0.2.2
 
 - Add the existing VS Code extension icon to the SharpDeps.Cli and SharpDeps.Mcp NuGet packages.
