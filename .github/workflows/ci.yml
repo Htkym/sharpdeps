@@ -13,16 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
 
@@ -74,7 +74,7 @@ jobs:
           node scripts/check-release.js --vsix sharpdeps-check.vsix --cli-package "artifacts/cli/SharpDeps.Cli.$version.nupkg" --cli-version "$version" > artifacts/cli/candidate-identity.json
 
       - name: Upload CLI candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sharpdeps-cli-candidate
           path: artifacts/cli/
@@ -87,7 +87,7 @@ jobs:
           node scripts/check-release.js --mcp-package "artifacts/mcp/SharpDeps.Mcp.$version.nupkg" --mcp-version "$version" > artifacts/mcp/candidate-identity.json
 
       - name: Upload optional MCP candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sharpdeps-mcp-candidate
           path: artifacts/mcp/
@@ -105,7 +105,7 @@ jobs:
           SHARPDEPTS_E2E_MODE: vsix
 
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sharpdeps-vsix
           path: '*.vsix'
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-verification
           path: |
@@ -126,12 +126,12 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - name: Record environment
@@ -153,7 +153,7 @@ jobs:
         run: npx vitest run tests/analyzer tests/contract --reporter=default --reporter=json --outputFile=.local/ci/analyzers.json
       - name: Upload macOS verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-verification
           path: .local/ci/
