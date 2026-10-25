@@ -18,9 +18,10 @@ public static class IndexSnapshotValidator
     private const int MaximumPathUtf16 = 4096;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
-    public static void Validate(IndexSnapshot snapshot)
+    public static void Validate(IndexSnapshot snapshot, CancellationToken token = default)
     {
-        try { ValidateCore(snapshot); }
+        token.ThrowIfCancellationRequested();
+        try { ValidateCore(snapshot, token); token.ThrowIfCancellationRequested(); }
         catch (IndexStoreException) { throw; }
         catch (Exception error) when (error is ArgumentException or JsonException or OverflowException or InvalidOperationException)
         { throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data does not satisfy the index contract.", error); }
@@ -37,7 +38,7 @@ public static class IndexSnapshotValidator
         => Require(hash is not null && hash.Length == 64 && !hash.AsSpan().ContainsAnyExcept("0123456789abcdef"),
             "A lowercase full SHA256 hash is required.");
 
-    private static void ValidateCore(IndexSnapshot snapshot)
+    private static void ValidateCore(IndexSnapshot snapshot, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         HarnessGraphContract.ValidateHeader(snapshot.Graph);
@@ -45,15 +46,16 @@ public static class IndexSnapshotValidator
         Identifier(graph.SnapshotId, "Snapshot ID");
         var workspace = Guid.ParseExact(graph.WorkspaceId[3..], "N");
         Require(graph.WorkspaceId == HarnessIdentity.WorkspaceId(workspace), "Workspace identity is not canonical.");
-        var nodes = Unique(graph.Nodes, n => n.Id, "Node");
-        var variants = Unique(graph.Variants, v => v.Id, "Variant");
-        var occurrences = Unique(graph.SymbolOccurrences, o => o.Id, "Occurrence");
-        _ = Unique(graph.Edges, e => e.Id, "Edge");
-        var files = Unique(snapshot.Files, f => f.SourceId, "Source file");
+        var nodes = Unique(graph.Nodes, n => n.Id, "Node", token);
+        var variants = Unique(graph.Variants, v => v.Id, "Variant", token);
+        var occurrences = Unique(graph.SymbolOccurrences, o => o.Id, "Occurrence", token);
+        _ = Unique(graph.Edges, e => e.Id, "Edge", token);
+        var files = Unique(snapshot.Files, f => f.SourceId, "Source file", token);
         var filesByPath = new Dictionary<string, IndexFile>(StringComparer.OrdinalIgnoreCase);
         long inputBytes = 0;
         foreach (var file in files.Values)
         {
+            token.ThrowIfCancellationRequested();
             ValidateRelativePath(file.RelativePath); Identifier(file.Kind, "File kind", 128); ValidateHash(file.ContentHash);
             Require(file.ByteLength is >= 0 and <= MaximumInputFileBytes
                 && (file.Utf16Length is null || file.Utf16Length is >= 0 and <= MaximumInputFileUtf16),
@@ -70,6 +72,7 @@ public static class IndexSnapshotValidator
             "The graph needs exactly its declared workspace root.");
         foreach (var node in nodes.Values)
         {
+            token.ThrowIfCancellationRequested();
             Require(Enum.IsDefined(node.Kind), "Unknown node kind.");
             Text(node.Name, "Node name", MaximumSearchFieldUtf16);
             if (node.Signature is not null) Text(node.Signature, "Node signature", MaximumSearchFieldUtf16);
@@ -90,9 +93,10 @@ public static class IndexSnapshotValidator
             Location(node.Location);
         }
         var owners = new Dictionary<string, (string? Project, string? Document)>(StringComparer.Ordinal);
-        foreach (var node in nodes.Values) Owner(node.Id);
+        foreach (var node in nodes.Values) { token.ThrowIfCancellationRequested(); Owner(node.Id); }
         foreach (var variant in variants.Values)
         {
+            token.ThrowIfCancellationRequested();
             Require(nodes.TryGetValue(variant.ProjectId, out var project) && project.Kind == HarnessNodeKind.Project,
                 "Variant project does not exist.");
             Identifier(variant.TargetFramework, "Target framework", 256); Identifier(variant.Configuration, "Configuration", 256);
@@ -103,6 +107,7 @@ public static class IndexSnapshotValidator
         }
         foreach (var occurrence in occurrences.Values)
         {
+            token.ThrowIfCancellationRequested();
             Require(nodes.TryGetValue(occurrence.LogicalSymbolId, out var logical) && IsSymbol(logical.Kind),
                 "Occurrence logical symbol does not exist.");
             Require(variants.TryGetValue(occurrence.VariantId, out var variant), "Occurrence variant does not exist.");
@@ -117,6 +122,7 @@ public static class IndexSnapshotValidator
                 var declarations = new HashSet<HarnessLocation>();
                 foreach (var declaration in occurrence.Declarations)
                 {
+                    token.ThrowIfCancellationRequested();
                     Require(declaration is not null && declarations.Add(declaration), "Declaration locations must be non-null and unique.");
                     Location(declaration);
                 }
@@ -125,10 +131,11 @@ public static class IndexSnapshotValidator
             }
         }
         var catalogOccurrences = files.Values.Any(f => f.Reuse is not null)
-            ? occurrences.Values.GroupBy(o => o.LogicalSymbolId, StringComparer.Ordinal)
+            ? Checked(occurrences.Values, token).GroupBy(o => o.LogicalSymbolId, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal) : null;
         foreach (var file in files.Values.Where(f => f.Reuse is not null))
         {
+            token.ThrowIfCancellationRequested();
             var reuse = file.Reuse!;
             Require(!file.Deleted, "Reuse proof must belong to a live target input.");
             Identifier(reuse.OwnerVersion, "Reuse owner version", 128);
@@ -139,6 +146,7 @@ public static class IndexSnapshotValidator
             long catalogLength = 0;
             foreach (var symbol in reuse.Catalog)
             {
+                token.ThrowIfCancellationRequested();
                 Require(symbol is not null, "Reuse catalog symbol cannot be null.");
                 Require(nodes.TryGetValue(symbol.NodeId, out var node)
                     && node.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol,
@@ -146,6 +154,7 @@ public static class IndexSnapshotValidator
                 foreach (var value in new[] { symbol.FullName, symbol.ShortName, symbol.DocumentationId,
                     symbol.Project, symbol.Namespace, symbol.VariantId, symbol.SourceId })
                 {
+                    token.ThrowIfCancellationRequested();
                     if (value is null) continue;
                     Text(value, "Reuse catalog field", MaximumSearchFieldUtf16);
                     catalogLength = checked(catalogLength + value.Length);
@@ -168,37 +177,40 @@ public static class IndexSnapshotValidator
                 Identifier(projects.Version, "Project reuse version", 128);
                 ValidateHash(projects.StructureHash);
                 Require(projects.Variants is { Count: > 0 and <= 64 }, "Project reuse needs a bounded variant set.");
-                var projectProofs = Unique(projects.Variants, p => p.Key, "Project reuse key");
+                var projectProofs = Unique(projects.Variants, p => p.Key, "Project reuse key", token);
                 Require(projectProofs.Values.Select(p => p.VariantId).Distinct(StringComparer.Ordinal).Count() == variants.Count
                     && projectProofs.Count == variants.Count, "Project proof must cover exactly the graph variants.");
                 var sources = new HashSet<string>(StringComparer.Ordinal);
                 long dataLength = 0;
                 foreach (var project in projectProofs.Values)
                 {
+                    token.ThrowIfCancellationRequested();
                     Require(variants.TryGetValue(project.VariantId, out var variant) && variant.ProjectId == project.ProjectId,
                         "Project proof must bind the actual project variant.");
                     Count(project.SourceIds, "Project reuse sources"); Count(project.References, "Project reuse references");
-                    Require(project.SourceIds.Distinct(StringComparer.Ordinal).Count() == project.SourceIds.Count
-                        && project.References.Distinct(StringComparer.Ordinal).Count() == project.References.Count,
+                    Require(Checked(project.SourceIds, token).Distinct(StringComparer.Ordinal).Count() == project.SourceIds.Count
+                        && Checked(project.References, token).Distinct(StringComparer.Ordinal).Count() == project.References.Count,
                         "Project proof source/reference sets must be unique.");
                     foreach (var source in project.SourceIds)
                     {
+                        token.ThrowIfCancellationRequested();
                         Require(files.TryGetValue(source, out var input) && input.Kind == "source" && !input.Deleted,
                             "Project proof source must be a live captured compiler input.");
                         sources.Add(source);
                     }
-                    foreach (var reference in project.References)
+                    foreach (var reference in Checked(project.References, token))
                         Require(reference != project.Key && projectProofs.ContainsKey(reference), "Project reference proof is not closed.");
                     Require(project.Data.ValueKind == JsonValueKind.Object, "Project extraction data must be an object.");
                     dataLength = checked(dataLength + project.Data.GetRawText().Length);
                     Require(dataLength <= MaximumSearchTextUtf16, "Project extraction proof exceeds its bounded text budget.");
                 }
-                Require(sources.SetEquals(files.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId)),
+                Require(sources.SetEquals(Checked(files.Values, token).Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId)),
                     "Project proof must own every captured compiler input; shared inputs may have several owners.");
             }
         }
         foreach (var edge in graph.Edges)
         {
+            token.ThrowIfCancellationRequested();
             Require(nodes.ContainsKey(edge.SourceNodeId) && nodes.ContainsKey(edge.TargetNodeId), "Edge endpoints do not exist.");
             Require(Enum.IsDefined(edge.Certainty), "Unknown edge certainty.");
             // Kind/producer are extensible strings in harness-v1, unlike the closed node/certainty enums.
@@ -226,6 +238,7 @@ public static class IndexSnapshotValidator
         var legacy = new HashSet<(int Schema, string Legacy, string Node, string? Occurrence)>();
         foreach (var reference in graph.LegacyReferences)
         {
+            token.ThrowIfCancellationRequested();
             Require(reference is not null, "Legacy reference cannot be null.");
             Identifier(reference.LegacyId, "Legacy ID");
             Require(reference.SchemaVersion == 2 && nodes.ContainsKey(reference.NodeId), "Unsupported or dangling legacy reference.");
@@ -244,7 +257,7 @@ public static class IndexSnapshotValidator
         }
         if (graph.Diagnostics is not null)
         {
-            var diagnostics = Unique(graph.Diagnostics, d => d.Code, "Diagnostic");
+            var diagnostics = Unique(graph.Diagnostics, d => d.Code, "Diagnostic", token);
             Require(diagnostics.Values.All(d => d.Count >= 0), "Diagnostic counts cannot be negative.");
         }
         Count(snapshot.Documents, "Documents");
@@ -254,6 +267,7 @@ public static class IndexSnapshotValidator
         var sectionIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var document in snapshot.Documents)
         {
+            token.ThrowIfCancellationRequested();
             Require(document is not null && document.DocumentUuid != Guid.Empty, "A persisted document UUID is required.");
             ValidateRelativePath(document.RelativePath); ValidateHash(document.ContentHash); ValidateHash(document.OptionsHash);
             Identifier(document.ScopeId, "Document scope");
@@ -282,6 +296,7 @@ public static class IndexSnapshotValidator
             var tokens = new HashSet<string>(StringComparer.Ordinal);
             foreach (var section in document.Sections)
             {
+                token.ThrowIfCancellationRequested();
                 Require(section is not null, "Section identity cannot be null.");
                 Identifier(section.LocalKey, "Section local key"); Identifier(section.Token, "Section token");
                 Require(localKeys.Add(section.LocalKey) && tokens.Add(section.Token), "Section local keys and tokens must be unique per document.");
@@ -293,26 +308,29 @@ public static class IndexSnapshotValidator
                     && sectionNode.Location?.SourceId == file.SourceId, "Section token does not match its graph document/source.");
             }
         }
-        Require(graph.Nodes.Where(n => n.Kind == HarnessNodeKind.Document).All(n => documentIds.Contains(n.Id))
-            && graph.Nodes.Where(n => n.Kind == HarnessNodeKind.Section).All(n => sectionIds.Contains(n.Id)),
+        Require(Checked(graph.Nodes, token).Where(n => n.Kind == HarnessNodeKind.Document).All(n => documentIds.Contains(n.Id))
+            && Checked(graph.Nodes, token).Where(n => n.Kind == HarnessNodeKind.Section).All(n => sectionIds.Contains(n.Id)),
             "Graph documents and sections must have corresponding persisted identities.");
         Count(snapshot.Aliases, "Aliases");
         var aliases = new HashSet<(string Kind, string Old, string New)>();
         foreach (var alias in snapshot.Aliases)
         {
+            token.ThrowIfCancellationRequested();
             Require(alias is not null, "Alias cannot be null.");
             Identifier(alias.Kind, "Alias kind", 128); Identifier(alias.OldId, "Alias old ID"); Identifier(alias.NewId, "Alias new ID");
             Identifier(alias.Reason, "Alias reason", 4096);
             Require(Enum.IsDefined(alias.Certainty) && nodes.ContainsKey(alias.NewId), "Alias certainty or target is invalid.");
             Require(aliases.Add((alias.Kind, alias.OldId, alias.NewId)), "Aliases must be unique.");
         }
-        var search = Unique(snapshot.SearchText, s => s.NodeId, "Search node");
+        var search = Unique(snapshot.SearchText, s => s.NodeId, "Search node", token);
         long searchLength = 0;
         foreach (var row in search.Values)
         {
+            token.ThrowIfCancellationRequested();
             Require(nodes.ContainsKey(row.NodeId), "Search node does not exist.");
             foreach (var value in new[] { row.Name, row.Signature, row.Heading, row.Body, row.Path })
             {
+                token.ThrowIfCancellationRequested();
                 Text(value, "Search field", MaximumSearchFieldUtf16);
                 searchLength = checked(searchLength + value.Length);
                 Require(searchLength <= MaximumSearchTextUtf16, "Selected search text exceeds the snapshot limit.");
@@ -322,6 +340,7 @@ public static class IndexSnapshotValidator
 
         void Location(HarnessLocation? location)
         {
+            token.ThrowIfCancellationRequested();
             if (location is null) return;
             Identifier(location.SourceId, "Location source ID");
             Require(files.TryGetValue(location.SourceId, out var file) && !file.Deleted, "Location source is not a live manifest file.");
@@ -341,6 +360,7 @@ public static class IndexSnapshotValidator
             (string? Project, string? Document) owner = default;
             while (!owners.TryGetValue(cursor, out owner))
             {
+                token.ThrowIfCancellationRequested();
                 Require(seen.Add(cursor) && pending.Count < 4096, "Node parents contain a cycle or exceed the depth limit.");
                 var node = nodes[cursor]; pending.Add(node);
                 if (node.ParentId is null) { owner = default; break; }
@@ -348,6 +368,7 @@ public static class IndexSnapshotValidator
             }
             for (var i = pending.Count - 1; i >= 0; i--)
             {
+                token.ThrowIfCancellationRequested();
                 var node = pending[i];
                 if (node.Kind == HarnessNodeKind.Project) owner.Project = node.Id;
                 if (node.Kind == HarnessNodeKind.Document) owner.Document = node.Id;
@@ -360,17 +381,27 @@ public static class IndexSnapshotValidator
     private static bool IsSymbol(HarnessNodeKind kind)
         => kind is HarnessNodeKind.Namespace or HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol;
 
-    private static Dictionary<string, T> Unique<T>(IReadOnlyList<T> values, Func<T, string> key, string label) where T : class
+    private static Dictionary<string, T> Unique<T>(IReadOnlyList<T> values, Func<T, string> key, string label, CancellationToken token) where T : class
     {
         Count(values, label);
         var result = new Dictionary<string, T>(StringComparer.Ordinal);
         foreach (var value in values)
         {
+            token.ThrowIfCancellationRequested();
             Require(value is not null, label + " cannot be null.");
             var id = key(value); Identifier(id, label + " ID");
             Require(result.TryAdd(id, value), label + " IDs must be unique.");
         }
         return result;
+    }
+
+    private static IEnumerable<T> Checked<T>(IEnumerable<T> values, CancellationToken token)
+    {
+        foreach (var value in values)
+        {
+            token.ThrowIfCancellationRequested();
+            yield return value;
+        }
     }
 
     private static void Count<T>(IReadOnlyList<T> values, string label)

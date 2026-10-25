@@ -1,0 +1,191 @@
+namespace SharpDeps.Query;
+
+using System.Security.Cryptography;
+using System.Text.Json;
+using SharpDeps.Analysis.Contracts.Harness;
+using SharpDeps.Index;
+
+internal sealed class ExplorationSnapshot
+{
+    internal readonly IndexSnapshot saved;
+    internal readonly Dictionary<string, HarnessNode> nodes;
+    internal readonly Dictionary<string, HarnessSymbolOccurrence> occurrences;
+    internal readonly Dictionary<string, HarnessSymbolOccurrence[]> bySymbol;
+    internal readonly Dictionary<string, IndexFile> files;
+    internal readonly Dictionary<string, HarnessEdge[]> outgoing;
+    internal readonly Dictionary<string, HarnessEdge[]> incoming;
+
+    internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token)
+    {
+        saved = frozen;
+        nodes = Lookup(frozen.Graph.Nodes, node => node.Id, token);
+        occurrences = Lookup(frozen.Graph.SymbolOccurrences, occurrence => occurrence.Id, token);
+        files = Lookup(frozen.Files, file => file.SourceId, token);
+        bySymbol = Group(frozen.Graph.SymbolOccurrences, occurrence => occurrence.LogicalSymbolId, occurrence => occurrence.Id, token);
+        outgoing = Group(frozen.Graph.Edges, edge => edge.SourceNodeId, edge => edge.Id, token);
+        incoming = Group(frozen.Graph.Edges, edge => edge.TargetNodeId, edge => edge.Id, token);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private static Dictionary<string, T> Lookup<T>(IEnumerable<T> values, Func<T, string> key, CancellationToken token)
+    {
+        var result = new Dictionary<string, T>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            token.ThrowIfCancellationRequested();
+            result.Add(key(value), value);
+        }
+        return result;
+    }
+
+    private static Dictionary<string, T[]> Group<T>(IEnumerable<T> values, Func<T, string> groupKey,
+        Func<T, string> orderKey, CancellationToken token)
+    {
+        var groups = new Dictionary<string, List<T>>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            token.ThrowIfCancellationRequested();
+            var key = groupKey(value);
+            if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = []);
+            group.Add(value);
+        }
+        var result = new Dictionary<string, T[]>(StringComparer.Ordinal);
+        foreach (var (key, group) in groups)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                group.Sort((left, right) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return StringComparer.Ordinal.Compare(orderKey(left), orderKey(right));
+                });
+            }
+            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
+            { throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token); }
+            token.ThrowIfCancellationRequested();
+            result.Add(key, group.ToArray());
+        }
+        return result;
+    }
+
+    internal string? Project(HarnessNode node)
+    {
+        var current = node;
+        while (true)
+        {
+            if (current.Kind == HarnessNodeKind.Project) return current.Id;
+            if (current.ParentId is not { } parent || !nodes.TryGetValue(parent, out var next)) return null;
+            current = next;
+        }
+    }
+
+    internal string Label(HarnessNode node) => node.Kind == HarnessNodeKind.Member && node.ParentId is { } parent
+        && nodes.TryGetValue(parent, out var owner) ? owner.Name + "." + node.Name : node.Name;
+
+    internal IEnumerable<HarnessLocation> Locations(HarnessNode node, string? variant)
+    {
+        if (bySymbol.TryGetValue(node.Id, out var declarations))
+        {
+            foreach (var occurrence in declarations)
+                if (variant is null || occurrence.VariantId == variant)
+                    foreach (var location in occurrence.Declarations ?? (occurrence.Location is null ? [] : [occurrence.Location]))
+                        yield return location;
+        }
+        else if (node.Location is { } location) yield return location;
+    }
+}
+
+internal static class ExplorationSnapshotCache
+{
+    private sealed record Entry(Fingerprint Key, ExplorationSnapshot Snapshot);
+    private readonly record struct Fingerprint(string Sha256, long Bytes);
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static Entry? latest;
+
+    internal static ExplorationSnapshot Get(IndexSnapshot current, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        token.ThrowIfCancellationRequested();
+        var wanted = Serialize(current, Stream.Null, token);
+        var cached = Volatile.Read(ref latest);
+        if (cached is not null && cached.Key == wanted)
+        {
+            token.ThrowIfCancellationRequested();
+            return cached.Snapshot;
+        }
+        Gate.Wait(token);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            cached = Volatile.Read(ref latest);
+            if (cached is not null && cached.Key == wanted) return cached.Snapshot;
+
+            // Only a miss holds clone bytes; the key is computed from those exact bytes.
+            using var bytes = new MemoryStream();
+            var actual = Serialize(current, bytes, token);
+            cached = Volatile.Read(ref latest);
+            if (cached is not null && cached.Key == actual)
+            {
+                token.ThrowIfCancellationRequested();
+                return cached.Snapshot;
+            }
+            bytes.Position = 0;
+            using var input = new CheckedStream(bytes, token);
+            var frozen = JsonSerializer.Deserialize<IndexSnapshot>(input, QueryJson.Options)
+                ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data cannot be null.");
+            token.ThrowIfCancellationRequested();
+            IndexSnapshotValidator.Validate(frozen, token);
+            var prepared = new ExplorationSnapshot(frozen, token);
+            token.ThrowIfCancellationRequested();
+            Volatile.Write(ref latest, new Entry(actual, prepared));
+            return prepared;
+        }
+        finally { Gate.Release(); }
+    }
+
+    private static Fingerprint Serialize(IndexSnapshot snapshot, Stream destination, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var output = new CheckedStream(destination, token, hash);
+        JsonSerializer.Serialize(output, snapshot, QueryJson.Options);
+        token.ThrowIfCancellationRequested();
+        return new(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), output.BytesWritten);
+    }
+
+    private sealed class CheckedStream(Stream inner, CancellationToken token, IncrementalHash? hash = null) : Stream
+    {
+        internal long BytesWritten { get; private set; }
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => inner.CanWrite;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush()
+        {
+            token.ThrowIfCancellationRequested();
+            inner.Flush();
+            token.ThrowIfCancellationRequested();
+        }
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            token.ThrowIfCancellationRequested();
+            var count = inner.Read(buffer);
+            token.ThrowIfCancellationRequested();
+            return count;
+        }
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            token.ThrowIfCancellationRequested();
+            inner.Write(buffer);
+            hash?.AppendData(buffer);
+            BytesWritten = checked(BytesWritten + buffer.Length);
+            token.ThrowIfCancellationRequested();
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+}

@@ -58,14 +58,30 @@ public interface IQueryIndex
 {
     IndexSnapshot Snapshot { get; }
     IReadOnlyList<IndexSearchHit> Search(string literal, int limit);
+    IndexSnapshot ReadSnapshot(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var snapshot = Snapshot;
+        token.ThrowIfCancellationRequested();
+        return snapshot;
+    }
+    IReadOnlyList<IndexSearchHit> Search(string literal, int limit, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var hits = Search(literal, limit);
+        token.ThrowIfCancellationRequested();
+        return hits;
+    }
 }
 /// <summary>The caller owns and disposes the underlying IndexReader after the query session.</summary>
 public sealed class PinnedQueryIndex : IQueryIndex
 {
     private readonly IndexReader reader;
-    public PinnedQueryIndex(IndexReader reader) { this.reader = reader; Snapshot = reader.Snapshot(); }
+    public PinnedQueryIndex(IndexReader reader, CancellationToken token = default) { this.reader = reader; Snapshot = reader.Snapshot(token); }
     public IndexSnapshot Snapshot { get; }
     public IReadOnlyList<IndexSearchHit> Search(string literal, int limit) => reader.Search(literal, limit);
+    public IndexSnapshot ReadSnapshot(CancellationToken token) => reader.Snapshot(token);
+    public IReadOnlyList<IndexSearchHit> Search(string literal, int limit, CancellationToken token) => reader.Search(literal, limit, token);
 }
 public static class QueryJson
 {

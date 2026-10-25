@@ -169,6 +169,16 @@ public sealed class CliTests
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".sharpdeps")));
         var missingTerm = await Run("search", "--root", fixture.Root);
         Assert.Equal(2, missingTerm.Exit);
+        foreach (var arguments in new[] {
+            new[] { "--term", new string('x', 1025) },
+            new[] { "--term", "Service", "--variant", "first", "--variant", "second" },
+            new[] { "--term", "Service", "--project-id", " " },
+            new[] { "--term", "Service", "--max-chars", "2047" },
+            new[] { "--term", "Service", "--include-candidates" } })
+        {
+            var invalidExplore = await Run(["explore", "--root", fixture.Root, .. arguments]);
+            Assert.Equal(2, invalidExplore.Exit);
+        }
         var unsupported = await Run("query", "--kind", "status", "--root", fixture.Root, "--dependencies");
         Assert.Equal(2, unsupported.Exit);
         var statusScope = await Run("status", "--root", fixture.Root, "--project-id", "ignored-project");

@@ -6,6 +6,7 @@
 namespace SharpDeps.Analysis.Roslyn.Symbols;
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SharpDeps.Analysis.Contracts;
 using SharpDeps.Analysis.Core.Identity;
 
@@ -192,6 +193,10 @@ public static class SymbolIndexBuilder
                         continue;
                     }
 
+                    var harnessDeclarations = member is IFieldSymbol or IEventSymbol
+                        ? CollectDeclarations(member, documents, cancellationToken, includeFieldDeclaration: true)
+                        : memberDeclarations;
+
                     var parameterTypes = member is IMethodSymbol method
                         ? ParameterTypeKeys(method)
                         : [];
@@ -215,9 +220,9 @@ public static class SymbolIndexBuilder
                         Declarations: memberDeclarations,
                         HarnessSignature: SymbolResolver.HarnessSignatureOf(SymbolResolver.NormalizeHarnessMember(member)!),
                         HarnessDeclarations: member is IMethodSymbol { PartialImplementationPart: not null } partial
-                            ? memberDeclarations.Concat(CollectDeclarations(partial.PartialImplementationPart, documents, cancellationToken))
+                            ? harnessDeclarations.Concat(CollectDeclarations(partial.PartialImplementationPart, documents, cancellationToken))
                                 .Distinct().OrderBy(location => location.DocumentId, StringComparer.Ordinal).ThenBy(location => location.Start).ToArray()
-                            : memberDeclarations));
+                            : harnessDeclarations));
                 }
             }
 
@@ -328,7 +333,8 @@ public static class SymbolIndexBuilder
     private static IReadOnlyList<SymbolDeclarationLocation> CollectDeclarations(
         ISymbol symbol,
         SourceDocumentRegistry documents,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includeFieldDeclaration = false)
     {
         var locations = new List<SymbolDeclarationLocation>();
         foreach (var reference in symbol.DeclaringSyntaxReferences)
@@ -342,6 +348,9 @@ public static class SymbolIndexBuilder
 
             var document = documents.Register(tree.FilePath);
             var span = reference.Span;
+            if (includeFieldDeclaration && reference.GetSyntax(cancellationToken) is VariableDeclaratorSyntax
+                { Parent: VariableDeclarationSyntax { Parent: BaseFieldDeclarationSyntax field } })
+                span = field.Span;
             var lineSpan = tree.GetLineSpan(span);
             locations.Add(new SymbolDeclarationLocation(
                 document.Id,

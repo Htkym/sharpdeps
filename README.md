@@ -23,6 +23,8 @@ The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-d
 
 ## CLI and optional MCP
 
+This source checkout introduces a breaking MCP interface: one typed `explore` tool replaces the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for trust, scope, freshness, and response limits. Published 0.2.3 packages retain their earlier interface.
+
 NuGet tools 0.2.2 include the same icon as the VS Code extension. The published Visual Studio Marketplace extension remains at 0.2.1; the 0.2.2 release contains the tool packages and their checksums, with no new VSIX. This release does not publish an extension to Open VSX.
 
 Use an available exact package version in place of `<version>`. Both tools require the .NET 10 runtime. Install them from NuGet, or use the nupkg downloads from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) with a local NuGet feed.
