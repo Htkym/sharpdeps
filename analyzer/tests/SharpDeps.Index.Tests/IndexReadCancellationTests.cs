@@ -79,7 +79,8 @@ public sealed class IndexReadCancellationTests
 
     private sealed class Fixture : IDisposable
     {
-        private static readonly string FixtureBase = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sharpdeps-index-read-cancellation"));
+        private static readonly string FixtureBase = Path.GetFullPath(Path.Combine(
+            OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-index-read-cancellation"));
         private const string Source = "class App { }\n";
         private static readonly UTF8Encoding Utf8 = new(false, true);
         public string Root { get; } = Path.Combine(FixtureBase, Guid.NewGuid().ToString("N"));

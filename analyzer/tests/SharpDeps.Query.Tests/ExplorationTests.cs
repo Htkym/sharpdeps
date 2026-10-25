@@ -867,7 +867,8 @@ public sealed class ExplorationTests
         public const string OtherProjectPath = "other/Pump.cs", SuspectPath = "src/Suspect.cs";
         public const string Field = "private int count = 0, total = 1;";
         public const string Markdown = "# Flow\r\n\r\nThe pump accepts a value.\r\n";
-        private static readonly string FixtureBase = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sharpdeps-exploration-tests"));
+        private static readonly string FixtureBase = Path.GetFullPath(Path.Combine(
+            OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-exploration-tests"));
         private readonly Guid workspace, document = Guid.NewGuid();
         private readonly bool caseDistinct, dense, implicitConstructor;
         private readonly string run, runString = "public int Run(string value) { return value.Length; }";
