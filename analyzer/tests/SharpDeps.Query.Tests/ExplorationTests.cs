@@ -167,7 +167,7 @@ public sealed class ExplorationTests
     public void NamedMembersKeepOverloadsLocalStateAndBoundHelpersWithoutTheUnrelatedNeighbour()
     {
         using var fixture = new Fixture();
-        var reply = fixture.Explore("Run");
+        var reply = fixture.Explore("Pump Run");
         Assert.True(reply.Succeeded);
         foreach (var id in new[] { fixture.RunInt, fixture.RunString, fixture.Count, fixture.Helper })
             Assert.Contains(reply.Units, unit => unit.SymbolIds.Contains(id));
@@ -184,52 +184,6 @@ public sealed class ExplorationTests
         });
         Assert.Single(reply.Text.Split('\n'), line => line.Contains("completeSavedRange=true", StringComparison.Ordinal));
         Assert.Single(reply.Text.Split('\n'), line => line.Contains("body=unknown", StringComparison.Ordinal));
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ExplicitSmallTypesReturnSparseAndSingleMemberOwnerContextWithinTheWireBudget(bool singleMember)
-    {
-        using var fixture = new Fixture(partial: true, ownerGap: "// <検証😀> \" \\\r\n");
-        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } };
-        var type = singleMember ? snapshot.Graph.Nodes.Single(node => node.Id == fixture.Suspect).ParentId! : fixture.Pump;
-        var path = singleMember ? Fixture.SuspectPath : Fixture.CorePath;
-        var ids = singleMember ? new[] { fixture.Suspect } : new[] { fixture.RunInt, fixture.RunString };
-        var query = singleMember ? "Suspect Hidden" : "Pump Run";
-        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
-        var request = fixture.Request(query);
-        var reply = engine.Execute(request);
-        var declaration = snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(type))
-            .Declarations!.Single(location => location.SourceId == path);
-
-        Assert.True(reply.Succeeded);
-        Assert.Contains("coverage=Partial", reply.Text);
-        var owner = Assert.Single(reply.Units, unit => unit.Path == path);
-        Assert.Equal(declaration.RawSpan, owner.Span);
-        Assert.Contains(type, owner.SymbolIds);
-        foreach (var id in ids) Assert.Contains(id, owner.SymbolIds);
-        Assert.Equal("unknown", owner.BodyAvailability);
-        Assert.True(owner.CompleteSavedRange);
-        Assert.Equal(Fixture.Hash(fixture.Sources[path]), owner.ContentHash);
-        Assert.Equal(fixture.Sources[path].Substring(owner.Span.Start, owner.Span.Length), owner.Text);
-        if (!singleMember)
-        {
-            Assert.Contains("Unrelated", owner.Text);
-            Assert.DoesNotContain(fixture.Helper, owner.SymbolIds);
-        }
-        var requestedLength = snapshot.Graph.SymbolOccurrences.Where(item => item.VariantId == fixture.Variant
-                && ids.Contains(item.LogicalSymbolId)).SelectMany(item => item.Declarations!)
-            .Select(location => location.RawSpan!.Value).Distinct().Sum(span => span.Length);
-        Assert.True(requestedLength * 4 < owner.Span.Length * 3);
-        AssertWireBudget(reply, request.Budget!);
-
-        var exact = request.Budget! with { MaxChars = Math.Max(2048, reply.WireChars), MaxBytes = Math.Max(2048, reply.WireBytes) };
-        var bounded = engine.Execute(request with { Budget = exact });
-        Assert.True(bounded.Succeeded);
-        Assert.Contains(bounded.Units, unit => unit.Path == path && unit.Span == owner.Span
-            && unit.ContentHash == owner.ContentHash && ids.Append(type).All(unit.SymbolIds.Contains));
-        AssertWireBudget(bounded, exact);
     }
 
     [Fact]
@@ -601,35 +555,6 @@ public sealed class ExplorationTests
         AssertWireBudget(reply, budget);
     }
 
-    [Theory]
-    [InlineData(1800, false)]
-    [InlineData(9000, true)]
-    public void DeferredOwnersCannotDisplaceRequestedMembersOrAnotherFile(int padding, bool exceedsOwnerLimit)
-    {
-        using var fixture = new Fixture(ownerGap: "// " + new string('p', padding) + "\r\n",
-            suspectPadding: "/* " + new string('s', 2000) + " */");
-        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } };
-        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
-        var budget = Generous with { MaxChars = 5500, MaxBytes = 22000 };
-        var reply = engine.Execute(fixture.Request("Pump " + fixture.RunString + " " + fixture.Suspect, budget));
-        var declaration = snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.Pump))
-            .Declarations!.Single(location => location.SourceId == Fixture.CorePath);
-
-        Assert.True(reply.Succeeded);
-        Assert.Contains(reply.Units, unit => unit.Path == Fixture.CorePath && unit.SymbolIds.Contains(fixture.RunString));
-        Assert.Contains(reply.Units, unit => unit.Path == Fixture.SuspectPath && unit.SymbolIds.Contains(fixture.Suspect));
-        Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.CorePath && unit.Span == declaration.RawSpan);
-        Assert.Contains("OMITTED_UNITS", reply.OmissionReasons);
-        Assert.Contains($"span={declaration.RawSpan!.Value.Start}:{declaration.RawSpan.Value.Length} reason=", reply.Text);
-        if (exceedsOwnerLimit) Assert.Contains("owner context limit (8192)", reply.Text);
-        Assert.All(reply.Units, unit =>
-        {
-            Assert.Equal(Fixture.Hash(fixture.Sources[unit.Path]), unit.ContentHash);
-            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
-        });
-        AssertWireBudget(reply, budget);
-    }
-
     [Fact]
     public void ExplicitCaseDistinctIdentifiersBothRemainRequested()
     {
@@ -761,7 +686,7 @@ public sealed class ExplorationTests
         else if (change == "delete") File.Delete(fixture.CoreFullPath);
         else File.Move(fixture.CoreFullPath, Path.Combine(fixture.Root, "src", "Renamed.cs"));
 
-        var reply = engine.Execute(fixture.Request("Pump " + fixture.RunInt + " " + fixture.RunString));
+        var reply = engine.Execute(fixture.Request(fixture.RunInt + " " + fixture.RunString));
         Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.CorePath);
         Assert.True(reply.OmissionReasons.Count > 0 || reply.Errors.Count > 0);
     }
@@ -780,7 +705,7 @@ public sealed class ExplorationTests
             if (cancel && current == 2) cancellation.Cancel();
             return new(fixture.Inventory(), current == 1);
         });
-        var reply = fixture.Engine(workspace).Execute(fixture.Request("Pump " + fixture.RunInt) with
+        var reply = fixture.Engine(workspace).Execute(fixture.Request(fixture.RunInt) with
         { Freshness = QueryFreshnessPolicy.RequireFresh }, cancellation.Token);
         Assert.True(inspections >= 2);
         Assert.False(reply.Succeeded);

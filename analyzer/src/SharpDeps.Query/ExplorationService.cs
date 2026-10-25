@@ -108,13 +108,12 @@ public sealed class ExplorationService
         public string Identity => Occurrence?.Id ?? Node.Id;
     }
     private sealed record Pending(Selected Selection, HarnessLocation Location, string Reason,
-        int? RequiredChars = null, int? RequiredBytes = null, int SourcePriority = 4, bool OwnerContext = false);
+        int? RequiredChars = null, int? RequiredBytes = null, int SourcePriority = 4);
     private sealed record Relation(HarnessEdge Edge, Selected From, Selected To, bool OutsideScope);
     private sealed record Match(HarnessNode Node, int Score, bool Exact, bool Qualified, bool PathMatch = false);
 
     private sealed class Run
     {
-        private const int MaxOwnerContextChars = 8192;
         private readonly ExplorationSnapshot owner;
         private readonly IQueryIndex index;
         private readonly QueryWorkspace? workspace;
@@ -504,21 +503,6 @@ public sealed class ExplorationService
                     pending.Add(new(item, location, "budget", SourcePriority: SourcePriority(item, location)));
                 }
             }
-            foreach (var root in roots.Where(item => item.Node.Kind == HarnessNodeKind.Type
-                && !selected[item.Identity].IncludeSource && sourceMatches[item.Node.Id].Exact))
-            {
-                Check();
-                var locations = root.Occurrence?.Declarations ?? [];
-                if (locations.Count == 0) reasons.Add("DECLARATION_UNAVAILABLE");
-                foreach (var location in locations.Distinct().Where(PathAllowed))
-                {
-                    Check();
-                    pending.Add(new(root, location, location.RawSpan is { Length: > 0 and <= MaxOwnerContextChars }
-                        ? "budget" : location.RawSpan is { Length: > MaxOwnerContextChars }
-                            ? "owner context limit (8192); query type alone" : "source range unavailable",
-                        SourcePriority: 3, OwnerContext: true));
-                }
-            }
             pending.Sort((left, right) =>
             {
                 var order = left.SourcePriority.CompareTo(right.SourcePriority);
@@ -558,7 +542,7 @@ public sealed class ExplorationService
                 foreach (var candidate in requested) ReadCandidate(candidate, failedFiles);
             }
             CoalesceOwners(failedFiles, requestedOnly: true);
-            foreach (var candidate in allCandidates.Where(candidate => candidate.SourcePriority > 2 && !candidate.OwnerContext))
+            foreach (var candidate in allCandidates.Where(candidate => candidate.SourcePriority > 2))
                 ReadCandidate(candidate, failedFiles);
             CoalesceOwners(failedFiles);
             if (pending.Count != 0) reasons.Add("OMITTED_UNITS");
@@ -622,10 +606,10 @@ public sealed class ExplorationService
                 {
                     Check();
                     if (Errors.Count != 0) break;
-                    if (location.RawSpan is not { Length: > 0 and <= MaxOwnerContextChars } span
+                    if (location.RawSpan is not { Length: > 0 and <= 8192 } span
                         || span.Length > request.Budget!.MaxChars || span.Length > request.Budget.MaxBytes
                         || !owner.files.TryGetValue(location.SourceId, out var file) || failedFiles.Contains(file.SourceId)) continue;
-                    if (requestedOnly && !allCandidates.Any(item => (item.SourcePriority <= 2 || item.OwnerContext)
+                    if (requestedOnly && !allCandidates.Any(item => item.SourcePriority <= 2
                         && (item.Selection.Node.Id == node.Id || item.Selection.Node.ParentId == node.Id)
                         && item.Location.SourceId == file.SourceId && item.Location.ContentHash == location.ContentHash
                         && item.Location.RawSpan is { } requestedSpan && requestedSpan.Start >= span.Start && requestedSpan.End <= span.End)) continue;
@@ -635,7 +619,7 @@ public sealed class ExplorationService
                         && item.Location.ContentHash == file.ContentHash && item.Location.RawSpan is { Length: > 0 } part
                         && part.Start >= span.Start && part.End <= span.End).ToHashSet();
                     var whole = coveredPending.Where(item => item.Location.RawSpan == span).ToArray();
-                    var explicitWhole = whole.Any(item => item.SourcePriority <= 2 || item.OwnerContext);
+                    var explicitWhole = whole.Any(item => item.SourcePriority <= 2);
                     var proper = contained.Where(unit => unit.Span != span).ToArray();
                     var memberPending = coveredPending.Where(item => item.Location.RawSpan != span).ToArray();
                     if (!explicitWhole && proper.Select(unit => unit.Span).Concat(memberPending.Select(item => item.Location.RawSpan!.Value))
