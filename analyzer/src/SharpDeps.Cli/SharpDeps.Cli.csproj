@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps</ToolCommandName>
     <PackageId>SharpDeps.Cli</PackageId>
-    <Version>0.2.3</Version>
+    <Version>0.3.0</Version>
     <PackageIcon>icon.png</PackageIcon>
     <Description>Explicit trusted indexing and saved graph queries for SharpDeps.</Description>
     <UseAppHost>false</UseAppHost>

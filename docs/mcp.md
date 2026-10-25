@@ -1,6 +1,22 @@
 # CLI and MCP exploration
 
-This interface applies to this source checkout. It is a breaking change from the published 0.2.3 MCP tools and supersedes the earlier MCP query-tool contract.
+This is the CLI/MCP interface for 0.3.0. It is a breaking change from the 0.2.3 MCP tools and supersedes the earlier MCP query-tool contract. Check the package registry or GitHub Release for availability.
+
+## Upgrade from 0.2.3
+
+Install both tools at the same exact 0.3.0 version. Update MCP client configuration to use `explore` instead of the previous separate query tools.
+
+Rebuild your selected solution or project before using the new exploration interface. Automatic migration of older semantic extraction proofs is not guaranteed. Keep the previous index and create a new root-contained index path; no old database or workspace identity needs to be deleted:
+
+```bash
+sharpdeps index --root /absolute/workspace --target YourSolution.sln --index .sharpdeps/explore-0.3.sqlite --configuration Release --trusted
+sharpdeps explore --root /absolute/workspace --index .sharpdeps/explore-0.3.sqlite --trusted --term "related names or paths"
+sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/explore-0.3.sqlite --trusted
+```
+
+Choose an unused index path and your actual root-contained target. Restore the target's packages first and use its required SDK and compilation options. `index` performs full trusted analysis and may run MSBuild or generators; run it only for a workspace you trust. Wait for successful publication before querying the new index. Keep the same index path in subsequent CLI calls and MCP startup. Saved IDs, spans, coverage, and freshness belong to their returned snapshot; do not combine old and new query results.
+
+This release retains the Syntamark 1.0.0 runtime/source pair. Exploration preserves explicit uncertainty and omission information; fewer file reads or lower model-context usage are not guaranteed.
 
 ## Read source evidence
 

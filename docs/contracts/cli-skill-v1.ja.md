@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-SD2-07のCLI候補はnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、配布基準版は`0.2.0`、ToolCommandNameは`sharpdeps`である。package名と版は未公開の候補であり、NuGet取得成功、出荷、実pack済みの判定をこの文書だけで行わない。旧Quick/Semantic、report v1/v2、extension版、固定Markdown runtime/source pairを変更する契約ではない。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、0.3.0のToolCommandNameは`sharpdeps`である。配布の有無はレジストリまたはGitHub Releaseで確認する。0.3.0のExplore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧Quick/Semantic、report v1/v2、extension版、固定Markdown runtime/source pairを変更する契約ではない。
 
 候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
 
@@ -11,7 +11,7 @@ SD2-07のCLI候補はnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、配布
 公開後に使う予定のexact版指定例は次のとおり。現在の公開状態を確認せず実行しない。
 
 ```powershell
-dnx SharpDeps.Cli@0.2.0 -- status --root 'D:\work\repo' --quiet
+dnx SharpDeps.Cli@0.3.0 -- status --root 'D:\work\repo' --quiet
 ```
 
 ローカル候補の例は、利用者が選んだ新しいtool作業directoryと、正確なnupkg・local-only NuGet.Configを置いたfeedを使う。以下のinstallとmanifest作成は例であり、query依頼から自動実行しない。
@@ -19,7 +19,7 @@ dnx SharpDeps.Cli@0.2.0 -- status --root 'D:\work\repo' --quiet
 ```powershell
 Set-Location 'D:\work\sharpdeps-tool'
 dotnet new tool-manifest
-dotnet tool install SharpDeps.Cli --local --version 0.2.0 --configfile 'D:\work\cli-feed\NuGet.Config'
+dotnet tool install SharpDeps.Cli --local --version 0.3.0 --configfile 'D:\work\cli-feed\NuGet.Config'
 dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 ```
 

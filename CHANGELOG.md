@@ -1,5 +1,14 @@
 # Change Log
 
+## 0.3.0
+
+- Add shared CLI/MCP `explore` queries for scoped Roslyn symbols, related names, exact identities, and source paths. Return bounded saved source ranges with hashes, UTF-16 spans, semantic certainty, freshness, and explicit omissions.
+- Replace the separate MCP query tools with one typed `explore` tool and one text result. Existing CLI query commands remain available; trusted MCP indexing and updates still require host-side opt-in.
+- Track field and event declarations through Roslyn extraction and saved-index publication. Retain Markdown links, Partial coverage, and source verification.
+- Rebuild selected targets into a new index when upgrading from 0.2.3. Do not rely on automatic migration or reuse of older semantic extraction proofs. See [upgrade instructions](docs/mcp.md#upgrade-from-023).
+- Exploration may still require additional source reads; fewer tool calls or lower model-context usage are not guaranteed.
+- Publish only the NuGet tools as 0.3.0, retaining Syntamark 1.0.0. The Visual Studio Marketplace extension remains at 0.2.1; no new VSIX or Open VSX publication is included.
+
 ## 0.2.3
 
 - Fix root indexing when Markdown has a partial decoded-text mapping but complete raw source positions. Preserve Partial coverage, section identities, and parser diagnostics.

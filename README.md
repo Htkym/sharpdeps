@@ -23,9 +23,9 @@ The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-d
 
 ## CLI and optional MCP
 
-This source checkout introduces a breaking MCP interface: one typed `explore` tool replaces the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for trust, scope, freshness, and response limits. Published 0.2.3 packages retain their earlier interface.
+Version 0.3.0 introduces a breaking MCP interface: one typed `explore` tool replaces the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for trust, scope, freshness, response limits, and upgrading an existing index. Versions through 0.2.3 retain their earlier MCP interface.
 
-NuGet tools 0.2.2 include the same icon as the VS Code extension. The published Visual Studio Marketplace extension remains at 0.2.1; the 0.2.2 release contains the tool packages and their checksums, with no new VSIX. This release does not publish an extension to Open VSX.
+The 0.3.0 release targets the NuGet tools and their checksums. The Visual Studio Marketplace extension remains at 0.2.1; no new VSIX or Open VSX publication is included. Check the registry or GitHub Release for package availability.
 
 Use an available exact package version in place of `<version>`. Both tools require the .NET 10 runtime. Install them from NuGet, or use the nupkg downloads from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) with a local NuGet feed.
 
@@ -86,7 +86,7 @@ npm ci
 npm run package
 ```
 
-This builds both analyzer hosts and the webview, then creates `sharpdeps-0.1.0.vsix`. To run a development host, use `npm run build:analyzer` and `npm run build`, then press **F5** in VS Code.
+This builds both analyzer hosts and the webview, then creates `sharpdeps-<package.json version>.vsix`. To run a development host, use `npm run build:analyzer` and `npm run build`, then press **F5** in VS Code.
 
 ## License
 
