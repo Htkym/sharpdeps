@@ -77,7 +77,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
     public QueryFreshness Verify(IndexSnapshot snapshot, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        IndexSnapshotValidator.Validate(snapshot);
+        IndexSnapshotValidator.Validate(snapshot, token);
         token.ThrowIfCancellationRequested();
         var dirty = new HashSet<string>(StringComparer.Ordinal);
         var unverified = new HashSet<string>(StringComparer.Ordinal);

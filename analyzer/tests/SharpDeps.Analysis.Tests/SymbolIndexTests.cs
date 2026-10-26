@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using SharpDeps.Analysis.Roslyn.Symbols;
@@ -71,9 +73,11 @@ public sealed class SymbolIndexTests : IDisposable
     [Fact]
     public void MergesPartialDeclarationsIntoOneTypeWithSeveralLocations()
     {
+        const string definition = "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string First { get; set; } = string.Empty;\n    partial void Update(ref int value);\n}\n";
+        const string implementation = "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string Second { get; set; } = string.Empty;\n    partial void Update(ref int value) { value++; }\n}\n";
         var index = BuildFromSource(
-            ("Partial.cs", "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string First { get; set; } = string.Empty;\n    partial void Update(ref int value);\n}\n"),
-            ("Partial.Second.cs", "namespace Sample;\n\npublic sealed partial class PartialThing\n{\n    public string Second { get; set; } = string.Empty;\n    partial void Update(ref int value) { value++; }\n}\n"));
+            ("Partial.cs", definition),
+            ("Partial.Second.cs", implementation));
 
         var type = Assert.Single(index.Types, entry => entry.Name == "PartialThing");
 
@@ -91,6 +95,41 @@ public sealed class SymbolIndexTests : IDisposable
         Assert.Contains("ref ", method.HarnessSignature, StringComparison.Ordinal);
         Assert.Equal(2, method.HarnessDeclarations!.Count);
         Assert.Equal(2, method.HarnessDeclarations.Select(location => location.DocumentId).Distinct().Count());
+        foreach (var location in method.HarnessDeclarations)
+        {
+            var source = location.RelativePath == "Partial.cs" ? definition : implementation;
+            var expected = location.RelativePath == "Partial.cs"
+                ? "partial void Update(ref int value);"
+                : "partial void Update(ref int value) { value++; }";
+            Assert.Equal(expected, source.Substring(location.Start, location.Length));
+        }
+    }
+
+    [Fact]
+    public void HarnessFieldAndEventRangesRetainTheSharedDeclarationAndLegacyDeclarators()
+    {
+        const string field = "[System.Obsolete] private readonly T first = default!, second = default!;";
+        const string @event = "public event System.Action? Changed, Other;";
+        const string source = "namespace Sample;\r\npublic sealed class State<T>\r\n{\r\n    // 😀 state\r\n    "
+            + field + "\r\n    " + @event + "\r\n}\r\n";
+        var index = BuildFromSource(("State.cs", source));
+        var document = Assert.Single(index.Documents);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant(), document.ContentHash);
+        foreach (var (name, declaration, legacy) in new[] {
+            ("first", field, "first = default!"), ("second", field, "second = default!"),
+            ("Changed", @event, "Changed"), ("Other", @event, "Other") })
+        {
+            var member = Assert.Single(index.Members, member => member.Name == name);
+            var harness = Assert.Single(member.HarnessDeclarations!);
+            Assert.Equal(document.Id, harness.DocumentId);
+            Assert.Equal(declaration, source.Substring(harness.Start, harness.Length));
+            Assert.Equal(source.IndexOf(declaration, StringComparison.Ordinal), harness.Start);
+            Assert.Equal(4, harness.StartCharacter);
+            Assert.Equal(harness.StartLine, harness.EndLine);
+            Assert.Equal(harness.StartCharacter + harness.Length, harness.EndCharacter);
+            var original = Assert.Single(member.Declarations);
+            Assert.Equal(legacy, source.Substring(original.Start, original.Length));
+        }
     }
 
     [Fact]

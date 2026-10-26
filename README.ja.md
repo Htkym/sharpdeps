@@ -21,7 +21,7 @@ SharpDeps は、.NET ソリューションの依存関係を VS Code のエデ�
 
 [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) は拡張機能の依存関係としてインストールされます。SharpDeps が SDK を取得したり、対象パッケージを自動で復元したりすることはありません。
 
-NuGet の SharpDeps.Cli と SharpDeps.Mcp 0.2.2 には、VS Code 拡張と同じアイコンを同梱しています。Visual Studio Marketplace の公開拡張は 0.2.1 のままです。0.2.2 のリリースにはツールのパッケージとチェックサムを含み、新しい VSIX は含めません。今回は Open VSX への拡張公開は行いません。
+0.3.0 は NuGet の SharpDeps.Cli と SharpDeps.Mcp、およびチェックサムを配布対象とします。Visual Studio Marketplace の公開拡張は 0.2.1 のままで、新しい VSIX や Open VSX への公開は含みません。配布の有無はレジストリまたは GitHub Release で確認してください。MCP は従来の個別 query tool から typed `explore` へ変わります。CLI の既存 query command は引き続き利用できます。[索引の再作成と移行条件](docs/mcp.md#upgrade-from-023)を確認してください。
 
 ## 最初のマップを開く
 
@@ -52,7 +52,7 @@ npm ci
 npm run package
 ```
 
-解析プログラムと画面をビルドし、`sharpdeps-0.1.0.vsix` を作成します。開発用ウィンドウで動かす場合は、`npm run build:analyzer` と `npm run build` を実行したあと、VS Code で **F5** を押してください。
+解析プログラムと画面をビルドし、`sharpdeps-<version>.vsix` を作成します。開発用ウィンドウで動かす場合は、`npm run build:analyzer` と `npm run build` を実行したあと、VS Code で **F5** を押してください。
 
 ## ライセンス
 

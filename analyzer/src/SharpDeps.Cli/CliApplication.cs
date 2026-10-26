@@ -1,6 +1,7 @@
 namespace SharpDeps.Cli;
 
 using System.Reflection;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -12,18 +13,21 @@ public static class CliApplication
     public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, CancellationToken token = default)
     {
         CliArguments? options = null;
+        CancellationTokenSource? explorationDeadline = null;
+        Stopwatch? explorationClock = null;
         try
         {
             options = CliArguments.Parse(args);
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
-                return await Reply(stdout, options, new { commands = new[] { "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
+                return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
                     root = "--root absolute-directory",
                     index = "--target root-contained.slnx|.sln|.csproj --trusted",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
+                    explore = "--term names-or-file-paths [--project-id id --variant id]; returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
-                    helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]} (provisional, unpublished)" });
+                    helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
             if (options.Command == "doctor")
                 return await Reply(stdout, options, new { runtime = RuntimeInformation.FrameworkDescription, sdkProbe = "not-run",
                     toolTargetFramework = "net10.0", indexing = "trusted target SDK/MSBuild required", savedQuery = "runtime-only; no restore/build/network",
@@ -31,7 +35,14 @@ public static class CliApplication
                     updateMode = "closed-input-project-markdown-or-full-rebuild"
                 });
             // Validate request syntax before opening any stored data.
-            var request = options.Command is "index" or "update" or "serve" or "coordinator-status" ? null : options.QueryRequest();
+            var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
+            var request = options.Command is "index" or "update" or "serve" or "coordinator-status" or "explore" ? null : options.QueryRequest();
+            if (exploration is not null)
+            {
+                explorationClock = Stopwatch.StartNew();
+                explorationDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                explorationDeadline.CancelAfter(exploration.Budget!.MaxMilliseconds);
+            }
             if (options.Command is "index" or "update" or "serve" && !options.Has("trusted")) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
             var root = CliPaths.Root(options.Require("root"));
             var indexPath = CliPaths.InRoot(root, options.Get("index") ?? ".sharpdeps/index.sqlite");
@@ -42,11 +53,25 @@ public static class CliApplication
             if (options.Command == "coordinator-status") return await CoordinatorStatusAsync(options, root, indexPath, stdout, token);
             var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(indexPath)) throw new CliFailure("INDEX_MISSING", 3);
-            using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid);
-            var pinned = new PinnedQueryIndex(reader);
-            var service = new QueryService(pinned, options.Has("trusted") ? new QueryWorkspace(root,
-                queryToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, queryToken)) : null,
-                options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
+            var queryToken = explorationDeadline?.Token ?? token;
+            queryToken.ThrowIfCancellationRequested();
+            using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid, queryToken);
+            var pinned = new PinnedQueryIndex(reader, queryToken);
+            var sourceWorkspace = options.Has("trusted") ? new QueryWorkspace(root,
+                ownerToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
+            if (exploration is not null)
+            {
+                if (explorationClock!.ElapsedMilliseconds >= exploration.Budget!.MaxMilliseconds)
+                    throw new CliFailure("QUERY_TIMEOUT", 4);
+                var explored = new ExplorationService(pinned, sourceWorkspace, options.Has("trusted"))
+                    .Execute(exploration, token, queryToken);
+                token.ThrowIfCancellationRequested();
+                if (explorationClock.ElapsedMilliseconds >= exploration.Budget.MaxMilliseconds)
+                    throw new CliFailure("QUERY_TIMEOUT", 4);
+                await stdout.WriteLineAsync(explored.Text);
+                return explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
+            }
+            var service = new QueryService(pinned, sourceWorkspace, options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
             var reply = service.Execute(request!, token);
             await stdout.WriteLineAsync(reply.Json);
             return reply.Succeeded ? 0 : ExitFor(reply.Envelope.Errors[0].Code);
@@ -54,11 +79,17 @@ public static class CliApplication
         catch (CliFailure error) { return await Error(stdout, options, error.Code, error.ExitCode); }
         catch (CliIndexException error) { return await Error(stdout, options, error.Code, error.ExitCode); }
         catch (IndexStoreException error) { return await Error(stdout, options, error.Code, ExitFor(error.Code)); }
-        catch (OperationCanceledException) { return await Error(stdout, options, "CANCELLED", 130); }
+        catch (OperationCanceledException)
+        {
+            return explorationDeadline?.IsCancellationRequested == true && !token.IsCancellationRequested
+                ? await Error(stdout, options, "QUERY_TIMEOUT", 4)
+                : await Error(stdout, options, "CANCELLED", 130);
+        }
         catch (ArgumentException) { return await Error(stdout, options, "ARGUMENT_INVALID", 2); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { return await Error(stdout, options, "ROOT_ACCESS_DENIED", 5); }
         catch (Exception) { return await Error(stdout, options, "INTERNAL_ERROR", 7); }
+        finally { explorationDeadline?.Dispose(); }
     }
 
     private static QueryInputInventory VerifyQueryOwner(string root, string indexPath, Guid uuid,

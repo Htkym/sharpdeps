@@ -13,20 +13,44 @@ public sealed class McpTests
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N")));
         var adapter = new McpQueryAdapter(new(root));
-        Assert.Equal(7, adapter.ListTools().Count);
+        var tool = Assert.Single(adapter.ListTools());
+        Assert.Equal("explore", tool.Name);
+        Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
+        Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
         Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", root, "--allow-mutations"]));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "index" }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
         {
-            Name = "search", Arguments = new Dictionary<string, JsonElement>
+            Name = "explore", Arguments = new Dictionary<string, JsonElement>
             { ["arguments"] = JsonSerializer.SerializeToElement(new[] { "--root", root, "--term", "Service" }) }
         }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
         {
-            Name = "status", Arguments = new Dictionary<string, JsonElement> { ["trusted"] = JsonSerializer.SerializeToElement(true) }
+            Name = "explore", Arguments = new Dictionary<string, JsonElement> { ["trusted"] = JsonSerializer.SerializeToElement(true) }
         }));
         Assert.False(Directory.Exists(root));
-        Assert.Equal(9, new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true)).ListTools().Count);
+        Assert.Equal(3, new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true)).ListTools().Count);
+    }
+
+    [Fact]
+    public async Task TypedExploreArgumentsAreValidatedBeforeOpeningTheWorkspace()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
+        var adapter = new McpQueryAdapter(new(root));
+        foreach (var json in new[] {
+            "{}", "{\"query\":\"\"}", "{\"query\":\"--trusted\"}",
+            "{\"query\":\"Service\",\"root\":\"elsewhere\"}",
+            "{\"query\":\"Service\",\"maxChars\":2047}",
+            "{\"query\":\"Service\",\"maxBytes\":4000001}",
+            "{\"query\":\"Service\",\"maxMilliseconds\":\"1000\"}",
+            "{\"query\":\"Service\",\"freshness\":\"current\"}" })
+        {
+            var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
+            await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+            { Name = "explore", Arguments = properties }));
+        }
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "search" }));
+        Assert.False(Directory.Exists(root));
     }
 
     [Fact]

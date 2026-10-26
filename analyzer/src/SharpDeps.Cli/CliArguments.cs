@@ -17,6 +17,9 @@ internal sealed class CliArguments
     { "term", "id", "ids", "project-id", "path-prefix", "variant", "node-kind", "edge-kind", "include-candidates",
       "no-documents", "dependencies", "freshness", "require-complete", "page-size", "cursor", "max-nodes", "max-edges",
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind" };
+    private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
+    { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
+      "max-depth", "max-milliseconds", "max-chars", "max-bytes" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -37,7 +40,7 @@ internal sealed class CliArguments
         if (args.Length == 0 || args is ["--help"] or ["-h"]) return parsed;
         if (args.Length > 200) throw new CliFailure("ARGUMENT_INVALID", 2);
         parsed.Command = args[0].ToLowerInvariant();
-        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "doctor" or "help")
+        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help")
             && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
         if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
@@ -46,6 +49,7 @@ internal sealed class CliArguments
             allowed.UnionWith(Index);
             allowed.UnionWith(["watch", "watch-resync-seconds"]);
         }
+        else if (parsed.Command == "explore") allowed.UnionWith(Explore);
         else if (parsed.Command is not ("help" or "doctor" or "serve" or "coordinator-status")) allowed.UnionWith(Query);
         for (var i = 1; i < args.Length; i++)
         {
@@ -76,6 +80,29 @@ internal sealed class CliArguments
             _ = parsed.Number("watch-resync-seconds", 30, 1, 3600);
         }
         return parsed;
+    }
+
+    public ExploreRequest ExplorationRequest()
+    {
+        var query = Require("term");
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 1024
+            || Get("project-id") is { Length: > 128 } || Get("path-prefix") is { Length: > 512 }
+            || Many("variant") is { Count: > 1 } || Get("variant") is { Length: > 128 })
+            throw new CliFailure("ARGUMENT_INVALID", 2);
+        foreach (var field in new[] { "project-id", "variant" })
+            if (Get(field) is { } selection && string.IsNullOrWhiteSpace(selection))
+                throw new CliFailure("ARGUMENT_INVALID", 2);
+        var freshness = Get("freshness") switch
+        {
+            null or "allow-stale" => QueryFreshnessPolicy.AllowStale,
+            "require-fresh" => QueryFreshnessPolicy.RequireFresh,
+            "refresh" => QueryFreshnessPolicy.Refresh,
+            _ => throw new CliFailure("ARGUMENT_INVALID", 2)
+        };
+        return new(query, Get("project-id"), Get("variant"), Get("path-prefix"), freshness,
+            new QueryBudget(Number("max-nodes", 60, 1, 500), Number("max-edges", 120, 1, 1000),
+                Number("max-depth", 2, 1, 8), Number("max-milliseconds", 1000, 10, 30000),
+                Number("max-chars", 12000, 2048, 1000000), Number("max-bytes", 48000, 2048, 4000000)));
     }
 
     public QueryRequest QueryRequest()
