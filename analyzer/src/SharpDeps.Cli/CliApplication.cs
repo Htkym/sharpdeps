@@ -13,8 +13,6 @@ public static class CliApplication
     public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, CancellationToken token = default)
     {
         CliArguments? options = null;
-        CancellationTokenSource? explorationDeadline = null;
-        Stopwatch? explorationClock = null;
         try
         {
             options = CliArguments.Parse(args);
@@ -36,13 +34,14 @@ public static class CliApplication
                 });
             // Validate request syntax before opening any stored data.
             var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
-            var request = options.Command is "index" or "update" or "serve" or "coordinator-status" or "explore" ? null : options.QueryRequest();
             if (exploration is not null)
             {
-                explorationClock = Stopwatch.StartNew();
-                explorationDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                explorationDeadline.CancelAfter(exploration.Budget!.MaxMilliseconds);
+                var result = await ExploreAsync(options.Require("root"), options.Get("index") ?? ".sharpdeps/index.sqlite",
+                    options.Has("trusted"), exploration, options.RequestId, token);
+                await stdout.WriteLineAsync(result.Text);
+                return result.ExitCode;
             }
+            var request = options.Command is "index" or "update" or "serve" or "coordinator-status" ? null : options.QueryRequest();
             if (options.Command is "index" or "update" or "serve" && !options.Has("trusted")) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
             var root = CliPaths.Root(options.Require("root"));
             var indexPath = CliPaths.InRoot(root, options.Get("index") ?? ".sharpdeps/index.sqlite");
@@ -53,44 +52,80 @@ public static class CliApplication
             if (options.Command == "coordinator-status") return await CoordinatorStatusAsync(options, root, indexPath, stdout, token);
             var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(indexPath)) throw new CliFailure("INDEX_MISSING", 3);
-            var queryToken = explorationDeadline?.Token ?? token;
+            var queryToken = token;
             queryToken.ThrowIfCancellationRequested();
             using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid, queryToken);
             var pinned = new PinnedQueryIndex(reader, queryToken);
             var sourceWorkspace = options.Has("trusted") ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
-            if (exploration is not null)
-            {
-                if (explorationClock!.ElapsedMilliseconds >= exploration.Budget!.MaxMilliseconds)
-                    throw new CliFailure("QUERY_TIMEOUT", 4);
-                var explored = new ExplorationService(pinned, sourceWorkspace, options.Has("trusted"))
-                    .Execute(exploration, token, queryToken);
-                token.ThrowIfCancellationRequested();
-                if (explorationClock.ElapsedMilliseconds >= exploration.Budget.MaxMilliseconds)
-                    throw new CliFailure("QUERY_TIMEOUT", 4);
-                await stdout.WriteLineAsync(explored.Text);
-                return explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
-            }
             var service = new QueryService(pinned, sourceWorkspace, options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
             var reply = service.Execute(request!, token);
             await stdout.WriteLineAsync(reply.Json);
             return reply.Succeeded ? 0 : ExitFor(reply.Envelope.Errors[0].Code);
         }
-        catch (CliFailure error) { return await Error(stdout, options, error.Code, error.ExitCode); }
-        catch (CliIndexException error) { return await Error(stdout, options, error.Code, error.ExitCode); }
-        catch (IndexStoreException error) { return await Error(stdout, options, error.Code, ExitFor(error.Code)); }
-        catch (OperationCanceledException)
+        catch (Exception error)
         {
-            return explorationDeadline?.IsCancellationRequested == true && !token.IsCancellationRequested
-                ? await Error(stdout, options, "QUERY_TIMEOUT", 4)
-                : await Error(stdout, options, "CANCELLED", 130);
+            var failure = Failure(error);
+            return await Error(stdout, options, failure.Code, failure.ExitCode);
         }
-        catch (ArgumentException) { return await Error(stdout, options, "ARGUMENT_INVALID", 2); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        { return await Error(stdout, options, "ROOT_ACCESS_DENIED", 5); }
-        catch (Exception) { return await Error(stdout, options, "INTERNAL_ERROR", 7); }
-        finally { explorationDeadline?.Dispose(); }
     }
+
+    /// <summary>Executes saved exploration with a fresh reader and returns text without the CLI transport newline.</summary>
+    public static Task<(string Text, int ExitCode)> ExploreAsync(string root, string index, bool trusted,
+        ExploreRequest request, string requestId = "cli", CancellationToken token = default)
+    {
+        CancellationTokenSource? deadline = null;
+        var hostParsed = false;
+        try
+        {
+            CliArguments.ValidateValue(root);
+            CliArguments.ValidateValue(index);
+            CliArguments.ValidateValue(requestId);
+            CliArguments.ValidateRequestId(requestId);
+            hostParsed = true;
+            token.ThrowIfCancellationRequested();
+            request = ExploreRequestFactory.Validate(request);
+            var budget = request.Budget!;
+            var clock = Stopwatch.StartNew();
+            deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(budget.MaxMilliseconds);
+            root = CliPaths.Root(root);
+            index = CliPaths.InRoot(root, index);
+            foreach (var sidecar in new[] { index + "-wal", index + "-shm", index + ".writer.lock" }) CliPaths.RejectLinks(sidecar);
+            var state = CliWorkspaceState.Open(root, create: false);
+            if (!File.Exists(index)) throw new CliFailure("INDEX_MISSING", 3);
+            var queryToken = deadline.Token;
+            queryToken.ThrowIfCancellationRequested();
+            using var reader = IndexReader.Open(index, state.WorkspaceUuid, queryToken);
+            var pinned = new PinnedQueryIndex(reader, queryToken);
+            var sourceWorkspace = trusted ? new QueryWorkspace(root,
+                ownerToken => VerifyQueryOwner(root, index, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
+            if (clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
+            var explored = new ExplorationService(pinned, sourceWorkspace, trusted).Execute(request, token, queryToken);
+            token.ThrowIfCancellationRequested();
+            if (clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
+            var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
+            return Task.FromResult((explored.Text, exit));
+        }
+        catch (Exception error)
+        {
+            var failure = Failure(error, deadline?.IsCancellationRequested == true && !token.IsCancellationRequested);
+            return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code), failure.ExitCode));
+        }
+        finally { deadline?.Dispose(); }
+    }
+
+    private static (string Code, int ExitCode) Failure(Exception error, bool timedOut = false) => error switch
+    {
+        CliFailure failure => (failure.Code, failure.ExitCode),
+        CliIndexException failure => (failure.Code, failure.ExitCode),
+        IndexStoreException failure => (failure.Code, ExitFor(failure.Code)),
+        OperationCanceledException when timedOut => ("QUERY_TIMEOUT", 4),
+        OperationCanceledException => ("CANCELLED", 130),
+        ArgumentException => ("ARGUMENT_INVALID", 2),
+        IOException or UnauthorizedAccessException => ("ROOT_ACCESS_DENIED", 5),
+        _ => ("INTERNAL_ERROR", 7)
+    };
 
     private static QueryInputInventory VerifyQueryOwner(string root, string indexPath, Guid uuid,
         IndexSnapshot snapshot, CancellationToken token)
@@ -227,11 +262,16 @@ public static class CliApplication
     }
     private static async Task<int> Error(TextWriter output, CliArguments? options, string code, int exitCode)
     {
+        await output.WriteLineAsync(ErrorText(options?.Command ?? "unknown", options?.RequestId ?? "cli", code));
+        return exitCode;
+    }
+
+    private static string ErrorText(string command, string requestId, string code)
+    {
         var message = code == "CLI_MARKDOWN_FACTS_INCOMPLETE"
             ? "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying."
             : "See CLI contract for the recovery action.";
-        await output.WriteLineAsync(JsonSerializer.Serialize(new { apiVersion = "1", command = options?.Command ?? "unknown",
-            requestId = options?.RequestId ?? "cli", errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options));
-        return exitCode;
+        return JsonSerializer.Serialize(new { apiVersion = "1", command,
+            requestId, errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options);
     }
 }

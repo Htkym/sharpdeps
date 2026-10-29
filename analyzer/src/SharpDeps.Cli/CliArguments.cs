@@ -29,9 +29,29 @@ internal sealed class CliArguments
     public int Number(string name, int fallback, int min, int max)
     {
         if (!Has(name)) return fallback;
-        if (!int.TryParse(Get(name), NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < min || value > max)
+        var value = OptionalNumber(name)!.Value;
+        if (value < min || value > max)
             throw new CliFailure("ARGUMENT_INVALID", 2);
         return value;
+    }
+
+    private int? OptionalNumber(string name)
+    {
+        if (!Has(name)) return null;
+        if (!int.TryParse(Get(name), NumberStyles.None, CultureInfo.InvariantCulture, out var value))
+            throw new CliFailure("ARGUMENT_INVALID", 2);
+        return value;
+    }
+
+    internal static void ValidateValue(string value)
+    {
+        if (value.StartsWith("--", StringComparison.Ordinal)) throw new CliFailure("ARGUMENT_REQUIRED", 2);
+        if (value.Length > 8192 || value.Length == 0 || value.Any(char.IsControl)) throw new CliFailure("ARGUMENT_INVALID", 2);
+    }
+
+    internal static void ValidateRequestId(string value)
+    {
+        if (value.Length > 64 || string.IsNullOrWhiteSpace(value)) throw new CliFailure("ARGUMENT_INVALID", 2);
     }
 
     public static CliArguments Parse(string[] args)
@@ -60,15 +80,15 @@ internal sealed class CliArguments
             var value = "true";
             if (!Switches.Contains(name))
             {
-                if (++i >= args.Length || args[i].StartsWith("--", StringComparison.Ordinal)) throw new CliFailure("ARGUMENT_REQUIRED", 2);
+                if (++i >= args.Length) throw new CliFailure("ARGUMENT_REQUIRED", 2);
                 value = args[i];
-                if (value.Length > 8192 || value.Length == 0 || value.Any(char.IsControl)) throw new CliFailure("ARGUMENT_INVALID", 2);
+                ValidateValue(value);
             }
             if (!parsed.values.TryGetValue(name, out var list)) parsed.values.Add(name, list = []);
             else if (!Repeated.Contains(name)) throw new CliFailure("ARGUMENT_DUPLICATE", 2);
             list.Add(value);
         }
-        if (parsed.RequestId.Length > 64 || string.IsNullOrWhiteSpace(parsed.RequestId)) throw new CliFailure("ARGUMENT_INVALID", 2);
+        ValidateRequestId(parsed.RequestId);
         if (parsed.Has("kind") && parsed.Command != "query") throw new CliFailure("ARGUMENT_INVALID", 2);
         if (parsed.Has("tfm") && !parsed.Has("project")) throw new CliFailure("PROJECT_SELECTION_REQUIRED", 2);
         if (parsed.Command == "serve" && !parsed.Has("watch")
@@ -85,37 +105,13 @@ internal sealed class CliArguments
     public ExploreRequest ExplorationRequest()
     {
         var query = Require("term");
-        if (string.IsNullOrWhiteSpace(query) || query.Length > 1024
-            || Get("project-id") is { Length: > 128 } || Get("path-prefix") is { Length: > 512 }
-            || Many("variant") is { Count: > 1 } || Get("variant") is { Length: > 128 }
-            || Get("path-to") is { Length: > 128 })
+        if (Many("variant") is { Count: > 1 })
             throw new CliFailure("ARGUMENT_INVALID", 2);
-        foreach (var field in new[] { "project-id", "variant", "path-to" })
-            if (Get(field) is { } selection && string.IsNullOrWhiteSpace(selection))
-                throw new CliFailure("ARGUMENT_INVALID", 2);
-        var freshness = Get("freshness") switch
-        {
-            null or "allow-stale" => QueryFreshnessPolicy.AllowStale,
-            "require-fresh" => QueryFreshnessPolicy.RequireFresh,
-            "refresh" => QueryFreshnessPolicy.Refresh,
-            _ => throw new CliFailure("ARGUMENT_INVALID", 2)
-        };
-        var format = Get("format") switch
-        {
-            null or "audit" => ExploreFormat.Audit,
-            "agent" => ExploreFormat.Agent,
-            _ => throw new CliFailure("ARGUMENT_INVALID", 2)
-        };
-        var scopePolicy = Get("scope-policy") switch
-        {
-            null or "unique" => ExploreScopePolicy.RequireUnique,
-            "prefer-debug" => ExploreScopePolicy.PreferDebug,
-            _ => throw new CliFailure("ARGUMENT_INVALID", 2)
-        };
-        return new(query, Get("project-id"), Get("variant"), Get("path-prefix"), freshness,
-            new QueryBudget(Number("max-nodes", 60, 1, 500), Number("max-edges", 120, 1, 1000),
-                Number("max-depth", 2, 1, 8), Number("max-milliseconds", 1000, 10, 30000),
-                Number("max-chars", 12000, 2048, 1000000), Number("max-bytes", 48000, 2048, 4000000)), format, scopePolicy, Get("path-to"));
+        return ExploreRequestFactory.Validate(new(query, Get("project-id"), Get("variant"), Get("path-prefix"),
+            ExploreRequestFactory.Freshness(Get("freshness")),
+            ExploreRequestFactory.Budget(OptionalNumber("max-nodes"), OptionalNumber("max-edges"), OptionalNumber("max-depth"),
+                OptionalNumber("max-milliseconds"), OptionalNumber("max-chars"), OptionalNumber("max-bytes")),
+            ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit), ExploreRequestFactory.ScopePolicy(Get("scope-policy")), Get("path-to")));
     }
 
     public QueryRequest QueryRequest()

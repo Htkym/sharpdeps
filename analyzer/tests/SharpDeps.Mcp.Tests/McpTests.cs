@@ -40,11 +40,18 @@ public sealed class McpTests
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
         var adapter = new McpQueryAdapter(new(root));
         foreach (var json in new[] {
-            "{}", "{\"query\":\"\"}", "{\"query\":\"--trusted\"}",
+            "{}", "{\"query\":\"\"}", "{\"query\":null}", "{\"query\":\"--trusted\"}",
+            "{\"query\":\"Service\\n\"}",
             "{\"query\":\"Service\",\"root\":\"elsewhere\"}",
+            "{\"query\":\"Service\",\"Format\":\"agent\"}",
             "{\"query\":\"Service\",\"maxChars\":2047}",
+            "{\"query\":\"Service\",\"maxChars\":2048.5}",
+            "{\"query\":\"Service\",\"maxChars\":null}",
             "{\"query\":\"Service\",\"maxBytes\":4000001}",
+            "{\"query\":\"Service\",\"maxBytes\":null}",
             "{\"query\":\"Service\",\"maxMilliseconds\":\"1000\"}",
+            "{\"query\":\"Service\",\"maxMilliseconds\":null}",
+            "{\"query\":\"Service\",\"maxNodes\":1}",
             "{\"query\":\"Service\",\"freshness\":\"current\"}",
             "{\"query\":\"Service\",\"format\":\"verbose\"}",
             "{\"query\":\"Service\",\"format\":\"Agent\"}",
@@ -60,8 +67,9 @@ public sealed class McpTests
             JsonSerializer.Serialize(new { query = "Service", pathTo = new string('x', 129) }) })
         {
             var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
-            await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+            var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
             { Name = "explore", Arguments = properties }));
+            Assert.Equal("MCP_ARGUMENT_INVALID", error.Message);
         }
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "search" }));
         Assert.False(Directory.Exists(root));

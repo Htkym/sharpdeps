@@ -2,7 +2,9 @@ namespace SharpDeps.Mcp.Tests;
 
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
@@ -20,51 +22,145 @@ public sealed class McpFlowTests
     [InlineData(true, "audit", "unique")]
     public async Task ExploreMatchesCliAndKeepsSourceTrustAndTheCommittedGeneration(bool trusted, string? format, string? scopePolicy)
     {
-        using var fixture = new Fixture(addScopes: scopePolicy == "prefer-debug");
+        var code = Fixture.Code.TrimEnd('\n') + " // " + string.Concat(Enumerable.Repeat("検証😀 \" \\", 80)) + "\r\n";
+        using var fixture = new Fixture(addScopes: scopePolicy == "prefer-debug", code: code);
         var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: trusted));
-        using var stdout = new StringWriter();
         var arguments = new List<string> { "explore", "--root", fixture.Root, "--term", "Service", "--format", format ?? "agent" };
         if (trusted) arguments.Add("--trusted");
         if (scopePolicy is not null) arguments.AddRange(["--scope-policy", scopePolicy]);
-        var exit = await CliApplication.RunAsync(arguments.ToArray(), stdout, TextWriter.Null);
-        var result = await adapter.CallAsync(Explore("Service", format, scopePolicy));
-        Assert.Equal(exit != 0, result.IsError);
-        var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
-        var cliText = stdout.ToString();
-        Assert.EndsWith(stdout.NewLine, cliText, StringComparison.Ordinal);
-        Assert.Equal(cliText[..^stdout.NewLine.Length], text);
-        Assert.Null(result.StructuredContent);
+        var (exit, text, result) = await AssertEquivalent(adapter, Explore("Service", format, scopePolicy), arguments);
+        Assert.Equal(0, exit);
+        Assert.EndsWith("\n", text, StringComparison.Ordinal);
+        AssertWireBudget(result, 12000, 48000);
+        if (scopePolicy is null) Assert.DoesNotContain("Scope policy=", text, StringComparison.Ordinal);
         if (trusted)
         {
-            Assert.False(result.IsError);
-            Assert.Contains(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
+            Assert.Contains(fixture.SavedText, text, StringComparison.Ordinal);
             if (format == "audit") Assert.Contains(fixture.SourceHash, text, StringComparison.Ordinal);
             else Assert.DoesNotContain(fixture.SourceHash, text, StringComparison.Ordinal);
             var current = Explore("Service", format, scopePolicy);
             current.Arguments!["freshness"] = JsonSerializer.SerializeToElement("require-fresh");
-            var unverified = await adapter.CallAsync(current);
-            Assert.True(unverified.IsError);
-            Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), Assert.IsType<TextContentBlock>(Assert.Single(unverified.Content)).Text, StringComparison.Ordinal);
+            var (currentExit, currentText, _) = await AssertEquivalent(adapter, current,
+                [.. arguments, "--freshness", "require-fresh"]);
+            Assert.NotEqual(0, currentExit);
+            Assert.DoesNotContain(fixture.SavedText, currentText, StringComparison.Ordinal);
+
+            File.WriteAllText(Path.Combine(fixture.Root, "App.cs"), code.Replace("=> 7", "=> 8", StringComparison.Ordinal), new UTF8Encoding(false));
+            try
+            {
+                var (_, changedText, _) = await AssertEquivalent(adapter, Explore("Service", format, scopePolicy), arguments);
+                Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", changedText, StringComparison.Ordinal);
+                Assert.DoesNotContain(fixture.SavedText, changedText, StringComparison.Ordinal);
+            }
+            finally { File.WriteAllText(Path.Combine(fixture.Root, "App.cs"), code, new UTF8Encoding(false)); }
         }
-        else Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
-        if (scopePolicy == "prefer-debug")
+        else Assert.DoesNotContain(fixture.SavedText, text, StringComparison.Ordinal);
+
+        var pathArguments = new List<string>(arguments);
+        pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
+        pathArguments.AddRange(["--project-id", fixture.Project, "--variant", fixture.Variant, "--path-prefix", "App.cs",
+            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "1500"]);
+        var pathRequest = Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence);
+        foreach (var (name, value) in new[] { ("projectId", fixture.Project), ("variantId", fixture.Variant),
+            ("pathPrefix", "App.cs"), ("freshness", "allow-stale") })
+            pathRequest.Arguments![name] = JsonSerializer.SerializeToElement(value);
+        pathRequest.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(10000);
+        pathRequest.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(40000);
+        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(1500);
+        var (pathExit, pathText, pathResult) = await AssertEquivalent(adapter, pathRequest, pathArguments);
+        Assert.Equal(0, pathExit);
+        Assert.Contains($"Retained path status=found source={fixture.Occurrence} target={fixture.Occurrence} hops=0 shown=0/0", pathText, StringComparison.Ordinal);
+        AssertWireBudget(pathResult, 10000, 40000);
+
+        if (format is not null)
         {
-            var pathArguments = new List<string>(arguments);
-            pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
-            pathArguments.AddRange(["--path-to", fixture.Occurrence]);
-            using var pathOutput = new StringWriter();
-            Assert.Equal(0, await CliApplication.RunAsync(pathArguments.ToArray(), pathOutput, TextWriter.Null));
-            var path = await adapter.CallAsync(Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence));
-            Assert.False(path.IsError);
-            var pathText = Assert.IsType<TextContentBlock>(Assert.Single(path.Content)).Text;
-            Assert.Null(path.StructuredContent);
-            Assert.Equal(pathOutput.ToString()[..^pathOutput.NewLine.Length], pathText);
-            Assert.Contains($"Retained path status=found source={fixture.Occurrence} target={fixture.Occurrence} hops=0 shown=0/0", pathText, StringComparison.Ordinal);
+            var missingArguments = new List<string>(arguments);
+            missingArguments[missingArguments.IndexOf("--term") + 1] = "NoSuchSavedSymbol";
+            var (missingExit, missingText, _) = await AssertEquivalent(adapter, Explore("NoSuchSavedSymbol", format, scopePolicy), missingArguments);
+            Assert.Equal(2, missingExit);
+            Assert.Contains("SYMBOL_NOT_FOUND", missingText, StringComparison.Ordinal);
+        }
+        if (format == "audit")
+        {
+            var defaultArguments = new List<string>(arguments);
+            defaultArguments.RemoveRange(defaultArguments.IndexOf("--format"), 2);
+            var (defaultExit, defaultText, _) = await AssertEquivalent(adapter, Explore("Service", "audit", scopePolicy), defaultArguments);
+            Assert.Equal(0, defaultExit);
+            Assert.Equal(text, defaultText);
+
+            var missingIndex = new McpQueryAdapter(new(fixture.Root, Index: "missing.sqlite", Trusted: trusted));
+            var (hostExit, hostText, _) = await AssertEquivalent(missingIndex, Explore("Service", format, scopePolicy),
+                [.. arguments, "--index", "missing.sqlite"]);
+            Assert.Equal(3, hostExit);
+            using var hostError = JsonDocument.Parse(hostText);
+            Assert.Equal("1", hostError.RootElement.GetProperty("apiVersion").GetString());
+            Assert.Equal("explore", hostError.RootElement.GetProperty("command").GetString());
+            Assert.Equal("cli", hostError.RootElement.GetProperty("requestId").GetString());
+            var hostIssue = Assert.Single(hostError.RootElement.GetProperty("errors").EnumerateArray());
+            Assert.Equal("INDEX_MISSING", hostIssue.GetProperty("code").GetString());
+            Assert.Equal("See CLI contract for the recovery action.", hostIssue.GetProperty("message").GetString());
+            Assert.DoesNotContain(fixture.Root, hostText, StringComparison.Ordinal);
+
+            var invalidPathArguments = new List<string>(arguments);
+            invalidPathArguments[invalidPathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
+            invalidPathArguments.AddRange(["--path-to", "Service"]);
+            var (invalidPathExit, invalidPathText, _) = await AssertEquivalent(adapter,
+                Explore(fixture.Occurrence, format, scopePolicy, "Service"), invalidPathArguments);
+            Assert.Equal(2, invalidPathExit);
+            using var invalidPath = JsonDocument.Parse(invalidPathText);
+            Assert.Equal("ARGUMENT_INVALID", invalidPath.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
+            var (precedenceExit, precedenceText, _) = await AssertEquivalent(missingIndex,
+                Explore(fixture.Occurrence, format, scopePolicy, "Service"), [.. invalidPathArguments, "--index", "missing.sqlite"]);
+            Assert.Equal(3, precedenceExit);
+            using var precedence = JsonDocument.Parse(precedenceText);
+            Assert.Equal("INDEX_MISSING", precedence.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
+
+            var refresh = Explore("Service", format, scopePolicy);
+            refresh.Arguments!["freshness"] = JsonSerializer.SerializeToElement("refresh");
+            var (refreshExit, refreshText, _) = await AssertEquivalent(adapter, refresh, [.. arguments, "--freshness", "refresh"]);
+            Assert.Equal(3, refreshExit);
+            Assert.Contains("UPDATE_REQUIRED", refreshText, StringComparison.Ordinal);
+            var tight = Explore("Service", format, scopePolicy);
+            tight.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(2048);
+            tight.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(2048);
+            var fullWire = JsonSerializer.Serialize(result, McpJsonUtilities.DefaultOptions);
+            Assert.True(fullWire.Length > 2048 || Encoding.UTF8.GetByteCount(fullWire) > 2048);
+            var (tightExit, tightText, tightResult) = await AssertEquivalent(adapter, tight,
+                [.. arguments, "--max-chars", "2048", "--max-bytes", "2048"]);
+            Assert.True(tightExit == 0 || tightExit == 4 && tightText.Contains("OUTPUT_BUDGET_TOO_SMALL", StringComparison.Ordinal));
+            AssertWireBudget(tightResult, 2048, 2048);
+            Assert.DoesNotContain(fixture.SavedText, tightText, StringComparison.Ordinal);
         }
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service", format, scopePolicy), cancelled.Token));
         using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+
+    private static async Task<(int Exit, string Text, CallToolResult Result)> AssertEquivalent(
+        McpQueryAdapter adapter, CallToolRequestParams request, IReadOnlyList<string> arguments)
+    {
+        using var output = new StringWriter();
+        var exit = await CliApplication.RunAsync(arguments.ToArray(), output, TextWriter.Null);
+        var result = await adapter.CallAsync(request);
+        Assert.Equal(exit != 0, result.IsError);
+        var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+        Assert.Null(result.StructuredContent);
+        var cliText = output.ToString();
+        Assert.EndsWith(output.NewLine, cliText, StringComparison.Ordinal);
+        Assert.Equal(cliText[..^output.NewLine.Length], text);
+        return (exit, text, result);
+    }
+
+    private static void AssertWireBudget(CallToolResult result, int maxChars, int maxBytes)
+    {
+        var wire = JsonSerializer.Serialize(result, McpJsonUtilities.DefaultOptions);
+        Assert.InRange(wire.Length, 0, maxChars);
+        Assert.InRange(Encoding.UTF8.GetByteCount(wire), 0, maxBytes);
+        using var encoded = JsonDocument.Parse(wire);
+        Assert.False(encoded.RootElement.TryGetProperty("structuredContent", out _));
+        Assert.Equal(Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text,
+            Assert.Single(encoded.RootElement.GetProperty("content").EnumerateArray()).GetProperty("text").GetString());
     }
 
     [Theory]
@@ -179,16 +275,22 @@ public sealed class McpFlowTests
         public Guid Workspace { get; } = Guid.NewGuid();
         public string IndexPath => Path.Combine(Root, ".sharpdeps", "index.sqlite");
         public const string Code = "public sealed class Service { public int Value => 7; }\n";
-        public string SourceHash { get; } = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Code))).ToLowerInvariant();
+        public string SavedText { get; }
+        public string SourceHash { get; }
+        public string Project => HarnessIdentity.ProjectId(Workspace, "App.csproj");
+        public string Variant => HarnessIdentity.VariantId(Workspace, Project, "net10.0", "Debug");
         public string Symbol { get; }
         public string Occurrence { get; }
-        public Fixture(bool addScopes = false)
+        public Fixture(bool addScopes = false, string? code = null)
         {
+            code ??= Code;
+            SavedText = code.TrimEnd('\r', '\n');
+            SourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
             Directory.CreateDirectory(Path.GetDirectoryName(IndexPath)!);
             File.WriteAllText(Path.Combine(Root, ".sharpdeps", "workspace.json"), JsonSerializer.Serialize(
                 new { schemaVersion = 1, workspaceUuid = Workspace, cursorKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) }));
-            File.WriteAllText(Path.Combine(Root, "App.cs"), Code, new System.Text.UTF8Encoding(false));
-            var location = new HarnessLocation("App.cs", null, SourceHash, new(0, Code.Length - 1));
+            File.WriteAllText(Path.Combine(Root, "App.cs"), code, new UTF8Encoding(false));
+            var location = new HarnessLocation("App.cs", null, SourceHash, new(0, SavedText.Length));
             var workspace = HarnessIdentity.WorkspaceId(Workspace);
             var project = HarnessIdentity.ProjectId(Workspace, "App.csproj");
             var variant = HarnessIdentity.VariantId(Workspace, project, "net10.0", "Debug");
@@ -209,7 +311,7 @@ public sealed class McpFlowTests
                 [new(workspace, HarnessNodeKind.Workspace, "Workspace", null, null), new(project, HarnessNodeKind.Project, "App", workspace, null), new(Symbol, HarnessNodeKind.Type, "Service", project, null)],
                 occurrences, [], [], null);
             using var writer = IndexWriter.Open(Root, IndexPath, Workspace, isTrusted: true);
-            writer.Commit(IndexStage.Create(new IndexSnapshot(graph, [new("App.cs", "App.cs", "source", SourceHash, System.Text.Encoding.UTF8.GetByteCount(Code), Code.Length)], [], [], [new(Symbol, "Service", "Service", "", "", "App.cs")])));
+            writer.Commit(IndexStage.Create(new IndexSnapshot(graph, [new("App.cs", "App.cs", "source", SourceHash, Encoding.UTF8.GetByteCount(code), code.Length)], [], [], [new(Symbol, "Service", "Service", "", "", "App.cs")])));
         }
         public void Dispose()
         {

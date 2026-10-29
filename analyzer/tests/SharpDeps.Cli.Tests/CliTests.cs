@@ -258,6 +258,91 @@ public sealed class CliTests
     }
 
     [Fact]
+    public async Task ExploreUsesFreshOwnerProofAndSourceForEachInvocation()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var sourcePath = Path.Combine(fixture.Root, "Service.cs");
+        var originalText = File.ReadAllText(sourcePath);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var originalGeneration = pinned.Snapshot().Graph.Generation;
+        var proofs = 0;
+        var failProof = 0;
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, (_, token) =>
+        {
+            using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid, token);
+            var previous = current.Snapshot(token);
+            var text = File.ReadAllText(sourcePath);
+            var bytes = new UTF8Encoding(false).GetBytes(text);
+            var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            var generation = previous.Graph.Generation + 1;
+            HarnessLocation? Updated(HarnessLocation? location) => location is null ? null
+                : location with { ContentHash = hash, SourceVersion = "v" + generation };
+            var snapshot = previous with
+            {
+                Files = previous.Files.Select(file => file with { ContentHash = hash, ByteLength = bytes.Length, Utf16Length = text.Length }).ToArray(),
+                Graph = previous.Graph with
+                {
+                    SnapshotId = Guid.NewGuid().ToString("N"), Generation = generation,
+                    Nodes = previous.Graph.Nodes.Select(node => node with { Location = Updated(node.Location) }).ToArray(),
+                    SymbolOccurrences = previous.Graph.SymbolOccurrences.Select(item => item with
+                    { Location = Updated(item.Location), Declarations = item.Declarations?.Select(location => Updated(location)!).ToArray() }).ToArray()
+                }
+            };
+            return Task.FromResult(new CliIndexBuild(snapshot, () => { })
+            {
+                VerifyQueryInputs = proofToken =>
+                {
+                    proofToken.ThrowIfCancellationRequested();
+                    return new(["Service.cs"], Interlocked.Increment(ref proofs) != Volatile.Read(ref failProof));
+                }
+            });
+        });
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root, "--trusted", "--target", "App.csproj"]),
+            fixture.Root, fixture.IndexPath, fixture.Uuid);
+        var published = await owner.UpdateAsync(update, "publish-proof", deadline.Token);
+        Assert.Null(published.ErrorCode);
+        var arguments = new[] { "explore", "--root", fixture.Root, "--trusted", "--term", "Service",
+            "--freshness", "require-fresh", "--max-milliseconds", "10000" };
+        var first = await Run(arguments);
+        Assert.Equal(0, first.Exit);
+        Assert.Contains("Freshness=verified-current", first.Json);
+        Assert.Contains(originalText.TrimEnd('\r', '\n'), first.Json);
+        Assert.Equal(2, Volatile.Read(ref proofs));
+
+        // The second proof can fail after source admission; no body from that reply may escape.
+        Volatile.Write(ref failProof, Volatile.Read(ref proofs) + 2);
+        var invalidated = await Run(arguments);
+        Assert.Equal(3, invalidated.Exit);
+        Assert.Contains("Error FRESHNESS_REQUIREMENT_NOT_MET", invalidated.Json);
+        Assert.Contains("returned source ranges=0", invalidated.Json);
+        Assert.DoesNotContain(originalText.TrimEnd('\r', '\n'), invalidated.Json);
+        Assert.Equal(Volatile.Read(ref failProof), Volatile.Read(ref proofs));
+        Volatile.Write(ref failProof, 0);
+
+        var changedText = originalText.Replace("ServiceExtra {}", "ServiceExtra{ }", StringComparison.Ordinal);
+        Assert.NotEqual(originalText, changedText);
+        File.WriteAllText(sourcePath, changedText, new UTF8Encoding(false));
+        var dirty = await Run(arguments);
+        Assert.Equal(3, dirty.Exit);
+        Assert.Contains("Freshness=dirty", dirty.Json);
+        Assert.Contains("returned source ranges=0", dirty.Json);
+        Assert.DoesNotContain(changedText.TrimEnd('\r', '\n'), dirty.Json);
+
+        var replacement = await owner.UpdateAsync(update, "publish-current", deadline.Token);
+        Assert.Null(replacement.ErrorCode);
+        Assert.Equal(originalGeneration + 2, replacement.Result!.Generation);
+        var currentReply = await Run(arguments);
+        Assert.Equal(0, currentReply.Exit);
+        Assert.Contains("generation=" + replacement.Result.Generation, currentReply.Json);
+        Assert.Contains("Freshness=verified-current", currentReply.Json);
+        Assert.Contains(changedText.TrimEnd('\r', '\n'), currentReply.Json);
+        Assert.Equal(originalGeneration, pinned.Snapshot().Graph.Generation);
+    }
+
+    [Fact]
     public async Task CancellationAndUnsupportedStateProduceOneJsonWithoutWritingOrLeakingPaths()
     {
         using var fixture = new Fixture();

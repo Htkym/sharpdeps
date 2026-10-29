@@ -1,10 +1,10 @@
 namespace SharpDeps.Mcp;
 
-using System.Globalization;
 using System.Text.Json;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using SharpDeps.Cli;
+using SharpDeps.Query;
 
 public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/index.sqlite", bool Trusted = false, bool AllowMutations = false)
 {
@@ -68,17 +68,22 @@ public sealed class McpQueryAdapter(McpHostOptions host)
         var mutation = request.Name is "index" or "update";
         if (request.Name != "explore" && !(host.Trusted && host.AllowMutations && mutation))
             throw new McpProtocolException("MCP_TOOL_UNKNOWN", McpErrorCode.InvalidParams);
-        var arguments = new List<string> { request.Name, "--root", host.Root, "--index", host.Index, "--quiet" };
-        if (host.Trusted) arguments.Add("--trusted");
-        if (mutation) AddMutationArguments(request, arguments);
-        else AddExploreArguments(request, arguments);
+        List<string>? arguments = null;
+        ExploreRequest? exploration = null;
+        if (mutation)
+        {
+            arguments = [request.Name, "--root", host.Root, "--index", host.Index, "--quiet"];
+            if (host.Trusted) arguments.Add("--trusted");
+            AddMutationArguments(request, arguments);
+        }
+        else exploration = ParseExploreRequest(request);
         if (!await slots.WaitAsync(0, token))
             throw new McpProtocolException("MCP_BUSY", McpErrorCode.InternalError);
         try
         {
             if (mutation)
             {
-                var (exit, json) = await CliMutationProcess.RunAsync(arguments.ToArray(), token);
+                var (exit, json) = await CliMutationProcess.RunAsync(arguments!.ToArray(), token);
                 using var document = JsonDocument.Parse(json);
                 return new()
                 {
@@ -86,50 +91,55 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                     StructuredContent = document.RootElement.Clone(), IsError = exit != 0
                 };
             }
-            using var output = new StringWriter(CultureInfo.InvariantCulture);
-            using var diagnostics = new StringWriter(CultureInfo.InvariantCulture);
-            var queryExit = await CliApplication.RunAsync(arguments.ToArray(), output, diagnostics, token);
-            var text = output.ToString();
-            if (text.EndsWith(output.NewLine, StringComparison.Ordinal)) text = text[..^output.NewLine.Length];
-            return new() { Content = [new TextContentBlock { Text = text }], IsError = queryExit != 0 };
+            var explored = await CliApplication.ExploreAsync(host.Root, host.Index, host.Trusted, exploration!, token: token);
+            return new() { Content = [new TextContentBlock { Text = explored.Text }], IsError = explored.ExitCode != 0 };
         }
         finally { slots.Release(); }
     }
 
-    private static void AddExploreArguments(CallToolRequestParams request, List<string> arguments)
+    private static ExploreRequest ParseExploreRequest(CallToolRequestParams request)
     {
         if (request.Arguments is not { } properties || !properties.ContainsKey("query")) throw Invalid();
-        foreach (var (name, value) in properties)
+        string? query = null, project = null, variant = null, pathPrefix = null, pathTo = null,
+            freshness = null, format = null, scopePolicy = null;
+        int? maxChars = null, maxBytes = null, maxMilliseconds = null;
+        try
         {
-            var flag = name switch
+            foreach (var (name, value) in properties)
             {
-                "query" => "term", "projectId" => "project-id", "variantId" => "variant",
-                "pathPrefix" => "path-prefix", "pathTo" => "path-to", "freshness" => "freshness", "format" => "format", "scopePolicy" => "scope-policy",
-                "maxChars" => "max-chars", "maxBytes" => "max-bytes", "maxMilliseconds" => "max-milliseconds",
-                _ => throw Invalid()
-            };
-            string text;
-            if (name is "maxChars" or "maxBytes" or "maxMilliseconds")
-            {
-                var min = name == "maxMilliseconds" ? 10 : 2048;
-                var max = name switch { "maxChars" => 1000000, "maxBytes" => 4000000, _ => 30000 };
-                if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var number) || number < min || number > max) throw Invalid();
-                text = number.ToString(CultureInfo.InvariantCulture);
+                if (name is "maxChars" or "maxBytes" or "maxMilliseconds")
+                {
+                    if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var number)) throw Invalid();
+                    switch (name)
+                    {
+                        case "maxChars": maxChars = number; break;
+                        case "maxBytes": maxBytes = number; break;
+                        case "maxMilliseconds": maxMilliseconds = number; break;
+                    }
+                    continue;
+                }
+                if (name is not ("query" or "projectId" or "variantId" or "pathPrefix" or "pathTo" or "freshness" or "format" or "scopePolicy")) throw Invalid();
+                if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text
+                    || string.IsNullOrWhiteSpace(text) || text.Any(char.IsControl) || text.StartsWith("--", StringComparison.Ordinal)) throw Invalid();
+                ExploreRequestFactory.Text(name, text);
+                switch (name)
+                {
+                    case "query": query = text; break;
+                    case "projectId": project = text; break;
+                    case "variantId": variant = text; break;
+                    case "pathPrefix": pathPrefix = text; break;
+                    case "pathTo": pathTo = text; break;
+                    case "freshness": freshness = text; break;
+                    case "format": format = text; break;
+                    case "scopePolicy": scopePolicy = text; break;
+                }
             }
-            else
-            {
-                if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } input) throw Invalid();
-                text = input;
-                var max = name switch { "query" => 1024, "pathPrefix" => 512, _ => 128 };
-                if (string.IsNullOrWhiteSpace(text) || text.Length > max || text.Any(char.IsControl)
-                    || text.StartsWith("--", StringComparison.Ordinal)
-                    || name == "freshness" && text is not ("allow-stale" or "require-fresh" or "refresh")
-                    || name == "format" && text is not ("agent" or "audit")
-                    || name == "scopePolicy" && text is not ("unique" or "prefer-debug")) throw Invalid();
-            }
-            arguments.Add("--" + flag); arguments.Add(text);
+            return ExploreRequestFactory.Validate(new(query!, project, variant, pathPrefix,
+                ExploreRequestFactory.Freshness(freshness),
+                ExploreRequestFactory.Budget(maxMilliseconds: maxMilliseconds, maxChars: maxChars, maxBytes: maxBytes),
+                ExploreRequestFactory.Format(format, ExploreFormat.Agent), ExploreRequestFactory.ScopePolicy(scopePolicy), pathTo));
         }
-        if (!properties.ContainsKey("format")) arguments.AddRange(["--format", "agent"]);
+        catch (CliFailure) { throw Invalid(); }
     }
 
     private static void AddMutationArguments(CallToolRequestParams request, List<string> arguments)
