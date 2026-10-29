@@ -10,9 +10,18 @@ public enum ExploreFormat
     Agent
 }
 
+public enum ExploreScopePolicy
+{
+    /// <summary>Leaves ambiguous compilation scopes unresolved.</summary>
+    RequireUnique,
+    /// <summary>Uses explicit identities first, then the sole saved Debug variant within one project.</summary>
+    PreferDebug
+}
+
 public sealed record ExploreRequest(string Query, string? ProjectId = null, string? VariantId = null,
     string? PathPrefix = null, QueryFreshnessPolicy Freshness = QueryFreshnessPolicy.AllowStale,
-    QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit);
+    QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit,
+    ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique);
 
 public sealed record ExploreUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan Span,
     string Text, int FirstLine, IReadOnlyList<string> SymbolIds,

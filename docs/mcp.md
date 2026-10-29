@@ -28,6 +28,8 @@ sharpdeps explore --root /absolute/workspace --trusted --term "related names or 
 
 The term can contain related symbol names, exact identities, or saved source paths. Supply `--project-id` and `--variant` when selecting a particular compilation context; `--path-prefix` restricts source paths. A unique matching project/variant can be selected automatically. Ambiguous matches return choices rather than combining compilation contexts. An absent result means no match in the selected index, not proof that the repository has no such code.
 
+Scope selection defaults to `--scope-policy unique` (MCP `scopePolicy: "unique"`). To prefer a Debug compilation, opt in with `--scope-policy prefer-debug` or `scopePolicy: "prefer-debug"`. Explicit project, variant, path-prefix filters, and requested identities are applied first. A single remaining scope is used regardless of its configuration. If several scopes remain, prefer-debug resolves them only when they belong to one project and exactly one is a saved Debug variant. Multiple projects or multiple Debug variants still require a scope choice. The response reports the selection reason and bounded alternatives; the policy does not infer a target framework from the installed SDK or enable source access.
+
 CLI exploration defaults to `--format audit`, retaining full saved identities, hashes, spans, and provenance. Use `--format agent` for a compact response with symbol aliases and line-numbered source. Both formats preserve scope, certainty, freshness, and omission information. Choosing a format does not enable updates or source access.
 
 Agent aliases such as `@1` apply only within one reply. Use the exact `selector` retained for requested or omitted targets when re-querying; a qualified name alone may be ambiguous between overloads or compilation scopes. File aliases map to saved relative paths, and source headings show their verified line ranges. Relation locations show `unknown` when they cannot be verified from the returned source.
@@ -55,7 +57,7 @@ Launch `sharpdeps-mcp --root /absolute/workspace --trusted` to permit source rea
 }
 ```
 
-Optional arguments are `projectId`, `variantId`, `pathPrefix`, `freshness`, `format`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, and hyphenated budget flags for the corresponding values.
+Optional arguments are `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `freshness`, `format`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, and hyphenated budget flags for the corresponding values.
 
 Explore returns a single text content block containing the same evidence text as the CLI when using the same format, without a duplicated `structuredContent` object. Clients using the old `status`, `search`, `symbol`, `callers`, `callees`, `impact`, or `context` MCP tools must migrate to `explore`; the existing CLI query commands remain available.
 

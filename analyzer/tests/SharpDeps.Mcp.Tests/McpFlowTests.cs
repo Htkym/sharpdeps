@@ -14,19 +14,20 @@ using Xunit;
 public sealed class McpFlowTests
 {
     [Theory]
-    [InlineData(false, null)]
-    [InlineData(true, null)]
-    [InlineData(true, "agent")]
-    [InlineData(true, "audit")]
-    public async Task ExploreMatchesCliAndKeepsSourceTrustAndTheCommittedGeneration(bool trusted, string? format)
+    [InlineData(false, null, null)]
+    [InlineData(true, null, null)]
+    [InlineData(true, "agent", "prefer-debug")]
+    [InlineData(true, "audit", "unique")]
+    public async Task ExploreMatchesCliAndKeepsSourceTrustAndTheCommittedGeneration(bool trusted, string? format, string? scopePolicy)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(addScopes: scopePolicy == "prefer-debug");
         var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: trusted));
         using var stdout = new StringWriter();
         var arguments = new List<string> { "explore", "--root", fixture.Root, "--term", "Service", "--format", format ?? "agent" };
         if (trusted) arguments.Add("--trusted");
+        if (scopePolicy is not null) arguments.AddRange(["--scope-policy", scopePolicy]);
         var exit = await CliApplication.RunAsync(arguments.ToArray(), stdout, TextWriter.Null);
-        var result = await adapter.CallAsync(Explore("Service", format));
+        var result = await adapter.CallAsync(Explore("Service", format, scopePolicy));
         Assert.Equal(exit != 0, result.IsError);
         var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
         var cliText = stdout.ToString();
@@ -39,7 +40,7 @@ public sealed class McpFlowTests
             Assert.Contains(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
             if (format == "audit") Assert.Contains(fixture.SourceHash, text, StringComparison.Ordinal);
             else Assert.DoesNotContain(fixture.SourceHash, text, StringComparison.Ordinal);
-            var current = Explore("Service", format);
+            var current = Explore("Service", format, scopePolicy);
             current.Arguments!["freshness"] = JsonSerializer.SerializeToElement("require-fresh");
             var unverified = await adapter.CallAsync(current);
             Assert.True(unverified.IsError);
@@ -47,7 +48,7 @@ public sealed class McpFlowTests
         }
         else Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service", format), cancelled.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service", format, scopePolicy), cancelled.Token));
         using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
     }
@@ -147,10 +148,11 @@ public sealed class McpFlowTests
         }
     }
 
-    private static CallToolRequestParams Explore(string query, string? format = null)
+    private static CallToolRequestParams Explore(string query, string? format = null, string? scopePolicy = null)
     {
         var arguments = new Dictionary<string, JsonElement> { ["query"] = JsonSerializer.SerializeToElement(query) };
         if (format is not null) arguments.Add("format", JsonSerializer.SerializeToElement(format));
+        if (scopePolicy is not null) arguments.Add("scopePolicy", JsonSerializer.SerializeToElement(scopePolicy));
         return new() { Name = "explore", Arguments = arguments };
     }
 
@@ -164,7 +166,7 @@ public sealed class McpFlowTests
         public const string Code = "public sealed class Service { public int Value => 7; }\n";
         public string SourceHash { get; } = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Code))).ToLowerInvariant();
         public string Symbol { get; }
-        public Fixture()
+        public Fixture(bool addScopes = false)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(IndexPath)!);
             File.WriteAllText(Path.Combine(Root, ".sharpdeps", "workspace.json"), JsonSerializer.Serialize(
@@ -175,11 +177,20 @@ public sealed class McpFlowTests
             var project = HarnessIdentity.ProjectId(Workspace, "App.csproj");
             var variant = HarnessIdentity.VariantId(Workspace, project, "net10.0", "Debug");
             Symbol = HarnessIdentity.LogicalSymbolId(Workspace, project, "type", "T:Service");
+            var variants = new List<HarnessVariant> { new(variant, project, "net10.0", "Debug", null, null, null) };
+            var occurrences = new List<HarnessSymbolOccurrence>
+            { new(HarnessIdentity.SymbolOccurrenceId(Workspace, Symbol, variant), Symbol, variant, location, [location]) };
+            if (addScopes)
+            {
+                var alternate = HarnessIdentity.VariantId(Workspace, project, "net10.0", "Release");
+                variants.Add(new(alternate, project, "net10.0", "Release", null, null, null));
+                occurrences.Add(new(HarnessIdentity.SymbolOccurrenceId(Workspace, Symbol, alternate), Symbol, alternate, location, [location]));
+            }
             var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
                 HarnessGraphContract.IdentityVersion, workspace, "mcp-fixture", 1, HarnessCoverage.Partial,
-                [new(variant, project, "net10.0", "Debug", null, null, null)],
+                variants,
                 [new(workspace, HarnessNodeKind.Workspace, "Workspace", null, null), new(project, HarnessNodeKind.Project, "App", workspace, null), new(Symbol, HarnessNodeKind.Type, "Service", project, null)],
-                [new(HarnessIdentity.SymbolOccurrenceId(Workspace, Symbol, variant), Symbol, variant, location, [location])], [], [], null);
+                occurrences, [], [], null);
             using var writer = IndexWriter.Open(Root, IndexPath, Workspace, isTrusted: true);
             writer.Commit(IndexStage.Create(new IndexSnapshot(graph, [new("App.cs", "App.cs", "source", SourceHash, System.Text.Encoding.UTF8.GetByteCount(Code), Code.Length)], [], [], [new(Symbol, "Service", "Service", "", "", "App.cs")])));
         }

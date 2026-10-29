@@ -166,6 +166,9 @@ public sealed class CliTests
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Agent, CliArguments.Parse(["explore", "--term", "Service", "--format", "agent"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service", "--format", "audit"]).ExplorationRequest().Format);
+        Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
+        Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "unique"]).ExplorationRequest().ScopePolicy);
+        Assert.Equal(ExploreScopePolicy.PreferDebug, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "prefer-debug"]).ExplorationRequest().ScopePolicy);
         var untrusted = await Run("index", "--root", fixture.Root, "--target", "absent.csproj");
         Assert.Equal(5, untrusted.Exit);
         Assert.Equal("WORKSPACE_UNTRUSTED", Code(untrusted.Json));
@@ -180,14 +183,20 @@ public sealed class CliTests
             new[] { "--term", "Service", "--format", "verbose" },
             new[] { "--term", "Service", "--format", "0" },
             new[] { "--term", "Service", "--format", "Agent" },
+            new[] { "--term", "Service", "--scope-policy", "auto" },
+            new[] { "--term", "Service", "--scope-policy", "PreferDebug" },
+            new[] { "--term", "Service", "--scope-policy", "1" },
             new[] { "--term", "Service", "--include-candidates" } })
         {
             var invalidExplore = await Run(["explore", "--root", fixture.Root, .. arguments]);
             Assert.Equal(2, invalidExplore.Exit);
         }
-        var nonExploreFormat = await Run("status", "--root", fixture.Root, "--format", "agent");
-        Assert.Equal(2, nonExploreFormat.Exit);
-        Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreFormat.Json));
+        foreach (var (flag, value) in new[] { ("--format", "agent"), ("--scope-policy", "prefer-debug") })
+        {
+            var nonExploreOption = await Run("status", "--root", fixture.Root, flag, value);
+            Assert.Equal(2, nonExploreOption.Exit);
+            Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreOption.Json));
+        }
         var unsupported = await Run("query", "--kind", "status", "--root", fixture.Root, "--dependencies");
         Assert.Equal(2, unsupported.Exit);
         var statusScope = await Run("status", "--root", fixture.Root, "--project-id", "ignored-project");

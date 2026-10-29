@@ -25,7 +25,7 @@ public static class CliApplication
                     index = "--target root-contained.slnx|.sln|.csproj --trusted",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
-                    explore = "--term names-or-file-paths [--project-id id --variant id --format audit|agent]; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
+                    explore = "--term names-or-file-paths [--project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug]; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
             if (options.Command == "doctor")

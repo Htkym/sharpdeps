@@ -87,7 +87,8 @@ public sealed class ExplorationService
         var budget = request.Budget!;
         if (!Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query)
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
-            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || budget.MaxNodes is < 1 or > 500
+            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
+            || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
             || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
@@ -132,7 +133,10 @@ public sealed class ExplorationService
         private readonly List<Pending> allCandidates = [];
         private readonly HashSet<string> reasons = new(StringComparer.Ordinal);
         private readonly List<(string Project, string Variant)> choices = [];
+        private readonly List<(string Project, string Variant)> alternativeScopes = [];
         private readonly List<Match> symbolChoices = [];
+        private string? scopeDecision;
+        private int excludedScopes;
         private string? project;
         private string? variant;
         private int relationDisplayLimit = 8;
@@ -185,7 +189,7 @@ public sealed class ExplorationService
 
         private bool NodeAllowed(HarnessNode node, string? selectedVariant = null)
         {
-            if (IsDocument(node) && project is not null && !DocumentScopeProven(node, selectedVariant)) return false;
+            if (IsDocument(node) && project is not null && !DocumentScopeProven(node, selectedVariant, project)) return false;
             if (project is not null && !IsDocument(node) && owner.Project(node) != project) return false;
             if (selectedVariant is not null && !IsDocument(node)
                 && !(owner.bySymbol.GetValueOrDefault(node.Id) ?? []).Any(o => o.VariantId == selectedVariant)) return false;
@@ -199,7 +203,7 @@ public sealed class ExplorationService
             return node;
         }
 
-        private bool DocumentScopeProven(HarnessNode node, string? selectedVariant)
+        private bool DocumentScopeProven(HarnessNode node, string? selectedVariant, string selectedProject)
         {
             var section = DocumentSection(node).Id;
             foreach (var edge in owner.saved.Graph.Edges)
@@ -213,7 +217,7 @@ public sealed class ExplorationService
                 else if (IsDocument(to) && DocumentSection(to).Id == section && !IsDocument(from))
                 { code = from; occurrenceId = edge.SourceOccurrenceId; }
                 else continue;
-                if (owner.Project(code) != project) continue;
+                if (owner.Project(code) != selectedProject) continue;
                 if (selectedVariant is null) return true;
                 if (occurrenceId is not null && owner.occurrences[occurrenceId].VariantId == selectedVariant) return true;
                 if (edge.VariantId == selectedVariant) return true;
@@ -233,7 +237,12 @@ public sealed class ExplorationService
                 project ??= scope.ProjectId;
             }
             var matches = Search();
-            if (Errors.Count != 0 || choices.Count > 1) return false;
+            if (Errors.Count != 0) return false;
+            if (choices.Count > 1)
+            {
+                if (request.ScopePolicy == ExploreScopePolicy.PreferDebug) scopeDecision = "ambiguous-explicit-occurrences";
+                return false;
+            }
             if (matches.Count == 0)
             { Error("SYMBOL_NOT_FOUND", "No match in the selected index; try a qualified name, exact identity or saved file path."); return false; }
             foreach (var match in matches.Where(m => !IsDocument(m.Node)))
@@ -247,8 +256,18 @@ public sealed class ExplorationService
                 }
             var tuples = choices.Distinct().OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Variant, StringComparer.Ordinal).ToArray();
             choices.Clear(); choices.AddRange(tuples);
+            if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && choices.Count > 0 && !TryPreferScope())
+            {
+                if (Errors.Count == 0) reasons.Add("SCOPE_AMBIGUOUS");
+                return false;
+            }
             if (choices.Count > 1) { reasons.Add("SCOPE_AMBIGUOUS"); return false; }
-            if (choices.Count == 1) { project = choices[0].Project; variant = choices[0].Variant; choices.Clear(); }
+            if (choices.Count == 1)
+            {
+                project = choices[0].Project; variant = choices[0].Variant; choices.Clear();
+            }
+            if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && scopeDecision is null && matches.All(match => IsDocument(match.Node)))
+                scopeDecision = "no-code-scope";
             matches = matches.Where(m => NodeAllowed(m.Node, variant)).ToList();
             if (Terms(request.Query).Length == 1 && matches.Where(m => m.Exact).ToArray() is { Length: > 1 } exact)
             {
@@ -267,6 +286,60 @@ public sealed class ExplorationService
             }
             if (matches.Count > roots.Count) reasons.Add("NODE_LIMIT");
             return roots.Count != 0;
+        }
+
+        private bool TryPreferScope()
+        {
+            if (request.ScopePolicy != ExploreScopePolicy.PreferDebug) return false;
+            var identities = Terms(request.Query).Select(term => owner.occurrences.TryGetValue(term, out var occurrence)
+                ? owner.nodes[occurrence.LogicalSymbolId] : owner.nodes.GetValueOrDefault(term))
+                .OfType<HarnessNode>().DistinctBy(node => node.Id).ToArray();
+            if (identities.Length > 0)
+            {
+                var count = choices.Count;
+                choices.RemoveAll(choice => identities.Any(node => !IdentityAllowsScope(node, choice)));
+                excludedScopes = count - choices.Count;
+                if (choices.Count == 0)
+                {
+                    scopeDecision = "incompatible-explicit-identities";
+                    Error("SYMBOL_OUTSIDE_SCOPE", "No matching saved scope contains all explicit identities within the supplied path.");
+                    return false;
+                }
+            }
+            if (choices.Count == 1)
+            {
+                project = choices[0].Project; variant = choices[0].Variant; choices.Clear();
+                scopeDecision = request.VariantId is not null ? "explicit-variant"
+                    : Terms(request.Query).Any(owner.occurrences.ContainsKey) ? "explicit-occurrence"
+                    : excludedScopes > 0 ? "selected-by-explicit-identities" : "unique-matching-scope";
+                return true;
+            }
+            if (choices.Any(choice => choice.Project != choices[0].Project))
+            { scopeDecision = "ambiguous-multiple-projects"; return false; }
+            var candidateIds = choices.Select(choice => choice.Variant).ToHashSet(StringComparer.Ordinal);
+            HarnessVariant? preferred = null;
+            foreach (var candidate in owner.saved.Graph.Variants)
+            {
+                Check();
+                if (!candidateIds.Contains(candidate.Id) || !candidate.Configuration.Equals("Debug", StringComparison.OrdinalIgnoreCase)) continue;
+                if (preferred is not null) { scopeDecision = "ambiguous-multiple-debug-variants"; return false; }
+                preferred = candidate;
+            }
+            if (preferred is null) { scopeDecision = "ambiguous-no-debug-variant"; return false; }
+            project = preferred.ProjectId; variant = preferred.Id;
+            alternativeScopes.AddRange(choices.Where(choice => choice.Variant != variant));
+            choices.Clear();
+            scopeDecision = "selected-unique-saved-debug";
+            return true;
+        }
+
+        private bool IdentityAllowsScope(HarnessNode node, (string Project, string Variant) choice)
+        {
+            Check();
+            if (IsDocument(node))
+                return DocumentScopeProven(node, choice.Variant, choice.Project)
+                    && (request.PathPrefix is null || owner.Locations(node, choice.Variant).Any(PathAllowed));
+            return owner.Project(node) == choice.Project && NodeAllowed(node, choice.Variant);
         }
 
         private static string ShortName(string name)
@@ -766,6 +839,7 @@ public sealed class ExplorationService
                 var scope = owner.saved.Graph.Variants.FirstOrDefault(v => v.Id == variant);
                 Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
             }
+            AppendScopeDecision(text, detailCount);
             text.AppendLine("Coverage is the selected index, not proof of runtime consumers or absent unindexed code/tests.");
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
             if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
@@ -778,7 +852,7 @@ public sealed class ExplorationService
                 foreach (var choice in choices.Take(detailCount))
                 {
                     var scope = graph.Variants.Single(v => v.Id == choice.Variant);
-                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(scope.TargetFramework, 80)} {Safe(scope.Configuration, 80)}");
+                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(scope.TargetFramework, 80)} {Safe(scope.Configuration, 80)}{ScopeChoiceDimensions(scope)}");
                 }
                 if (choices.Count > detailCount) Line($"Scope choices omitted={choices.Count - detailCount}; supply project/variant or a narrower query.");
             }
@@ -862,6 +936,7 @@ public sealed class ExplorationService
             text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
             Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
+            AppendScopeDecision(text, detailCount);
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
             if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
             foreach (var error in Errors.Take(8)) Line($"Error {Safe(error.Code, 80)}: {Safe(error.Message, 240)} {Safe(error.Path, 160)}");
@@ -873,7 +948,7 @@ public sealed class ExplorationService
                 foreach (var choice in choices.Take(detailCount))
                 {
                     var choiceScope = graph.Variants.Single(value => value.Id == choice.Variant);
-                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(choiceScope.TargetFramework, 80)} {Safe(choiceScope.Configuration, 80)}");
+                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(choiceScope.TargetFramework, 80)} {Safe(choiceScope.Configuration, 80)}{ScopeChoiceDimensions(choiceScope)}");
                 }
                 if (choices.Count > detailCount) Line($"Scope choices omitted={choices.Count - detailCount}; supply project/variant or a narrower query.");
             }
@@ -943,6 +1018,28 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private string ScopeChoiceDimensions(HarnessVariant scope)
+            => request.ScopePolicy == ExploreScopePolicy.PreferDebug
+                ? $" platform={Safe(scope.Platform ?? "unspecified", 80)} rid={Safe(scope.RuntimeIdentifier ?? "unspecified", 80)}" : "";
+
+        private void AppendScopeDecision(StringBuilder text, int detailCount)
+        {
+            if (scopeDecision is null) return;
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var selectedScope = owner.saved.Graph.Variants.FirstOrDefault(value => value.Id == variant);
+            var platform = selectedScope is null ? "unknown" : selectedScope.Platform ?? "unspecified";
+            var rid = selectedScope is null ? "unknown" : selectedScope.RuntimeIdentifier ?? "unspecified";
+            Line($"Scope policy=prefer-debug decision={scopeDecision} excludedByIdentity={excludedScopes} platform={Safe(platform, 80)} rid={Safe(rid, 80)}");
+            if (alternativeScopes.Count == 0) return;
+            Line($"Alternative scopes={alternativeScopes.Count}; supply variantId to switch:");
+            foreach (var choice in alternativeScopes.Take(detailCount))
+            {
+                var scope = owner.saved.Graph.Variants.Single(value => value.Id == choice.Variant);
+                Line($"project={choice.Project} variant={choice.Variant} {Safe(scope.TargetFramework, 80)} {Safe(scope.Configuration, 80)}{ScopeChoiceDimensions(scope)}");
+            }
+            if (alternativeScopes.Count > detailCount) Line($"Alternative scopes omitted={alternativeScopes.Count - detailCount}.");
         }
 
         private static string VerifiedLine(HarnessLocation location, IReadOnlyList<ExploreUnit> units)

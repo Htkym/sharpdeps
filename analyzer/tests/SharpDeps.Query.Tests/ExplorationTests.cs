@@ -123,20 +123,22 @@ public sealed class ExplorationTests
         }
     }
 
-    [Fact]
-    public void BatchedOccurrencesCannotMixOrOverrideCompilationAndPathScopes()
+    [Theory]
+    [InlineData(ExploreScopePolicy.RequireUnique)]
+    [InlineData(ExploreScopePolicy.PreferDebug)]
+    public void BatchedOccurrencesCannotMixOrOverrideCompilationAndPathScopes(ExploreScopePolicy scopePolicy)
     {
-        using var fixture = new Fixture(addScopes: true);
+        using var fixture = new Fixture(addScopes: true, scopePolicy: scopePolicy);
         var first = fixture.Occurrence(fixture.RunInt);
         var other = fixture.Occurrence(fixture.RunString, fixture.AlternateVariant);
-        var ambiguous = fixture.Engine().Execute(new(first + " " + other, Budget: Generous));
+        var ambiguous = fixture.Engine().Execute(new(first + " " + other, Budget: Generous, ScopePolicy: scopePolicy));
         Assert.True(ambiguous.Succeeded);
         Assert.Empty(ambiguous.Units);
         Assert.Contains("SCOPE_AMBIGUOUS", ambiguous.OmissionReasons);
         Assert.Contains(fixture.Variant, ambiguous.Text);
         Assert.Contains(fixture.AlternateVariant, ambiguous.Text);
 
-        var selected = fixture.Engine().Execute(new(first + " " + fixture.RunString, Budget: Generous));
+        var selected = fixture.Engine().Execute(new(first + " " + fixture.RunString, Budget: Generous, ScopePolicy: scopePolicy));
         Assert.True(selected.Succeeded);
         Assert.Contains(selected.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
         Assert.Contains(selected.Units, unit => unit.SymbolIds.Contains(fixture.RunString));
@@ -147,7 +149,7 @@ public sealed class ExplorationTests
         Assert.Empty(variantConflict.Units);
         Assert.Contains(variantConflict.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
         var projectConflict = fixture.Engine().Execute(new(first + " " + fixture.RunString,
-            fixture.OtherProject, fixture.OtherVariant, Budget: Generous));
+            fixture.OtherProject, fixture.OtherVariant, Budget: Generous, ScopePolicy: scopePolicy));
         Assert.False(projectConflict.Succeeded);
         Assert.Empty(projectConflict.Units);
         Assert.Contains(projectConflict.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
@@ -478,6 +480,173 @@ public sealed class ExplorationTests
         Assert.DoesNotContain(selected.Units, unit => unit.Path == Fixture.OtherProjectPath);
         var inconsistent = new ExploreRequest("Run", fixture.OtherProject, fixture.Variant, Budget: Generous);
         Assert.Throws<ArgumentException>(() => fixture.Engine().Execute(inconsistent));
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void PreferDebugReportsAlternativesAndKeepsExplicitVariantAndOccurrencePrecedence(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var request = new ExploreRequest("Pump Run", fixture.Project, Budget: Generous, Format: format,
+            ScopePolicy: ExploreScopePolicy.PreferDebug);
+        Assert.Throws<ArgumentException>(() => fixture.Engine().Execute(request with { ScopePolicy = (ExploreScopePolicy)99 }));
+        var preferred = fixture.Engine().Execute(request);
+        Assert.True(preferred.Succeeded);
+        Assert.NotEmpty(preferred.Units);
+        Assert.Contains("Scope project=" + fixture.Project + " variant=" + fixture.Variant, preferred.Text);
+        Assert.Contains("decision=selected-unique-saved-debug", preferred.Text);
+        Assert.Contains("Alternative scopes=1", preferred.Text);
+        Assert.Contains("variant=" + fixture.AlternateVariant, preferred.Text);
+        Assert.DoesNotContain(preferred.Units, unit => unit.Path == Fixture.OtherProjectPath);
+        AssertWireBudget(preferred, Generous);
+
+        var explicitRelease = fixture.Engine().Execute(request with { VariantId = fixture.AlternateVariant });
+        Assert.True(explicitRelease.Succeeded);
+        Assert.Contains("Scope project=" + fixture.Project + " variant=" + fixture.AlternateVariant, explicitRelease.Text);
+        Assert.Contains(fixture.Occurrence(fixture.RunInt, fixture.AlternateVariant), explicitRelease.Text);
+        Assert.DoesNotContain("Alternative scopes=", explicitRelease.Text);
+        AssertWireBudget(explicitRelease, Generous);
+        var occurrenceRelease = fixture.Engine().Execute(request with
+        { Query = fixture.Occurrence(fixture.RunInt, fixture.AlternateVariant) + " Run" });
+        Assert.True(occurrenceRelease.Succeeded);
+        Assert.Contains("Scope project=" + fixture.Project + " variant=" + fixture.AlternateVariant, occurrenceRelease.Text);
+        Assert.Contains("decision=explicit-occurrence", occurrenceRelease.Text);
+        AssertWireBudget(occurrenceRelease, Generous);
+        Assert.Throws<ArgumentException>(() => fixture.Engine().Execute(request with
+        { ProjectId = fixture.OtherProject, VariantId = fixture.Variant }));
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void PreferDebugKeepsMultipleProjectsAndDebugVariantsAmbiguousRegardlessOfSavedOrder(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var request = new ExploreRequest("Pump Run", Budget: Generous, Format: format, ScopePolicy: ExploreScopePolicy.PreferDebug);
+        var projects = fixture.Engine().Execute(request);
+        Assert.Empty(projects.Units);
+        Assert.Contains("SCOPE_AMBIGUOUS", projects.OmissionReasons);
+        Assert.Contains("decision=ambiguous-multiple-projects", projects.Text);
+        AssertWireBudget(projects, Generous);
+
+        var secondDebug = new HarnessVariant(fixture.SecondDebugVariant, fixture.Project, "net10.0", "Debug", "x64", "win-x64", Fixture.Hash("debug-x64"));
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        {
+            Variants = [.. fixture.Snapshot.Graph.Variants, secondDebug],
+            SymbolOccurrences = [.. fixture.Snapshot.Graph.SymbolOccurrences,
+                .. fixture.Snapshot.Graph.SymbolOccurrences.Where(occurrence => occurrence.VariantId == fixture.Variant)
+                    .Select(occurrence => occurrence with { Id = fixture.Occurrence(occurrence.LogicalSymbolId, secondDebug.Id), VariantId = secondDebug.Id })]
+        } };
+        request = request with { ProjectId = fixture.Project };
+        var variants = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.Empty(variants.Units);
+        Assert.Contains("SCOPE_AMBIGUOUS", variants.OmissionReasons);
+        Assert.Contains("decision=ambiguous-multiple-debug-variants", variants.Text);
+        Assert.Contains(fixture.Variant, variants.Text);
+        Assert.Contains(fixture.SecondDebugVariant, variants.Text);
+        var platformChoice = Assert.Single(variants.Text.Split('\n'), line => line.Contains("variant=" + fixture.SecondDebugVariant, StringComparison.Ordinal));
+        Assert.Contains("net10.0 Debug platform=x64 rid=win-x64", platformChoice);
+        AssertWireBudget(variants, Generous);
+        var uniquePolicy = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
+            .Execute(request with { ScopePolicy = ExploreScopePolicy.RequireUnique });
+        Assert.DoesNotContain(" platform=", uniquePolicy.Text);
+        var reordered = snapshot with { Graph = snapshot.Graph with
+        { Variants = snapshot.Graph.Variants.Reverse().ToArray(), SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Reverse().ToArray() } };
+        var repeated = new ExplorationService(new FixedIndex(reordered), new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.Equal(variants.Text, repeated.Text);
+
+        var secondRelease = secondDebug with { Id = fixture.SecondReleaseVariant, Configuration = "Release", AnalysisFingerprint = Fixture.Hash("release-x64") };
+        var noDebug = snapshot with { Graph = snapshot.Graph with
+        {
+            Variants = snapshot.Graph.Variants.Where(scope => scope.Id != fixture.Variant && scope.Id != secondDebug.Id).Append(secondRelease).ToArray(),
+            SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Where(occurrence => occurrence.VariantId != fixture.Variant && occurrence.VariantId != secondDebug.Id)
+                .Concat(snapshot.Graph.SymbolOccurrences.Where(occurrence => occurrence.VariantId == secondDebug.Id)
+                    .Select(occurrence => occurrence with { Id = fixture.Occurrence(occurrence.LogicalSymbolId, secondRelease.Id), VariantId = secondRelease.Id })).ToArray(),
+            Edges = snapshot.Graph.Edges.Where(edge => edge.VariantId != fixture.Variant).ToArray()
+        } };
+        var noPreferred = new ExplorationService(new FixedIndex(noDebug), new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.Empty(noPreferred.Units);
+        Assert.Contains("SCOPE_AMBIGUOUS", noPreferred.OmissionReasons);
+        Assert.Contains("decision=ambiguous-no-debug-variant", noPreferred.Text);
+        Assert.Contains(fixture.AlternateVariant, noPreferred.Text);
+        Assert.Contains(fixture.SecondReleaseVariant, noPreferred.Text);
+        AssertWireBudget(noPreferred, Generous);
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void PreferDebugIntersectsExplicitLogicalAndDocumentScopesWithoutChangingTheDefault(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var removed = new HashSet<string>(StringComparer.Ordinal)
+        { fixture.Occurrence(fixture.RunInt, fixture.AlternateVariant), fixture.Occurrence(fixture.RunString) };
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        { SymbolOccurrences = fixture.Snapshot.Graph.SymbolOccurrences.Where(occurrence => !removed.Contains(occurrence.Id)).ToArray() } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var budget = Generous with { MaxChars = 8192, MaxBytes = 12288 };
+        var request = new ExploreRequest(fixture.RunInt + " Pump", Budget: budget, Format: format);
+        var unchanged = engine.Execute(request);
+        Assert.Empty(unchanged.Units);
+        Assert.Contains("SCOPE_AMBIGUOUS", unchanged.OmissionReasons);
+        Assert.DoesNotContain("Scope policy=", unchanged.Text);
+        var preferred = engine.Execute(request with { ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.True(preferred.Succeeded);
+        Assert.Contains("decision=selected-by-explicit-identities", preferred.Text);
+        Assert.Contains(preferred.Units, unit => unit.SymbolIds.Contains(fixture.RunInt) && unit.Text.Contains("😀", StringComparison.Ordinal));
+        Assert.DoesNotContain(preferred.Units, unit => unit.SymbolIds.Contains(fixture.RunString) || unit.Path == Fixture.OtherProjectPath);
+        Assert.DoesNotContain("Alternative scopes=", preferred.Text);
+        Assert.All(preferred.Units, unit => Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text));
+        AssertWireBudget(unchanged, budget);
+        AssertWireBudget(preferred, budget);
+
+        var releaseOnly = engine.Execute(request with { Query = fixture.RunString + " Pump", ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.True(releaseOnly.Succeeded);
+        Assert.Contains("Scope project=" + fixture.Project + " variant=" + fixture.AlternateVariant, releaseOnly.Text);
+        Assert.Contains("decision=selected-by-explicit-identities", releaseOnly.Text);
+        Assert.Contains(releaseOnly.Units, unit => unit.SymbolIds.Contains(fixture.RunString));
+        AssertWireBudget(releaseOnly, budget);
+
+        var incompatible = engine.Execute(request with
+        { Query = fixture.RunInt + " " + fixture.RunString, ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.Empty(incompatible.Units);
+        Assert.Contains(incompatible.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
+        AssertWireBudget(incompatible, budget);
+        var outsidePath = engine.Execute(request with { PathPrefix = Fixture.PartialPath, ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.Empty(outsidePath.Units);
+        Assert.Contains(outsidePath.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
+        AssertWireBudget(outsidePath, budget);
+
+        var document = engine.Execute(request with { Query = fixture.Section + " Pump Run", ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.True(document.Succeeded);
+        Assert.Contains("decision=selected-by-explicit-identities", document.Text);
+        Assert.Contains(document.Units, unit => unit.SymbolIds.Contains(fixture.Section));
+        AssertWireBudget(document, budget);
+        var documentOnly = engine.Execute(request with { Query = fixture.Section, ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.True(documentOnly.Succeeded);
+        Assert.Contains(documentOnly.Units, unit => unit.SymbolIds.Contains(fixture.Section));
+        Assert.DoesNotContain("SCOPE_AMBIGUOUS", documentOnly.OmissionReasons);
+        Assert.Contains("decision=no-code-scope", documentOnly.Text);
+        AssertWireBudget(documentOnly, budget);
+
+        var unlinked = snapshot with { Graph = snapshot.Graph with
+        { Edges = snapshot.Graph.Edges.Where(edge => edge.Id != "doc-link").ToArray() } };
+        var unprovenDocument = new ExplorationService(new FixedIndex(unlinked), new QueryWorkspace(fixture.Root), true)
+            .Execute(request with { Query = fixture.RunInt + " " + fixture.Section, ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.Empty(unprovenDocument.Units);
+        Assert.Contains(unprovenDocument.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
+        AssertWireBudget(unprovenDocument, budget);
+        var incomplete = snapshot with { Graph = snapshot.Graph with
+        {
+            Coverage = HarnessCoverage.Partial,
+            Nodes = [.. snapshot.Graph.Nodes, new(fixture.Orphan, HarnessNodeKind.Member, "Orphan", fixture.Pump, null, "M:Demo.Pump.Orphan()")]
+        } };
+        var orphan = new ExplorationService(new FixedIndex(incomplete), new QueryWorkspace(fixture.Root), true)
+            .Execute(request with { Query = fixture.RunInt + " " + fixture.Orphan, ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.Empty(orphan.Units);
+        Assert.Contains(orphan.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
+        AssertWireBudget(orphan, budget);
     }
 
     [Fact]
@@ -917,6 +1086,7 @@ public sealed class ExplorationTests
         private readonly Guid workspace, document = Guid.NewGuid();
         private readonly bool caseDistinct, dense, implicitConstructor;
         private readonly ExploreFormat format;
+        private readonly ExploreScopePolicy scopePolicy;
         private readonly string run, runString = "public int Run(string value) { return value.Length; }";
         private readonly string hidden;
         private readonly string? splitRunText;
@@ -932,11 +1102,14 @@ public sealed class ExplorationTests
         public string OtherProject => HarnessIdentity.ProjectId(workspace, "other/Demo.csproj");
         public string Variant => HarnessIdentity.VariantId(workspace, Project, "net10.0", "Debug");
         public string AlternateVariant => HarnessIdentity.VariantId(workspace, Project, "net10.0", "Release");
+        public string SecondDebugVariant => HarnessIdentity.VariantId(workspace, Project, "net10.0", "Debug", "x64", "win-x64");
+        public string SecondReleaseVariant => HarnessIdentity.VariantId(workspace, Project, "net10.0", "Release", "x64", "win-x64");
         public string OtherVariant => HarnessIdentity.VariantId(workspace, OtherProject, "net10.0", "Debug");
         public string Pump => Symbol(Project, "type", "T:Demo.Pump");
         public string Constructor => Symbol(Project, "method", "M:Demo.Pump.#ctor");
         public string RunInt => Symbol(Project, "method", "M:Demo.Pump.Run(System.Int32)");
         public string RunString => Symbol(Project, "method", caseDistinct ? "M:Demo.Pump.run(System.String)" : "M:Demo.Pump.Run(System.String)");
+        public string Orphan => Symbol(Project, "method", "M:Demo.Pump.Orphan()");
         public string Count => Symbol(Project, "field", "F:Demo.Pump.count");
         public string Total => Symbol(Project, "field", "F:Demo.Pump.total");
         public string Helper => Symbol(Project, "method", "M:Demo.Pump.Helper(System.Int32)");
@@ -948,13 +1121,15 @@ public sealed class ExplorationTests
 
         public Fixture(bool addScopes = false, bool partial = false, bool huge = false, bool caseDistinct = false,
             bool dense = false, string ownerGap = "", bool splitRun = false, bool implicitConstructor = false,
-            string suspectPadding = "", Guid? workspaceUuid = null, ExploreFormat format = ExploreFormat.Audit)
+            string suspectPadding = "", Guid? workspaceUuid = null, ExploreFormat format = ExploreFormat.Audit,
+            ExploreScopePolicy scopePolicy = ExploreScopePolicy.RequireUnique)
         {
             workspace = workspaceUuid ?? Guid.NewGuid();
             this.caseDistinct = caseDistinct;
             this.dense = dense;
             this.implicitConstructor = implicitConstructor;
             this.format = format;
+            this.scopePolicy = scopePolicy;
             hidden = "public void Hidden() { " + suspectPadding + "}";
             if (splitRun)
             {
@@ -985,7 +1160,7 @@ public sealed class ExplorationTests
         }
 
         public ExploreRequest Request(string query, QueryBudget? budget = null, string? pathPrefix = null)
-            => new(query, Project, Variant, pathPrefix, Budget: budget ?? Generous, Format: format);
+            => new(query, Project, Variant, pathPrefix, Budget: budget ?? Generous, Format: format, ScopePolicy: scopePolicy);
         public ExplorationService Engine(QueryWorkspace? workspaceReader = null)
             => new(new FixedIndex(Snapshot), workspaceReader ?? new QueryWorkspace(Root), true);
         public ExploreReply Explore(string query, QueryBudget? budget = null, string? pathPrefix = null)
