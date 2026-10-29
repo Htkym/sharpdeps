@@ -2,6 +2,7 @@ namespace SharpDeps.Query;
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -117,7 +118,9 @@ public sealed class ExplorationService
     private sealed record Pending(Selected Selection, HarnessLocation Location, string Reason,
         int? RequiredChars = null, int? RequiredBytes = null, int SourcePriority = 4);
     private sealed record Relation(HarnessEdge Edge, Selected From, Selected To, bool OutsideScope);
-    private sealed record Match(HarnessNode Node, int Score, bool Exact, bool Qualified, bool PathMatch = false);
+    private enum MatchTier { Identity, ExactName, ExactPath, NameComponents, SignatureComponents, IndexHit, Substring }
+    private sealed record Match(HarnessNode Node, MatchTier Tier, bool Exact, bool Qualified, bool PathMatch = false,
+        uint MatchedTerms = 0, uint NameTerms = 0);
     private sealed record AgentDetail(Selected Root, Selected? Member = null, HarnessLocation? Location = null,
         int? SelectedMembers = null, int? CallerSymbols = null, int? CallerOccurrences = null, int? SavedCallEdges = null);
     private sealed record AgentSummary(AgentDetail[] Rows, int Roots, int Selected, int Relations,
@@ -146,6 +149,7 @@ public sealed class ExplorationService
         private readonly List<(string Project, string Variant)> choices = [];
         private readonly List<(string Project, string Variant)> alternativeScopes = [];
         private readonly List<Match> symbolChoices = [];
+        private string[] searchTerms = [];
         private string? scopeDecision;
         private int excludedScopes;
         private AgentSummary? agentSummary;
@@ -284,6 +288,7 @@ public sealed class ExplorationService
             if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && scopeDecision is null && matches.All(match => IsDocument(match.Node)))
                 scopeDecision = "no-code-scope";
             matches = matches.Where(m => NodeAllowed(m.Node, variant)).ToList();
+            matches = OrderMatches(matches);
             if (Terms(request.Query).Length == 1 && matches.Where(m => m.Exact).ToArray() is { Length: > 1 } exact)
             {
                 var families = exact.Select(m => m.Node.Kind == HarnessNodeKind.Member ? m.Node.ParentId
@@ -357,17 +362,6 @@ public sealed class ExplorationService
             return owner.Project(node) == choice.Project && NodeAllowed(node, choice.Variant);
         }
 
-        private static string ShortName(string name)
-        {
-            var depth = 0; var start = 0;
-            for (var i = 0; i < name.Length; i++)
-            {
-                if (name[i] is '<' or '[' or '(') depth++;
-                else if (name[i] is '>' or ']' or ')') depth--;
-                else if (name[i] == '.' && depth == 0) start = i + 1;
-            }
-            return name[start..];
-        }
         private static string[] Terms(string query) => Regex.Matches(query,
                 @"[\p{L}\p{N}_@][\p{L}\p{N}_@`./\\:+<>,\[\]]*", RegexOptions.CultureInvariant)
             .Select(m => m.Value.Replace('\\', '/').TrimEnd('.', ',', ':')).Where(t => t.Length != 0)
@@ -377,14 +371,24 @@ public sealed class ExplorationService
         {
             var query = request.Query.Trim();
             var wholeIdentity = owner.occurrences.ContainsKey(query) || owner.nodes.ContainsKey(query);
-            string[] terms = wholeIdentity ? [query] : Terms(query);
+            var normalized = query.Replace('\\', '/');
+            var literalStarPath = query.Contains('*') && (owner.savedPaths.Contains(normalized) || PathTerm(normalized));
+            string[] terms = wholeIdentity ? [query] : literalStarPath ? [normalized] : Terms(query);
             if (!wholeIdentity && !terms.Any(term => owner.occurrences.ContainsKey(term) || owner.nodes.ContainsKey(term) || IsSavedIdentity(term)))
             {
-                var literal = owner.saved.Graph.Nodes.Where(n => NodeAllowed(n, variant)
-                    && (n.Name == query || owner.Label(n) == query || n.Signature == query)).Select(n => new Match(n, 10000, true, true)).ToList();
-                if (literal.Count > 0) return literal;
+                var literal = new List<Match>();
+                foreach (var node in owner.names.GetValueOrDefault(query) ?? [])
+                {
+                    Check();
+                    if ((node.Name == query || owner.search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
+                        literal.Add(new(node, MatchTier.ExactName, true, true, MatchedTerms: 1,
+                            NameTerms: node.Name == query || owner.search[node.Id].Label == query ? 1u : 0u));
+                }
+                if (literal.Count > 0) { searchTerms = [query]; return literal; }
             }
+            if (query.Contains('*') && !literalStarPath) return SearchWildcard(query);
             if (terms.Length > 32) throw new ArgumentException("Explore accepts at most thirty-two distinct terms.");
+            searchTerms = terms;
             var occurrenceScopes = new HashSet<(string Project, string Variant)>();
             foreach (var term in terms)
             {
@@ -414,46 +418,62 @@ public sealed class ExplorationService
                 variant = scope.Variant;
             }
             var found = new Dictionary<string, Match>(StringComparer.Ordinal);
-            var pathTerms = terms.Where(term => term.Contains('/') || term.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                || term.EndsWith(".md", StringComparison.OrdinalIgnoreCase)).ToHashSet(StringComparer.Ordinal);
+            var pathTerms = terms.Where(PathTerm).ToHashSet(StringComparer.Ordinal);
             sourcePaths.UnionWith(pathTerms);
-            foreach (var term in terms)
+            for (var termIndex = 0; termIndex < terms.Length; termIndex++)
             {
                 Check();
+                var term = terms[termIndex];
+                var bit = 1u << termIndex;
                 var exactNode = owner.occurrences.TryGetValue(term, out var occurrence)
                     ? owner.nodes[occurrence.LogicalSymbolId] : owner.nodes.GetValueOrDefault(term);
                 if (exactNode is not null)
                 {
                     if (!NodeAllowed(exactNode, variant))
                     { Error("SYMBOL_OUTSIDE_SCOPE", "An explicitly requested identity is outside the supplied project, variant or path scope."); return []; }
-                    found[exactNode.Id] = new(exactNode, 10000, true, true, found.GetValueOrDefault(exactNode.Id)?.PathMatch == true);
+                    AddMatch(found, exactNode, MatchTier.Identity, true, true, false, bit, false);
                     continue;
                 }
-                var hits = term.Length <= 128
+                var hits = term.Length <= 128 && !term.Contains('*')
                     ? index.Search(term, 128, timer.Token).Select(h => h.NodeId).ToHashSet(StringComparer.Ordinal)
                     : new HashSet<string>(StringComparer.Ordinal);
-                foreach (var node in owner.saved.Graph.Nodes)
+                var components = ExplorationSnapshot.Components(term, timer.Token);
+                var candidates = new HashSet<string>(hits, StringComparer.Ordinal);
+                foreach (var node in owner.names.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                foreach (var component in components)
+                    foreach (var node in owner.words.GetValueOrDefault(component) ?? []) { Check(); candidates.Add(node.Id); }
+                if (pathTerms.Contains(term))
+                    foreach (var node in owner.paths.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                foreach (var id in candidates)
                 {
                     Check();
-                    if (node.Kind is not (HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.Section or HarnessNodeKind.Document)
-                        || !NodeAllowed(node, variant)) continue;
-                    var label = owner.Label(node);
-                    var simple = ShortName(node.Name);
-                    var baseName = Regex.Replace(simple, "[<`].*$", "", RegexOptions.CultureInvariant);
-                    var exact = term == node.Name || term == simple || term == baseName || term == label || term == node.Signature;
-                    var qualified = term.Contains('.') && term == label || term == node.Signature;
+                    if (!owner.search.TryGetValue(id, out var metadata) || !Searchable(metadata.Node) || !NodeAllowed(metadata.Node, variant)) continue;
+                    var node = metadata.Node;
+                    var exact = term == node.Name || term == metadata.SimpleName || term == metadata.BaseName || term == metadata.Label || term == node.Signature;
+                    var qualified = term.Contains('.') && term == metadata.Label || term == node.Signature;
                     var path = pathTerms.Contains(term) && owner.Locations(node, variant).Any(l =>
                         owner.files.TryGetValue(l.SourceId, out var file) && (file.RelativePath == term || Path.GetFileName(file.RelativePath) == term));
-                    var score = exact ? 100 : path ? 90 : hits.Contains(node.Id) ? 10 : label.Contains(term, StringComparison.OrdinalIgnoreCase) ? 5 : 0;
-                    if (score == 0) continue;
-                    var previous = found.GetValueOrDefault(node.Id);
-                    if (previous is { Score: >= 10000 })
-                    {
-                        if (path && !previous.PathMatch) found[node.Id] = previous with { PathMatch = true };
-                        continue;
-                    }
-                    found[node.Id] = new(node, score + (previous?.Score ?? 0), exact || previous?.Exact == true,
-                        qualified || previous?.Qualified == true, path || previous?.PathMatch == true);
+                    var name = metadata.Aliases.Any(alias => alias.Equals(term, StringComparison.OrdinalIgnoreCase))
+                        || ContainsWords(metadata.NameWords, components);
+                    var signature = ContainsWords(metadata.SignatureWords, components);
+                    MatchTier? tier = exact ? MatchTier.ExactName : path ? MatchTier.ExactPath : name ? MatchTier.NameComponents
+                        : signature ? MatchTier.SignatureComponents : hits.Contains(id) ? MatchTier.IndexHit : null;
+                    if (tier is { } matched) AddMatch(found, node, matched, exact, qualified, path, bit, name);
+                }
+            }
+            foreach (var metadata in owner.search.Values)
+            {
+                Check();
+                if (!Searchable(metadata.Node)) continue;
+                var allowed = false;
+                for (var termIndex = 0; termIndex < terms.Length; termIndex++)
+                {
+                    var term = terms[termIndex];
+                    if (owner.nodes.ContainsKey(term) || owner.occurrences.ContainsKey(term)
+                        || !metadata.Label.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!allowed && !NodeAllowed(metadata.Node, variant)) break;
+                    allowed = true;
+                    AddMatch(found, metadata.Node, MatchTier.Substring, false, false, false, 1u << termIndex, false);
                 }
             }
             var matches = found.Values.ToList();
@@ -462,10 +482,116 @@ public sealed class ExplorationService
                 matches.RemoveAll(m => m.Node.Kind == HarnessNodeKind.Member && !m.Qualified && m.Node.ParentId is { } parent
                     && !anchors.Contains(parent) && matches.Any(other => other.Node.Kind == HarnessNodeKind.Member && other.Node.Name == m.Node.Name
                         && other.Node.ParentId is { } otherParent && anchors.Contains(otherParent)));
-            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && m.Score < 90);
-            return matches.OrderByDescending(m => m.Score).ThenBy(m => owner.Label(m.Node), StringComparer.Ordinal)
-                .ThenBy(m => m.Node.Id, StringComparer.Ordinal).ToList();
+            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && !m.PathMatch);
+            return matches;
         }
+
+        private static bool Searchable(HarnessNode node) => node.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member
+            or HarnessNodeKind.Section or HarnessNodeKind.Document;
+
+        private static bool PathTerm(string term) => term.Contains('/') || term.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            || term.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+        private bool ContainsWords(string[] source, string[] term)
+        {
+            if (term.Length == 0) return false;
+            for (var start = 0; start <= source.Length - term.Length; start++)
+            {
+                Check();
+                var index = 0;
+                while (index < term.Length && source[start + index].Equals(term[index], StringComparison.OrdinalIgnoreCase)) index++;
+                if (index == term.Length) return true;
+            }
+            return false;
+        }
+
+        private static void AddMatch(Dictionary<string, Match> found, HarnessNode node, MatchTier tier, bool exact,
+            bool qualified, bool path, uint term, bool name)
+        {
+            var previous = found.GetValueOrDefault(node.Id);
+            found[node.Id] = new(node, previous is not null && previous.Tier.CompareTo(tier) < 0 ? previous.Tier : tier,
+                exact || previous?.Exact == true, qualified || previous?.Qualified == true, path || previous?.PathMatch == true,
+                term | (previous?.MatchedTerms ?? 0), (name ? term : 0) | (previous?.NameTerms ?? 0));
+        }
+
+        private List<Match> SearchWildcard(string query)
+        {
+            var prefix = query.EndsWith('*');
+            var literal = prefix ? query[..^1] : query.StartsWith('*') ? query[1..] : "";
+            var identifier = literal.StartsWith('@') ? literal[1..] : literal;
+            if (query.Count(character => character == '*') != 1 || identifier.Length < 2
+                || !(char.IsLetter(identifier[0]) || identifier[0] == '_')
+                || identifier.Any(character => !char.IsLetterOrDigit(character) && character != '_')
+                || IsSavedIdentity(identifier) || owner.nodes.ContainsKey(identifier) || owner.occurrences.ContainsKey(identifier))
+                throw new ArgumentException("Explore name wildcards require one leading or trailing star and at least two identifier characters.");
+            searchTerms = [identifier];
+            var matches = new List<Match>();
+            foreach (var metadata in owner.search.Values)
+            {
+                Check();
+                if (!Searchable(metadata.Node) || !metadata.Aliases.Any(alias => prefix
+                    ? alias.StartsWith(identifier, StringComparison.OrdinalIgnoreCase) : alias.EndsWith(identifier, StringComparison.OrdinalIgnoreCase))
+                    || !NodeAllowed(metadata.Node, variant)) continue;
+                matches.Add(new(metadata.Node, MatchTier.NameComponents, false, false, MatchedTerms: 1, NameTerms: 1));
+            }
+            return matches;
+        }
+
+        private List<Match> OrderMatches(List<Match> matches)
+        {
+            var terms = searchTerms.Select(term => ExplorationSnapshot.Components(term, timer.Token)).ToArray();
+            var ranked = new List<(Match Match, int Context, int Penalty, string Path, int Start)>();
+            foreach (var match in matches)
+            {
+                Check();
+                var metadata = owner.search[match.Node.Id];
+                uint context = 0;
+                for (var index = 0; index < terms.Length; index++)
+                    if (ContainsWords(metadata.ContextWords, terms[index])) context |= 1u << index;
+                var path = ""; var start = int.MaxValue; var known = false; var unknown = false; var deprioritized = true;
+                if (variant is not null)
+                    foreach (var location in owner.Locations(match.Node, variant))
+                    {
+                        Check();
+                        if (!PathAllowed(location)) continue;
+                        if (!owner.files.TryGetValue(location.SourceId, out var file)) { unknown = true; continue; }
+                        known = true;
+                        deprioritized &= DeprioritizedPath(file.RelativePath);
+                        var position = location.RawSpan?.Start ?? int.MaxValue;
+                        if (path.Length == 0 || StringComparer.Ordinal.Compare(file.RelativePath, path) < 0
+                            || file.RelativePath == path && position < start) { path = file.RelativePath; start = position; }
+                        var components = ExplorationSnapshot.Components(file.RelativePath, timer.Token);
+                        for (var index = 0; index < terms.Length; index++)
+                            if (ContainsWords(components, terms[index])) context |= 1u << index;
+                    }
+                ranked.Add((match, BitOperations.PopCount(context),
+                    !match.Exact && !match.PathMatch && known && !unknown && deprioritized ? 1 : 0, path, start));
+            }
+            try
+            {
+                ranked.Sort((left, right) =>
+                {
+                    Check();
+                    var order = left.Match.Tier.CompareTo(right.Match.Tier);
+                    if (order == 0) order = BitOperations.PopCount(right.Match.MatchedTerms).CompareTo(BitOperations.PopCount(left.Match.MatchedTerms));
+                    if (order == 0) order = BitOperations.PopCount(right.Match.NameTerms).CompareTo(BitOperations.PopCount(left.Match.NameTerms));
+                    if (order == 0) order = right.Context.CompareTo(left.Context);
+                    if (order == 0) order = left.Penalty.CompareTo(right.Penalty);
+                    if (order == 0) order = StringComparer.Ordinal.Compare(left.Path, right.Path);
+                    if (order == 0) order = left.Start.CompareTo(right.Start);
+                    if (order == 0) order = StringComparer.Ordinal.Compare(owner.search[left.Match.Node.Id].Label, owner.search[right.Match.Node.Id].Label);
+                    return order != 0 ? order : StringComparer.Ordinal.Compare(left.Match.Node.Id, right.Match.Node.Id);
+                });
+            }
+            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
+            { throw new OperationCanceledException("Search ranking was cancelled.", error, timer.Token); }
+            return ranked.Select(item => item.Match).ToList();
+        }
+
+        private static bool DeprioritizedPath(string path) => path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            || path.Split('/').Any(part => part.Equals("tests", StringComparison.OrdinalIgnoreCase)
+                || part.Equals("samples", StringComparison.OrdinalIgnoreCase) || part.Equals("benchmarks", StringComparison.OrdinalIgnoreCase)
+                || part.Equals("obj", StringComparison.OrdinalIgnoreCase));
 
         private static bool IsSavedIdentity(string value) => value.Length == 69
                 && (value.StartsWith("hsym_", StringComparison.Ordinal) || value.StartsWith("hocc_", StringComparison.Ordinal)

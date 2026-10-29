@@ -2,8 +2,12 @@ namespace SharpDeps.Query;
 
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Index;
+
+internal sealed record ExplorationSearchMetadata(HarnessNode Node, string Label, string SimpleName, string BaseName,
+    string[] Aliases, string[] NameWords, string[] SignatureWords, string[] ContextWords);
 
 internal sealed class ExplorationSnapshot
 {
@@ -14,6 +18,11 @@ internal sealed class ExplorationSnapshot
     internal readonly Dictionary<string, IndexFile> files;
     internal readonly Dictionary<string, HarnessEdge[]> outgoing;
     internal readonly Dictionary<string, HarnessEdge[]> incoming;
+    internal readonly Dictionary<string, ExplorationSearchMetadata> search;
+    internal readonly Dictionary<string, HarnessNode[]> names;
+    internal readonly Dictionary<string, HarnessNode[]> words;
+    internal readonly Dictionary<string, HarnessNode[]> paths;
+    internal readonly HashSet<string> savedPaths;
 
     internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token)
     {
@@ -24,7 +33,112 @@ internal sealed class ExplorationSnapshot
         bySymbol = Group(frozen.Graph.SymbolOccurrences, occurrence => occurrence.LogicalSymbolId, occurrence => occurrence.Id, token);
         outgoing = Group(frozen.Graph.Edges, edge => edge.SourceNodeId, edge => edge.Id, token);
         incoming = Group(frozen.Graph.Edges, edge => edge.TargetNodeId, edge => edge.Id, token);
+        search = new(StringComparer.Ordinal);
+        foreach (var node in frozen.Graph.Nodes)
+        {
+            token.ThrowIfCancellationRequested();
+            var label = Label(node);
+            var simple = ShortName(node.Name);
+            var baseName = Regex.Replace(simple, "[<`].*$", "", RegexOptions.CultureInvariant);
+            var context = node.Kind == HarnessNodeKind.Member && node.ParentId is { } parent
+                ? nodes[parent].Name : node.Name[..(node.Name.Length - simple.Length)];
+            var contextWords = Components(context, token);
+            var signature = node.Signature ?? "";
+            var declaration = node.Kind == HarnessNodeKind.Member ? label : node.Name;
+            var declarationStart = signature.IndexOf(declaration, StringComparison.Ordinal);
+            while (declarationStart >= 0 && declarationStart + declaration.Length < signature.Length
+                && (char.IsLetterOrDigit(signature[declarationStart + declaration.Length]) || signature[declarationStart + declaration.Length] == '_'))
+            {
+                token.ThrowIfCancellationRequested();
+                declarationStart = signature.IndexOf(declaration, declarationStart + 1, StringComparison.Ordinal);
+            }
+            // Mask only the declaring prefix; parameter types may legitimately repeat its words.
+            string[] signatureWords = context.Length > 0 && declarationStart >= 0
+                ? [.. Components(signature[..declarationStart], token), "", .. Components(signature[(declarationStart + context.Length)..], token)]
+                : Components(signature, token);
+            search.Add(node.Id, new(node, label, simple, baseName,
+                new[] { node.Name, simple, baseName, label }.Distinct(StringComparer.Ordinal).ToArray(),
+                Components(baseName, token), signatureWords, contextWords));
+        }
+        names = SearchLookup(item => item.Aliases.Concat(item.Node.Signature is { } signature ? [signature] : []),
+            StringComparer.OrdinalIgnoreCase, token);
+        words = SearchLookup(item => item.NameWords.Concat(item.SignatureWords), StringComparer.OrdinalIgnoreCase, token);
+        paths = SearchLookup(item => Locations(item.Node, null).Where(location => files.ContainsKey(location.SourceId))
+            .SelectMany(location => new[] { files[location.SourceId].RelativePath, Path.GetFileName(files[location.SourceId].RelativePath) }),
+            StringComparer.Ordinal, token);
+        savedPaths = new(StringComparer.Ordinal);
+        foreach (var file in frozen.Files)
+        {
+            token.ThrowIfCancellationRequested();
+            savedPaths.Add(file.RelativePath);
+            savedPaths.Add(Path.GetFileName(file.RelativePath));
+        }
         token.ThrowIfCancellationRequested();
+    }
+
+    private Dictionary<string, HarnessNode[]> SearchLookup(Func<ExplorationSearchMetadata, IEnumerable<string>> keys,
+        StringComparer comparer, CancellationToken token)
+    {
+        var groups = new Dictionary<string, List<HarnessNode>>(comparer);
+        foreach (var item in search.Values)
+            foreach (var key in keys(item).Where(key => key.Length != 0).Distinct(comparer))
+            {
+                token.ThrowIfCancellationRequested();
+                if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = []);
+                group.Add(item.Node);
+            }
+        var result = new Dictionary<string, HarnessNode[]>(comparer);
+        foreach (var (key, group) in groups)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                group.Sort((left, right) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return StringComparer.Ordinal.Compare(left.Id, right.Id);
+                });
+            }
+            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
+            { throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token); }
+            result.Add(key, group.ToArray());
+        }
+        return result;
+    }
+
+    private static string ShortName(string name)
+    {
+        var depth = 0; var start = 0;
+        for (var index = 0; index < name.Length; index++)
+        {
+            if (name[index] is '<' or '[' or '(') depth++;
+            else if (name[index] is '>' or ']' or ')') depth--;
+            else if (name[index] == '.' && depth == 0) start = index + 1;
+        }
+        return name[start..];
+    }
+
+    internal static string[] Components(string text, CancellationToken token = default)
+    {
+        var result = new List<string>();
+        var start = 0;
+        for (var index = 0; index <= text.Length; index++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (index == text.Length || !char.IsLetterOrDigit(text[index]))
+            {
+                if (index > start) result.Add(text[start..index]);
+                start = index + 1;
+            }
+            else if (index > start && char.IsUpper(text[index])
+                && (char.IsLower(text[index - 1]) || char.IsDigit(text[index - 1])
+                    || char.IsUpper(text[index - 1]) && index + 1 < text.Length && char.IsLower(text[index + 1])))
+            {
+                result.Add(text[start..index]);
+                start = index;
+            }
+        }
+        return result.ToArray();
     }
 
     private static Dictionary<string, T> Lookup<T>(IEnumerable<T> values, Func<T, string> key, CancellationToken token)

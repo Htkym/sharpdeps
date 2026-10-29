@@ -14,6 +14,160 @@ public sealed class ExplorationTests
     private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
     [Fact]
+    public void DerivedRankingUsesDistinctTermsIdentifierComponentsAndTheExactCachedPayload()
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var current = RankingSnapshot(fixture,
+            (fixture.RunInt, "GetUser", "M:Demo.Pump.GetUser()"),
+            (fixture.RunString, "GetGetGetOrder", "M:Demo.Pump.GetGetGetOrder()"),
+            (fixture.Helper, "HTTPClient", "M:Demo.Pump.HTTPClient()"),
+            (fixture.Count, "order_client", "F:Demo.Pump.order_client"),
+            (fixture.Total, "Clientele", "F:Demo.Pump.Clientele"),
+            (fixture.Suspect, "OrderClient", "M:Demo.Suspect.OrderClient()"));
+        var engine = new ExplorationService(new ObservedIndex(() => current), null, false);
+        var one = Generous with { MaxNodes = 1 };
+        AssertRankingSelectors(engine.Execute(fixture.Request("get user", one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request("get get user", one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request("http client", one)), fixture.Occurrence(fixture.Helper));
+        AssertRankingSelectors(engine.Execute(fixture.Request("client", Generous with { MaxNodes = 3 })),
+            fixture.Occurrence(fixture.Helper), fixture.Occurrence(fixture.Count), fixture.Occurrence(fixture.Suspect));
+
+        // Keep the same snapshot/generation identities: the full changed payload must rebuild the name metadata.
+        current = RenameRankingNodes(current, (fixture.RunInt, "Absent", "M:Demo.Pump.Absent()"));
+        AssertRankingSelectors(engine.Execute(fixture.Request("get user", one)), fixture.Occurrence(fixture.RunString));
+    }
+
+    [Fact]
+    public void RankingTiersAndSavedTiesDoNotDependOnCandidateOrHitEnumerationOrder()
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var snapshot = RankingSnapshot(fixture,
+            (fixture.RunInt, "Order", "M:Demo.Pump.Order()"),
+            (fixture.RunString, "OrderUser", "M:Demo.Pump.OrderUser()"),
+            (fixture.Helper, "Other", "M:Demo.Pump.OrderUserUserUser(Token)"),
+            (fixture.Count, "Opaque", "F:Demo.Pump.Opaque"),
+            (fixture.Total, "prefixstoredtermsuffix", "F:Demo.Pump.prefixstoredtermsuffix"));
+        var index = new RankingIndex(snapshot, fixture.Count);
+        var engine = new ExplorationService(index, null, false);
+        var one = Generous with { MaxNodes = 1 };
+        AssertRankingSelectors(engine.Execute(fixture.Request("Order user", one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request("user", one)), fixture.Occurrence(fixture.RunString));
+        AssertRankingSelectors(engine.Execute(fixture.Request("token", one)), fixture.Occurrence(fixture.Helper));
+        AssertRankingSelectors(engine.Execute(fixture.Request("M:Demo.Pump.OrderUserUserUser(Token)", one)), fixture.Occurrence(fixture.Helper));
+        AssertRankingSelectors(engine.Execute(fixture.Request("storedterm", one)), fixture.Occurrence(fixture.Count));
+        AssertRankingSelectors(engine.Execute(fixture.Request(fixture.Occurrence(fixture.Total) + " storedterm", one)),
+            fixture.Occurrence(fixture.Total));
+
+        var contextual = RenameRankingNodes(snapshot,
+            (fixture.Pump, "Demo.Client", "T:Demo.Client"),
+            (fixture.Helper, "Use", "M:Demo.Client.Use(HttpClient)"));
+        AssertRankingSelectors(new ExplorationService(new RankingIndex(contextual, fixture.Count), null, false)
+            .Execute(fixture.Request("HttpClient", one)), fixture.Occurrence(fixture.Helper));
+
+        var tied = RenameRankingNodes(snapshot,
+            (fixture.RunInt, "TwinClient", "M:Demo.Pump.TwinClient()"),
+            (fixture.RunString, "TwinClient", "M:Demo.Pump.TwinClient()"));
+        var shared = tied.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.RunInt));
+        tied = tied with { Graph = tied.Graph with { SymbolOccurrences = tied.Graph.SymbolOccurrences.Select(item =>
+            item.Id == fixture.Occurrence(fixture.RunString) ? item with { Location = shared.Location, Declarations = shared.Declarations } : item).ToArray() } };
+        var expected = new[] { fixture.RunInt, fixture.RunString }.Order(StringComparer.Ordinal).First();
+        AssertRankingSelectors(new ExplorationService(new RankingIndex(tied, fixture.RunString, fixture.RunInt), null, false)
+            .Execute(fixture.Request("client", one)), fixture.Occurrence(expected));
+        var reversed = tied with
+        {
+            Graph = tied.Graph with { Nodes = tied.Graph.Nodes.Reverse().ToArray(), SymbolOccurrences = tied.Graph.SymbolOccurrences.Reverse().ToArray() },
+            SearchText = tied.SearchText.Reverse().ToArray()
+        };
+        Assert.Equal(tied.Graph.SnapshotId, reversed.Graph.SnapshotId);
+        AssertRankingSelectors(new ExplorationService(new RankingIndex(reversed, fixture.RunInt, fixture.RunString), null, false)
+            .Execute(fixture.Request("client", one)), fixture.Occurrence(expected));
+    }
+
+    [Fact]
+    public void WeakPathPreferenceUsesOnlyTheSelectedVariantAndNeverExcludesExplicitTargets()
+    {
+        using var fixture = new Fixture(addScopes: true, format: ExploreFormat.Agent);
+        var other = fixture.Snapshot.Graph.SymbolOccurrences.Single(item => item.VariantId == fixture.OtherVariant
+            && fixture.Snapshot.Graph.Nodes.Single(node => node.Id == item.LogicalSymbolId).Kind == HarnessNodeKind.Member).LogicalSymbolId;
+        var snapshot = RankingSnapshot(fixture,
+            (fixture.RunInt, "AlphaClient", "M:Demo.Pump.AlphaClient()"),
+            (fixture.Suspect, "ZetaClient", "M:Demo.Suspect.ZetaClient()"),
+            (other, "OmegaClient", "M:Demo.Pump.OmegaClient()"));
+        snapshot = snapshot with { Files = snapshot.Files.Select(file => file.SourceId == Fixture.CorePath
+            ? file with { RelativePath = "benchmarks/Alpha.cs" } : file.SourceId == Fixture.SuspectPath
+                ? file with { RelativePath = "src/Zeta.cs" } : file).ToArray() };
+        var normal = snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.Pump)).Declarations!
+            .Single(location => location.SourceId == Fixture.PartialPath);
+        snapshot = snapshot with { Graph = snapshot.Graph with { SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(item =>
+            item.Id == fixture.Occurrence(fixture.RunInt, fixture.AlternateVariant)
+                ? item with { Declarations = item.Declarations!.Append(normal).ToArray() } : item).ToArray() } };
+        var one = Generous with { MaxNodes = 1 };
+        var engine = new ExplorationService(new FixedIndex(snapshot), null, false);
+        AssertRankingSelectors(engine.Execute(fixture.Request("client", one)), fixture.Occurrence(fixture.Suspect));
+        AssertRankingSelectors(engine.Execute(fixture.Request("AlphaClient", one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request(fixture.Occurrence(fixture.RunInt), one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request(fixture.RunInt, one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request("benchmarks/Alpha.cs client", one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request("client", one, "benchmarks")), fixture.Occurrence(fixture.RunInt));
+
+        // A normal declaration in Release does not rescue Debug; a normal Debug declaration does.
+        var mixed = snapshot with { Graph = snapshot.Graph with { SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(item =>
+            item.Id == fixture.Occurrence(fixture.RunInt) ? item with { Declarations = item.Declarations!.Append(normal).ToArray() } : item).ToArray() } };
+        AssertRankingSelectors(new ExplorationService(new FixedIndex(mixed), null, false).Execute(fixture.Request("client", one)),
+            fixture.Occurrence(fixture.RunInt));
+        var inferred = snapshot with { Graph = snapshot.Graph with
+        {
+            Variants = snapshot.Graph.Variants.Where(item => item.Id != fixture.AlternateVariant).ToArray(),
+            SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Where(item => item.VariantId != fixture.AlternateVariant).ToArray()
+        } };
+        AssertRankingSelectors(new ExplorationService(new FixedIndex(inferred), null, false)
+            .Execute(new ExploreRequest("client", ProjectId: fixture.Project, Budget: one, Format: ExploreFormat.Agent)),
+            fixture.Occurrence(fixture.Suspect));
+        var ambiguous = engine.Execute(new ExploreRequest("client", Budget: one, Format: ExploreFormat.Agent));
+        Assert.Contains("SCOPE_AMBIGUOUS", ambiguous.OmissionReasons);
+        Assert.Contains(fixture.Project, ambiguous.Text);
+        Assert.Contains(fixture.OtherProject, ambiguous.Text);
+        Assert.Contains(fixture.AlternateVariant, ambiguous.Text);
+        Assert.Empty(ambiguous.Units);
+    }
+
+    [Fact]
+    public void IdentifierWildcardsKeepLiteralPathsNamesJapaneseAndSavedIdentitiesDistinct()
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var snapshot = RankingSnapshot(fixture,
+            (fixture.RunInt, "OrderClient", "M:Demo.Pump.OrderClient()"),
+            (fixture.RunString, "OrderService", "M:Demo.Pump.OrderService()"),
+            (fixture.Helper, "設定Loader", "M:Demo.Pump.設定Loader()"));
+        var index = new RankingIndex(snapshot);
+        var engine = new ExplorationService(index, null, false);
+        var one = Generous with { MaxNodes = 1 };
+        AssertRankingSelectors(engine.Execute(fixture.Request("Order*", Generous with { MaxNodes = 2 })),
+            fixture.Occurrence(fixture.RunInt), fixture.Occurrence(fixture.RunString));
+        AssertRankingSelectors(engine.Execute(fixture.Request("@Order*", Generous with { MaxNodes = 2 })),
+            fixture.Occurrence(fixture.RunInt), fixture.Occurrence(fixture.RunString));
+        AssertRankingSelectors(engine.Execute(fixture.Request("*Service", one)), fixture.Occurrence(fixture.RunString));
+        AssertRankingSelectors(engine.Execute(fixture.Request("設定", one)), fixture.Occurrence(fixture.Helper));
+        AssertRankingSelectors(engine.Execute(fixture.Request("設定Loader", one)), fixture.Occurrence(fixture.Helper));
+        foreach (var query in new[] { "O*", "Ord*er", "*Order*", "Order* other", fixture.RunInt + "*", fixture.Occurrence(fixture.RunInt) + "*" })
+            Assert.Throws<ArgumentException>(() => engine.Execute(fixture.Request(query, one)));
+        var missingPath = engine.Execute(fixture.Request("src/*.cs", one));
+        Assert.Contains(missingPath.Errors, issue => issue.Code == "SYMBOL_NOT_FOUND");
+        Assert.DoesNotContain(index.Literals, literal => literal.Contains('*'));
+
+        var literalName = RenameRankingNodes(snapshot, (fixture.Helper, "Order*", "M:Demo.Pump.LiteralStar()"));
+        AssertRankingSelectors(new ExplorationService(new FixedIndex(literalName), null, false)
+            .Execute(fixture.Request("Order*", one)), fixture.Occurrence(fixture.Helper));
+        var literalPath = snapshot with { Files = snapshot.Files.Select(file => file.SourceId == Fixture.SuspectPath
+            ? file with { RelativePath = "src/Order*.cs" } : file).ToArray() };
+        var pathReply = new ExplorationService(new FixedIndex(literalPath), null, false)
+            .Execute(fixture.Request("src/Order*.cs", one));
+        Assert.True(pathReply.Succeeded);
+        Assert.Contains("src/Order*.cs", pathReply.Text);
+        Assert.Empty(pathReply.Units);
+    }
+
+    [Fact]
     public void LongExploreTermsDoNotExceedTheSavedIndexLiteralLimit()
     {
         using var fixture = new Fixture();
@@ -1404,6 +1558,43 @@ public sealed class ExplorationTests
         Assert.InRange(Encoding.UTF8.GetByteCount(conservative), 0, reply.WireBytes);
         Assert.InRange(reply.WireChars, 0, budget.MaxChars);
         Assert.InRange(reply.WireBytes, 0, budget.MaxBytes);
+    }
+
+    // These case-local snapshots exercise saved metadata only. Renamed labels/signatures do not describe current source bodies.
+    private static IndexSnapshot RankingSnapshot(Fixture fixture, params (string Id, string Name, string Signature)[] names)
+        => RenameRankingNodes(fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } }, names);
+
+    private static IndexSnapshot RenameRankingNodes(IndexSnapshot snapshot, params (string Id, string Name, string Signature)[] names)
+    {
+        var changes = names.ToDictionary(item => item.Id, StringComparer.Ordinal);
+        return snapshot with
+        {
+            Graph = snapshot.Graph with { Nodes = snapshot.Graph.Nodes.Select(node => changes.TryGetValue(node.Id, out var item)
+                ? node with { Name = item.Name, Signature = item.Signature } : node).ToArray() },
+            SearchText = snapshot.SearchText.Select(text => changes.TryGetValue(text.NodeId, out var item)
+                ? text with { Name = item.Name, Signature = item.Signature } : text).ToArray()
+        };
+    }
+
+    private static void AssertRankingSelectors(ExploreReply reply, params string[] expected)
+    {
+        Assert.True(reply.Succeeded);
+        Assert.Empty(reply.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", reply.OmissionReasons);
+        var actual = System.Text.RegularExpressions.Regex.Matches(reply.Text, @" selector=(hocc_[0-9a-f]{64})(?: |\r?$)",
+            System.Text.RegularExpressions.RegexOptions.Multiline).Select(match => match.Groups[1].Value).Distinct().Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(expected.Order(StringComparer.Ordinal).ToArray(), actual);
+    }
+
+    private sealed class RankingIndex(IndexSnapshot snapshot, params string[] hits) : IQueryIndex
+    {
+        public IndexSnapshot Snapshot { get; } = snapshot;
+        public List<string> Literals { get; } = [];
+        public IReadOnlyList<IndexSearchHit> Search(string literal, int limit)
+        {
+            Literals.Add(literal);
+            return hits.Select(id => new IndexSearchHit(id, 0, "fixture-hit")).ToArray();
+        }
     }
 
     private sealed class FixedIndex(IndexSnapshot snapshot) : IQueryIndex

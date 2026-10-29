@@ -294,6 +294,18 @@ public sealed class QueryTests
             Scope: new(Kind: HarnessNodeKind.Section, PathPrefix: "readme.md"), Budget: Generous));
         Assert.Equal(fixture.SectionId, Assert.Single(japanese.Envelope.Items).Id);
         Assert.Equal("readme.md", japanese.Envelope.Items[0].Path);
+        const string bodyOnlyJapanese = "定の手";
+        Assert.DoesNotContain(reader.Snapshot().Graph.Nodes, node => node.Name.Contains(bodyOnlyJapanese, StringComparison.Ordinal)
+            || node.Signature?.Contains(bodyOnlyJapanese, StringComparison.Ordinal) == true);
+        var nativeHit = Assert.Single(reader.Search(bodyOnlyJapanese));
+        Assert.Equal(fixture.SectionId, nativeHit.NodeId);
+        Assert.Equal("literal-substring", nativeHit.MatchMethod);
+        var explored = new ExplorationService(new PinnedQueryIndex(reader), isTrusted: false)
+            .Execute(new(bodyOnlyJapanese, PathPrefix: "readme.md", Budget: Generous));
+        Assert.True(explored.Succeeded);
+        Assert.Contains("id=" + fixture.SectionId, explored.Text, StringComparison.Ordinal);
+        Assert.Empty(explored.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", explored.OmissionReasons);
         var detail = query.Execute(new("declarations", QueryKind.Symbol, NodeId: fixture.A,
             Scope: new(VariantIds: [fixture.Variant]), Budget: Generous));
         Assert.Equal(fixture.Occurrence(fixture.A), Assert.Single(detail.Envelope.Items, i => i.Occurrence is not null).Id);
