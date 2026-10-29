@@ -244,6 +244,109 @@ public sealed class ExplorationTests
                 + (format == ExploreFormat.Audit ? "/Resolved-->" : "/Resolved->"), reply.Text);
     }
 
+    [Fact]
+    public void AgentTypeHubKeepsRelationlessMemberSelectorsWithoutReadingTheirSource()
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var declaration = fixture.Snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.Suspect)).Location!;
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        {
+            Nodes = [.. fixture.Snapshot.Graph.Nodes,
+                new(fixture.Orphan, HarnessNodeKind.Member, "Orphan", fixture.Pump, null, "M:Demo.Pump.Orphan()")],
+            SymbolOccurrences = [.. fixture.Snapshot.Graph.SymbolOccurrences,
+                new(fixture.Occurrence(fixture.Orphan), fixture.Orphan, fixture.Variant, declaration, [declaration])],
+            Edges = []
+        } };
+        foreach (var path in fixture.Sources.Keys) File.Delete(Path.Combine(fixture.Root, path));
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), false);
+        var request = fixture.Request(fixture.Occurrence(fixture.Pump));
+        var agent = engine.Execute(request);
+
+        Assert.True(agent.Succeeded);
+        Assert.Empty(agent.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", agent.OmissionReasons);
+        var symbol = Assert.Single(agent.Text.Split('\n'), line => line.Contains(" selector=" + fixture.Occurrence(fixture.Orphan), StringComparison.Ordinal));
+        var alias = symbol.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+        var member = Assert.Single(agent.Text.Split('\n'), line => line.StartsWith("Member @", StringComparison.Ordinal)
+            && line.Contains(" -> " + alias + " signature=M:Demo.Pump.Orphan() ", StringComparison.Ordinal));
+        Assert.Contains("variant=" + fixture.Variant, member);
+        Assert.Contains(":unknown source=not-requested", member);
+        AssertWireBudget(agent, request.Budget!);
+
+        var audit = engine.Execute(request with { Format = ExploreFormat.Audit });
+        Assert.Empty(audit.Units);
+        Assert.DoesNotContain("Retained overview", audit.Text);
+        Assert.DoesNotContain("Retained root ", audit.Text);
+        Assert.DoesNotContain("Member @", audit.Text);
+        Assert.DoesNotContain(fixture.Occurrence(fixture.Orphan), audit.Text);
+        AssertWireBudget(audit, request.Budget!);
+    }
+
+    [Fact]
+    public void AgentCallerSummaryCountsBoundRetainedEdgesWithoutExpandingUnconfirmedPointers()
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var template = fixture.Snapshot.Graph.Edges.Single(edge => edge.Id == "direct-helper");
+        HarnessLocation Location(string id) => fixture.Snapshot.Graph.SymbolOccurrences
+            .Single(item => item.Id == fixture.Occurrence(id)).Location!;
+        HarnessEdge Incoming(string id, string source, HarnessCertainty certainty = HarnessCertainty.Resolved) => template with
+        {
+            Id = id, SourceNodeId = source, SourceOccurrenceId = fixture.Occurrence(source),
+            TargetNodeId = fixture.RunInt, TargetOccurrenceId = fixture.Occurrence(fixture.RunInt),
+            Certainty = certainty, Evidence = Location(source)
+        };
+        var caller = Incoming("caller-first", fixture.Helper);
+        var candidate = template with
+        {
+            Id = "candidate-start", TargetNodeId = fixture.RunString, TargetOccurrenceId = fixture.Occurrence(fixture.RunString),
+            Certainty = HarnessCertainty.Candidate
+        };
+        var unbound = template with
+        {
+            Id = "unbound-start", SourceOccurrenceId = null,
+            TargetNodeId = fixture.Total, TargetOccurrenceId = fixture.Occurrence(fixture.Total)
+        };
+        var tail = template with
+        {
+            Id = "candidate-tail", SourceNodeId = fixture.RunString, SourceOccurrenceId = fixture.Occurrence(fixture.RunString),
+            TargetNodeId = fixture.Count, TargetOccurrenceId = fixture.Occurrence(fixture.Count), Evidence = Location(fixture.RunString)
+        };
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges =
+        [
+            caller, caller with { Id = "caller-second" },
+            caller with { Id = "caller-outside-evidence", Evidence = Location(fixture.Suspect) },
+            Incoming("candidate-caller", fixture.RunString, HarnessCertainty.Candidate),
+            Incoming("unbound-caller", fixture.Count) with { SourceOccurrenceId = null },
+            Incoming("outside-caller", fixture.Suspect),
+            candidate, tail, unbound,
+            tail with { Id = "unbound-tail", SourceNodeId = fixture.Total, SourceOccurrenceId = fixture.Occurrence(fixture.Total), Evidence = Location(fixture.Total) }
+        ] } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt), pathPrefix: Fixture.CorePath);
+        var agent = engine.Execute(request);
+
+        Assert.True(agent.Succeeded);
+        var unit = Assert.Single(agent.Units);
+        Assert.Equal(new[] { fixture.RunInt }, unit.SymbolIds);
+        Assert.Equal(fixture.Sources[Fixture.CorePath].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+        Assert.True(unit.CompleteSavedRange);
+        var symbol = Assert.Single(agent.Text.Split('\n'), line => line.Contains(" selector=" + fixture.Occurrence(fixture.RunInt), StringComparison.Ordinal));
+        var alias = symbol.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+        Assert.Contains("Retained root " + alias + " kind=Member callerSymbols=1 callerOccurrences=1 savedCallEdges=2", agent.Text);
+        var callerSymbol = Assert.Single(agent.Text.Split('\n'), line => line.StartsWith("@", StringComparison.Ordinal)
+            && line.Contains(" Demo.Pump.Helper ", StringComparison.Ordinal));
+        var callerAlias = callerSymbol.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+        Assert.Equal(3, agent.Text.Split('\n').Count(line => line.StartsWith(callerAlias + " -calls/Resolved-> " + alias + " ", StringComparison.Ordinal)));
+        Assert.Contains("/Candidate->", agent.Text);
+        Assert.Contains("outside-selected-scope; not expanded", agent.Text);
+        AssertWireBudget(agent, request.Budget!);
+
+        var audit = engine.Execute(request with { Format = ExploreFormat.Audit });
+        Assert.Equal(JsonSerializer.Serialize(audit.Units, QueryJson.Options), JsonSerializer.Serialize(agent.Units, QueryJson.Options));
+        Assert.DoesNotContain("Retained overview", audit.Text);
+        AssertWireBudget(audit, request.Budget!);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -1009,6 +1112,14 @@ public sealed class ExplorationTests
         Assert.True(fullAgent.Succeeded);
         Assert.Equal(JsonSerializer.Serialize(fullAudit.Units, QueryJson.Options), JsonSerializer.Serialize(fullAgent.Units, QueryJson.Options));
         Assert.Single(fullAudit.Units);
+        Assert.DoesNotContain("Retained overview", fullAudit.Text);
+        Assert.Contains("Retained root ", fullAgent.Text);
+        var tightAgentBudget = Generous with { MaxChars = fullAgent.WireChars - 1, MaxBytes = fullAgent.WireBytes };
+        var tightAgent = engine.Execute(request with { Budget = tightAgentBudget, Format = ExploreFormat.Agent });
+        Assert.True(tightAgent.Succeeded);
+        Assert.Equal(JsonSerializer.Serialize(fullAgent.Units, QueryJson.Options), JsonSerializer.Serialize(tightAgent.Units, QueryJson.Options));
+        Assert.DoesNotContain("Retained root ", tightAgent.Text);
+        AssertWireBudget(tightAgent, tightAgentBudget);
 
         var auditBoundary = Generous with { MaxChars = fullAudit.WireChars, MaxBytes = fullAudit.WireBytes };
         var auditAtBoundary = engine.Execute(request with { Budget = auditBoundary, Format = ExploreFormat.Audit });
@@ -1020,21 +1131,22 @@ public sealed class ExplorationTests
         Assert.Contains("OMITTED_UNITS", auditBelowBoundary.OmissionReasons);
         AssertWireBudget(auditBelowBoundary, belowAuditBoundary);
 
-        var budget = Generous with { MaxChars = fullAgent.WireChars, MaxBytes = fullAgent.WireBytes };
-        var agent = engine.Execute(request with { Budget = budget, Format = ExploreFormat.Agent });
-        var audit = engine.Execute(request with { Budget = budget });
-        Assert.Equal(fullAgent.Text, agent.Text);
-        Assert.Single(agent.Units);
-        Assert.Empty(audit.Units);
-        Assert.Contains("OMITTED_UNITS", audit.OmissionReasons);
-        AssertWireBudget(agent, budget);
-        AssertWireBudget(audit, budget);
+        var agentBoundary = Generous with { MaxChars = fullAgent.WireChars, MaxBytes = fullAgent.WireBytes };
+        var agentAtBoundary = engine.Execute(request with { Budget = agentBoundary, Format = ExploreFormat.Agent });
+        Assert.Equal(fullAgent.Text, agentAtBoundary.Text);
+        Assert.Equal(JsonSerializer.Serialize(fullAgent.Units, QueryJson.Options), JsonSerializer.Serialize(agentAtBoundary.Units, QueryJson.Options));
+        AssertWireBudget(agentAtBoundary, agentBoundary);
 
-        var choice = Assert.Single(audit.Text.Split('\n'), line => line.Contains(" id=", StringComparison.Ordinal));
+        var agent = engine.Execute(request with { Budget = belowAuditBoundary, Format = ExploreFormat.Agent });
+        Assert.True(agent.Succeeded);
+        Assert.Single(agent.Units);
+        AssertWireBudget(agent, belowAuditBoundary);
+
+        var choice = Assert.Single(auditBelowBoundary.Text.Split('\n'), line => line.Contains(" id=", StringComparison.Ordinal));
         var selector = choice[(choice.IndexOf(" id=", StringComparison.Ordinal) + 4)..].Split(' ')[0];
-        var retried = engine.Execute(request with { Query = selector, Budget = budget, Format = ExploreFormat.Agent });
+        var retried = engine.Execute(request with { Query = selector, Budget = belowAuditBoundary, Format = ExploreFormat.Agent });
         Assert.Equal(JsonSerializer.Serialize(agent.Units, QueryJson.Options), JsonSerializer.Serialize(retried.Units, QueryJson.Options));
-        AssertWireBudget(retried, budget);
+        AssertWireBudget(retried, belowAuditBoundary);
     }
 
     private static void AssertWireBudget(ExploreReply reply, QueryBudget budget)

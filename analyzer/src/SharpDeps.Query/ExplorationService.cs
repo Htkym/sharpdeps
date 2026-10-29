@@ -48,6 +48,7 @@ public sealed class ExplorationService
             if (run.Errors.Count == 0 && run.Resolve())
             {
                 run.Expand();
+                if (request.Format == ExploreFormat.Agent) run.PrepareAgentSummary();
                 run.ReadUnits();
                 if (request.Freshness == QueryFreshnessPolicy.RequireFresh && run.Errors.Count == 0) run.Verify();
             }
@@ -112,6 +113,10 @@ public sealed class ExplorationService
         int? RequiredChars = null, int? RequiredBytes = null, int SourcePriority = 4);
     private sealed record Relation(HarnessEdge Edge, Selected From, Selected To, bool OutsideScope);
     private sealed record Match(HarnessNode Node, int Score, bool Exact, bool Qualified, bool PathMatch = false);
+    private sealed record AgentDetail(Selected Root, Selected? Member = null, HarnessLocation? Location = null,
+        int? SelectedMembers = null, int? CallerSymbols = null, int? CallerOccurrences = null, int? SavedCallEdges = null);
+    private sealed record AgentSummary(AgentDetail[] Rows, int Roots, int Selected, int Relations,
+        int RelationKinds, int Resolved, int Candidate, int Unresolved);
 
     private sealed class Run
     {
@@ -137,6 +142,7 @@ public sealed class ExplorationService
         private readonly List<Match> symbolChoices = [];
         private string? scopeDecision;
         private int excludedScopes;
+        private AgentSummary? agentSummary;
         private string? project;
         private string? variant;
         private int relationDisplayLimit = 8;
@@ -550,6 +556,77 @@ public sealed class ExplorationService
 
         private static bool BodyEdge(string kind) => kind is "calls" or "constructs" or "reads" or "writes" or "references_member";
 
+        public void PrepareAgentSummary()
+        {
+            var typeRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Type && root.Reason == "requested")
+                .ToDictionary(root => root.Node.Id, StringComparer.Ordinal);
+            var memberRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Member && root.Reason == "requested"
+                    && root.Occurrence is not null)
+                .ToDictionary(root => root.Occurrence!.Id, StringComparer.Ordinal);
+            var members = new Dictionary<string, List<Selected>>(StringComparer.Ordinal);
+            foreach (var item in selected.Values)
+            {
+                Check();
+                if (item.Node.Kind != HarnessNodeKind.Member || item.Node.ParentId is not { } parent || !typeRoots.ContainsKey(parent)) continue;
+                if (!members.TryGetValue(parent, out var group)) members.Add(parent, group = []);
+                group.Add(item);
+            }
+            var callers = new Dictionary<string, List<Relation>>(StringComparer.Ordinal);
+            var kinds = new HashSet<string>(StringComparer.Ordinal);
+            var resolved = 0; var candidate = 0; var unresolved = 0;
+            foreach (var relation in relations)
+            {
+                Check();
+                var edge = relation.Edge;
+                kinds.Add(edge.Kind);
+                if (edge.Certainty == HarnessCertainty.Resolved) resolved++;
+                else if (edge.Certainty == HarnessCertainty.Candidate) candidate++;
+                else unresolved++;
+                if (edge.Kind is not ("calls" or "constructs") || edge.Certainty != HarnessCertainty.Resolved || relation.OutsideScope
+                    || relation.From.Occurrence is not { } source || relation.To.Occurrence is not { } target
+                    || !memberRoots.TryGetValue(target.Id, out var root) || root.Node.Id != edge.TargetNodeId
+                    || edge.SourceOccurrenceId != source.Id || edge.TargetOccurrenceId != target.Id
+                    || source.VariantId != variant || target.VariantId != variant || IsDocument(relation.From.Node)
+                    || request.PathPrefix is not null && (edge.Evidence is null || !PathAllowed(edge.Evidence))
+                    || !NodeAllowed(relation.From.Node, variant) || !NodeAllowed(relation.To.Node, variant)) continue;
+                if (!callers.TryGetValue(root.Identity, out var group)) callers.Add(root.Identity, group = []);
+                group.Add(relation);
+            }
+            var rows = new List<AgentDetail>();
+            foreach (var root in roots.OrderBy(root => root.Priority).ThenBy(root => root.Identity, StringComparer.Ordinal))
+            {
+                Check();
+                var children = members.GetValueOrDefault(root.Node.Id) ?? [];
+                var incoming = callers.GetValueOrDefault(root.Identity) ?? [];
+                var countCallers = root.Node.Kind == HarnessNodeKind.Member && root.Reason == "requested" && root.Occurrence is not null;
+                rows.Add(new(root, SelectedMembers: typeRoots.ContainsKey(root.Node.Id) ? children.Count : null,
+                    CallerSymbols: countCallers ? incoming.Select(relation => relation.From.Node.Id).Distinct(StringComparer.Ordinal).Count() : null,
+                    CallerOccurrences: countCallers ? incoming.Select(relation => relation.From.Occurrence!.Id).Distinct(StringComparer.Ordinal).Count() : null,
+                    SavedCallEdges: countCallers ? incoming.Count : null));
+                foreach (var member in children.OrderBy(member => member.Node.Signature, StringComparer.Ordinal)
+                    .ThenBy(member => member.Identity, StringComparer.Ordinal))
+                {
+                    Check();
+                    rows.Add(new(root, member, AgentMemberLocation(member)));
+                }
+            }
+            agentSummary = new(rows.ToArray(), roots.Count, selected.Count, relations.Count, kinds.Count, resolved, candidate, unresolved);
+        }
+
+        private HarnessLocation? AgentMemberLocation(Selected member)
+        {
+            if (member.Occurrence is not { } occurrence)
+                return member.Node.Location is { } saved && PathAllowed(saved) ? saved : null;
+            if (occurrence.Location is { } primary && PathAllowed(primary)) return primary;
+            if (occurrence.Declarations is not { } declarations) return null;
+            for (var index = 0; index < Math.Min(declarations.Count, request.Budget!.MaxNodes); index++)
+            {
+                Check();
+                if (PathAllowed(declarations[index])) return declarations[index];
+            }
+            return null;
+        }
+
         private int SourcePriority(Selected item, HarnessLocation location)
         {
             if (sourceMatches.TryGetValue(item.Node.Id, out var match))
@@ -961,6 +1038,7 @@ public sealed class ExplorationService
             }
             var shownRelations = relations.Take(relationCount).ToArray();
             var shownOmissions = omitted.Take(detailCount).ToArray();
+            AgentDetail[] summaryRows = detailCount > 0 && agentSummary is not null ? agentSummary.Rows.Take(detailCount - 1).ToArray() : [];
             var identities = new Dictionary<string, Selected>(StringComparer.Ordinal);
             foreach (var item in roots) identities.TryAdd(item.Identity, item);
             foreach (var unit in units)
@@ -970,10 +1048,14 @@ public sealed class ExplorationService
             foreach (var relation in shownRelations)
             { identities.TryAdd(relation.From.Identity, relation.From); identities.TryAdd(relation.To.Identity, relation.To); }
             foreach (var omission in shownOmissions) identities.TryAdd(omission.Selection.Identity, omission.Selection);
+            foreach (var row in summaryRows)
+                if (row.Member is { } member) identities.TryAdd(member.Identity, member);
             var aliases = identities.Values.OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal)
                 .Select((selection, index) => (selection.Identity, Alias: "@" + (index + 1).ToString(CultureInfo.InvariantCulture)))
                 .ToDictionary(pair => pair.Identity, pair => pair.Alias, StringComparer.Ordinal);
             var selectors = roots.Select(item => item.Identity).Concat(shownOmissions.Select(item => item.Selection.Identity)).ToHashSet(StringComparer.Ordinal);
+            foreach (var row in summaryRows)
+                if (row.Member is { } member) selectors.Add(member.Identity);
             if (identities.Count > 0) text.AppendLine("Symbols (@n is reply-local; selection=requested certainty=Resolved unless shown):");
             foreach (var item in identities.Values.OrderBy(selection => aliases[selection.Identity], StringComparer.Ordinal))
             {
@@ -985,11 +1067,13 @@ public sealed class ExplorationService
             }
             var sourceIds = units.Select(unit => unit.SourceId).Concat(shownOmissions.Select(item => item.Location.SourceId))
                 .Concat(shownRelations.Select(relation => relation.Edge.Evidence?.SourceId).OfType<string>())
+                .Concat(summaryRows.Select(row => row.Location?.SourceId).OfType<string>())
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var sourceAliases = sourceIds.Select((id, index) => (id, Alias: "F" + (index + 1).ToString(CultureInfo.InvariantCulture)))
                 .ToDictionary(pair => pair.id, pair => pair.Alias, StringComparer.Ordinal);
             foreach (var sourceId in sourceIds)
                 if (owner.files.TryGetValue(sourceId, out var file)) Line($"{sourceAliases[sourceId]} {file.RelativePath}");
+            AppendAgentSummary(text, summaryRows, units, omitted, aliases, sourceAliases, detailCount);
             if (shownRelations.Length > 0) text.AppendLine("Saved relations (certainty is semantic evidence, not runtime dispatch):");
             foreach (var relation in shownRelations)
             {
@@ -1018,6 +1102,36 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private void AppendAgentSummary(StringBuilder text, IReadOnlyList<AgentDetail> rows, IReadOnlyList<ExploreUnit> units,
+            IReadOnlyList<Pending> omitted, IReadOnlyDictionary<string, string> aliases, IReadOnlyDictionary<string, string> sourceAliases, int detailCount)
+        {
+            if (detailCount == 0 || agentSummary is not { } summary) return;
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var incomplete = owner.saved.Graph.Coverage != HarnessCoverage.CompleteWithinScope || reasons.Count > 0 || Errors.Count > 0;
+            Line($"Retained overview roots={summary.Roots} selected={summary.Selected} relations={summary.Relations} relationKinds={summary.RelationKinds} resolved={summary.Resolved} candidate={summary.Candidate} unresolved={summary.Unresolved} admittedRanges={units.Count} rowsShown={rows.Count}/{summary.Rows.Length} incomplete={incomplete.ToString().ToLowerInvariant()}; callers are resolved bound in-scope saved evidence, not runtime totals");
+            foreach (var row in rows)
+            {
+                if (row.Member is not { } member)
+                {
+                    var counts = row.CallerSymbols is { } symbols
+                        ? FormattableString.Invariant($" callerSymbols={symbols} callerOccurrences={row.CallerOccurrences} savedCallEdges={row.SavedCallEdges}")
+                        : row.SelectedMembers is { } count ? FormattableString.Invariant($" selectedMembers={count}") : "";
+                    Line($"Retained root {aliases[row.Root.Identity]} kind={row.Root.Node.Kind}{counts}");
+                    continue;
+                }
+                var location = row.Location;
+                var covering = location?.RawSpan is { } span ? units.FirstOrDefault(unit => unit.SourceId == location.SourceId
+                    && unit.ContentHash == location.ContentHash && span.Start >= unit.Span.Start && span.End <= unit.Span.End) : null;
+                var covered = covering is not null;
+                var admitted = covering?.SymbolIds.Contains(member.Node.Id) == true;
+                var missing = omitted.Any(item => item.Selection.Identity == member.Identity);
+                var status = covered ? (admitted ? "returned" : "saved-range-covered") + (missing ? "+omitted" : "")
+                    : missing ? "omitted" : member.IncludeSource ? "not-returned" : "not-requested";
+                var at = location is not null ? sourceAliases[location.SourceId] + ":" + VerifiedLine(location, units) : "unknown";
+                Line($"Member {aliases[row.Root.Identity]} -> {aliases[member.Identity]} signature={Safe(member.Node.Signature, 240)} variant={member.Occurrence?.VariantId ?? "unknown"} at={at} source={status}");
+            }
         }
 
         private string ScopeChoiceDimensions(HarnessVariant scope)
