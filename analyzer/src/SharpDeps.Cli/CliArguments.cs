@@ -19,7 +19,7 @@ internal sealed class CliArguments
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy" };
+      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -87,9 +87,10 @@ internal sealed class CliArguments
         var query = Require("term");
         if (string.IsNullOrWhiteSpace(query) || query.Length > 1024
             || Get("project-id") is { Length: > 128 } || Get("path-prefix") is { Length: > 512 }
-            || Many("variant") is { Count: > 1 } || Get("variant") is { Length: > 128 })
+            || Many("variant") is { Count: > 1 } || Get("variant") is { Length: > 128 }
+            || Get("path-to") is { Length: > 128 })
             throw new CliFailure("ARGUMENT_INVALID", 2);
-        foreach (var field in new[] { "project-id", "variant" })
+        foreach (var field in new[] { "project-id", "variant", "path-to" })
             if (Get(field) is { } selection && string.IsNullOrWhiteSpace(selection))
                 throw new CliFailure("ARGUMENT_INVALID", 2);
         var freshness = Get("freshness") switch
@@ -114,7 +115,7 @@ internal sealed class CliArguments
         return new(query, Get("project-id"), Get("variant"), Get("path-prefix"), freshness,
             new QueryBudget(Number("max-nodes", 60, 1, 500), Number("max-edges", 120, 1, 1000),
                 Number("max-depth", 2, 1, 8), Number("max-milliseconds", 1000, 10, 30000),
-                Number("max-chars", 12000, 2048, 1000000), Number("max-bytes", 48000, 2048, 4000000)), format, scopePolicy);
+                Number("max-chars", 12000, 2048, 1000000), Number("max-bytes", 48000, 2048, 4000000)), format, scopePolicy, Get("path-to"));
     }
 
     public QueryRequest QueryRequest()

@@ -40,6 +40,10 @@ Response limits apply to the selected format's JSON-escaped output in characters
 
 Space-separated returned logical or occurrence IDs can be combined with names and paths. Duplicate identities share one selection in the chosen compilation context. Conflicting occurrence variants require a scope choice; an explicit identity outside supplied scope is an error, not a partial successful selection.
 
+For one directed saved call witness, use `--term <source-occurrence-id> --path-to <target-occurrence-id>` (MCP `query` and `pathTo`). Both endpoints must be exact saved occurrence IDs in the same snapshot and satisfy the supplied project, variant, and path constraints. Names and logical IDs cannot substitute for these endpoints. Identical endpoints give a zero-hop identity witness. The target remains a pointer and does not request another source body.
+
+The witness uses only resolved, occurrence-bound calls or constructions already retained by this exploration. Candidate, unresolved, unbound, and outside-scope relations cannot bridge it; a path-prefix filter also requires each hop's known evidence path to match. At most one minimum-hop witness is returned within that retained view, not a globally shortest index path or runtime call flow. The result distinguishes a found witness, no witness in retained eligible evidence, and incomplete evidence or search. Partial saved coverage and collection or search limits remain explicit. Optional hop details can be omitted for space while preserving a found status; required metadata that cannot fit produces `OUTPUT_BUDGET_TOO_SMALL`.
+
 Source text requires `--trusted`. Without trust, exploration can return saved graph evidence and omissions, but does not read source files. The MCP host fixes its workspace, index, and trust at startup; a request cannot change them.
 
 ## MCP requests
@@ -59,7 +63,7 @@ Launch `sharpdeps-mcp --root /absolute/workspace --trusted` to permit source rea
 }
 ```
 
-Optional arguments are `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `freshness`, `format`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, and hyphenated budget flags for the corresponding values.
+Optional arguments are `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `pathTo`, `freshness`, `format`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters; `pathTo` accepts up to 128 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, `--path-to`, and hyphenated budget flags for the corresponding values.
 
 Explore returns a single text content block containing the same evidence text as the CLI when using the same format, without a duplicated `structuredContent` object. Clients using the old `status`, `search`, `symbol`, `callers`, `callees`, `impact`, or `context` MCP tools must migrate to `explore`; the existing CLI query commands remain available.
 

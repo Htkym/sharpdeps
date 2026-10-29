@@ -47,6 +47,20 @@ public sealed class McpFlowTests
             Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), Assert.IsType<TextContentBlock>(Assert.Single(unverified.Content)).Text, StringComparison.Ordinal);
         }
         else Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
+        if (scopePolicy == "prefer-debug")
+        {
+            var pathArguments = new List<string>(arguments);
+            pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
+            pathArguments.AddRange(["--path-to", fixture.Occurrence]);
+            using var pathOutput = new StringWriter();
+            Assert.Equal(0, await CliApplication.RunAsync(pathArguments.ToArray(), pathOutput, TextWriter.Null));
+            var path = await adapter.CallAsync(Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence));
+            Assert.False(path.IsError);
+            var pathText = Assert.IsType<TextContentBlock>(Assert.Single(path.Content)).Text;
+            Assert.Null(path.StructuredContent);
+            Assert.Equal(pathOutput.ToString()[..^pathOutput.NewLine.Length], pathText);
+            Assert.Contains($"Retained path status=found source={fixture.Occurrence} target={fixture.Occurrence} hops=0 shown=0/0", pathText, StringComparison.Ordinal);
+        }
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service", format, scopePolicy), cancelled.Token));
         using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
@@ -148,11 +162,12 @@ public sealed class McpFlowTests
         }
     }
 
-    private static CallToolRequestParams Explore(string query, string? format = null, string? scopePolicy = null)
+    private static CallToolRequestParams Explore(string query, string? format = null, string? scopePolicy = null, string? pathTo = null)
     {
         var arguments = new Dictionary<string, JsonElement> { ["query"] = JsonSerializer.SerializeToElement(query) };
         if (format is not null) arguments.Add("format", JsonSerializer.SerializeToElement(format));
         if (scopePolicy is not null) arguments.Add("scopePolicy", JsonSerializer.SerializeToElement(scopePolicy));
+        if (pathTo is not null) arguments.Add("pathTo", JsonSerializer.SerializeToElement(pathTo));
         return new() { Name = "explore", Arguments = arguments };
     }
 
@@ -166,6 +181,7 @@ public sealed class McpFlowTests
         public const string Code = "public sealed class Service { public int Value => 7; }\n";
         public string SourceHash { get; } = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Code))).ToLowerInvariant();
         public string Symbol { get; }
+        public string Occurrence { get; }
         public Fixture(bool addScopes = false)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(IndexPath)!);
@@ -177,9 +193,10 @@ public sealed class McpFlowTests
             var project = HarnessIdentity.ProjectId(Workspace, "App.csproj");
             var variant = HarnessIdentity.VariantId(Workspace, project, "net10.0", "Debug");
             Symbol = HarnessIdentity.LogicalSymbolId(Workspace, project, "type", "T:Service");
+            Occurrence = HarnessIdentity.SymbolOccurrenceId(Workspace, Symbol, variant);
             var variants = new List<HarnessVariant> { new(variant, project, "net10.0", "Debug", null, null, null) };
             var occurrences = new List<HarnessSymbolOccurrence>
-            { new(HarnessIdentity.SymbolOccurrenceId(Workspace, Symbol, variant), Symbol, variant, location, [location]) };
+            { new(Occurrence, Symbol, variant, location, [location]) };
             if (addScopes)
             {
                 var alternate = HarnessIdentity.VariantId(Workspace, project, "net10.0", "Release");

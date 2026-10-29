@@ -53,7 +53,11 @@ public sealed class McpTests
             "{\"query\":\"Service\",\"scopePolicy\":\"auto\"}",
             "{\"query\":\"Service\",\"scopePolicy\":\"PreferDebug\"}",
             "{\"query\":\"Service\",\"scopePolicy\":true}",
-            "{\"query\":\"Service\",\"scopePolicy\":null}" })
+            "{\"query\":\"Service\",\"scopePolicy\":null}",
+            "{\"query\":\"Service\",\"pathTo\":true}",
+            "{\"query\":\"Service\",\"pathTo\":null}",
+            "{\"query\":\"Service\",\"pathTo\":\" \"}",
+            JsonSerializer.Serialize(new { query = "Service", pathTo = new string('x', 129) }) })
         {
             var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
             await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()

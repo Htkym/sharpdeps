@@ -169,6 +169,9 @@ public sealed class CliTests
         Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "unique"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.PreferDebug, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "prefer-debug"]).ExplorationRequest().ScopePolicy);
+        Assert.Null(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().PathTo);
+        var occurrence = "hocc_" + new string('a', 64);
+        Assert.Equal(occurrence, CliArguments.Parse(["explore", "--term", occurrence, "--path-to", occurrence]).ExplorationRequest().PathTo);
         var untrusted = await Run("index", "--root", fixture.Root, "--target", "absent.csproj");
         Assert.Equal(5, untrusted.Exit);
         Assert.Equal("WORKSPACE_UNTRUSTED", Code(untrusted.Json));
@@ -186,12 +189,14 @@ public sealed class CliTests
             new[] { "--term", "Service", "--scope-policy", "auto" },
             new[] { "--term", "Service", "--scope-policy", "PreferDebug" },
             new[] { "--term", "Service", "--scope-policy", "1" },
+            new[] { "--term", "Service", "--path-to", " " },
+            new[] { "--term", "Service", "--path-to", new string('x', 129) },
             new[] { "--term", "Service", "--include-candidates" } })
         {
             var invalidExplore = await Run(["explore", "--root", fixture.Root, .. arguments]);
             Assert.Equal(2, invalidExplore.Exit);
         }
-        foreach (var (flag, value) in new[] { ("--format", "agent"), ("--scope-policy", "prefer-debug") })
+        foreach (var (flag, value) in new[] { ("--format", "agent"), ("--scope-policy", "prefer-debug"), ("--path-to", occurrence) })
         {
             var nonExploreOption = await Run("status", "--root", fixture.Root, flag, value);
             Assert.Equal(2, nonExploreOption.Exit);

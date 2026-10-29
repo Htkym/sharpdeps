@@ -45,9 +45,10 @@ public sealed class ExplorationService
             if (request.Freshness == QueryFreshnessPolicy.Refresh)
                 run.Error("UPDATE_REQUIRED", "Request a trusted coordinator update and open a new reader.");
             else if (request.Freshness == QueryFreshnessPolicy.RequireFresh) run.Verify();
-            if (run.Errors.Count == 0 && run.Resolve())
+            if (run.Errors.Count == 0 && run.Resolve() && (request.PathTo is null || run.ResolvePathEndpoints()))
             {
                 run.Expand();
+                if (request.PathTo is not null) run.PrepareRetainedPath();
                 if (request.Format == ExploreFormat.Agent) run.PrepareAgentSummary();
                 run.ReadUnits();
                 if (request.Freshness == QueryFreshnessPolicy.RequireFresh && run.Errors.Count == 0) run.Verify();
@@ -88,6 +89,7 @@ public sealed class ExplorationService
         var budget = request.Budget!;
         if (!Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query)
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
+            || request.PathTo is { } target && (!Text(target, 128) || !IsOccurrenceIdentity(target.Trim()) || !IsOccurrenceIdentity(request.Query.Trim()))
             || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
             || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
@@ -100,6 +102,9 @@ public sealed class ExplorationService
             catch (IndexStoreException error) { throw new ArgumentException("Invalid exploration path scope.", nameof(request), error); }
         }
     }
+
+    private static bool IsOccurrenceIdentity(string value) => value.Length == 69 && value.StartsWith("hocc_", StringComparison.Ordinal)
+        && !value.AsSpan(5).ContainsAnyExcept("0123456789abcdef");
 
     private static bool IsDocument(HarnessNode node) => node.Kind is HarnessNodeKind.Document or HarnessNodeKind.Section
         or HarnessNodeKind.FrontMatter or HarnessNodeKind.CodeFence or HarnessNodeKind.LinkTarget or HarnessNodeKind.SymbolMention;
@@ -117,6 +122,7 @@ public sealed class ExplorationService
         int? SelectedMembers = null, int? CallerSymbols = null, int? CallerOccurrences = null, int? SavedCallEdges = null);
     private sealed record AgentSummary(AgentDetail[] Rows, int Roots, int Selected, int Relations,
         int RelationKinds, int Resolved, int Candidate, int Unresolved);
+    private sealed record RetainedPath(string Status, string Reason, HarnessEdge[] Hops, bool Incomplete);
 
     private sealed class Run
     {
@@ -143,6 +149,9 @@ public sealed class ExplorationService
         private string? scopeDecision;
         private int excludedScopes;
         private AgentSummary? agentSummary;
+        private HarnessSymbolOccurrence? pathSource;
+        private HarnessSymbolOccurrence? pathTarget;
+        private RetainedPath? retainedPath;
         private string? project;
         private string? variant;
         private int relationDisplayLimit = 8;
@@ -554,6 +563,97 @@ public sealed class ExplorationService
             }
         }
 
+        public bool ResolvePathEndpoints()
+        {
+            Check();
+            if (!owner.occurrences.TryGetValue(request.Query.Trim(), out var source)
+                || !owner.occurrences.TryGetValue(request.PathTo!.Trim(), out var target))
+            { Error("SYMBOL_NOT_FOUND", "A requested path occurrence is not in the selected snapshot."); return false; }
+            if (!PathOccurrenceAllowed(source) || !PathOccurrenceAllowed(target))
+            { Error("SYMBOL_OUTSIDE_SCOPE", "Path endpoints must share the selected project, variant and path scope."); return false; }
+            pathSource = source; pathTarget = target;
+            return true;
+        }
+
+        private bool PathOccurrenceAllowed(HarnessSymbolOccurrence occurrence)
+        {
+            if (occurrence.VariantId != variant || owner.Project(owner.nodes[occurrence.LogicalSymbolId]) != project) return false;
+            if (request.PathPrefix is null) return true;
+            foreach (var location in occurrence.Declarations ?? (occurrence.Location is { } primary ? [primary] : []))
+            {
+                Check();
+                if (PathAllowed(location)) return true;
+            }
+            return false;
+        }
+
+        private string? PathCollectionCutoff()
+            => owner.saved.Graph.Coverage != HarnessCoverage.CompleteWithinScope ? "coverage"
+                : reasons.Contains("NODE_LIMIT") ? "NODE_LIMIT" : reasons.Contains("EDGE_LIMIT") ? "EDGE_LIMIT"
+                : reasons.Contains("DEPTH_LIMIT") ? "DEPTH_LIMIT" : reasons.Contains("SEARCH_CANDIDATE_LIMIT") ? "SEARCH_CANDIDATE_LIMIT" : null;
+
+        public void PrepareRetainedPath()
+        {
+            Check();
+            var source = pathSource!; var target = pathTarget!;
+            var cutoff = PathCollectionCutoff();
+            retainedPath = new("incomplete", "search-not-complete", [], true);
+            if (source.Id == target.Id)
+            { retainedPath = new("found", cutoff is null ? "retained-witness" : "retained-witness/" + cutoff, [], cutoff is not null); return; }
+            var outgoing = new Dictionary<string, List<HarnessEdge>>(StringComparer.Ordinal);
+            foreach (var relation in relations.OrderBy(relation => relation.Edge.Id, StringComparer.Ordinal))
+            {
+                Check();
+                var edge = relation.Edge;
+                if (edge.Kind is not ("calls" or "constructs") || edge.Certainty != HarnessCertainty.Resolved || relation.OutsideScope
+                    || relation.From.Occurrence is not { } from || relation.To.Occurrence is not { } to
+                    || edge.SourceOccurrenceId != from.Id || edge.TargetOccurrenceId != to.Id
+                    || !PathOccurrenceAllowed(from) || !PathOccurrenceAllowed(to)
+                    || request.PathPrefix is not null && (edge.Evidence is null || !PathAllowed(edge.Evidence))) continue;
+                if (!outgoing.TryGetValue(from.Id, out var steps)) outgoing.Add(from.Id, steps = []);
+                steps.Add(edge);
+            }
+            var visited = new HashSet<string>(StringComparer.Ordinal) { source.Id };
+            var previous = new Dictionary<string, (string From, HarnessEdge Edge)>(StringComparer.Ordinal);
+            var queue = new Queue<(string Id, int Depth)>();
+            queue.Enqueue((source.Id, 0));
+            var inspected = 0;
+            while (queue.TryDequeue(out var current))
+            {
+                Check();
+                if (!outgoing.TryGetValue(current.Id, out var steps)) continue;
+                if (current.Depth >= request.Budget!.MaxDepth)
+                {
+                    if (steps.Any(edge => !visited.Contains(edge.TargetOccurrenceId!)))
+                    { retainedPath = new("incomplete", "depth-budget", [], true); return; }
+                    continue;
+                }
+                foreach (var edge in steps)
+                {
+                    Check();
+                    if (++inspected > request.Budget.MaxEdges)
+                    { retainedPath = new("incomplete", "edge-budget", [], true); return; }
+                    var next = edge.TargetOccurrenceId!;
+                    if (visited.Contains(next)) continue;
+                    if (visited.Count >= request.Budget.MaxNodes)
+                    { retainedPath = new("incomplete", "node-budget", [], true); return; }
+                    visited.Add(next); previous.Add(next, (current.Id, edge));
+                    if (next == target.Id)
+                    {
+                        var hops = new List<HarnessEdge>();
+                        for (var cursor = next; cursor != source.Id; cursor = previous[cursor].From)
+                        { Check(); hops.Add(previous[cursor].Edge); }
+                        hops.Reverse();
+                        retainedPath = new("found", cutoff is null ? "retained-witness" : "retained-witness/" + cutoff, hops.ToArray(), cutoff is not null);
+                        return;
+                    }
+                    queue.Enqueue((next, current.Depth + 1));
+                }
+            }
+            retainedPath = cutoff is null ? new("no-witness", "retained-eligible-exhausted", [], false)
+                : new("incomplete", cutoff, [], true);
+        }
+
         private static bool BodyEdge(string kind) => kind is "calls" or "constructs" or "reads" or "writes" or "references_member";
 
         public void PrepareAgentSummary()
@@ -917,6 +1017,7 @@ public sealed class ExplorationService
                 Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
             }
             AppendScopeDecision(text, detailCount);
+            if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
             text.AppendLine("Coverage is the selected index, not proof of runtime consumers or absent unindexed code/tests.");
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
             if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
@@ -1014,6 +1115,7 @@ public sealed class ExplorationService
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
             Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
             AppendScopeDecision(text, detailCount);
+            if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
             if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
             foreach (var error in Errors.Take(8)) Line($"Error {Safe(error.Code, 80)}: {Safe(error.Message, 240)} {Safe(error.Path, 160)}");
@@ -1038,7 +1140,8 @@ public sealed class ExplorationService
             }
             var shownRelations = relations.Take(relationCount).ToArray();
             var shownOmissions = omitted.Take(detailCount).ToArray();
-            AgentDetail[] summaryRows = detailCount > 0 && agentSummary is not null ? agentSummary.Rows.Take(detailCount - 1).ToArray() : [];
+            var summaryAllowance = request.PathTo is null ? detailCount : detailCount - PathDetailsShown(detailCount);
+            AgentDetail[] summaryRows = summaryAllowance > 0 && agentSummary is not null ? agentSummary.Rows.Take(summaryAllowance - 1).ToArray() : [];
             var identities = new Dictionary<string, Selected>(StringComparer.Ordinal);
             foreach (var item in roots) identities.TryAdd(item.Identity, item);
             foreach (var unit in units)
@@ -1073,7 +1176,7 @@ public sealed class ExplorationService
                 .ToDictionary(pair => pair.id, pair => pair.Alias, StringComparer.Ordinal);
             foreach (var sourceId in sourceIds)
                 if (owner.files.TryGetValue(sourceId, out var file)) Line($"{sourceAliases[sourceId]} {file.RelativePath}");
-            AppendAgentSummary(text, summaryRows, units, omitted, aliases, sourceAliases, detailCount);
+            AppendAgentSummary(text, summaryRows, units, omitted, aliases, sourceAliases, summaryAllowance);
             if (shownRelations.Length > 0) text.AppendLine("Saved relations (certainty is semantic evidence, not runtime dispatch):");
             foreach (var relation in shownRelations)
             {
@@ -1102,6 +1205,37 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private int PathDetailsShown(int detailCount)
+            => Errors.Count == 0 && retainedPath is { Status: "found" } path ? Math.Min(detailCount, path.Hops.Length) : 0;
+
+        private void AppendRetainedPath(StringBuilder text, IReadOnlyList<ExploreUnit> units, int detailCount)
+        {
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var error = Errors.Count > 0;
+            var path = retainedPath;
+            var status = error ? "incomplete" : path?.Status ?? "incomplete";
+            var found = status == "found";
+            var total = found ? path!.Hops.Length.ToString(CultureInfo.InvariantCulture) : "unknown";
+            var shown = PathDetailsShown(detailCount);
+            var incomplete = error || path?.Incomplete != false;
+            var reason = error ? "query-error" : path?.Reason ?? "endpoint-unresolved";
+            var details = found ? (shown == path!.Hops.Length ? "complete" : "omitted") : "none";
+            Line($"Retained path status={status} source={request.Query.Trim()} target={request.PathTo!.Trim()} hops={total} shown={shown}/{total} incomplete={incomplete.ToString().ToLowerInvariant()} reason={reason} details={details}; minimum hops in retained eligible evidence only");
+            if (!found) return;
+            for (var index = 0; index < shown; index++)
+            {
+                var edge = path!.Hops[index];
+                var evidence = edge.Evidence;
+                var location = " evidence=unknown";
+                if (evidence is not null)
+                {
+                    var span = evidence.RawSpan is { } raw ? FormattableString.Invariant($"{raw.Start}:{raw.Length}") : "unknown";
+                    location = FormattableString.Invariant($" evidenceSource={Safe(evidence.SourceId, 4096)} path={Safe(owner.files.GetValueOrDefault(evidence.SourceId)?.RelativePath ?? "unknown", 4096)} version={Safe(evidence.SourceVersion ?? "unknown", 128)} saved-sha256={Safe(evidence.ContentHash ?? "unknown", 64)} span={span} line={VerifiedLine(evidence, units)}");
+                }
+                Line($"Path hop {index + 1} edge={edge.Id} from={edge.SourceOccurrenceId} to={edge.TargetOccurrenceId} kind={edge.Kind} certainty={edge.Certainty} logicalFrom={edge.SourceNodeId} logicalTo={edge.TargetNodeId} variant={variant} edgeVariant={edge.VariantId ?? "unknown"} producer={Safe(edge.Producer, 64)} origin={Safe(edge.Origin ?? "unknown", 80)}{location}");
+            }
         }
 
         private void AppendAgentSummary(StringBuilder text, IReadOnlyList<AgentDetail> rows, IReadOnlyList<ExploreUnit> units,

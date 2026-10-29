@@ -21,7 +21,7 @@ public enum ExploreScopePolicy
 public sealed record ExploreRequest(string Query, string? ProjectId = null, string? VariantId = null,
     string? PathPrefix = null, QueryFreshnessPolicy Freshness = QueryFreshnessPolicy.AllowStale,
     QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit,
-    ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique);
+    ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique, string? PathTo = null);
 
 public sealed record ExploreUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan Span,
     string Text, int FirstLine, IReadOnlyList<string> SymbolIds,

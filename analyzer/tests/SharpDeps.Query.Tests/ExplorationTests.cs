@@ -348,6 +348,218 @@ public sealed class ExplorationTests
     }
 
     [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void RetainedPathKeepsDirectionAndCyclesWithoutSelectingAnotherSourceRoot(ExploreFormat format)
+    {
+        using var fixture = new Fixture(dense: true, implicitConstructor: true, format: format);
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges =
+        [
+            SavedPathEdge(fixture, "a-construct", fixture.RunInt, fixture.Constructor) with { Kind = "constructs" },
+            SavedPathEdge(fixture, "b-call", fixture.Constructor, fixture.Clamp),
+            SavedPathEdge(fixture, "c-cycle", fixture.Clamp, fixture.Constructor),
+            SavedPathEdge(fixture, "z-alternate", fixture.RunInt, fixture.Finish),
+            SavedPathEdge(fixture, "z-tail", fixture.Finish, fixture.Clamp)
+        ] } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt), Generous with { MaxDepth = 4 });
+        var baseline = engine.Execute(request);
+        var path = engine.Execute(request with { PathTo = fixture.Occurrence(fixture.Clamp) });
+
+        Assert.DoesNotContain("Retained path ", baseline.Text);
+        Assert.True(path.Succeeded);
+        Assert.Contains("status=found source=" + fixture.Occurrence(fixture.RunInt)
+            + " target=" + fixture.Occurrence(fixture.Clamp) + " hops=2 shown=2/2", RetainedPathHeader(path));
+        var hops = path.Text.Split('\n').Where(line => line.StartsWith("Path hop ", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, hops.Length);
+        Assert.Contains("edge=a-construct from=" + fixture.Occurrence(fixture.RunInt)
+            + " to=" + fixture.Occurrence(fixture.Constructor) + " kind=constructs certainty=Resolved", hops[0]);
+        Assert.Contains("edge=b-call from=" + fixture.Occurrence(fixture.Constructor)
+            + " to=" + fixture.Occurrence(fixture.Clamp) + " kind=calls certainty=Resolved", hops[1]);
+        Assert.Equal(JsonSerializer.Serialize(baseline.Units, QueryJson.Options), JsonSerializer.Serialize(path.Units, QueryJson.Options));
+        if (format == ExploreFormat.Agent) Assert.Contains("Retained overview roots=1 ", path.Text);
+        AssertWireBudget(path, request.Budget!);
+
+        var reverse = fixture.Request(fixture.Occurrence(fixture.Clamp), request.Budget);
+        var reverseBaseline = engine.Execute(reverse);
+        var absent = engine.Execute(reverse with { PathTo = fixture.Occurrence(fixture.RunInt) });
+        Assert.True(absent.Succeeded);
+        Assert.Contains("status=no-witness", RetainedPathHeader(absent));
+        Assert.DoesNotContain("Path hop ", absent.Text);
+        Assert.Equal(JsonSerializer.Serialize(reverseBaseline.Units, QueryJson.Options), JsonSerializer.Serialize(absent.Units, QueryJson.Options));
+        AssertWireBudget(absent, request.Budget!);
+
+        foreach (var symbolId in new[] { fixture.RunInt, fixture.Pump })
+        {
+            var occurrenceId = fixture.Occurrence(symbolId);
+            var zeroRequest = fixture.Request(occurrenceId, request.Budget);
+            var zeroBaseline = engine.Execute(zeroRequest);
+            var same = engine.Execute(zeroRequest with { PathTo = occurrenceId });
+            Assert.True(same.Succeeded);
+            Assert.Contains("status=found source=" + occurrenceId
+                + " target=" + occurrenceId + " hops=0 shown=0/0", RetainedPathHeader(same));
+            Assert.DoesNotContain("Path hop ", same.Text);
+            Assert.Equal(JsonSerializer.Serialize(zeroBaseline.Units, QueryJson.Options), JsonSerializer.Serialize(same.Units, QueryJson.Options));
+        }
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void RetainedPathRequiresExactOccurrenceEndpointsWithinTheExplicitScope(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, format: format);
+        var engine = fixture.Engine();
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt)) with { PathTo = fixture.Occurrence(fixture.Helper) };
+        foreach (var invalid in new[]
+        {
+            request with { Query = "Run" }, request with { Query = fixture.RunInt },
+            request with { PathTo = "Helper" }, request with { PathTo = fixture.Helper }
+        }) Assert.Throws<ArgumentException>(() => engine.Execute(invalid));
+
+        var missing = engine.Execute(request with { PathTo = "hocc_" + new string('0', 64) });
+        Assert.False(missing.Succeeded);
+        Assert.Empty(missing.Units);
+        Assert.Contains(missing.Errors, error => error.Code == "SYMBOL_NOT_FOUND");
+        AssertWireBudget(missing, request.Budget!);
+
+        var otherTarget = fixture.Snapshot.Graph.SymbolOccurrences.Single(occurrence => occurrence.VariantId == fixture.OtherVariant
+            && fixture.Snapshot.Graph.Nodes.Any(node => node.Id == occurrence.LogicalSymbolId && node.Kind == HarnessNodeKind.Member)).Id;
+        foreach (var outside in new[]
+        {
+            request with { PathTo = fixture.Occurrence(fixture.Helper, fixture.AlternateVariant) },
+            request with { PathTo = otherTarget },
+            request with { PathTo = fixture.Occurrence(fixture.Suspect), PathPrefix = Fixture.CorePath },
+            request with { PathPrefix = Fixture.PartialPath }
+        })
+        {
+            var reply = engine.Execute(outside);
+            Assert.False(reply.Succeeded);
+            Assert.Empty(reply.Units);
+            Assert.Contains(reply.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
+            AssertWireBudget(reply, request.Budget!);
+        }
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void RetainedPathKeepsQualifiedLeavesOutOfTheWitnessAndDistinguishesCutoffs(ExploreFormat format)
+    {
+        using var fixture = new Fixture(dense: true, format: format);
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges =
+        [
+            SavedPathEdge(fixture, "a-bound-start", fixture.RunInt, fixture.Helper),
+            SavedPathEdge(fixture, "a-candidate-tail", fixture.Helper, fixture.Clamp) with { Certainty = HarnessCertainty.Candidate },
+            SavedPathEdge(fixture, "b-unbound-start", fixture.RunInt, fixture.RunString) with { SourceOccurrenceId = null },
+            SavedPathEdge(fixture, "b-tail", fixture.RunString, fixture.Clamp),
+            SavedPathEdge(fixture, "c-outside-start", fixture.RunInt, fixture.Suspect),
+            SavedPathEdge(fixture, "c-tail", fixture.Suspect, fixture.Clamp),
+            SavedPathEdge(fixture, "d-outside-evidence", fixture.RunInt, fixture.Finish) with
+            { Evidence = fixture.Snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.Suspect)).Location },
+            SavedPathEdge(fixture, "d-tail", fixture.Finish, fixture.Clamp)
+        ] } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt), pathPrefix: Fixture.CorePath);
+        var baseline = engine.Execute(request);
+        var absent = engine.Execute(request with { PathTo = fixture.Occurrence(fixture.Clamp) });
+        Assert.True(absent.Succeeded);
+        Assert.Contains("status=no-witness", RetainedPathHeader(absent));
+        Assert.DoesNotContain("Path hop ", absent.Text);
+        Assert.Equal(JsonSerializer.Serialize(baseline.Units, QueryJson.Options), JsonSerializer.Serialize(absent.Units, QueryJson.Options));
+        AssertWireBudget(absent, request.Budget!);
+
+        var chain = snapshot with { Graph = snapshot.Graph with { Edges =
+        [ SavedPathEdge(fixture, "start", fixture.RunInt, fixture.Helper), SavedPathEdge(fixture, "tail", fixture.Helper, fixture.Clamp) ] } };
+        var chainEngine = new ExplorationService(new FixedIndex(chain), new QueryWorkspace(fixture.Root), true);
+        var pathRequest = request with { PathTo = fixture.Occurrence(fixture.Clamp) };
+        Assert.Contains("status=found", RetainedPathHeader(chainEngine.Execute(pathRequest)));
+        foreach (var (budget, reason) in new[]
+        {
+            (Generous with { MaxDepth = 1 }, "DEPTH_LIMIT"),
+            (Generous with { MaxEdges = 1 }, "EDGE_LIMIT")
+        })
+        {
+            var incomplete = chainEngine.Execute(pathRequest with { Budget = budget });
+            Assert.True(incomplete.Succeeded);
+            Assert.Contains("status=incomplete", RetainedPathHeader(incomplete));
+            Assert.Contains(reason, incomplete.OmissionReasons);
+            Assert.DoesNotContain("Path hop ", incomplete.Text);
+            AssertWireBudget(incomplete, budget);
+        }
+        var partial = snapshot with { Graph = snapshot.Graph with { Coverage = HarnessCoverage.Partial } };
+        var partialReply = new ExplorationService(new FixedIndex(partial), new QueryWorkspace(fixture.Root), true)
+            .Execute(pathRequest);
+        Assert.True(partialReply.Succeeded);
+        Assert.Contains("status=incomplete", RetainedPathHeader(partialReply));
+        AssertWireBudget(partialReply, request.Budget!);
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void RetainedPathPreservesStatusAndSourceTrustWithinTheEscapedUnicodeWireBudget(ExploreFormat format)
+    {
+        using var fixture = new Fixture(dense: true, huge: true, format: format);
+        var engine = fixture.Engine();
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt)) with { PathTo = fixture.Occurrence(fixture.Clamp) };
+        void AssertRequestedPath(ExploreReply reply, QueryBudget budget)
+        {
+            Assert.True(reply.Succeeded);
+            var header = RetainedPathHeader(reply);
+            Assert.Contains("status=found source=" + fixture.Occurrence(fixture.RunInt)
+                + " target=" + fixture.Occurrence(fixture.Clamp) + " hops=2 ", header);
+            var shown = reply.Text.Split('\n').Count(line => line.StartsWith("Path hop ", StringComparison.Ordinal));
+            Assert.InRange(shown, 0, 2);
+            Assert.Contains("shown=" + shown.ToString(CultureInfo.InvariantCulture) + "/2 ", header);
+            Assert.Contains(shown < 2 ? "details=omitted" : "details=complete", header);
+            var unit = Assert.Single(reply.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+            Assert.Equal(Fixture.CorePath, unit.Path);
+            Assert.True(unit.CompleteSavedRange);
+            Assert.True(unit.Span.Start <= fixture.RunSpan.Start && unit.Span.End >= fixture.RunSpan.End);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+            Assert.Equal(Fixture.Hash(fixture.Sources[unit.Path]), unit.ContentHash);
+            Assert.Contains("😀", unit.Text);
+            AssertWireBudget(reply, budget);
+        }
+        var full = engine.Execute(request);
+        AssertRequestedPath(full, request.Budget!);
+        var exactBudget = Generous with { MaxChars = full.WireChars, MaxBytes = full.WireBytes };
+        var exact = engine.Execute(request with { Budget = exactBudget });
+        AssertRequestedPath(exact, exactBudget);
+
+        var tightBudget = exactBudget with { MaxChars = exactBudget.MaxChars - 1 };
+        var tight = engine.Execute(request with { Budget = tightBudget });
+        AssertRequestedPath(tight, tightBudget);
+
+        var minimumBudget = Generous with { MaxChars = 2048, MaxBytes = 8192 };
+        var minimum = engine.Execute(request with { Budget = minimumBudget });
+        AssertWireBudget(minimum, minimumBudget);
+        if (minimum.Errors.Any(error => error.Code == "OUTPUT_BUDGET_TOO_SMALL")) Assert.Empty(minimum.Units);
+        else
+        {
+            Assert.True(minimum.Succeeded);
+            var header = RetainedPathHeader(minimum);
+            Assert.Contains("status=found", header);
+            Assert.Contains("hops=2 ", header);
+            var shown = minimum.Text.Split('\n').Count(line => line.StartsWith("Path hop ", StringComparison.Ordinal));
+            Assert.InRange(shown, 0, 2);
+            Assert.Contains("shown=" + shown.ToString(CultureInfo.InvariantCulture) + "/2 ", header);
+            Assert.Contains(shown < 2 ? "details=omitted" : "details=complete", header);
+        }
+
+        foreach (var path in fixture.Sources.Keys) File.Delete(Path.Combine(fixture.Root, path));
+        var untrusted = new ExplorationService(new FixedIndex(fixture.Snapshot), new QueryWorkspace(fixture.Root), false).Execute(request);
+        Assert.True(untrusted.Succeeded);
+        Assert.Empty(untrusted.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", untrusted.OmissionReasons);
+        Assert.Contains("status=found", RetainedPathHeader(untrusted));
+        Assert.Contains("Freshness=unverified", untrusted.Text);
+        Assert.Contains("body=unknown", untrusted.Text);
+        AssertWireBudget(untrusted, request.Budget!);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
@@ -999,20 +1211,32 @@ public sealed class ExplorationTests
     public void RequireFreshClearsReturnedUnitsWhenTheSecondProofFailsOrCancels(bool cancel, ExploreFormat format)
     {
         using var fixture = new Fixture(format: format);
-        using var cancellation = new CancellationTokenSource();
-        var inspections = 0;
-        var workspace = new QueryWorkspace(fixture.Root, _ =>
+        foreach (var withPath in new[] { false, true })
         {
-            var current = ++inspections;
-            if (cancel && current == 2) cancellation.Cancel();
-            return new(fixture.Inventory(), current == 1);
-        });
-        var reply = fixture.Engine(workspace).Execute(fixture.Request(fixture.RunInt) with
-        { Freshness = QueryFreshnessPolicy.RequireFresh }, cancellation.Token);
-        Assert.True(inspections >= 2);
-        Assert.False(reply.Succeeded);
-        Assert.NotEmpty(reply.Errors);
-        Assert.Empty(reply.Units);
+            using var cancellation = new CancellationTokenSource();
+            var inspections = 0;
+            var workspace = new QueryWorkspace(fixture.Root, _ =>
+            {
+                var current = ++inspections;
+                if (cancel && current == 2) cancellation.Cancel();
+                return new(fixture.Inventory(), current == 1);
+            });
+            var request = fixture.Request(withPath ? fixture.Occurrence(fixture.RunInt) : fixture.RunInt) with
+            { Freshness = QueryFreshnessPolicy.RequireFresh, PathTo = withPath ? fixture.Occurrence(fixture.Helper) : null };
+            var reply = fixture.Engine(workspace).Execute(request, cancellation.Token);
+            Assert.True(inspections >= 2);
+            Assert.False(reply.Succeeded);
+            Assert.NotEmpty(reply.Errors);
+            Assert.Empty(reply.Units);
+            if (withPath)
+            {
+                var header = RetainedPathHeader(reply);
+                Assert.Contains("status=incomplete", header);
+                Assert.Contains("reason=query-error", header);
+                Assert.DoesNotContain("Path hop ", reply.Text);
+                AssertWireBudget(reply, request.Budget!);
+            }
+        }
     }
 
     [Theory]
@@ -1147,6 +1371,29 @@ public sealed class ExplorationTests
         var retried = engine.Execute(request with { Query = selector, Budget = belowAuditBoundary, Format = ExploreFormat.Agent });
         Assert.Equal(JsonSerializer.Serialize(agent.Units, QueryJson.Options), JsonSerializer.Serialize(retried.Units, QueryJson.Options));
         AssertWireBudget(retried, belowAuditBoundary);
+    }
+
+    private static HarnessEdge SavedPathEdge(Fixture fixture, string id, string source, string target)
+        => new(id, source, target, fixture.Occurrence(source), fixture.Occurrence(target), fixture.Variant,
+            "calls", HarnessCertainty.Resolved, "saved-path-fixture",
+            fixture.Snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(source)).Location);
+
+    private static string RetainedPathHeader(ExploreReply reply)
+    {
+        var header = Assert.Single(reply.Text.Split('\n'), line => line.StartsWith("Retained path status=", StringComparison.Ordinal));
+        Assert.Matches(@"\bincomplete=(true|false)\b", header);
+        Assert.Matches(@"\breason=\S+", header);
+        if (header.Contains("status=no-witness", StringComparison.Ordinal))
+        {
+            Assert.Contains("hops=unknown", header);
+            Assert.Contains("incomplete=false", header);
+        }
+        if (header.Contains("status=incomplete", StringComparison.Ordinal))
+        {
+            Assert.Contains("hops=unknown", header);
+            Assert.Contains("incomplete=true", header);
+        }
+        return header;
     }
 
     private static void AssertWireBudget(ExploreReply reply, QueryBudget budget)
