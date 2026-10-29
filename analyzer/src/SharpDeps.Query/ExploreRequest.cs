@@ -21,7 +21,13 @@ public enum ExploreScopePolicy
 public sealed record ExploreRequest(string Query, string? ProjectId = null, string? VariantId = null,
     string? PathPrefix = null, QueryFreshnessPolicy Freshness = QueryFreshnessPolicy.AllowStale,
     QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit,
-    ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique, string? PathTo = null);
+    ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique, string? PathTo = null)
+{
+    public bool ObserveOwner { get; init; }
+}
+
+public sealed record ExploreOwnerObservation(string State, string? WorkspaceId = null, string? SnapshotId = null,
+    long? Generation = null, long? Revision = null, long? DesiredRevision = null);
 
 public sealed record ExploreUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan Span,
     string Text, int FirstLine, IReadOnlyList<string> SymbolIds,

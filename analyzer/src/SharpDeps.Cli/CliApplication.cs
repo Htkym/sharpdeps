@@ -23,7 +23,7 @@ public static class CliApplication
                     index = "--target root-contained.slnx|.sln|.csproj --trusted",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
-                    explore = "--term names-or-file-paths [--project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id]; path-to requires an exact source occurrence term; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
+                    explore = "--term names-or-file-paths [--project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; path-to requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
             if (options.Command == "doctor")
@@ -101,7 +101,12 @@ public static class CliApplication
             var sourceWorkspace = trusted ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, index, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             if (clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
-            var explored = new ExplorationService(pinned, sourceWorkspace, trusted).Execute(request, token, queryToken);
+            var service = new ExplorationService(pinned, sourceWorkspace, trusted)
+            {
+                OwnerStatusProvider = request.ObserveOwner
+                    ? ownerToken => ObserveQueryOwner(root, index, state.WorkspaceUuid, ownerToken) : null
+            };
+            var explored = service.Execute(request, token, queryToken);
             token.ThrowIfCancellationRequested();
             if (clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
             var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
@@ -146,6 +151,30 @@ public static class CliApplication
         }
         catch (Exception error) when (error is CliFailure or IOException or UnauthorizedAccessException)
         { throw new QuerySourceException("QUERY_PROOF_UNAVAILABLE"); }
+    }
+
+    private static ExploreOwnerObservation ObserveQueryOwner(string root, string indexPath, Guid uuid,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(200));
+        try
+        {
+            var owner = CoordinatorProtocol.Discover(root, indexPath, uuid);
+            timeout.Token.ThrowIfCancellationRequested();
+            if (owner is null) return new("absent");
+            var reply = CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version, owner.Instance, uuid,
+                "owner-status", "status", root, indexPath, false, []), timeout.Token).GetAwaiter().GetResult();
+            timeout.Token.ThrowIfCancellationRequested();
+            if (reply is null || reply.ErrorCode is not null) return new("unavailable");
+            return new(reply.State, reply.Result?.WorkspaceId, reply.Result?.SnapshotId, reply.Result?.Generation,
+                reply.Revision, reply.DesiredRevision);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return new("unavailable"); }
+        catch (Exception error) when (error is CliFailure or IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        { return new("unavailable"); }
+        finally { token.ThrowIfCancellationRequested(); }
     }
 
     // Keep target SDK/MSBuild activation out of the saved-only command path.

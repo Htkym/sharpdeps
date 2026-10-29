@@ -67,7 +67,7 @@ Launch `sharpdeps-mcp --root /absolute/workspace --trusted` to permit source rea
 }
 ```
 
-Optional arguments are `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `pathTo`, `freshness`, `format`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters; `pathTo` accepts up to 128 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, `--path-to`, and hyphenated budget flags for the corresponding values.
+Optional arguments are `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `pathTo`, `freshness`, `format`, `ownerStatus`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters; `pathTo` accepts up to 128 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, `--path-to`, and hyphenated budget flags for the corresponding values.
 
 Explore returns a single text content block containing the same evidence text as the CLI when using the same format, without a duplicated `structuredContent` object. Clients using the old `status`, `search`, `symbol`, `callers`, `callees`, `impact`, or `context` MCP tools must migrate to `explore`; the existing CLI query commands remain available.
 
@@ -76,6 +76,10 @@ Starting the host with both `--trusted --allow-mutations` adds `index` and `upda
 ## Freshness and limits
 
 `allow-stale` is the default. Returned source ranges are checked against saved hashes, while semantic freshness remains explicitly unverified. `require-fresh` additionally requires a trusted coordinator's current input and configuration proof before and after collection; failed verification returns no source. `refresh` returns `UPDATE_REQUIRED`: explicitly update through the trusted coordinator and retry against a new generation. Saved coverage, including `Partial`, and diagnostics remain independent of freshness.
+
+To observe a coordinator you already started, add `--owner-status` (MCP `ownerStatus: true`). This optional read-only status request shows the observed owner state, committed generation when available, and whether its complete saved identity matches this reply's pinned snapshot. It does not start a coordinator or watcher, run analysis, update the index, grant source access or change the request's freshness policy. An idle owner or matching generation is not a current input/configuration proof. A missing descriptor is reported as absent; an unreachable or invalid owner is unavailable. An owner that has not published a result has an unknown generation and pin comparison.
+
+Owner observation defaults to disabled. When enabled, its bounded advisory line shares the selected format's response budget and can reduce returned source. Its probe uses a 200 ms local allowance within the original request deadline; it does not extend that deadline. State can change after observation. Continue using `require-fresh` for source/configuration verification and an explicit trusted update for publication.
 
 Defaults are 12,000 response characters, 48,000 UTF-8 bytes, and 1,000 milliseconds. Character and byte limits include conservative JSON escaping for one text-content tool result, not only source text; the client-controlled JSON-RPC envelope is excluded. CLI exploration also accepts `--max-nodes`, `--max-edges`, and `--max-depth` to bound collection.
 

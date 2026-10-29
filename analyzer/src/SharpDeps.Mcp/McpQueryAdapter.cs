@@ -40,7 +40,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
 {
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024,"description":"Names, exact identities, or source paths to explore together."},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["unique","prefer-debug"],"default":"unique","description":"Optionally prefer the single saved Debug variant within one matching project; explicit scopes take precedence."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","minimum":10,"maximum":30000}},"required":["query"],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024,"description":"Names, exact identities, or source paths to explore together."},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["unique","prefer-debug"],"default":"unique","description":"Optionally prefer the single saved Debug variant within one matching project; explicit scopes take precedence."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","minimum":10,"maximum":30000}},"required":["query"],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
@@ -103,10 +103,17 @@ public sealed class McpQueryAdapter(McpHostOptions host)
         string? query = null, project = null, variant = null, pathPrefix = null, pathTo = null,
             freshness = null, format = null, scopePolicy = null;
         int? maxChars = null, maxBytes = null, maxMilliseconds = null;
+        var observeOwner = false;
         try
         {
             foreach (var (name, value) in properties)
             {
+                if (name == "ownerStatus")
+                {
+                    if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw Invalid();
+                    observeOwner = value.GetBoolean();
+                    continue;
+                }
                 if (name is "maxChars" or "maxBytes" or "maxMilliseconds")
                 {
                     if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var number)) throw Invalid();
@@ -137,7 +144,8 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             return ExploreRequestFactory.Validate(new(query!, project, variant, pathPrefix,
                 ExploreRequestFactory.Freshness(freshness),
                 ExploreRequestFactory.Budget(maxMilliseconds: maxMilliseconds, maxChars: maxChars, maxBytes: maxBytes),
-                ExploreRequestFactory.Format(format, ExploreFormat.Agent), ExploreRequestFactory.ScopePolicy(scopePolicy), pathTo));
+                ExploreRequestFactory.Format(format, ExploreFormat.Agent), ExploreRequestFactory.ScopePolicy(scopePolicy), pathTo)
+                { ObserveOwner = observeOwner });
         }
         catch (CliFailure) { throw Invalid(); }
     }

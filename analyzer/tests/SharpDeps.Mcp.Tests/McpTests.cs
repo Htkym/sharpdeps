@@ -19,6 +19,8 @@ public sealed class McpTests
         Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal("agent", tool.InputSchema.GetProperty("properties").GetProperty("format").GetProperty("default").GetString());
         Assert.Equal("unique", tool.InputSchema.GetProperty("properties").GetProperty("scopePolicy").GetProperty("default").GetString());
+        Assert.Equal("boolean", tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("type").GetString());
+        Assert.False(tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("default").GetBoolean());
         Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", root, "--allow-mutations"]));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "index" }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
@@ -61,6 +63,9 @@ public sealed class McpTests
             "{\"query\":\"Service\",\"scopePolicy\":\"PreferDebug\"}",
             "{\"query\":\"Service\",\"scopePolicy\":true}",
             "{\"query\":\"Service\",\"scopePolicy\":null}",
+            "{\"query\":\"Service\",\"ownerStatus\":null}",
+            "{\"query\":\"Service\",\"ownerStatus\":\"true\"}",
+            "{\"query\":\"Service\",\"ownerStatus\":1}",
             "{\"query\":\"Service\",\"pathTo\":true}",
             "{\"query\":\"Service\",\"pathTo\":null}",
             "{\"query\":\"Service\",\"pathTo\":\" \"}",

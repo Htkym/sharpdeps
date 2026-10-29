@@ -8,7 +8,7 @@ internal sealed class CliArguments
 {
     private readonly Dictionary<string, List<string>> values = new(StringComparer.Ordinal);
     private static readonly HashSet<string> Switches = new(StringComparer.Ordinal)
-    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch" };
+    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch", "owner-status" };
     private static readonly HashSet<string> Repeated = new(StringComparer.Ordinal) { "project", "variant", "edge-kind" };
     private static readonly HashSet<string> Common = new(StringComparer.Ordinal) { "root", "index", "trusted", "quiet", "request-id" };
     private static readonly HashSet<string> Index = new(StringComparer.Ordinal)
@@ -19,7 +19,7 @@ internal sealed class CliArguments
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to" };
+      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -111,7 +111,8 @@ internal sealed class CliArguments
             ExploreRequestFactory.Freshness(Get("freshness")),
             ExploreRequestFactory.Budget(OptionalNumber("max-nodes"), OptionalNumber("max-edges"), OptionalNumber("max-depth"),
                 OptionalNumber("max-milliseconds"), OptionalNumber("max-chars"), OptionalNumber("max-bytes")),
-            ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit), ExploreRequestFactory.ScopePolicy(Get("scope-policy")), Get("path-to")));
+            ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit), ExploreRequestFactory.ScopePolicy(Get("scope-policy")), Get("path-to"))
+            { ObserveOwner = Has("owner-status") });
     }
 
     public QueryRequest QueryRequest()

@@ -15,6 +15,8 @@ public sealed class ExplorationService
     private readonly QueryWorkspace? workspace;
     private readonly bool trusted;
 
+    public Func<CancellationToken, ExploreOwnerObservation>? OwnerStatusProvider { get; init; }
+
     public ExplorationService(IQueryIndex index, QueryWorkspace? workspace = null, bool isTrusted = false)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -43,6 +45,11 @@ public sealed class ExplorationService
                 throw new ArgumentException("Project and variant scopes disagree.", nameof(request));
             run = new Run(saved, index, workspace, trusted, request, timer, clock, cancellationToken);
             run.Check();
+            if (request.ObserveOwner)
+            {
+                run.ObserveOwner(OwnerStatusProvider?.Invoke(timer.Token));
+                run.Check();
+            }
             if (request.Freshness == QueryFreshnessPolicy.Refresh)
                 run.Error("UPDATE_REQUIRED", "Request a trusted coordinator update and open a new reader.");
             else if (request.Freshness == QueryFreshnessPolicy.RequireFresh) run.Verify();
@@ -164,6 +171,7 @@ public sealed class ExplorationService
         private string? cachedSourceText;
         private bool cancelled;
         private QueryFreshness freshness = new("unverified", null, [], ["complete inventory/configuration not checked"]);
+        private ExploreOwnerObservation? ownerObservation;
         public List<QueryIssue> Errors { get; } = [];
         public List<ExploreUnit> Units { get; } = [];
 
@@ -200,6 +208,27 @@ public sealed class ExplorationService
             Check();
             if (freshness.State != "verified-current")
                 Error("FRESHNESS_REQUIREMENT_NOT_MET", "Wait for the trusted owner to publish a current generation, then reopen the reader.");
+        }
+
+        public void ObserveOwner(ExploreOwnerObservation? observation)
+        {
+            ownerObservation = new("unavailable");
+            if (observation is null || observation.State is not ("absent" or "unavailable" or "idle" or "updating" or "dirty" or "degraded" or "stopping")) return;
+            var noIdentity = observation.WorkspaceId is null && observation.SnapshotId is null && observation.Generation is null;
+            var identity = observation.WorkspaceId is { Length: 35 } workspaceId && workspaceId.StartsWith("hw_", StringComparison.Ordinal)
+                && !workspaceId.AsSpan(3).ContainsAnyExcept("0123456789abcdef")
+                && observation.SnapshotId is { Length: > 0 and <= 2048 } snapshotId && !string.IsNullOrWhiteSpace(snapshotId) && snapshotId == snapshotId.Trim()
+                && !snapshotId.Any(char.IsControl) && observation.Generation is >= 0;
+            var noRevision = observation.Revision is null && observation.DesiredRevision is null;
+            var revision = observation.Revision is { } current && current >= 0
+                && observation.DesiredRevision is { } desired && desired >= current;
+            if ((!noIdentity && !identity) || (!noRevision && !revision)) return;
+            if (observation.State is "absent" or "unavailable")
+            {
+                if (noIdentity && noRevision) ownerObservation = observation;
+                return;
+            }
+            ownerObservation = observation;
         }
 
         private bool PathAllowed(HarnessLocation location) => request.PathPrefix is not { } prefix
@@ -1136,6 +1165,7 @@ public sealed class ExplorationService
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage}");
             Line($"Freshness={freshness.State}; returned source ranges={units.Count}, hash-verified when returned.");
+            AppendOwnerObservation(text);
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; completeness is the saved span only. Owner context does not select additional semantic targets or prove inactive text active.");
             if (project is not null || variant is not null)
             {
@@ -1236,6 +1266,7 @@ public sealed class ExplorationService
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
+            AppendOwnerObservation(text);
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; hash-verified saved spans only. Owner context adds no semantic targets or proof that inactive text is active.");
             text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
@@ -1331,6 +1362,18 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private void AppendOwnerObservation(StringBuilder text)
+        {
+            if (!request.ObserveOwner) return;
+            var observation = ownerObservation ?? new("unavailable");
+            var graph = owner.saved.Graph;
+            var pin = observation.WorkspaceId is null ? "unknown"
+                : observation.WorkspaceId == graph.WorkspaceId && observation.SnapshotId == graph.SnapshotId && observation.Generation == graph.Generation
+                    ? "same" : "different";
+            static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+            text.AppendLine(FormattableString.Invariant($"Owner observation state={observation.State} generation={Number(observation.Generation)} pin={pin} revision={Number(observation.Revision)} desired={Number(observation.DesiredRevision)}; status only, not freshness proof."));
         }
 
         private int PathDetailsShown(int detailCount)

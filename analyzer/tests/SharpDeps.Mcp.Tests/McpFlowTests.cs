@@ -32,6 +32,7 @@ public sealed class McpFlowTests
         Assert.Equal(0, exit);
         Assert.EndsWith("\n", text, StringComparison.Ordinal);
         AssertWireBudget(result, 12000, 48000);
+        Assert.DoesNotContain("Owner observation ", text, StringComparison.Ordinal);
         if (scopePolicy is null) Assert.DoesNotContain("Scope policy=", text, StringComparison.Ordinal);
         if (trusted)
         {
@@ -59,7 +60,7 @@ public sealed class McpFlowTests
         var pathArguments = new List<string>(arguments);
         pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
         pathArguments.AddRange(["--project-id", fixture.Project, "--variant", fixture.Variant, "--path-prefix", "App.cs",
-            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "1500"]);
+            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "1500", "--owner-status"]);
         var pathRequest = Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence);
         foreach (var (name, value) in new[] { ("projectId", fixture.Project), ("variantId", fixture.Variant),
             ("pathPrefix", "App.cs"), ("freshness", "allow-stale") })
@@ -67,9 +68,14 @@ public sealed class McpFlowTests
         pathRequest.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(10000);
         pathRequest.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(40000);
         pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(1500);
+        pathRequest.Arguments["ownerStatus"] = JsonSerializer.SerializeToElement(true);
         var (pathExit, pathText, pathResult) = await AssertEquivalent(adapter, pathRequest, pathArguments);
         Assert.Equal(0, pathExit);
         Assert.Contains($"Retained path status=found source={fixture.Occurrence} target={fixture.Occurrence} hops=0 shown=0/0", pathText, StringComparison.Ordinal);
+        const string absentOwner = "Owner observation state=absent generation=unknown pin=unknown revision=unknown desired=unknown; status only, not freshness proof.";
+        Assert.Contains(absentOwner, pathText, StringComparison.Ordinal);
+        Assert.Contains("Freshness=unverified", pathText, StringComparison.Ordinal);
+        if (!trusted) Assert.DoesNotContain(fixture.SavedText, pathText, StringComparison.Ordinal);
         AssertWireBudget(pathResult, 10000, 40000);
 
         if (format is not null)
@@ -84,7 +90,9 @@ public sealed class McpFlowTests
         {
             var defaultArguments = new List<string>(arguments);
             defaultArguments.RemoveRange(defaultArguments.IndexOf("--format"), 2);
-            var (defaultExit, defaultText, _) = await AssertEquivalent(adapter, Explore("Service", "audit", scopePolicy), defaultArguments);
+            var defaultRequest = Explore("Service", "audit", scopePolicy);
+            defaultRequest.Arguments!["ownerStatus"] = JsonSerializer.SerializeToElement(false);
+            var (defaultExit, defaultText, _) = await AssertEquivalent(adapter, defaultRequest, defaultArguments);
             Assert.Equal(0, defaultExit);
             Assert.Equal(text, defaultText);
 
@@ -123,12 +131,14 @@ public sealed class McpFlowTests
             var tight = Explore("Service", format, scopePolicy);
             tight.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(2048);
             tight.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(2048);
+            tight.Arguments["ownerStatus"] = JsonSerializer.SerializeToElement(true);
             var fullWire = JsonSerializer.Serialize(result, McpJsonUtilities.DefaultOptions);
             Assert.True(fullWire.Length > 2048 || Encoding.UTF8.GetByteCount(fullWire) > 2048);
             var (tightExit, tightText, tightResult) = await AssertEquivalent(adapter, tight,
-                [.. arguments, "--max-chars", "2048", "--max-bytes", "2048"]);
+                [.. arguments, "--max-chars", "2048", "--max-bytes", "2048", "--owner-status"]);
             Assert.True(tightExit == 0 || tightExit == 4 && tightText.Contains("OUTPUT_BUDGET_TOO_SMALL", StringComparison.Ordinal));
             AssertWireBudget(tightResult, 2048, 2048);
+            if (tightExit == 0) Assert.Contains(absentOwner, tightText, StringComparison.Ordinal);
             Assert.DoesNotContain(fixture.SavedText, tightText, StringComparison.Ordinal);
         }
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();

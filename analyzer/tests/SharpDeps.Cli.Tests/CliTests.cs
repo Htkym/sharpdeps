@@ -169,6 +169,8 @@ public sealed class CliTests
         Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "unique"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.PreferDebug, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "prefer-debug"]).ExplorationRequest().ScopePolicy);
+        Assert.False(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ObserveOwner);
+        Assert.True(CliArguments.Parse(["explore", "--term", "Service", "--owner-status"]).ExplorationRequest().ObserveOwner);
         Assert.Null(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().PathTo);
         var occurrence = "hocc_" + new string('a', 64);
         Assert.Equal(occurrence, CliArguments.Parse(["explore", "--term", occurrence, "--path-to", occurrence]).ExplorationRequest().PathTo);
@@ -202,6 +204,9 @@ public sealed class CliTests
             Assert.Equal(2, nonExploreOption.Exit);
             Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreOption.Json));
         }
+        var nonExploreOwnerStatus = await Run("status", "--root", fixture.Root, "--owner-status");
+        Assert.Equal(2, nonExploreOwnerStatus.Exit);
+        Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreOwnerStatus.Json));
         var unsupported = await Run("query", "--kind", "status", "--root", fixture.Root, "--dependencies");
         Assert.Equal(2, unsupported.Exit);
         var statusScope = await Run("status", "--root", fixture.Root, "--project-id", "ignored-project");
@@ -269,6 +274,11 @@ public sealed class CliTests
         var originalGeneration = pinned.Snapshot().Graph.Generation;
         var proofs = 0;
         var failProof = 0;
+        var observationArguments = new[] { "explore", "--root", fixture.Root, "--term", "Service",
+            "--owner-status", "--max-milliseconds", "10000" };
+        var absent = await Run(observationArguments);
+        Assert.Equal(0, absent.Exit);
+        Assert.Contains("Owner observation state=absent generation=unknown pin=unknown revision=unknown desired=unknown;", absent.Json);
         using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
         await using var owner = new CliCoordinator(writer, (_, token) =>
         {
@@ -300,6 +310,11 @@ public sealed class CliTests
                 }
             });
         });
+        var emptyOwner = await Run(observationArguments);
+        Assert.Equal(0, emptyOwner.Exit);
+        Assert.Contains("Owner observation state=idle generation=unknown pin=unknown revision=0 desired=0;", emptyOwner.Json);
+        Assert.DoesNotContain(originalText.TrimEnd('\r', '\n'), emptyOwner.Json);
+        Assert.Equal(0, Volatile.Read(ref proofs));
         var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root, "--trusted", "--target", "App.csproj"]),
             fixture.Root, fixture.IndexPath, fixture.Uuid);
         var published = await owner.UpdateAsync(update, "publish-proof", deadline.Token);
@@ -310,7 +325,14 @@ public sealed class CliTests
         Assert.Equal(0, first.Exit);
         Assert.Contains("Freshness=verified-current", first.Json);
         Assert.Contains(originalText.TrimEnd('\r', '\n'), first.Json);
+        Assert.DoesNotContain("Owner observation ", first.Json);
         Assert.Equal(2, Volatile.Read(ref proofs));
+        var observed = await Run([.. arguments, "--owner-status"]);
+        Assert.Equal(0, observed.Exit);
+        Assert.Contains($"Owner observation state=idle generation={published.Result!.Generation} pin=same revision={published.Revision} desired={published.DesiredRevision};", observed.Json);
+        Assert.Contains("Freshness=verified-current", observed.Json);
+        Assert.Contains(originalText.TrimEnd('\r', '\n'), observed.Json);
+        Assert.Equal(4, Volatile.Read(ref proofs));
 
         // The second proof can fail after source admission; no body from that reply may escape.
         Volatile.Write(ref failProof, Volatile.Read(ref proofs) + 2);
@@ -334,12 +356,17 @@ public sealed class CliTests
         var replacement = await owner.UpdateAsync(update, "publish-current", deadline.Token);
         Assert.Null(replacement.ErrorCode);
         Assert.Equal(originalGeneration + 2, replacement.Result!.Generation);
-        var currentReply = await Run(arguments);
+        var currentReply = await Run([.. arguments, "--owner-status"]);
         Assert.Equal(0, currentReply.Exit);
         Assert.Contains("generation=" + replacement.Result.Generation, currentReply.Json);
         Assert.Contains("Freshness=verified-current", currentReply.Json);
         Assert.Contains(changedText.TrimEnd('\r', '\n'), currentReply.Json);
+        Assert.Contains($"Owner observation state=idle generation={replacement.Result.Generation} pin=same revision={replacement.Revision} desired={replacement.DesiredRevision};", currentReply.Json);
         Assert.Equal(originalGeneration, pinned.Snapshot().Graph.Generation);
+        await owner.DisposeAsync();
+        var unavailable = await Run(observationArguments);
+        Assert.Equal(0, unavailable.Exit);
+        Assert.Contains("Owner observation state=unavailable generation=unknown pin=unknown", unavailable.Json);
     }
 
     [Fact]

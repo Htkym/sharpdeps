@@ -13,6 +13,144 @@ public sealed class ExplorationTests
 {
     private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void OwnerObservationIsOptInAndBoundToTheActualReplyPin(ExploreFormat format)
+    {
+        using var fixture = new Fixture(format: format);
+        var index = new FixedIndex(fixture.Snapshot);
+        var graph = fixture.Snapshot.Graph;
+        var request = fixture.Request(fixture.RunInt);
+        var baseline = new ExplorationService(index).Execute(request);
+        var same = new ExploreOwnerObservation("idle", graph.WorkspaceId, graph.SnapshotId, graph.Generation, 1, 1);
+        ExploreOwnerObservation? observation = same;
+        var calls = 0;
+        var engine = new ExplorationService(index)
+        { OwnerStatusProvider = _ => { calls++; return observation!; } };
+        Assert.False(request.ObserveOwner);
+        Assert.Equal(baseline.Text, engine.Execute(request).Text);
+        Assert.Equal(0, calls);
+        Assert.DoesNotContain("Owner observation ", baseline.Text);
+
+        var cases = new (ExploreOwnerObservation? Value, string Expected)[]
+        {
+            (same, $"state=idle generation={graph.Generation} pin=same"),
+            (same with { State = "dirty", DesiredRevision = 2 }, $"state=dirty generation={graph.Generation} pin=same"),
+            (same with { State = "updating", SnapshotId = graph.SnapshotId + "-other" }, $"state=updating generation={graph.Generation} pin=different"),
+            (same with { State = "degraded", WorkspaceId = HarnessIdentity.WorkspaceId(Guid.Parse("00000000-0000-0000-0000-000000000001")) }, $"state=degraded generation={graph.Generation} pin=different"),
+            (same with { State = "stopping", Generation = 0 }, "state=stopping generation=0 pin=different"),
+            (new("idle", Revision: 0, DesiredRevision: 0), "state=idle generation=unknown pin=unknown"),
+            (new("absent"), "state=absent generation=unknown pin=unknown"),
+            (new("unavailable"), "state=unavailable generation=unknown pin=unknown"),
+            (new("unexpected-owner-payload\nverified-current"), "state=unavailable generation=unknown pin=unknown"),
+            (new("idle", WorkspaceId: graph.WorkspaceId), "state=unavailable generation=unknown pin=unknown"),
+            (same with { Revision = 2, DesiredRevision = 1 }, "state=unavailable generation=unknown pin=unknown"),
+            (null, "state=unavailable generation=unknown pin=unknown")
+        };
+        foreach (var item in cases)
+        {
+            observation = item.Value;
+            var previous = calls;
+            var reply = engine.Execute(request with { ObserveOwner = true });
+            Assert.True(reply.Succeeded);
+            Assert.Equal(previous + 1, calls);
+            var line = Assert.Single(reply.Text.Split('\n'), line => line.StartsWith("Owner observation ", StringComparison.Ordinal)).TrimEnd('\r');
+            Assert.StartsWith("Owner observation " + item.Expected, line, StringComparison.Ordinal);
+            Assert.EndsWith("; status only, not freshness proof.", line, StringComparison.Ordinal);
+            Assert.Contains("Freshness=unverified", reply.Text);
+            Assert.Contains("WORKSPACE_UNTRUSTED", reply.OmissionReasons);
+            Assert.Empty(reply.Units);
+            Assert.DoesNotContain("unexpected-owner-payload", reply.Text);
+            AssertWireBudget(reply, request.Budget!);
+        }
+
+        var longSnapshot = fixture.Snapshot with { Graph = graph with { SnapshotId = new string('s', 2048) } };
+        var longObservation = same with { SnapshotId = longSnapshot.Graph.SnapshotId };
+        var longEngine = new ExplorationService(new FixedIndex(longSnapshot))
+        { OwnerStatusProvider = _ => longObservation };
+        Assert.Contains($"Owner observation state=idle generation={graph.Generation} pin=same", longEngine.Execute(request with { ObserveOwner = true }).Text);
+        longObservation = longObservation with { SnapshotId = " " + longSnapshot.Graph.SnapshotId[1..] };
+        Assert.Contains("Owner observation state=unavailable generation=unknown pin=unknown", longEngine.Execute(request with { ObserveOwner = true }).Text);
+
+        foreach (var caller in new[] { false, true })
+        {
+            using var cancellation = new CancellationTokenSource();
+            var interrupted = new ExplorationService(index)
+            { OwnerStatusProvider = _ => { cancellation.Cancel(); return new("idle"); } };
+            var reply = interrupted.Execute(request with { ObserveOwner = true }, caller ? cancellation.Token : default,
+                caller ? default : cancellation.Token);
+            Assert.Contains(reply.Errors, error => error.Code == (caller ? "CANCELLED" : "QUERY_TIMEOUT"));
+            Assert.Empty(reply.Units);
+        }
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void OwnerObservationUsesTheWireBudgetWithoutReplacingFreshnessOrSourceChecks(ExploreFormat format)
+    {
+        using var fixture = new Fixture(huge: true, format: format);
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } };
+        var graph = snapshot.Graph;
+        var observations = 0;
+        var proofs = 0;
+        var failProof = 0;
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(fixture.Inventory(), ++proofs != failProof));
+        var observation = new ExploreOwnerObservation("dirty", graph.WorkspaceId, graph.SnapshotId, graph.Generation, 1, 2);
+        var engine = new ExplorationService(new FixedIndex(snapshot), workspace, true)
+        { OwnerStatusProvider = _ => { observations++; return observation; } };
+        var request = fixture.Request(fixture.RunInt) with { ObserveOwner = true };
+        var full = engine.Execute(request);
+        Assert.True(full.Succeeded);
+        Assert.Contains(full.Units, unit => unit.SymbolIds.Contains(fixture.RunInt) && unit.Text.Contains("😀", StringComparison.Ordinal));
+        Assert.Contains("Owner observation state=dirty", full.Text);
+        Assert.Contains("Freshness=unverified", full.Text);
+        Assert.Equal(0, proofs);
+        Assert.Equal(1, observations);
+        AssertWireBudget(full, request.Budget!);
+
+        foreach (var budget in new[]
+        {
+            Generous with { MaxChars = full.WireChars - 1, MaxBytes = full.WireBytes },
+            Generous with { MaxChars = 2048, MaxBytes = 8192 }
+        })
+        {
+            var previous = observations;
+            var bounded = engine.Execute(request with { Budget = budget });
+            Assert.Equal(previous + 1, observations);
+            AssertWireBudget(bounded, budget);
+            if (bounded.Errors.Any(error => error.Code == "OUTPUT_BUDGET_TOO_SMALL")) Assert.Empty(bounded.Units);
+            else Assert.Contains("Owner observation state=dirty", bounded.Text);
+            Assert.All(bounded.Units, unit => Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text));
+        }
+
+        observation = observation with { State = "idle", DesiredRevision = 1 };
+        var fresh = engine.Execute(request with { Freshness = QueryFreshnessPolicy.RequireFresh });
+        Assert.True(fresh.Succeeded);
+        Assert.Contains("Freshness=verified-current", fresh.Text);
+        Assert.NotEmpty(fresh.Units);
+        Assert.Equal(2, proofs);
+        Assert.Equal(4, observations);
+
+        proofs = 0; failProof = 2;
+        var invalidated = engine.Execute(request with { Freshness = QueryFreshnessPolicy.RequireFresh });
+        Assert.False(invalidated.Succeeded);
+        Assert.Empty(invalidated.Units);
+        Assert.Contains(invalidated.Errors, error => error.Code == "FRESHNESS_REQUIREMENT_NOT_MET");
+        Assert.Contains("Owner observation state=idle", invalidated.Text);
+        Assert.Equal(2, proofs);
+        Assert.Equal(5, observations);
+
+        File.WriteAllText(fixture.CoreFullPath, fixture.Sources[Fixture.CorePath].Replace("value + count", "value - count", StringComparison.Ordinal), Fixture.Utf8);
+        var dirty = engine.Execute(request);
+        Assert.Empty(dirty.Units);
+        Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", dirty.OmissionReasons);
+        Assert.Contains("Freshness=dirty", dirty.Text);
+        Assert.Contains("Owner observation state=idle", dirty.Text);
+        Assert.Equal(6, observations);
+    }
+
     [Fact]
     public void DerivedRankingUsesDistinctTermsIdentifierComponentsAndTheExactCachedPayload()
     {
