@@ -163,6 +163,9 @@ public sealed class CliTests
     public async Task TrustAndArgumentFailuresHappenBeforeAnyWorkspaceCreation()
     {
         using var fixture = new Fixture(seed: false);
+        Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().Format);
+        Assert.Equal(ExploreFormat.Agent, CliArguments.Parse(["explore", "--term", "Service", "--format", "agent"]).ExplorationRequest().Format);
+        Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service", "--format", "audit"]).ExplorationRequest().Format);
         var untrusted = await Run("index", "--root", fixture.Root, "--target", "absent.csproj");
         Assert.Equal(5, untrusted.Exit);
         Assert.Equal("WORKSPACE_UNTRUSTED", Code(untrusted.Json));
@@ -174,11 +177,17 @@ public sealed class CliTests
             new[] { "--term", "Service", "--variant", "first", "--variant", "second" },
             new[] { "--term", "Service", "--project-id", " " },
             new[] { "--term", "Service", "--max-chars", "2047" },
+            new[] { "--term", "Service", "--format", "verbose" },
+            new[] { "--term", "Service", "--format", "0" },
+            new[] { "--term", "Service", "--format", "Agent" },
             new[] { "--term", "Service", "--include-candidates" } })
         {
             var invalidExplore = await Run(["explore", "--root", fixture.Root, .. arguments]);
             Assert.Equal(2, invalidExplore.Exit);
         }
+        var nonExploreFormat = await Run("status", "--root", fixture.Root, "--format", "agent");
+        Assert.Equal(2, nonExploreFormat.Exit);
+        Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreFormat.Json));
         var unsupported = await Run("query", "--kind", "status", "--root", fixture.Root, "--dependencies");
         Assert.Equal(2, unsupported.Exit);
         var statusScope = await Run("status", "--root", fixture.Root, "--project-id", "ignored-project");

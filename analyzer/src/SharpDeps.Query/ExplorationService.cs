@@ -87,7 +87,7 @@ public sealed class ExplorationService
         var budget = request.Budget!;
         if (!Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query)
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
-            || !Enum.IsDefined(request.Freshness) || budget.MaxNodes is < 1 or > 500
+            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
             || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
@@ -750,6 +750,10 @@ public sealed class ExplorationService
         }
 
         private string Render(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
+            => request.Format == ExploreFormat.Agent ? RenderAgent(units, omitted, relationCount, detailCount)
+                : RenderAudit(units, omitted, relationCount, detailCount);
+
+        private string RenderAudit(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
         {
             var text = new StringBuilder();
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
@@ -846,6 +850,109 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
+        {
+            var text = new StringBuilder();
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var graph = owner.saved.Graph;
+            Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
+            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; hash-verified saved spans only. Owner context adds no semantic targets or proof that inactive text is active.");
+            text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+            var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
+            Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
+            foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
+            if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
+            foreach (var error in Errors.Take(8)) Line($"Error {Safe(error.Code, 80)}: {Safe(error.Message, 240)} {Safe(error.Path, 160)}");
+            if (freshness.DirtyPaths.Count > 0) Line($"Dirty sources={freshness.DirtyPaths.Count}: {string.Join(", ", freshness.DirtyPaths.Take(4).Select(path => Safe(path, 160)))}");
+            if (freshness.Unverified.Count > 0) Line($"Unverified: {string.Join("; ", freshness.Unverified.Take(4).Select(value => Safe(value, 160)))}");
+            if (choices.Count > 0)
+            {
+                Line($"Choose project/variant ({choices.Count} matching scopes; no code scope was inferred):");
+                foreach (var choice in choices.Take(detailCount))
+                {
+                    var choiceScope = graph.Variants.Single(value => value.Id == choice.Variant);
+                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(choiceScope.TargetFramework, 80)} {Safe(choiceScope.Configuration, 80)}");
+                }
+                if (choices.Count > detailCount) Line($"Scope choices omitted={choices.Count - detailCount}; supply project/variant or a narrower query.");
+            }
+            if (symbolChoices.Count > 0)
+            {
+                Line($"Ambiguous symbols={symbolChoices.Count}; re-query an exact selector with its scope:");
+                foreach (var choice in symbolChoices.Take(detailCount))
+                    Line($"{Safe(owner.Label(choice.Node), 160)} selector={choice.Node.Id} signature={Safe(choice.Node.Signature, 240)}");
+                if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
+            }
+            var shownRelations = relations.Take(relationCount).ToArray();
+            var shownOmissions = omitted.Take(detailCount).ToArray();
+            var identities = new Dictionary<string, Selected>(StringComparer.Ordinal);
+            foreach (var item in roots) identities.TryAdd(item.Identity, item);
+            foreach (var unit in units)
+                foreach (var item in selected.Values.Where(selection => unit.SymbolIds.Contains(selection.Node.Id))
+                    .OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal))
+                    identities.TryAdd(item.Identity, item);
+            foreach (var relation in shownRelations)
+            { identities.TryAdd(relation.From.Identity, relation.From); identities.TryAdd(relation.To.Identity, relation.To); }
+            foreach (var omission in shownOmissions) identities.TryAdd(omission.Selection.Identity, omission.Selection);
+            var aliases = identities.Values.OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal)
+                .Select((selection, index) => (selection.Identity, Alias: "@" + (index + 1).ToString(CultureInfo.InvariantCulture)))
+                .ToDictionary(pair => pair.Identity, pair => pair.Alias, StringComparer.Ordinal);
+            var selectors = roots.Select(item => item.Identity).Concat(shownOmissions.Select(item => item.Selection.Identity)).ToHashSet(StringComparer.Ordinal);
+            if (identities.Count > 0) text.AppendLine("Symbols (@n is reply-local; selection=requested certainty=Resolved unless shown):");
+            foreach (var item in identities.Values.OrderBy(selection => aliases[selection.Identity], StringComparer.Ordinal))
+            {
+                var details = selectors.Contains(item.Identity) ? " selector=" + item.Identity : "";
+                details += units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)) ? " source" : " signature=" + Safe(item.Node.Signature, 240);
+                if (item.Reason != "requested") details += " selection=" + Safe(item.Reason, 100);
+                if (item.Certainty != HarnessCertainty.Resolved) details += " certainty=" + item.Certainty;
+                Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)}{details}");
+            }
+            var sourceIds = units.Select(unit => unit.SourceId).Concat(shownOmissions.Select(item => item.Location.SourceId))
+                .Concat(shownRelations.Select(relation => relation.Edge.Evidence?.SourceId).OfType<string>())
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var sourceAliases = sourceIds.Select((id, index) => (id, Alias: "F" + (index + 1).ToString(CultureInfo.InvariantCulture)))
+                .ToDictionary(pair => pair.id, pair => pair.Alias, StringComparer.Ordinal);
+            foreach (var sourceId in sourceIds)
+                if (owner.files.TryGetValue(sourceId, out var file)) Line($"{sourceAliases[sourceId]} {file.RelativePath}");
+            if (shownRelations.Length > 0) text.AppendLine("Saved relations (certainty is semantic evidence, not runtime dispatch):");
+            foreach (var relation in shownRelations)
+            {
+                var evidence = relation.Edge.Evidence;
+                var at = evidence is null ? "unknown" : sourceAliases[evidence.SourceId] + ":" + VerifiedLine(evidence, units);
+                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}");
+            }
+            if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact selector for more evidence.");
+            foreach (var unit in units)
+            {
+                var symbols = identities.Values.Where(selection => unit.SymbolIds.Contains(selection.Node.Id))
+                    .OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal).Select(selection => aliases[selection.Identity]);
+                var lastLine = unit.FirstLine + unit.Text.AsSpan().Count('\n') - (unit.Text.EndsWith('\n') ? 1 : 0);
+                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
+                var lines = unit.Text.Split('\n');
+                for (var index = 0; index < lines.Length; index++)
+                {
+                    if (index == lines.Length - 1 && lines[index].Length == 0) break;
+                    text.Append((unit.FirstLine + index).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(lines[index]).Append('\n');
+                }
+            }
+            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry its exact selector with larger maxChars/maxBytes, or read the saved source range in audit.");
+            foreach (var omission in shownOmissions)
+                Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
+            if (omitted.Count > shownOmissions.Length) Line($"Omission details not shown={omitted.Count - shownOmissions.Length}; narrow to requested selectors.");
+            var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
+            return text.ToString();
+        }
+
+        private static string VerifiedLine(HarnessLocation location, IReadOnlyList<ExploreUnit> units)
+        {
+            if (location.RawSpan is not { } span) return "unknown";
+            foreach (var unit in units)
+                if (unit.SourceId == location.SourceId && unit.ContentHash == location.ContentHash
+                    && span.Start >= unit.Span.Start && span.End <= unit.Span.End)
+                    return (unit.FirstLine + unit.Text.AsSpan(0, span.Start - unit.Span.Start).Count('\n')).ToString(CultureInfo.InvariantCulture);
+            return "unknown";
         }
 
         private static string Safe(string? value, int maximum)

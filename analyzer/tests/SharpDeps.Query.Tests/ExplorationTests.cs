@@ -79,10 +79,13 @@ public sealed class ExplorationTests
         Assert.Contains(recovered.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
     }
 
-    [Fact]
-    public void ReturnedIdsCanBeBatchedWithLogicalIdsNamesAndDuplicateOccurrences()
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void ReturnedIdsCanBeBatchedWithLogicalIdsNamesAndDuplicateOccurrences(ExploreFormat format)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(format: format);
+        var marker = format == ExploreFormat.Audit ? " id=" : " selector=";
         var first = fixture.Explore("count total");
         Assert.True(first.Succeeded);
         var count = ReadId(first.Text, "Demo.Pump.count");
@@ -105,7 +108,7 @@ public sealed class ExplorationTests
         var mixedField = Assert.Single(mixed.Units, unit => unit.Text == Fixture.Field);
         Assert.Equal(2, mixedField.SymbolIds.Count);
         Assert.Equal(1, mixed.Text.Split(Fixture.Field, StringSplitOptions.None).Length - 1);
-        Assert.Equal(1, mixed.Text.Split(" id=" + count + " ", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, mixed.Text.Split(marker + count + " ", StringSplitOptions.None).Length - 1);
 
         var withPath = fixture.Explore(mixedQuery + " " + Fixture.PartialPath);
         Assert.True(withPath.Succeeded);
@@ -113,10 +116,10 @@ public sealed class ExplorationTests
         Assert.Contains(withPath.Units, unit => unit.SymbolIds.Contains(fixture.Count));
         Assert.Contains(withPath.Units, unit => unit.SymbolIds.Contains(fixture.Total));
 
-        static string ReadId(string text, string label)
+        string ReadId(string text, string label)
         {
-            var line = Assert.Single(text.Split('\n'), line => line.Contains(" " + label + " id=", StringComparison.Ordinal));
-            return line[(line.IndexOf(" id=", StringComparison.Ordinal) + 4)..].Split(' ')[0];
+            var line = Assert.Single(text.Split('\n'), line => line.Contains(" " + label + marker, StringComparison.Ordinal));
+            return line[(line.IndexOf(marker, StringComparison.Ordinal) + marker.Length)..].Split(' ')[0];
         }
     }
 
@@ -163,10 +166,12 @@ public sealed class ExplorationTests
         Assert.Contains(missingDocument.Errors, error => error.Code == "SYMBOL_NOT_FOUND");
     }
 
-    [Fact]
-    public void NamedMembersKeepOverloadsLocalStateAndBoundHelpersWithoutTheUnrelatedNeighbour()
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void NamedMembersKeepOverloadsLocalStateAndBoundHelpersWithoutTheUnrelatedNeighbour(ExploreFormat format)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(format: format);
         var reply = fixture.Explore("Pump Run");
         Assert.True(reply.Succeeded);
         foreach (var id in new[] { fixture.RunInt, fixture.RunString, fixture.Count, fixture.Helper })
@@ -186,10 +191,12 @@ public sealed class ExplorationTests
         Assert.Single(reply.Text.Split('\n'), line => line.Contains("body=unknown", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void IncomingCallersAndSignatureTypesRemainPointersWhileForwardBodiesExpand()
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void IncomingCallersAndSignatureTypesRemainPointersWhileForwardBodiesExpand(ExploreFormat format)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(format: format);
         var helper = fixture.Snapshot.Graph.Edges.Single(edge => edge.Id == "direct-helper");
         var suspectType = fixture.Snapshot.Graph.Nodes.Single(node => node.Id == fixture.Suspect).ParentId!;
         var incoming = helper with
@@ -218,10 +225,21 @@ public sealed class ExplorationTests
         foreach (var id in new[] { fixture.RunInt, fixture.Helper, fixture.Count, fixture.RunString })
             Assert.Contains(reply.Units, unit => unit.SymbolIds.Contains(id));
         Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.SuspectPath);
-        Assert.Contains(" id=" + fixture.Occurrence(fixture.Suspect) + " signature=M:Demo.Suspect.Hidden()", reply.Text);
-        Assert.Contains(" id=" + fixture.Occurrence(suspectType) + " signature=T:Demo.Suspect", reply.Text);
+        if (format == ExploreFormat.Audit)
+        {
+            Assert.Contains(" id=" + fixture.Occurrence(fixture.Suspect) + " signature=M:Demo.Suspect.Hidden()", reply.Text);
+            Assert.Contains(" id=" + fixture.Occurrence(suspectType) + " signature=T:Demo.Suspect", reply.Text);
+        }
+        else
+        {
+            Assert.Contains("signature=M:Demo.Suspect.Hidden()", reply.Text);
+            Assert.Contains("signature=T:Demo.Suspect", reply.Text);
+            Assert.Contains(":unknown", reply.Text);
+            Assert.Matches(@" at=F\d+:\d+\b", reply.Text);
+        }
         foreach (var kind in new[] { "calls", "signature", "references_member", "future_relation" })
-            Assert.Contains("--" + kind + "/Resolved-->", reply.Text);
+            Assert.Contains((format == ExploreFormat.Audit ? "--" : "-") + kind
+                + (format == ExploreFormat.Audit ? "/Resolved-->" : "/Resolved->"), reply.Text);
     }
 
     [Theory]
@@ -424,10 +442,12 @@ public sealed class ExplorationTests
             Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text));
     }
 
-    [Fact]
-    public void PartialDeclarationsRemainSeparateAndAFileScopeIsAHardBoundary()
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void PartialDeclarationsRemainSeparateAndAFileScopeIsAHardBoundary(ExploreFormat format)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(format: format);
         var all = fixture.Explore("Pump");
         Assert.Contains(all.Units, unit => unit.Path == Fixture.CorePath && unit.SymbolIds.Contains(fixture.Pump));
         Assert.Contains(all.Units, unit => unit.Path == Fixture.PartialPath && unit.SymbolIds.Contains(fixture.Pump));
@@ -645,16 +665,21 @@ public sealed class ExplorationTests
         Assert.DoesNotContain(reply.Units, unit => unit.SymbolIds.Contains(fixture.Suspect));
     }
 
-    [Fact]
-    public void HugeUnicodeUnitIsEitherWholeOrOmittedWithAnExactLargerBudgetRetry()
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void HugeUnicodeUnitIsEitherWholeOrOmittedWithAnExactLargerBudgetRetry(ExploreFormat format)
     {
-        using var fixture = new Fixture(huge: true, dense: true);
+        using var fixture = new Fixture(huge: true, dense: true, format: format);
         var smallBudget = Generous with { MaxChars = 2048, MaxBytes = 8192 };
         var small = fixture.Explore(fixture.RunInt, budget: smallBudget);
         Assert.DoesNotContain(small.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
         Assert.NotEmpty(small.OmissionReasons);
-        Assert.Contains(Fixture.Hash(fixture.Sources[Fixture.CorePath]), small.Text);
-        Assert.Contains(fixture.RunSpan.Length.ToString(CultureInfo.InvariantCulture), small.Text);
+        if (format == ExploreFormat.Audit)
+        {
+            Assert.Contains(Fixture.Hash(fixture.Sources[Fixture.CorePath]), small.Text);
+            Assert.Contains(fixture.RunSpan.Length.ToString(CultureInfo.InvariantCulture), small.Text);
+        }
         Assert.True(small.Text.Contains(fixture.RunInt, StringComparison.Ordinal)
             || small.Text.Contains(fixture.Occurrence(fixture.RunInt), StringComparison.Ordinal));
         AssertWireBudget(small, smallBudget);
@@ -670,12 +695,15 @@ public sealed class ExplorationTests
     }
 
     [Theory]
-    [InlineData("edit")]
-    [InlineData("delete")]
-    [InlineData("rename")]
-    public void SourceChangesNeverReturnAnOldSlice(string change)
+    [InlineData("edit", ExploreFormat.Audit)]
+    [InlineData("delete", ExploreFormat.Audit)]
+    [InlineData("rename", ExploreFormat.Audit)]
+    [InlineData("edit", ExploreFormat.Agent)]
+    [InlineData("delete", ExploreFormat.Agent)]
+    [InlineData("rename", ExploreFormat.Agent)]
+    public void SourceChangesNeverReturnAnOldSlice(string change, ExploreFormat format)
     {
-        using var fixture = new Fixture(dense: true);
+        using var fixture = new Fixture(dense: true, format: format);
         var engine = fixture.Engine();
         var timestamp = File.GetLastWriteTimeUtc(fixture.CoreFullPath);
         if (change == "edit")
@@ -692,11 +720,13 @@ public sealed class ExplorationTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void RequireFreshClearsReturnedUnitsWhenTheSecondProofFailsOrCancels(bool cancel)
+    [InlineData(false, ExploreFormat.Audit)]
+    [InlineData(true, ExploreFormat.Audit)]
+    [InlineData(false, ExploreFormat.Agent)]
+    [InlineData(true, ExploreFormat.Agent)]
+    public void RequireFreshClearsReturnedUnitsWhenTheSecondProofFailsOrCancels(bool cancel, ExploreFormat format)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(format: format);
         using var cancellation = new CancellationTokenSource();
         var inspections = 0;
         var workspace = new QueryWorkspace(fixture.Root, _ =>
@@ -714,11 +744,13 @@ public sealed class ExplorationTests
     }
 
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void TrustAndOwnerProofAreIndependentRequirements(bool trusted, bool hasOwnerProof)
+    [InlineData(false, true, ExploreFormat.Audit)]
+    [InlineData(true, false, ExploreFormat.Audit)]
+    [InlineData(false, true, ExploreFormat.Agent)]
+    [InlineData(true, false, ExploreFormat.Agent)]
+    public void TrustAndOwnerProofAreIndependentRequirements(bool trusted, bool hasOwnerProof, ExploreFormat format)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(format: format);
         var workspace = new QueryWorkspace(fixture.Root, hasOwnerProof ? _ => new(fixture.Inventory(), true) : null);
         var reply = new ExplorationService(new FixedIndex(fixture.Snapshot), workspace, trusted)
             .Execute(fixture.Request(fixture.RunInt) with { Freshness = QueryFreshnessPolicy.RequireFresh });
@@ -727,10 +759,12 @@ public sealed class ExplorationTests
         Assert.NotEmpty(reply.Errors);
     }
 
-    [Fact]
-    public void NewGenerationUsesNewHashesWhileTheOldPinCannotServeChangedSource()
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void NewGenerationUsesNewHashesWhileTheOldPinCannotServeChangedSource(ExploreFormat format)
     {
-        using var fixture = new Fixture(dense: true);
+        using var fixture = new Fixture(dense: true, format: format);
         var oldEngine = fixture.Engine();
         var changed = fixture.Sources[Fixture.CorePath].Replace("value + count", "value - count", StringComparison.Ordinal);
         File.WriteAllText(fixture.CoreFullPath, changed, Fixture.Utf8);
@@ -746,6 +780,92 @@ public sealed class ExplorationTests
         Assert.DoesNotContain("value + count", unit.Text);
         Assert.Equal(Fixture.Hash(changed), unit.ContentHash);
         Assert.Equal("saved-owner-declaration", unit.Role);
+    }
+
+    [Theory]
+    [InlineData(2048, 8192, false)]
+    [InlineData(5500, 22000, false)]
+    [InlineData(100000, 5500, false)]
+    [InlineData(100000, 12000, true)]
+    public void ProfilesKeepExactSelectorsAndUncertaintyWithinTheirOwnWireBudgets(int maxChars, int maxBytes, bool longPath)
+    {
+        using var fixture = new Fixture(partial: true, dense: true);
+        var request = fixture.Request(fixture.RunInt + " " + fixture.RunString,
+            Generous with { MaxChars = maxChars, MaxBytes = maxBytes });
+        var path = string.Join("/", Enumerable.Repeat(new string('p', 100), 39)) + "/Pump.cs";
+        var snapshot = longPath ? fixture.Snapshot with { Files = fixture.Snapshot.Files.Select(file => file.SourceId == Fixture.CorePath
+            ? file with { RelativePath = path } : file).ToArray() } : fixture.Snapshot;
+        // A saved-only query can display a long path without depending on OS path limits or reading it.
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), !longPath);
+        Assert.Throws<ArgumentException>(() => engine.Execute(request with { Format = (ExploreFormat)99 }));
+        var audit = engine.Execute(request);
+        var agent = engine.Execute(request with { Format = ExploreFormat.Agent });
+
+        AssertWireBudget(audit, request.Budget!);
+        AssertWireBudget(agent, request.Budget!);
+        if (agent.Errors.Any(error => error.Code == "OUTPUT_BUDGET_TOO_SMALL"))
+        {
+            Assert.Empty(agent.Units);
+            return;
+        }
+        foreach (var value in new[] { "generation=1", "snapshot=fixture-1", "coverage=Partial", "Freshness=unverified", "Scope project=" + fixture.Project,
+            "variant=" + fixture.Variant, "Unverified:", "@n is reply-local" }) Assert.Contains(value, agent.Text);
+        foreach (var id in new[] { fixture.RunInt, fixture.RunString })
+            Assert.Single(agent.Text.Split('\n'), line => line.Contains(" selector=" + fixture.Occurrence(id), StringComparison.Ordinal));
+        Assert.DoesNotContain("saved-sha256=", agent.Text);
+        Assert.DoesNotContain(" proof=", agent.Text);
+        Assert.DoesNotContain(" span=", agent.Text);
+        Assert.Contains("Owner context adds no semantic targets", agent.Text);
+        if (longPath)
+        {
+            Assert.Empty(agent.Units);
+            Assert.Contains(path, agent.Text);
+            Assert.Contains("WORKSPACE_UNTRUSTED", agent.OmissionReasons);
+        }
+        if (agent.Units.Count > 0) Assert.Matches(@"Source F\d+:\d+-\d+ @", agent.Text);
+        if (agent.Units.Any(unit => unit.SymbolIds.Contains(fixture.Section)))
+            Assert.Contains("selection=documents_symbol Candidate certainty=Candidate", agent.Text);
+    }
+
+    [Fact]
+    public void AgentUsesItsOwnSourceBudgetWhileAuditKeepsItsExactWireBoundary()
+    {
+        using var fixture = new Fixture(huge: true);
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.RunInt);
+        var fullAudit = engine.Execute(request);
+        var fullAgent = engine.Execute(request with { Format = ExploreFormat.Agent });
+        Assert.True(fullAudit.Succeeded);
+        Assert.True(fullAgent.Succeeded);
+        Assert.Equal(JsonSerializer.Serialize(fullAudit.Units, QueryJson.Options), JsonSerializer.Serialize(fullAgent.Units, QueryJson.Options));
+        Assert.Single(fullAudit.Units);
+
+        var auditBoundary = Generous with { MaxChars = fullAudit.WireChars, MaxBytes = fullAudit.WireBytes };
+        var auditAtBoundary = engine.Execute(request with { Budget = auditBoundary, Format = ExploreFormat.Audit });
+        Assert.Equal(fullAudit.Text, auditAtBoundary.Text);
+        AssertWireBudget(auditAtBoundary, auditBoundary);
+        var belowAuditBoundary = auditBoundary with { MaxChars = auditBoundary.MaxChars - 1 };
+        var auditBelowBoundary = engine.Execute(request with { Budget = belowAuditBoundary });
+        Assert.Empty(auditBelowBoundary.Units);
+        Assert.Contains("OMITTED_UNITS", auditBelowBoundary.OmissionReasons);
+        AssertWireBudget(auditBelowBoundary, belowAuditBoundary);
+
+        var budget = Generous with { MaxChars = fullAgent.WireChars, MaxBytes = fullAgent.WireBytes };
+        var agent = engine.Execute(request with { Budget = budget, Format = ExploreFormat.Agent });
+        var audit = engine.Execute(request with { Budget = budget });
+        Assert.Equal(fullAgent.Text, agent.Text);
+        Assert.Single(agent.Units);
+        Assert.Empty(audit.Units);
+        Assert.Contains("OMITTED_UNITS", audit.OmissionReasons);
+        AssertWireBudget(agent, budget);
+        AssertWireBudget(audit, budget);
+
+        var choice = Assert.Single(audit.Text.Split('\n'), line => line.Contains(" id=", StringComparison.Ordinal));
+        var selector = choice[(choice.IndexOf(" id=", StringComparison.Ordinal) + 4)..].Split(' ')[0];
+        var retried = engine.Execute(request with { Query = selector, Budget = budget, Format = ExploreFormat.Agent });
+        Assert.Equal(JsonSerializer.Serialize(agent.Units, QueryJson.Options), JsonSerializer.Serialize(retried.Units, QueryJson.Options));
+        AssertWireBudget(retried, budget);
     }
 
     private static void AssertWireBudget(ExploreReply reply, QueryBudget budget)
@@ -796,6 +916,7 @@ public sealed class ExplorationTests
             OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-exploration-tests"));
         private readonly Guid workspace, document = Guid.NewGuid();
         private readonly bool caseDistinct, dense, implicitConstructor;
+        private readonly ExploreFormat format;
         private readonly string run, runString = "public int Run(string value) { return value.Length; }";
         private readonly string hidden;
         private readonly string? splitRunText;
@@ -827,12 +948,13 @@ public sealed class ExplorationTests
 
         public Fixture(bool addScopes = false, bool partial = false, bool huge = false, bool caseDistinct = false,
             bool dense = false, string ownerGap = "", bool splitRun = false, bool implicitConstructor = false,
-            string suspectPadding = "", Guid? workspaceUuid = null)
+            string suspectPadding = "", Guid? workspaceUuid = null, ExploreFormat format = ExploreFormat.Audit)
         {
             workspace = workspaceUuid ?? Guid.NewGuid();
             this.caseDistinct = caseDistinct;
             this.dense = dense;
             this.implicitConstructor = implicitConstructor;
+            this.format = format;
             hidden = "public void Hidden() { " + suspectPadding + "}";
             if (splitRun)
             {
@@ -863,7 +985,7 @@ public sealed class ExplorationTests
         }
 
         public ExploreRequest Request(string query, QueryBudget? budget = null, string? pathPrefix = null)
-            => new(query, Project, Variant, pathPrefix, Budget: budget ?? Generous);
+            => new(query, Project, Variant, pathPrefix, Budget: budget ?? Generous, Format: format);
         public ExplorationService Engine(QueryWorkspace? workspaceReader = null)
             => new(new FixedIndex(Snapshot), workspaceReader ?? new QueryWorkspace(Root), true);
         public ExploreReply Explore(string query, QueryBudget? budget = null, string? pathPrefix = null)

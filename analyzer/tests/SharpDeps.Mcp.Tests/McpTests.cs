@@ -17,6 +17,7 @@ public sealed class McpTests
         Assert.Equal("explore", tool.Name);
         Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
         Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal("agent", tool.InputSchema.GetProperty("properties").GetProperty("format").GetProperty("default").GetString());
         Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", root, "--allow-mutations"]));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "index" }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
@@ -43,7 +44,11 @@ public sealed class McpTests
             "{\"query\":\"Service\",\"maxChars\":2047}",
             "{\"query\":\"Service\",\"maxBytes\":4000001}",
             "{\"query\":\"Service\",\"maxMilliseconds\":\"1000\"}",
-            "{\"query\":\"Service\",\"freshness\":\"current\"}" })
+            "{\"query\":\"Service\",\"freshness\":\"current\"}",
+            "{\"query\":\"Service\",\"format\":\"verbose\"}",
+            "{\"query\":\"Service\",\"format\":\"Agent\"}",
+            "{\"query\":\"Service\",\"format\":1}",
+            "{\"query\":\"Service\",\"format\":null}" })
         {
             var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
             await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()

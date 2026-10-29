@@ -14,17 +14,19 @@ using Xunit;
 public sealed class McpFlowTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ExploreMatchesCliAndKeepsSourceTrustAndTheCommittedGeneration(bool trusted)
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(true, "agent")]
+    [InlineData(true, "audit")]
+    public async Task ExploreMatchesCliAndKeepsSourceTrustAndTheCommittedGeneration(bool trusted, string? format)
     {
         using var fixture = new Fixture();
         var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: trusted));
         using var stdout = new StringWriter();
-        var arguments = new List<string> { "explore", "--root", fixture.Root, "--term", "Service" };
+        var arguments = new List<string> { "explore", "--root", fixture.Root, "--term", "Service", "--format", format ?? "agent" };
         if (trusted) arguments.Add("--trusted");
         var exit = await CliApplication.RunAsync(arguments.ToArray(), stdout, TextWriter.Null);
-        var result = await adapter.CallAsync(Explore("Service"));
+        var result = await adapter.CallAsync(Explore("Service", format));
         Assert.Equal(exit != 0, result.IsError);
         var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
         var cliText = stdout.ToString();
@@ -35,8 +37,9 @@ public sealed class McpFlowTests
         {
             Assert.False(result.IsError);
             Assert.Contains(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
-            Assert.Contains(fixture.SourceHash, text, StringComparison.Ordinal);
-            var current = Explore("Service");
+            if (format == "audit") Assert.Contains(fixture.SourceHash, text, StringComparison.Ordinal);
+            else Assert.DoesNotContain(fixture.SourceHash, text, StringComparison.Ordinal);
+            var current = Explore("Service", format);
             current.Arguments!["freshness"] = JsonSerializer.SerializeToElement("require-fresh");
             var unverified = await adapter.CallAsync(current);
             Assert.True(unverified.IsError);
@@ -44,7 +47,7 @@ public sealed class McpFlowTests
         }
         else Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service"), cancelled.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service", format), cancelled.Token));
         using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
     }
@@ -90,7 +93,7 @@ public sealed class McpFlowTests
                 Assert.False(result.TryGetProperty("structuredContent", out _));
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains(Fixture.Code.TrimEnd('\n'), source, StringComparison.Ordinal);
-                Assert.Contains(fixture.SourceHash, source, StringComparison.Ordinal);
+                Assert.DoesNotContain(fixture.SourceHash, source, StringComparison.Ordinal);
             }
             await Send("""{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"index","arguments":{"arguments":["--target","App.csproj"]}}}""");
             using (var indexed = await Reply(4))
@@ -103,7 +106,7 @@ public sealed class McpFlowTests
                 File.AppendAllText(Path.Combine(fixture.Root, "App.cs"), " public sealed class Added { }");
                 await Send("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update","arguments":{"arguments":["--target","App.csproj"]}}}""");
                 using (var updated = await Reply(5)) AssertMutation(updated, "update");
-                await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added"}}}""");
+                await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit"}}}""");
                 using var saved = await Reply(6);
                 var result = saved.RootElement.GetProperty("result");
                 Assert.False(result.GetProperty("isError").GetBoolean());
@@ -144,8 +147,12 @@ public sealed class McpFlowTests
         }
     }
 
-    private static CallToolRequestParams Explore(string query) => new()
-    { Name = "explore", Arguments = new Dictionary<string, JsonElement> { ["query"] = JsonSerializer.SerializeToElement(query) } };
+    private static CallToolRequestParams Explore(string query, string? format = null)
+    {
+        var arguments = new Dictionary<string, JsonElement> { ["query"] = JsonSerializer.SerializeToElement(query) };
+        if (format is not null) arguments.Add("format", JsonSerializer.SerializeToElement(format));
+        return new() { Name = "explore", Arguments = arguments };
+    }
 
     private sealed class Fixture : IDisposable
     {

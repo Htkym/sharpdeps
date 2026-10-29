@@ -40,7 +40,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
 {
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024,"description":"Names, exact identities, or source paths to explore together."},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"pathPrefix":{"type":"string","maxLength":512},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","minimum":10,"maximum":30000}},"required":["query"],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024,"description":"Names, exact identities, or source paths to explore together."},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"pathPrefix":{"type":"string","maxLength":512},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","minimum":10,"maximum":30000}},"required":["query"],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
@@ -49,7 +49,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
     public IList<Tool> ListTools()
     {
         var tools = new List<Tool> { MakeTool("explore",
-            "Find related .NET implementations and reference evidence for names or paths in one request. Returns bounded source ranges, identities, certainty, freshness and omissions; source text requires host trust.",
+            "Find related .NET implementations and reference evidence for names or paths in one request. Returns bounded source ranges, certainty, freshness and omissions; defaults to concise agent format. Set format=audit for full saved identities and provenance. Source text requires host trust.",
             ExploreSchema, readOnly: true) };
         if (host.AllowMutations && host.Trusted)
             foreach (var name in new[] { "index", "update" })
@@ -104,7 +104,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             var flag = name switch
             {
                 "query" => "term", "projectId" => "project-id", "variantId" => "variant",
-                "pathPrefix" => "path-prefix", "freshness" => "freshness",
+                "pathPrefix" => "path-prefix", "freshness" => "freshness", "format" => "format",
                 "maxChars" => "max-chars", "maxBytes" => "max-bytes", "maxMilliseconds" => "max-milliseconds",
                 _ => throw Invalid()
             };
@@ -123,10 +123,12 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                 var max = name switch { "query" => 1024, "pathPrefix" => 512, _ => 128 };
                 if (string.IsNullOrWhiteSpace(text) || text.Length > max || text.Any(char.IsControl)
                     || text.StartsWith("--", StringComparison.Ordinal)
-                    || name == "freshness" && text is not ("allow-stale" or "require-fresh" or "refresh")) throw Invalid();
+                    || name == "freshness" && text is not ("allow-stale" or "require-fresh" or "refresh")
+                    || name == "format" && text is not ("agent" or "audit")) throw Invalid();
             }
             arguments.Add("--" + flag); arguments.Add(text);
         }
+        if (!properties.ContainsKey("format")) arguments.AddRange(["--format", "agent"]);
     }
 
     private static void AddMutationArguments(CallToolRequestParams request, List<string> arguments)
