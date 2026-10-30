@@ -209,6 +209,7 @@ public static class IndexSnapshotValidator
             }
         }
         long extensionDisplayLength = 0;
+        long httpGetTemplateLength = 0;
         foreach (var edge in graph.Edges)
         {
             token.ThrowIfCancellationRequested();
@@ -255,6 +256,53 @@ public static class IndexSnapshotValidator
                     Require(binding.ReceiverTypeDisplay is null && binding.ConstructedMethodDisplay is null
                         && binding.OmissionReason is "unsupported-type" or "metadata-budget" or "semantic-unavailable",
                         "Omitted extension binding metadata needs only a supported omission reason.");
+            }
+            if (edge.HttpGetDeclaration is { } declaration)
+            {
+                Require(edge.Kind == "attribute" && edge.Certainty == HarnessCertainty.Resolved
+                    && edge.Producer == "roslyn-declaration" && edge.SourceOccurrenceId is not null
+                    && nodes[edge.SourceNodeId].Kind == HarnessNodeKind.Member
+                    && nodes[edge.TargetNodeId].Kind is HarnessNodeKind.Type or HarnessNodeKind.ExternalSymbol
+                    && (edge.TargetOccurrenceId is not null || nodes[edge.TargetNodeId].Kind == HarnessNodeKind.ExternalSymbol)
+                    && edge.Evidence is { RawSpan: { Length: > 0 }, ContentHash: not null },
+                    "HttpGet metadata needs a resolved Roslyn member attribute with saved name evidence.");
+                var evidence = edge.Evidence!;
+                var nameSpan = evidence.RawSpan!.Value;
+                var source = occurrences[edge.SourceOccurrenceId!];
+                Require(DeclaredHere(source.Location) || source.Declarations?.Any(location => DeclaredHere(location)) == true,
+                    "HttpGet name evidence must belong to its saved member declaration.");
+                Require(Enum.IsDefined(declaration.State), "Unknown HttpGet declaration state.");
+                if (declaration.State == HarnessHttpGetDeclarationState.Saved)
+                {
+                    Require(declaration.OmissionReason is null && declaration.TemplateSpan is not null,
+                        "Saved HttpGet metadata needs its complete template and literal span only.");
+                    Text(declaration.Template!, "HttpGet template", HarnessHttpGetDeclaration.MaximumTemplateUtf16);
+                    Require(!declaration.Template!.Any(char.IsControl), "HttpGet template cannot contain control characters.");
+                    var literal = declaration.TemplateSpan!.Value;
+                    var end = (long)literal.Start + literal.Length;
+                    var file = files[evidence.SourceId];
+                    Require(literal.Length is > 0 and <= HarnessHttpGetDeclaration.MaximumLiteralSpanUtf16
+                        && literal.Start >= nameSpan.End && end <= int.MaxValue
+                        && (file.Utf16Length is null || end <= file.Utf16Length.Value),
+                        "HttpGet literal range must follow its attribute name within the original UTF-16 source.");
+                    Require(DeclaredHere(source.Location, literal) || source.Declarations?.Any(location => DeclaredHere(location, literal)) == true,
+                        "HttpGet literal evidence must belong to its saved member declaration.");
+                    httpGetTemplateLength = checked(httpGetTemplateLength + declaration.Template!.Length);
+                    Require(httpGetTemplateLength <= HarnessHttpGetDeclaration.MaximumSnapshotTemplateUtf16,
+                        "HttpGet templates exceed the snapshot text budget.");
+                }
+                else
+                    Require(declaration.Template is null && declaration.TemplateSpan is null
+                        && declaration.OmissionReason is "no-template" or "nonliteral-template" or "metadata-budget" or "semantic-unavailable",
+                        "Omitted HttpGet metadata needs only a supported omission reason.");
+
+                bool DeclaredHere(HarnessLocation? location, HarnessRawSpan? literal = null)
+                {
+                    token.ThrowIfCancellationRequested();
+                    return location is { RawSpan: { } range } && location.SourceId == evidence.SourceId
+                        && location.SourceVersion == evidence.SourceVersion && location.ContentHash == evidence.ContentHash
+                        && range.Start <= nameSpan.Start && range.End >= (literal?.End ?? nameSpan.End);
+                }
             }
         }
         Count(graph.LegacyReferences, "Legacy references");

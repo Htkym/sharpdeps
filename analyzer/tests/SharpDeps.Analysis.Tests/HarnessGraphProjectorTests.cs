@@ -235,6 +235,72 @@ public sealed class HarnessGraphProjectorTests : IDisposable
     }
 
     [Fact]
+    public void PreservesHttpGetLiteralProvenanceOnMembersWithoutChangingAttributeIdentities()
+    {
+        const string text = """
+            using Microsoft.AspNetCore.Mvc;
+            public partial class Endpoints
+            {
+                [HttpGet("one"), HttpGet(template: "")]
+                public partial int Read();
+            }
+            public partial class Endpoints
+            {
+                public partial int Read() => 1;
+            }
+            """;
+        var sample = Collect(text, twoVariants: true, includeDeclarations: true);
+        var graph = Project(sample);
+        var declarations = graph.Edges.Where(edge => edge.HttpGetDeclaration is not null).ToArray();
+        Assert.Equal(4, declarations.Length);
+        foreach (var edge in declarations)
+        {
+            var declaration = Assert.IsType<HarnessHttpGetDeclaration>(edge.HttpGetDeclaration);
+            Assert.Equal(HarnessHttpGetDeclarationState.Saved, declaration.State);
+            Assert.Equal("attribute", edge.Kind);
+            Assert.Equal("roslyn-declaration", edge.Producer);
+            var evidence = edge.Evidence!;
+            var name = evidence.RawSpan!.Value;
+            Assert.Equal("HttpGet", text.Substring(name.Start, name.Length));
+            var literal = declaration.TemplateSpan!.Value;
+            Assert.Equal("\"" + declaration.Template + "\"", text.Substring(literal.Start, literal.Length));
+            var source = graph.SymbolOccurrences.Single(occurrence => occurrence.Id == edge.SourceOccurrenceId);
+            Assert.Equal(edge.VariantId, source.VariantId);
+            Assert.Contains(source.Declarations!, saved => saved.SourceId == evidence.SourceId
+                && saved.SourceVersion == evidence.SourceVersion && saved.ContentHash == evidence.ContentHash
+                && saved.RawSpan is { } range && range.Start <= name.Start && range.End >= literal.End);
+            Assert.True(source.Declarations!.Count > 1);
+            Assert.Equal(HarnessNodeKind.ExternalSymbol, graph.Nodes.Single(node => node.Id == edge.TargetNodeId).Kind);
+            Assert.Equal(edge.VariantId, graph.SymbolOccurrences.Single(occurrence => occurrence.Id == edge.TargetOccurrenceId).VariantId);
+        }
+        var plain = Project(sample with { Evidence = sample.Evidence.Select(entry => entry with { HttpGetDeclaration = null }).ToArray() });
+        Assert.Equal(plain.Nodes, graph.Nodes);
+        Assert.Equal(plain.Edges, graph.Edges.Select(edge => edge with { HttpGetDeclaration = null }));
+        Assert.Equal(graph.Edges, Project(sample, generation: 2).Edges);
+        Assert.Equal(graph.Edges, HarnessGraphContract.Read(JsonSerializer.Serialize(graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope)).Edges);
+
+        var entry = sample.Evidence.First(entry => entry.HttpGetDeclaration is not null);
+        var conflict = entry with { HttpGetDeclaration = entry.HttpGetDeclaration! with { Template = "different" } };
+        var conflicted = Project(sample with { Evidence = sample.Evidence.Append(conflict).ToArray() });
+        var omission = Assert.Single(conflicted.Edges, edge => edge.HttpGetDeclaration?.State == HarnessHttpGetDeclarationState.Omitted);
+        Assert.Equal("semantic-unavailable", omission.HttpGetDeclaration!.OmissionReason);
+        Assert.Null(omission.HttpGetDeclaration.Template);
+        Assert.Null(omission.HttpGetDeclaration.TemplateSpan);
+        Assert.Equal(graph.Coverage, conflicted.Coverage);
+        Assert.Equal(conflicted.Edges, Project(sample with { Evidence = sample.Evidence.Append(conflict).Reverse().ToArray() }).Edges);
+
+        var candidate = Project(sample with { Evidence = sample.Evidence.Append(entry with
+        { Evidence = entry.Evidence with { Confidence = "candidate" } }).ToArray() });
+        Assert.Contains(candidate.Edges, edge => edge.Id == omission.Id && edge.Certainty == HarnessCertainty.Candidate && edge.HttpGetDeclaration is null);
+        var foreignSpan = Project(sample with { Evidence = sample.Evidence.Select(value => value == entry ? value with
+        { HttpGetDeclaration = value.HttpGetDeclaration! with { TemplateSpan = new(0, 1) } } : value).ToArray() });
+        Assert.Contains(foreignSpan.Edges, edge => edge.Id == omission.Id && edge.HttpGetDeclaration is null);
+        var missingHash = Project(sample with { Evidence = sample.Evidence.Select(value => value with
+        { Evidence = value.Evidence with { SourceContentHash = null! } }).ToArray() });
+        Assert.DoesNotContain(missingHash.Edges, edge => edge.HttpGetDeclaration is not null);
+    }
+
+    [Fact]
     public void PreservesExtensionBindingWithoutChangingCallIdentityOrDefiningOccurrences()
     {
         var sample = Collect("""

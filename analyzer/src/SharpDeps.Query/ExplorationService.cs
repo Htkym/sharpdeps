@@ -821,6 +821,12 @@ public sealed class ExplorationService
                 : $" extension-binding=Omitted reason={binding.OmissionReason}")
                 + "; compile-time labels only; not runtime dispatch or type identities";
 
+        private static string HttpGetDeclarationNote(HarnessHttpGetDeclaration? declaration, string source)
+            => declaration is null ? "" : (declaration.State == HarnessHttpGetDeclarationState.Saved
+                ? FormattableString.Invariant($" declared-http-get=Saved template={JsonSerializer.Serialize(declaration.Template)} literal={source} literalSpan={declaration.TemplateSpan!.Value.Start}:{declaration.TemplateSpan!.Value.Length}")
+                : $" declared-http-get=Omitted reason={declaration.OmissionReason}")
+                + "; declaration fragment only; controller prefixes/tokens/conventions/effective routes not evaluated";
+
         public void PrepareAgentSummary()
         {
             var typeRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Type && root.Reason == "requested")
@@ -1246,7 +1252,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var source = evidence is null ? "none" : sourceAliases[evidence.SourceId];
-                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}");
+                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}{HttpGetDeclarationNote(relation.Edge.HttpGetDeclaration, source)}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact symbol for more evidence.");
             foreach (var unit in units)
@@ -1349,7 +1355,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var at = evidence is null ? "unknown" : sourceAliases[evidence.SourceId] + ":" + VerifiedLine(evidence, units);
-                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}");
+                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}{HttpGetDeclarationNote(relation.Edge.HttpGetDeclaration, evidence is null ? "unknown" : sourceAliases[evidence.SourceId])}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact selector for more evidence.");
             foreach (var unit in units)

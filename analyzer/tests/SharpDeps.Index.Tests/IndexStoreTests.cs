@@ -11,6 +11,106 @@ using Xunit;
 
 public sealed class IndexStoreTests
 {
+    private const string HttpGetCode = "namespace App; partial class Service { partial void Before(); [HttpGet(\" /café/{id} \"), HttpGet(\"\"), HttpGet] partial void Before() { } }\n";
+
+    [Fact]
+    public void HttpGetDeclarationRoundTripsThroughSqliteWithLiteralProvenanceAndLegacyNull()
+    {
+        using var fixture = new StoreFixture(code: HttpGetCode);
+        var snapshot = HttpGetSnapshot(fixture);
+        var attribute = snapshot.Graph.Edges[0];
+        var saved = attribute.HttpGetDeclaration!;
+        var emptyStart = HttpGetCode.IndexOf("HttpGet(\"\")", StringComparison.Ordinal);
+        var omittedStart = HttpGetCode.LastIndexOf("HttpGet", StringComparison.Ordinal);
+        var empty = new HarnessHttpGetDeclaration(HarnessHttpGetDeclarationState.Saved, "",
+            new(HttpGetCode.IndexOf("\"\"", StringComparison.Ordinal), 2));
+        var omitted = new HarnessHttpGetDeclaration(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "no-template");
+        snapshot = snapshot with { Graph = snapshot.Graph with { Edges =
+        [
+            attribute with { Id = "http-get-saved" },
+            attribute with { Id = "http-get-empty", Evidence = attribute.Evidence! with { RawSpan = new(emptyStart, 7) }, HttpGetDeclaration = empty },
+            attribute with { Id = "http-get-omitted", Evidence = attribute.Evidence! with { RawSpan = new(omittedStart, 7) }, HttpGetDeclaration = omitted },
+            attribute with { Id = "legacy-attribute", HttpGetDeclaration = null }
+        ] } };
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var edges = reader.Snapshot().Graph.Edges.ToDictionary(edge => edge.Id, StringComparer.Ordinal);
+        Assert.Equal(saved, edges["http-get-saved"].HttpGetDeclaration);
+        Assert.Equal(" /café/{id} ", edges["http-get-saved"].HttpGetDeclaration!.Template);
+        Assert.Equal(empty, edges["http-get-empty"].HttpGetDeclaration);
+        Assert.Equal(omitted, edges["http-get-omitted"].HttpGetDeclaration);
+        Assert.Null(edges["legacy-attribute"].HttpGetDeclaration);
+        Assert.All(edges.Values, edge =>
+        {
+            Assert.Equal(attribute.SourceNodeId, edge.SourceNodeId);
+            Assert.Equal(attribute.SourceOccurrenceId, edge.SourceOccurrenceId);
+            Assert.Equal(attribute.TargetNodeId, edge.TargetNodeId);
+            Assert.Null(edge.TargetOccurrenceId);
+            Assert.Equal(attribute.VariantId, edge.VariantId);
+            Assert.Equal(attribute.Evidence!.ContentHash, edge.Evidence!.ContentHash);
+        });
+        var occurrence = Assert.Single(reader.Snapshot().Graph.SymbolOccurrences);
+        var literal = saved.TemplateSpan!.Value;
+        Assert.True(literal.Start > occurrence.Location!.RawSpan!.Value.End);
+        Assert.Contains(occurrence.Declarations!, location => location.SourceId == attribute.Evidence!.SourceId
+            && location.RawSpan is { } range && range.Start <= attribute.Evidence.RawSpan!.Value.Start
+            && range.End >= literal.End);
+    }
+
+    [Fact]
+    public void StagingRejectsPartialUnsafeOrForeignHttpGetDeclarationMetadata()
+    {
+        using var fixture = new StoreFixture(code: HttpGetCode);
+        var snapshot = HttpGetSnapshot(fixture);
+        var attribute = snapshot.Graph.Edges[0];
+        var saved = attribute.HttpGetDeclaration!;
+        foreach (var declaration in new[]
+        {
+            saved with { Template = null },
+            saved with { TemplateSpan = null },
+            saved with { OmissionReason = "no-template" },
+            saved with { Template = "unsafe\ntext" },
+            saved with { Template = "\uD800" },
+            saved with { Template = new string('x', HarnessHttpGetDeclaration.MaximumTemplateUtf16 + 1) },
+            saved with { TemplateSpan = new(saved.TemplateSpan!.Value.Start, 0) },
+            saved with { TemplateSpan = new(attribute.Evidence!.RawSpan!.Value.Start, 1) },
+            saved with { TemplateSpan = new(HttpGetCode.Length - 2, 1) },
+            saved with { TemplateSpan = new(HttpGetCode.Length, 1) },
+            saved with { TemplateSpan = new(saved.TemplateSpan!.Value.Start, HarnessHttpGetDeclaration.MaximumLiteralSpanUtf16 + 1) },
+            saved with { State = (HarnessHttpGetDeclarationState)123 },
+            new(HarnessHttpGetDeclarationState.Omitted, Template: "partial", OmissionReason: "nonliteral-template"),
+            new(HarnessHttpGetDeclarationState.Omitted, TemplateSpan: new(0, 1), OmissionReason: "semantic-unavailable"),
+            new(HarnessHttpGetDeclarationState.Omitted),
+            new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "unknown-reason")
+        }) Reject(attribute with { HttpGetDeclaration = declaration });
+        var foreign = snapshot.Graph.Nodes.Single(node => node.Kind == HarnessNodeKind.Document).Location!;
+        foreach (var edge in new[]
+        {
+            attribute with { Kind = "calls" },
+            attribute with { Certainty = HarnessCertainty.Candidate },
+            attribute with { Producer = "roslyn-operation" },
+            attribute with { SourceOccurrenceId = null },
+            attribute with { TargetNodeId = fixture.MemberId },
+            attribute with { Evidence = null },
+            attribute with { Evidence = attribute.Evidence! with { RawSpan = null } },
+            attribute with { Evidence = attribute.Evidence! with { RawSpan = new(0, 0) } },
+            attribute with { Evidence = attribute.Evidence! with { ContentHash = null } },
+            attribute with { Evidence = attribute.Evidence! with { SourceVersion = "other-version" } },
+            attribute with { Evidence = foreign with { RawSpan = new(0, 1) },
+                HttpGetDeclaration = saved with { TemplateSpan = new(2, 1) } }
+        }) Reject(edge);
+        var maximum = saved with { Template = new string('x', HarnessHttpGetDeclaration.MaximumTemplateUtf16) };
+        var atLimit = Enumerable.Range(0, HarnessHttpGetDeclaration.MaximumSnapshotTemplateUtf16 / maximum.Template!.Length)
+            .Select(i => attribute with { Id = "http-get-" + i, HttpGetDeclaration = maximum }).ToArray();
+        _ = IndexStage.Create(snapshot with { Graph = snapshot.Graph with { Edges = atLimit } });
+        AssertCode("INDEX_INVALID_SNAPSHOT", () => IndexStage.Create(snapshot with { Graph = snapshot.Graph with
+        { Edges = atLimit.Append(attribute with { Id = "http-get-over-budget", HttpGetDeclaration = saved with { Template = "x" } }).ToArray() } }));
+        Assert.False(File.Exists(fixture.IndexPath));
+
+        void Reject(HarnessEdge edge) => AssertCode("INDEX_INVALID_SNAPSHOT",
+            () => IndexStage.Create(snapshot with { Graph = snapshot.Graph with { Edges = [edge] } }));
+    }
+
     [Fact]
     public void ExtensionBindingMetadataRoundTripsThroughSqliteWithoutRequiringItOnLegacyCalls()
     {
@@ -472,6 +572,34 @@ public sealed class IndexStoreTests
         }
     }
 
+    private static IndexSnapshot HttpGetSnapshot(StoreFixture fixture)
+    {
+        var snapshot = fixture.Snapshot(1, "Before");
+        var target = HarnessIdentity.ExternalSymbolId(fixture.Workspace,
+            "Microsoft.AspNetCore.Mvc.Core, Version=10.0.0.0, Culture=neutral, PublicKeyToken=adb9793829ddae60",
+            "type", "T:Microsoft.AspNetCore.Mvc.HttpGetAttribute");
+        var nameStart = HttpGetCode.IndexOf("HttpGet", StringComparison.Ordinal);
+        var literalStart = HttpGetCode.IndexOf('"');
+        var primaryStart = HttpGetCode.IndexOf("partial void", StringComparison.Ordinal);
+        var primary = fixture.CodeLocation with { RawSpan = new(primaryStart, HttpGetCode.IndexOf(';', primaryStart) + 1 - primaryStart) };
+        var start = HttpGetCode.IndexOf('[');
+        var end = HttpGetCode.LastIndexOf('}', HttpGetCode.LastIndexOf('}') - 1) + 1;
+        var declaration = fixture.CodeLocation with { RawSpan = new(start, end - start) };
+        var occurrence = snapshot.Graph.SymbolOccurrences[0] with { Location = primary, Declarations = [primary, declaration] };
+        var attribute = snapshot.Graph.Edges[0] with
+        {
+            SourceNodeId = fixture.MemberId, SourceOccurrenceId = occurrence.Id, TargetNodeId = target, TargetOccurrenceId = null,
+            Kind = "attribute", Certainty = HarnessCertainty.Resolved, Producer = "roslyn-declaration", Origin = "userSource",
+            Evidence = fixture.CodeLocation with { RawSpan = new(nameStart, 7) },
+            HttpGetDeclaration = new(HarnessHttpGetDeclarationState.Saved, " /café/{id} ", new(literalStart, "\" /café/{id} \"".Length))
+        };
+        return snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = snapshot.Graph.Nodes.Append(new(target, HarnessNodeKind.ExternalSymbol, "HttpGetAttribute", null, null)).ToArray(),
+            SymbolOccurrences = [occurrence], Edges = [attribute]
+        } };
+    }
+
     private static HarnessEdge ExtensionCall(StoreFixture fixture, IndexSnapshot snapshot, HarnessExtensionBinding binding)
         => snapshot.Graph.Edges[0] with
         {
@@ -490,6 +618,7 @@ public sealed class IndexStoreTests
             ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd205-20261010-01\fixtures-revision01"
             : Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-sd205-fixtures-revision01");
         public const string Code = "namespace App; class Service { public void Before() { } }\n";
+        private readonly string _code;
         public const string Markdown = "# 設定\r\n\r\n😀 Service の設定の手順を説明する。\r\n";
         public Guid Workspace { get; }
         public Guid Document { get; }
@@ -501,15 +630,16 @@ public sealed class IndexStoreTests
         public string MemberId => HarnessIdentity.LogicalSymbolId(Workspace, ProjectId, "method", "M:App.Service.Before");
         public string DocumentId => HarnessIdentity.DocumentId(Workspace, Document);
         public string SectionId => HarnessIdentity.SectionId(Workspace, DocumentId, "persisted:intro");
-        public HarnessLocation CodeLocation => new("src/App.cs", "code-v1", Hash(Code), new(0, Code.Length));
+        public HarnessLocation CodeLocation => new("src/App.cs", "code-v1", Hash(_code), new(0, _code.Length));
 
-        public StoreFixture(Guid? workspace = null, Guid? document = null)
+        public StoreFixture(Guid? workspace = null, Guid? document = null, string? code = null)
         {
+            _code = code ?? Code;
             Workspace = workspace ?? Guid.NewGuid();
             Document = document ?? Guid.NewGuid();
             Directory.CreateDirectory(Path.GetDirectoryName(CodePath)!);
             Directory.CreateDirectory(Path.GetDirectoryName(BackupPath)!);
-            File.WriteAllText(CodePath, Code, Utf8);
+            File.WriteAllText(CodePath, _code, Utf8);
             File.WriteAllText(Path.Combine(Root, "readme.md"), Markdown, Utf8);
         }
 
@@ -529,7 +659,7 @@ public sealed class IndexStoreTests
             var mentionId = "hmdf_" + Hash("mention");
             var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
                 HarnessGraphContract.IdentityVersion, workspaceId, "snapshot-" + generation, generation,
-                HarnessCoverage.Partial, [new(variant, ProjectId, "net10.0", "Debug", null, null, Hash(Code))],
+                HarnessCoverage.Partial, [new(variant, ProjectId, "net10.0", "Debug", null, null, Hash(_code))],
                 [new(workspaceId, HarnessNodeKind.Workspace, "Workspace", null, null),
                     new(ProjectId, HarnessNodeKind.Project, "App", workspaceId, null),
                     new(MemberId, HarnessNodeKind.Member, memberName, ProjectId, CodeLocation, memberName + "()"),
@@ -543,7 +673,7 @@ public sealed class IndexStoreTests
                 new("2.0.0-preview.3", Hash("fixed-source"), "2.0.0-preview.3", "1.0.0", "lithosharp-markdown/1", Hash("options")),
                 [new("fixture-candidate", 1)]);
             return new(graph,
-                [Manifest("src/App.cs", "code", Code), Manifest("readme.md", "markdown", Markdown)],
+                [Manifest("src/App.cs", "code", _code), Manifest("readme.md", "markdown", Markdown)],
                 [new(Document, "readme.md", "guide", Hash(Markdown), "scope", "2.0.0-preview.3", "1.0.0",
                     "lithosharp-markdown/1", Hash("options"), [new("section-local", "persisted:intro", "1:設定", Hash(Markdown))])],
                 [new("verified-move", "retired-section", SectionId, "verified-owner-move", HarnessCertainty.Resolved)],

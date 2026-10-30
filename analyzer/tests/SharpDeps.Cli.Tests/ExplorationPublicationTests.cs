@@ -15,6 +15,62 @@ public sealed class ExplorationPublicationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task HttpGetLiteralSurvivesPublicationWithItsOwnSpanAndDeclaringMethod()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
+            + "<ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup></Project>", Fixture.Utf8);
+        const string source = """
+            using Microsoft.AspNetCore.Mvc;
+            public sealed class Api
+            {
+                // 😀 The declaration does not prove that MVC exposes this method.
+                [HttpGet("items/{id}")]
+                public string Read(int id) => id.ToString();
+            }
+            """;
+        File.WriteAllText(fixture.SourcePath, source, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var edge = Assert.Single(saved.Graph.Edges, edge => edge.HttpGetDeclaration is not null);
+        Assert.Equal("attribute", edge.Kind);
+        Assert.Equal("roslyn-declaration", edge.Producer);
+        Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+        Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+        var owner = Assert.Single(saved.Graph.Nodes, node => node.Id == edge.SourceNodeId);
+        Assert.Equal(HarnessNodeKind.Member, owner.Kind);
+        Assert.Equal("Read", owner.Name);
+        Assert.Equal(edge.VariantId, Assert.Single(saved.Graph.SymbolOccurrences,
+            occurrence => occurrence.Id == edge.SourceOccurrenceId).VariantId);
+        var declaration = edge.HttpGetDeclaration!;
+        Assert.Equal(HarnessHttpGetDeclarationState.Saved, declaration.State);
+        Assert.Equal("items/{id}", declaration.Template);
+        var span = Assert.IsType<HarnessRawSpan>(declaration.TemplateSpan);
+        Assert.Equal("\"items/{id}\"", source.Substring(span.Start, span.Length));
+        Assert.Equal("HttpGet", source.Substring(edge.Evidence!.RawSpan!.Value.Start, edge.Evidence.RawSpan.Value.Length));
+        Assert.True(span.Start >= edge.Evidence.RawSpan.Value.End);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(fixture.SourcePath))).ToLowerInvariant(),
+            edge.Evidence.ContentHash);
+        foreach (var format in new[] { ExploreFormat.Audit, ExploreFormat.Agent })
+        {
+            var reply = fixture.Engine(reader).Execute(new(edge.SourceOccurrenceId!, Format: format, Budget: Budget));
+            Assert.True(reply.Succeeded);
+            Assert.Contains("declared-http-get=Saved", reply.Text);
+            Assert.Contains("declaration fragment", reply.Text);
+        }
+        var callers = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callers", QueryKind.Callers,
+            NodeId: edge.SourceNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));
+        Assert.DoesNotContain(callers.Envelope.Items, item => item.Edge?.Id == edge.Id);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task ExtensionBindingSurvivesPublicationAsMetadataOnTheSameCall()
     {
         using var fixture = new Fixture();

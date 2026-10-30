@@ -3,6 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using SharpDeps.Analysis.Core.Graph;
 using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Analysis.Roslyn.Evidence;
 using SharpDeps.Analysis.Roslyn.Symbols;
@@ -334,6 +335,117 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
         var methodConstraint = Assert.Single(collected.For("MethodConstraints", "Order"));
         Assert.Equal("constraint", methodConstraint.Evidence.Kind);
         Assert.NotNull(methodConstraint.Evidence.SourceMemberId);
+    }
+
+    [Fact]
+    public void PreservesLiteralHttpGetFragmentsOnlyInHarnessAttributeCopies()
+    {
+        const string text = """
+            using Microsoft.AspNetCore.Mvc;
+            using Get = Microsoft.AspNetCore.Mvc.HttpGetAttribute;
+            [Route("api/[controller]")]
+            public class Endpoints
+            {
+                [Get("orders/{id:int}", Name = "declared", Order = 3)] public int Read() => 1;
+                [HttpGet(template: "")] private int Empty() => 2;
+                [NonAction, HttpGet(" /raw/ ")] public static int NotAnAction() => 3;
+                [HttpGet("one"), HttpGet("two")] public int Multiple() => 4;
+            }
+            """;
+        var collected = Collect(false, true, ("Endpoints.cs", text));
+        Assert.All(collected.Evidence, entry => Assert.Null(entry.HttpGetDeclaration));
+        var declarations = collected.HarnessEvidence.Where(entry => entry.HttpGetDeclaration is not null).ToArray();
+        Assert.Equal(5, declarations.Length);
+        foreach (var entry in declarations)
+        {
+            var original = Assert.Single(collected.Evidence, original => original.Evidence.Id == entry.Evidence.Id);
+            Assert.Equal(original, entry with { HttpGetDeclaration = null });
+            var declaration = Assert.IsType<HarnessHttpGetDeclaration>(entry.HttpGetDeclaration);
+            Assert.Equal(HarnessHttpGetDeclarationState.Saved, declaration.State);
+            Assert.Null(declaration.OmissionReason);
+            Assert.Equal("attribute", entry.Evidence.Kind);
+            Assert.Equal("roslyn-declaration", entry.Producer);
+            Assert.Equal("resolved", entry.Evidence.Confidence);
+            Assert.Equal("var_sample", entry.SourceVariantId);
+            Assert.Null(entry.TargetVariantId);
+            Assert.True(entry.TargetIsExternal);
+            var target = Assert.IsType<HarnessTargetSymbol>(entry.TargetSymbol);
+            Assert.Equal(typeof(Microsoft.AspNetCore.Mvc.HttpGetAttribute).Assembly.GetName().FullName, target.AssemblyIdentity);
+            Assert.Equal("Microsoft.AspNetCore.Mvc.HttpGetAttribute", target.TypeName.Replace("global::", "", StringComparison.Ordinal));
+            var name = entry.Evidence.PhysicalSpan!;
+            Assert.Contains(text.Substring(name.Start, name.Length), new[] { "Get", "HttpGet" });
+            var literal = declaration.TemplateSpan!.Value;
+            Assert.True(literal.Start >= name.Start + name.Length);
+            Assert.Equal("\"" + declaration.Template + "\"", text.Substring(literal.Start, literal.Length));
+        }
+        var byName = declarations.ToLookup(entry => collected.Index.Members.First(member => member.Id == entry.CanonicalSourceMemberId).Name);
+        Assert.Equal("orders/{id:int}", Assert.Single(byName["Read"]).HttpGetDeclaration!.Template);
+        Assert.Equal("", Assert.Single(byName["Empty"]).HttpGetDeclaration!.Template);
+        Assert.Equal(" /raw/ ", Assert.Single(byName["NotAnAction"]).HttpGetDeclaration!.Template);
+        Assert.Equal(new[] { "one", "two" }, byName["Multiple"].Select(entry => entry.HttpGetDeclaration!.Template).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void OmitsUnsupportedHttpGetTemplatesAndLeavesLookalikesOutsideTheSlice()
+    {
+        var quotes = new string('"', HarnessHttpGetDeclaration.MaximumLiteralSpanUtf16 / 2);
+        var text = """
+            using Microsoft.AspNetCore.Mvc;
+            public class Endpoints
+            {
+                const string Constant = "constant";
+                [HttpGet] public void Unspecified() { }
+                [HttpGet(null)] public void NullValue() { }
+                [HttpGet(Constant)] public void NamedConstant() { }
+                [HttpGet("one" + "two")] public void Concatenated() { }
+                [HttpGet($"literal")] public void Interpolated() { }
+                [HttpGet("line\nbreak")] public void Control() { }
+                [HttpGet("\uD800")] public void InvalidUtf16() { }
+                [HttpGet(__LARGE__)] public void LargeValue() { }
+                [HttpGet(__RAW__)] public void LargeSyntax() { }
+                [return: HttpGet("not-a-method-attribute")] public int ReturnTarget() => 1;
+                [DerivedGet("custom")] public void Derived() { }
+            }
+            public sealed class DerivedGetAttribute : HttpGetAttribute
+            {
+                public DerivedGetAttribute(string template) : base(template) { }
+            }
+            """.Replace("__LARGE__", "\"" + new string('x', HarnessHttpGetDeclaration.MaximumTemplateUtf16 + 1) + "\"", StringComparison.Ordinal)
+                .Replace("__RAW__", quotes + "short" + quotes, StringComparison.Ordinal);
+        var collected = Collect(true, true, ("Unsupported.cs", text));
+        var declarations = collected.HarnessEvidence.Where(entry => entry.HttpGetDeclaration is not null).ToArray();
+        Assert.DoesNotContain(declarations, entry => entry.HttpGetDeclaration!.State == HarnessHttpGetDeclarationState.Saved);
+        var byName = declarations.ToLookup(entry => collected.Index.Members.First(member => member.Id == entry.CanonicalSourceMemberId).Name);
+        foreach (var name in new[] { "NullValue", "NamedConstant", "Concatenated", "Interpolated" })
+            Assert.Equal("nonliteral-template", Assert.Single(byName[name]).HttpGetDeclaration!.OmissionReason);
+        Assert.Equal("no-template", Assert.Single(byName["Unspecified"]).HttpGetDeclaration!.OmissionReason);
+        foreach (var name in new[] { "Control", "InvalidUtf16" })
+            Assert.Equal("semantic-unavailable", Assert.Single(byName[name]).HttpGetDeclaration!.OmissionReason);
+        foreach (var name in new[] { "LargeValue", "LargeSyntax" })
+            Assert.Equal("metadata-budget", Assert.Single(byName[name]).HttpGetDeclaration!.OmissionReason);
+        Assert.Empty(byName["ReturnTarget"]);
+        Assert.Empty(byName["Derived"]);
+        Assert.All(declarations, entry =>
+        {
+            Assert.Null(entry.HttpGetDeclaration!.Template);
+            Assert.Null(entry.HttpGetDeclaration.TemplateSpan);
+        });
+
+        var sameName = Collect(("Lookalike.cs", """
+            public class Endpoints
+            {
+                [Microsoft.AspNetCore.Mvc.HttpGet("source")] public void Read() { }
+            }
+            namespace Microsoft.AspNetCore.Mvc
+            {
+                public sealed class HttpGetAttribute : System.Attribute
+                {
+                    public HttpGetAttribute(string template) { }
+                }
+            }
+            """));
+        Assert.DoesNotContain(sameName.HarnessEvidence, entry => entry.HttpGetDeclaration is not null);
+        Assert.Contains(sameName.Evidence, entry => entry.Evidence.Kind == "attribute" && !entry.TargetIsExternal);
     }
 
     [Fact]

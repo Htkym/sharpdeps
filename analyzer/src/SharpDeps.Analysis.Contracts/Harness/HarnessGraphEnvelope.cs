@@ -45,6 +45,18 @@ public enum HarnessNodeKind
 public enum HarnessCertainty { Resolved, Candidate, Unresolved }
 public enum HarnessCoverage { CompleteWithinScope, Partial, Failed }
 public enum HarnessExtensionBindingState { Saved, Omitted }
+public enum HarnessHttpGetDeclarationState { Saved, Omitted }
+
+/// <summary>A declared fragment; TemplateSpan uses the edge evidence's source/version/hash, not an endpoint identity.</summary>
+public sealed record HarnessHttpGetDeclaration(HarnessHttpGetDeclarationState State,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Template = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HarnessRawSpan? TemplateSpan = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OmissionReason = null)
+{
+    public const int MaximumTemplateUtf16 = 1024;
+    public const int MaximumLiteralSpanUtf16 = 16 * 1024;
+    public const int MaximumSnapshotTemplateUtf16 = 1024 * 1024;
+}
 
 /// <summary>Compile-time display labels at one invocation, not type identities or runtime dispatch.</summary>
 public sealed record HarnessExtensionBinding(HarnessExtensionBindingState State,
@@ -84,7 +96,8 @@ public sealed record HarnessEdge(string Id, string SourceNodeId, string TargetNo
     string? SourceOccurrenceId, string? TargetOccurrenceId, string? VariantId,
     string Kind, HarnessCertainty Certainty, string Producer, HarnessLocation? Evidence,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Origin = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HarnessExtensionBinding? ExtensionBinding = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HarnessExtensionBinding? ExtensionBinding = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HarnessHttpGetDeclaration? HttpGetDeclaration = null);
 public sealed record HarnessLegacyReference(int SchemaVersion, string LegacyId, string NodeId, string? OccurrenceId);
 public sealed record HarnessMarkdownIdentity(string ComponentVersion, string CanonicalSourceHash,
     string ParserVersion, string ContractVersion, string ProfileId, string OptionsHash);

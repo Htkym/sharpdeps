@@ -14,7 +14,9 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
+using System.Text;
 using SharpDeps.Analysis.Contracts;
+using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn.Symbols;
 
@@ -25,6 +27,8 @@ public sealed record DeclarationCollectionResult(
 
 public sealed class DeclarationDependencyCollector
 {
+    private static readonly byte[] MvcPublicKeyToken = [0xad, 0xb9, 0x79, 0x38, 0x29, 0xdd, 0xae, 0x60];
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly SymbolResolver _resolver;
     private readonly SourceDocumentRegistry _documents;
     private readonly SymbolIndex _index;
@@ -34,6 +38,11 @@ public sealed class DeclarationDependencyCollector
     private readonly HashSet<string> _seen;
     private readonly HashSet<string> _harnessSeen = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<HarnessDeclarationOwner>> _harnessOwners = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _ordinaryMethodIds;
+    private readonly Dictionary<string, HarnessHttpGetDeclaration> _httpGetDeclarations = new(StringComparer.Ordinal);
+    private bool _includeHarness;
+    private int _httpGetTemplateChars;
+    private CancellationToken _metadataCancellationToken;
 
     private readonly ExternalTypeRegistry? _externalTypes;
 
@@ -50,6 +59,7 @@ public sealed class DeclarationDependencyCollector
         _index = index;
         _profileHash = profileHash;
         _typesById = index.Types.ToDictionary(type => type.Id, StringComparer.Ordinal);
+        _ordinaryMethodIds = index.Members.Where(member => member.Kind == "method").Select(member => member.Id).ToHashSet(StringComparer.Ordinal);
         _contentHashByDocument = index.Documents.ToDictionary(
             document => document.Id,
             document => document.ContentHash,
@@ -78,6 +88,10 @@ public sealed class DeclarationDependencyCollector
         _seen.Clear();
         _harnessSeen.Clear();
         _harnessOwners.Clear();
+        _httpGetDeclarations.Clear();
+        _httpGetTemplateChars = 0;
+        _includeHarness = includeHarness;
+        _metadataCancellationToken = cancellationToken;
 
         foreach (var input in inputs)
         {
@@ -111,8 +125,9 @@ public sealed class DeclarationDependencyCollector
             HarnessDeclarationOwners = Array.AsReadOnly(_harnessOwners[entry.Evidence.Id]
                 .OrderBy(owner => owner.SourceMemberId, StringComparer.Ordinal).ToArray())
         }).ToArray();
-        return new(evidence, memberFacts is { Count: > 0 }
-            ? Array.AsReadOnly(evidence.Concat(memberFacts).ToArray()) : null);
+        return new(evidence, memberFacts is { Count: > 0 } || _httpGetDeclarations.Count > 0
+            ? Array.AsReadOnly(evidence.Select(entry => _httpGetDeclarations.TryGetValue(entry.Evidence.Id, out var declaration)
+                ? entry with { HttpGetDeclaration = declaration } : entry).Concat(memberFacts ?? []).ToArray()) : null);
     }
 
     private void CollectMemberFacts(SemanticModel model, SymbolIndexInput input, SyntaxNode declaration,
@@ -495,7 +510,8 @@ public sealed class DeclarationDependencyCollector
         }
 
         CollectConstraints(model, input, constraintClauses, sourceTypeId, memberId, publicSurface, results);
-        CollectAttributes(model, input, attributes, sourceTypeId, memberId, publicSurface, results);
+        CollectAttributes(model, input, attributes, sourceTypeId, memberId, publicSurface, results,
+            symbol is IMethodSymbol { MethodKind: MethodKind.Ordinary });
     }
 
     private void CollectConstraints(
@@ -530,7 +546,8 @@ public sealed class DeclarationDependencyCollector
         string sourceTypeId,
         string? sourceMemberId,
         bool publicSurface,
-        List<CollectedEvidence> results)
+        List<CollectedEvidence> results,
+        bool ordinaryMethod = false)
     {
         foreach (var attribute in attributeLists.SelectMany(list => list.Attributes))
         {
@@ -540,6 +557,7 @@ public sealed class DeclarationDependencyCollector
             }
 
             var attributeType = constructor.ContainingType;
+            var previousCount = results.Count;
             AddEvidence(
                 input,
                 attributeType,
@@ -549,8 +567,51 @@ public sealed class DeclarationDependencyCollector
                 publicSurface,
                 "attribute",
                 results);
+            if (_includeHarness && ordinaryMethod && sourceMemberId is not null && _ordinaryMethodIds.Contains(sourceMemberId)
+                && results.Count > previousCount && HttpGetDeclaration(model, attribute, constructor) is { } declaration)
+                _httpGetDeclarations.Add(results[^1].Evidence.Id, declaration);
         }
     }
+
+    private HarnessHttpGetDeclaration? HttpGetDeclaration(SemanticModel model, AttributeSyntax attribute, IMethodSymbol constructor)
+    {
+        if (attribute.Parent is not AttributeListSyntax list || list.Target is { } target && target.Identifier.ValueText != "method") return null;
+        var type = constructor.ContainingType;
+        var assembly = type.ContainingAssembly;
+        var info = model.GetSymbolInfo(attribute, _metadataCancellationToken);
+        if (constructor.MethodKind != MethodKind.Constructor || constructor.IsStatic || constructor.DeclaredAccessibility != Accessibility.Public
+            || type.MetadataName != "HttpGetAttribute" || type.ContainingType is not null
+            || type.ContainingNamespace.ToDisplayString() != "Microsoft.AspNetCore.Mvc"
+            || type.DeclaredAccessibility != Accessibility.Public || type.Locations.IsEmpty
+            || type.Locations.Any(location => !location.IsInMetadata || location.IsInSource)
+            || assembly is null || assembly.Name != "Microsoft.AspNetCore.Mvc.Core" || !assembly.Identity.PublicKeyToken.SequenceEqual(MvcPublicKeyToken)
+            || info.CandidateReason != CandidateReason.None || !info.CandidateSymbols.IsEmpty
+            || !SymbolEqualityComparer.Default.Equals(info.Symbol, constructor)
+            || constructor.Parameters.Length > 1
+            || constructor.Parameters.Length == 1 && (constructor.Parameters[0].Type.SpecialType != SpecialType.System_String
+                || constructor.Parameters[0].RefKind != RefKind.None)) return null;
+        if (model.GetDiagnostics(attribute.Span, _metadataCancellationToken).Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            return OmittedHttpGet("semantic-unavailable");
+        if (constructor.Parameters.IsEmpty) return OmittedHttpGet("no-template");
+        var arguments = attribute.ArgumentList?.Arguments.Where(argument => argument.NameEquals is null).ToArray() ?? [];
+        if (arguments.Length != 1 || arguments[0].NameColon is { } name && name.Name.Identifier.ValueText != "template")
+            return OmittedHttpGet("semantic-unavailable");
+        if (arguments[0].Expression is not LiteralExpressionSyntax literal || !literal.IsKind(SyntaxKind.StringLiteralExpression))
+            return OmittedHttpGet("nonliteral-template");
+        var template = literal.Token.ValueText;
+        if (literal.Span.Length > HarnessHttpGetDeclaration.MaximumLiteralSpanUtf16
+            || template.Length > HarnessHttpGetDeclaration.MaximumTemplateUtf16
+            || template.Length > HarnessHttpGetDeclaration.MaximumSnapshotTemplateUtf16 - _httpGetTemplateChars)
+            return OmittedHttpGet("metadata-budget");
+        if (template.Any(char.IsControl)) return OmittedHttpGet("semantic-unavailable");
+        try { _ = StrictUtf8.GetByteCount(template); }
+        catch (EncoderFallbackException) { return OmittedHttpGet("semantic-unavailable"); }
+        _httpGetTemplateChars += template.Length;
+        return new(HarnessHttpGetDeclarationState.Saved, template, new(literal.Span.Start, literal.Span.Length));
+    }
+
+    private static HarnessHttpGetDeclaration OmittedHttpGet(string reason)
+        => new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: reason);
 
     /// <summary>
     /// Adds a reference for the written type and, recursively, for its type arguments,

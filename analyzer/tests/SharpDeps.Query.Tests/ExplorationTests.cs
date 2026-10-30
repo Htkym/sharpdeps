@@ -726,6 +726,104 @@ public sealed class ExplorationTests
         Assert.Equal(original.Text, Execute(null).Text);
     }
 
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void HttpGetDeclarationsKeepEmptyTemplatesAndSeparateLiteralEvidenceWithinWireBudgets(ExploreFormat format)
+    {
+        const string note = "declaration fragment only; controller prefixes/tokens/conventions/effective routes not evaluated";
+        foreach (var template in new[] { "", "v1/[controller]/" + new string('路', 180) + "/{id:int}?name=\"例😀\"" })
+        {
+            using var fixture = new Fixture(format: format, httpGetTemplate: template);
+            var literal = JsonSerializer.Serialize(template);
+            var nameSpan = new HarnessRawSpan(fixture.RunSpan.Start + 1, "HttpGet".Length);
+            var templateSpan = new HarnessRawSpan(nameSpan.End + 1, literal.Length);
+            Assert.Equal(literal, fixture.Sources[Fixture.CorePath].Substring(templateSpan.Start, templateSpan.Length));
+            Assert.NotEqual(nameSpan, templateSpan);
+            var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+            // This graph fixture tests saved declarations; Analysis tests establish actual framework binding.
+            var attributeId = HarnessIdentity.ExternalSymbolId(workspace, "saved-mvc-fixture", "type", "T:Microsoft.AspNetCore.Mvc.HttpGetAttribute");
+            var attribute = new HarnessNode(attributeId, HarnessNodeKind.ExternalSymbol, "HttpGetAttribute", null, null);
+            var attributeOccurrence = new HarnessSymbolOccurrence(fixture.Occurrence(attributeId), attributeId, fixture.Variant, null);
+            var member = fixture.Snapshot.Graph.SymbolOccurrences.Single(value => value.Id == fixture.Occurrence(fixture.RunInt));
+            var edge = new HarnessEdge("http-get-site", fixture.RunInt, attributeId, member.Id, attributeOccurrence.Id,
+                fixture.Variant, "attribute", HarnessCertainty.Resolved, "roslyn-declaration", member.Location! with { RawSpan = nameSpan });
+            var graph = fixture.Snapshot.Graph with
+            {
+                Nodes = fixture.Snapshot.Graph.Nodes.Append(attribute).ToArray(),
+                SymbolOccurrences = fixture.Snapshot.Graph.SymbolOccurrences.Append(attributeOccurrence).ToArray()
+            };
+            var request = fixture.Request(member.Id) with { PathTo = fixture.Occurrence(fixture.Helper) };
+            ExploreReply Execute(HarnessHttpGetDeclaration? declaration, QueryBudget? budget = null, bool trusted = true,
+                QueryWorkspace? sourceOwner = null)
+            {
+                var snapshot = fixture.Snapshot with { Graph = graph with { Edges = [edge with { HttpGetDeclaration = declaration }] } };
+                return new ExplorationService(new FixedIndex(snapshot), sourceOwner ?? new QueryWorkspace(fixture.Root), trusted)
+                    .Execute(request with { Budget = budget ?? Generous });
+            }
+            static string[] RouteLines(ExploreReply reply) => reply.Text.Split('\n')
+                .Where(line => line.Contains("declared-http-get=", StringComparison.Ordinal)).ToArray();
+            void AssertSavedLine(string line)
+            {
+                Assert.Contains("-attribute/Resolved", line);
+                Assert.Contains("declared-http-get=Saved template=" + literal, line);
+                var sourceAlias = line.Split(" at=", StringSplitOptions.None)[1].Split(' ')[0].Split(':')[0];
+                Assert.Contains($"literal={sourceAlias} literalSpan={templateSpan.Start}:{templateSpan.Length}", line);
+                if (format == ExploreFormat.Audit) Assert.Contains($"at={sourceAlias} span={nameSpan.Start}:{nameSpan.Length}", line);
+                Assert.EndsWith(note, line.TrimEnd('\r'), StringComparison.Ordinal);
+                Assert.DoesNotContain("display shortened", line);
+            }
+
+            var original = Execute(null);
+            Assert.True(original.Succeeded);
+            Assert.Empty(RouteLines(original));
+            var units = JsonSerializer.Serialize(original.Units, QueryJson.Options);
+            var declaration = new HarnessHttpGetDeclaration(HarnessHttpGetDeclarationState.Saved, template, templateSpan);
+            var saved = Execute(declaration);
+            Assert.True(saved.Succeeded);
+            AssertSavedLine(Assert.Single(RouteLines(saved)));
+            Assert.Equal(units, JsonSerializer.Serialize(saved.Units, QueryJson.Options));
+            Assert.Equal(new[] { fixture.RunInt }, Assert.Single(saved.Units).SymbolIds);
+            Assert.Contains("status=no-witness", RetainedPathHeader(saved));
+            Assert.Equal(RetainedPathHeader(original), RetainedPathHeader(saved));
+            if (format == ExploreFormat.Agent) Assert.Contains("kind=Member callerSymbols=0 callerOccurrences=0 savedCallEdges=0", saved.Text);
+            AssertWireBudget(saved, Generous);
+
+            var omitted = Execute(new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "nonliteral-template"));
+            var omittedLine = Assert.Single(RouteLines(omitted));
+            Assert.Contains("declared-http-get=Omitted reason=nonliteral-template", omittedLine);
+            Assert.DoesNotContain("template=", omittedLine);
+            Assert.DoesNotContain("literalSpan=", omittedLine);
+            Assert.EndsWith(note, omittedLine.TrimEnd('\r'), StringComparison.Ordinal);
+            Assert.Equal(units, JsonSerializer.Serialize(omitted.Units, QueryJson.Options));
+            AssertWireBudget(omitted, Generous);
+
+            var budget = Generous with { MaxChars = Math.Max(2048, original.WireChars), MaxBytes = Math.Max(8192, original.WireBytes) };
+            var bounded = Execute(declaration, budget);
+            Assert.True(bounded.Succeeded);
+            Assert.Contains(bounded.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+            Assert.All(RouteLines(bounded), AssertSavedLine);
+            AssertWireBudget(bounded, budget);
+            Assert.Equal(original.Text, Execute(null).Text);
+            File.Delete(fixture.CoreFullPath);
+            var inspections = 0;
+            var untrustedOwner = new QueryWorkspace(fixture.Root, _ =>
+            {
+                inspections++;
+                throw new InvalidOperationException("Untrusted saved declarations must not inspect source inventory.");
+            });
+            var untrusted = Execute(declaration, trusted: false, sourceOwner: untrustedOwner);
+            Assert.True(untrusted.Succeeded);
+            Assert.Empty(untrusted.Units);
+            Assert.Contains("WORKSPACE_UNTRUSTED", untrusted.OmissionReasons);
+            Assert.Contains("Freshness=unverified", untrusted.Text);
+            Assert.DoesNotContain("SOURCE_CHANGED_SINCE_SNAPSHOT", untrusted.Text);
+            Assert.Equal(0, inspections);
+            AssertSavedLine(Assert.Single(RouteLines(untrusted)));
+            AssertWireBudget(untrusted, Generous);
+        }
+    }
+
     [Fact]
     public void AgentTypeHubKeepsRelationlessMemberSelectorsWithoutReadingTheirSource()
     {
@@ -2000,7 +2098,7 @@ public sealed class ExplorationTests
         public Fixture(bool addScopes = false, bool partial = false, bool huge = false, bool caseDistinct = false,
             bool dense = false, string ownerGap = "", bool splitRun = false, bool implicitConstructor = false,
             string suspectPadding = "", Guid? workspaceUuid = null, ExploreFormat format = ExploreFormat.Audit,
-            ExploreScopePolicy scopePolicy = ExploreScopePolicy.RequireUnique)
+            ExploreScopePolicy scopePolicy = ExploreScopePolicy.RequireUnique, string? httpGetTemplate = null)
         {
             workspace = workspaceUuid ?? Guid.NewGuid();
             this.caseDistinct = caseDistinct;
@@ -2016,7 +2114,8 @@ public sealed class ExplorationTests
                     + string.Concat(Enumerable.Repeat("value += \"検証😀\";\r\n", 650)) + "return value.Length;\r\n}";
             }
             if (caseDistinct) runString = runString.Replace("Run(", "run(", StringComparison.Ordinal);
-            run = "public int Run(int value)\r\n{\r\nint Next() => value + count;\r\n// 😀 \" \\\r\n"
+            run = (httpGetTemplate is null ? "" : "[HttpGet(" + JsonSerializer.Serialize(httpGetTemplate) + ")]\r\n")
+                + "public int Run(int value)\r\n{\r\nint Next() => value + count;\r\n// 😀 \" \\\r\n"
                 + (huge ? string.Concat(Enumerable.Repeat("value += 1; // 検証😀\r\n", 650)) : "")
                 + "return " + (dense ? "Finish(Helper(Next()))" : "Helper(Next())") + ";\r\n}";
             Sources.Add(CorePath, "namespace Demo;\r\npartial class Pump\r\n{\r\n" + Field + "\r\n" + run + "\r\n"
