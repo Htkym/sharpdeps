@@ -18,6 +18,14 @@ sharpdeps explore --root ROOT_ABS --term "src/Parser.cs" --format agent
 
 MCP uses tool `explore` with `query` instead of `--term`, and defaults to agent format. CLI defaults to audit, so these examples select agent explicitly. Choose audit for full saved identities, hashes, spans and provenance. Format does not grant source access.
 
+For an exact captured MVC HttpGet fragment, select the explicit literal mode instead of a name/path search:
+
+```text
+sharpdeps explore --root ROOT_ABS --query-kind http-get-literal --term "items/{id}" --format agent
+```
+
+MCP uses `{"queryKind":"http-get-literal","query":"items/{id}"}`; `"query":""` matches a saved empty template only in that mode. Preserve case and whitespace. Slashes, braces, `*`, identity-like text and leading `--` are literal data, not URL matching or host options. A separate `--trusted` flag still needs authorization. Results point to saved declaring occurrences/sites, not effective endpoints: prefixes, tokens, conventions and exposure are not evaluated. Project/variant and matching-file path constraints remain authoritative; missing/omitted/old metadata does not prove route absence. Follow a returned exact selector in default `symbol` mode before using `pathTo`; literal mode does not accept a call-witness target. Default Symbol matching is unchanged.
+
 Read the snapshot/generation, selected project/variant, coverage, certainty, freshness, errors and omissions. Absence is limited to this index/scope; static binding is not runtime dispatch. Impact results are review candidates, not required changes or proof that other code is safe.
 
 For ambiguous scopes, choose the returned project/variant explicitly. Narrow with `--path-prefix` where appropriate; never combine alternative compilation contexts or fold their edges/source by logical ID. The default policy is unique. When several scopes remain, opt-in prefer-debug chooses only the single saved Debug candidate in one matching project after explicit constraints; the SDK is not a TFM selector.

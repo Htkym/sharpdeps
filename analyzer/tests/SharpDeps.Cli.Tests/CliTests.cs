@@ -163,6 +163,23 @@ public sealed class CliTests
     public async Task TrustAndArgumentFailuresHappenBeforeAnyWorkspaceCreation()
     {
         using var fixture = new Fixture(seed: false);
+        Assert.Equal(ExploreQueryKind.Symbol, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().QueryKind);
+        foreach (var literal in new[] { "", " ", "--trusted", "hocc_" + new string('a', 64), "items/*" })
+        {
+            foreach (var arguments in new[]
+            {
+                new[] { "explore", "--query-kind", "http-get-literal", "--term", literal },
+                new[] { "explore", "--term", literal, "--query-kind", "http-get-literal" }
+            })
+            {
+                var parsed = CliArguments.Parse(arguments);
+                var request = parsed.ExplorationRequest();
+                Assert.Equal(ExploreQueryKind.HttpGetLiteral, request.QueryKind);
+                Assert.Equal(literal, request.Query);
+                Assert.False(parsed.Has("trusted"));
+            }
+        }
+        Assert.True(CliArguments.Parse(["explore", "--term", "--trusted", "--query-kind", "http-get-literal", "--trusted"]).Has("trusted"));
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Agent, CliArguments.Parse(["explore", "--term", "Service", "--format", "agent"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service", "--format", "audit"]).ExplorationRequest().Format);
@@ -181,6 +198,16 @@ public sealed class CliTests
         var missingTerm = await Run("search", "--root", fixture.Root);
         Assert.Equal(2, missingTerm.Exit);
         foreach (var arguments in new[] {
+            new[] { "--term", "" },
+            new[] { "--term", " " },
+            new[] { "--term", "--trusted" },
+            new[] { "--term", "Service", "--query-kind", "other" },
+            new[] { "--term", "Service", "--query-kind", "HttpGetLiteral" },
+            new[] { "--term", "Service", "--query-kind", "1" },
+            new[] { "--term", "items/{id}", "--query-kind", "http-get-literal", "--path-to", occurrence },
+            new[] { "--term", "unsafe\ntext", "--query-kind", "http-get-literal" },
+            new[] { "--term", "\uD800", "--query-kind", "http-get-literal" },
+            new[] { "--term", new string('x', 1025), "--query-kind", "http-get-literal" },
             new[] { "--term", new string('x', 1025) },
             new[] { "--term", "Service", "--variant", "first", "--variant", "second" },
             new[] { "--term", "Service", "--project-id", " " },
@@ -198,7 +225,7 @@ public sealed class CliTests
             var invalidExplore = await Run(["explore", "--root", fixture.Root, .. arguments]);
             Assert.Equal(2, invalidExplore.Exit);
         }
-        foreach (var (flag, value) in new[] { ("--format", "agent"), ("--scope-policy", "prefer-debug"), ("--path-to", occurrence) })
+        foreach (var (flag, value) in new[] { ("--format", "agent"), ("--scope-policy", "prefer-debug"), ("--path-to", occurrence), ("--query-kind", "http-get-literal") })
         {
             var nonExploreOption = await Run("status", "--root", fixture.Root, flag, value);
             Assert.Equal(2, nonExploreOption.Exit);

@@ -21,7 +21,7 @@ internal sealed class CliArguments
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status" };
+      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status", "query-kind" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -85,11 +85,20 @@ internal sealed class CliArguments
             {
                 if (++i >= args.Length) throw new CliFailure("ARGUMENT_REQUIRED", 2);
                 value = args[i];
-                ValidateValue(value);
+                if (parsed.Command != "explore" || name != "term") ValidateValue(value);
             }
             if (!parsed.values.TryGetValue(name, out var list)) parsed.values.Add(name, list = []);
             else if (!Repeated.Contains(name)) throw new CliFailure("ARGUMENT_DUPLICATE", 2);
             list.Add(value);
+        }
+        if (parsed.Command == "explore")
+        {
+            var kind = ExploreRequestFactory.QueryKind(parsed.Get("query-kind"));
+            if (parsed.Get("term") is { } term)
+            {
+                if (kind == ExploreQueryKind.Symbol) ValidateValue(term);
+                else ExploreRequestFactory.QueryText(term, kind);
+            }
         }
         ValidateRequestId(parsed.RequestId);
         if (parsed.Has("kind") && parsed.Command != "query") throw new CliFailure("ARGUMENT_INVALID", 2);
@@ -115,7 +124,7 @@ internal sealed class CliArguments
             ExploreRequestFactory.Budget(OptionalNumber("max-nodes"), OptionalNumber("max-edges"), OptionalNumber("max-depth"),
                 OptionalNumber("max-milliseconds"), OptionalNumber("max-chars"), OptionalNumber("max-bytes")),
             ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit), ExploreRequestFactory.ScopePolicy(Get("scope-policy")), Get("path-to"))
-            { ObserveOwner = Has("owner-status") });
+            { ObserveOwner = Has("owner-status"), QueryKind = ExploreRequestFactory.QueryKind(Get("query-kind")) });
     }
 
     public QueryRequest QueryRequest()

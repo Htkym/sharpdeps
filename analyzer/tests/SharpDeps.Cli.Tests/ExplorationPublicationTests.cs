@@ -63,6 +63,10 @@ public sealed class ExplorationPublicationTests
             Assert.True(reply.Succeeded);
             Assert.Contains("declared-http-get=Saved", reply.Text);
             Assert.Contains("declaration fragment", reply.Text);
+            var literal = fixture.Engine(reader).Execute(new("items/{id}", Format: format, Budget: Budget)
+                { QueryKind = ExploreQueryKind.HttpGetLiteral });
+            Assert.True(literal.Succeeded);
+            Assert.Contains("HttpGet match selector=" + edge.SourceOccurrenceId, literal.Text);
         }
         var callers = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callers", QueryKind.Callers,
             NodeId: edge.SourceNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));

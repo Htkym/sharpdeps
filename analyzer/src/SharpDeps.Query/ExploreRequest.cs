@@ -18,12 +18,20 @@ public enum ExploreScopePolicy
     PreferDebug
 }
 
+public enum ExploreQueryKind
+{
+    Symbol,
+    /// <summary>Matches a captured HttpGet declaration fragment exactly, without route interpretation.</summary>
+    HttpGetLiteral
+}
+
 public sealed record ExploreRequest(string Query, string? ProjectId = null, string? VariantId = null,
     string? PathPrefix = null, QueryFreshnessPolicy Freshness = QueryFreshnessPolicy.AllowStale,
     QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit,
     ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique, string? PathTo = null)
 {
     public bool ObserveOwner { get; init; }
+    public ExploreQueryKind QueryKind { get; init; }
 }
 
 public sealed record ExploreOwnerObservation(string State, string? WorkspaceId = null, string? SnapshotId = null,

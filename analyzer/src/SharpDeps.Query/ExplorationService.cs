@@ -95,10 +95,11 @@ public sealed class ExplorationService
         static bool Text(string? value, int maximum) => value is null
             || value.Length <= maximum && !string.IsNullOrWhiteSpace(value) && !value.Any(char.IsControl);
         var budget = request.Budget!;
-        if (!Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query)
+        var literal = request.QueryKind == ExploreQueryKind.HttpGetLiteral;
+        if ((literal ? !HttpGetLiteral(request.Query) : !Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query))
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
-            || request.PathTo is { } target && (!Text(target, 128) || !IsOccurrenceIdentity(target.Trim()) || !IsOccurrenceIdentity(request.Query.Trim()))
-            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
+            || request.PathTo is { } target && (literal || !Text(target, 128) || !IsOccurrenceIdentity(target.Trim()) || !IsOccurrenceIdentity(request.Query.Trim()))
+            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy) || !Enum.IsDefined(request.QueryKind)
             || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
             || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
@@ -109,6 +110,15 @@ public sealed class ExplorationService
             try { IndexSnapshotValidator.ValidateRelativePath(prefix.TrimEnd('/')); }
             catch (IndexStoreException error) { throw new ArgumentException("Invalid exploration path scope.", nameof(request), error); }
         }
+    }
+
+    private static bool HttpGetLiteral(string? value)
+    {
+        if (value is null || value.Length > 1024 || value.Any(char.IsControl)) return false;
+        for (var index = 0; index < value.Length; index++)
+            if (char.IsSurrogate(value[index]) && (!char.IsHighSurrogate(value[index])
+                || ++index >= value.Length || !char.IsLowSurrogate(value[index]))) return false;
+        return true;
     }
 
     private static bool IsOccurrenceIdentity(string value) => value.Length == 69 && value.StartsWith("hocc_", StringComparison.Ordinal)
@@ -148,6 +158,7 @@ public sealed class ExplorationService
         private readonly List<Relation> relations = [];
         private readonly List<Selected> roots = [];
         private readonly Dictionary<string, Match> sourceMatches = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, HarnessEdge[]> httpGetMatches = new(StringComparer.Ordinal);
         private readonly HashSet<string> sourcePaths = new(StringComparer.Ordinal);
         private readonly HashSet<string> bodySelections = new(StringComparer.Ordinal);
         private readonly List<Pending> pending = [];
@@ -284,6 +295,7 @@ public sealed class ExplorationService
                 if (scope is null) { Error("SCOPE_NOT_FOUND", "The variant is not in this selected index."); return false; }
                 project ??= scope.ProjectId;
             }
+            if (request.QueryKind == ExploreQueryKind.HttpGetLiteral) return ResolveHttpGet();
             var matches = Search();
             if (Errors.Count != 0) return false;
             if (choices.Count > 1)
@@ -337,10 +349,54 @@ public sealed class ExplorationService
             return roots.Count != 0;
         }
 
+        private bool ResolveHttpGet()
+        {
+            var matches = new Dictionary<string, List<HarnessEdge>>(StringComparer.Ordinal);
+            foreach (var edge in owner.GetHttpGetDeclarations(request.Query, timer.Token))
+            {
+                Check();
+                var occurrence = owner.occurrences[edge.SourceOccurrenceId!];
+                var scope = owner.saved.Graph.Variants.Single(value => value.Id == occurrence.VariantId);
+                if (project is not null && scope.ProjectId != project || variant is not null && scope.Id != variant
+                    || edge.Evidence is not { } evidence || !PathAllowed(evidence)) continue;
+                if (!matches.TryGetValue(occurrence.Id, out var sites)) matches.Add(occurrence.Id, sites = []);
+                sites.Add(edge);
+                if (!choices.Contains((scope.ProjectId, scope.Id))) choices.Add((scope.ProjectId, scope.Id));
+            }
+            if (matches.Count == 0)
+            {
+                Error("HTTP_GET_DECLARATION_NOT_FOUND", "No exact captured HttpGet fragment in the selected saved view; missing or omitted metadata is not route absence.");
+                return false;
+            }
+            choices.Sort((left, right) =>
+            {
+                var order = StringComparer.Ordinal.Compare(left.Project, right.Project);
+                return order != 0 ? order : StringComparer.Ordinal.Compare(left.Variant, right.Variant);
+            });
+            if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && !TryPreferScope())
+            { reasons.Add("SCOPE_AMBIGUOUS"); return false; }
+            if (choices.Count > 1) { reasons.Add("SCOPE_AMBIGUOUS"); return false; }
+            if (choices.Count == 1)
+            { project = choices[0].Project; variant = choices[0].Variant; choices.Clear(); }
+            foreach (var (identity, sites) in matches.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                Check();
+                var occurrence = owner.occurrences[identity];
+                if (occurrence.VariantId != variant) continue;
+                var node = owner.nodes[occurrence.LogicalSymbolId];
+                var item = Select(node, occurrence.VariantId, 0, "requested", HarnessCertainty.Resolved, true);
+                if (item is null) continue;
+                roots.Add(item);
+                httpGetMatches.Add(item.Identity, sites.ToArray());
+                sourceMatches[node.Id] = new(node, MatchTier.ExactName, true, true);
+            }
+            return roots.Count != 0;
+        }
+
         private bool TryPreferScope()
         {
             if (request.ScopePolicy != ExploreScopePolicy.PreferDebug) return false;
-            var identities = Terms(request.Query).Select(term => owner.occurrences.TryGetValue(term, out var occurrence)
+            var identities = (request.QueryKind == ExploreQueryKind.Symbol ? Terms(request.Query) : Array.Empty<string>()).Select(term => owner.occurrences.TryGetValue(term, out var occurrence)
                 ? owner.nodes[occurrence.LogicalSymbolId] : owner.nodes.GetValueOrDefault(term))
                 .OfType<HarnessNode>().DistinctBy(node => node.Id).ToArray();
             if (identities.Length > 0)
@@ -359,7 +415,7 @@ public sealed class ExplorationService
             {
                 project = choices[0].Project; variant = choices[0].Variant; choices.Clear();
                 scopeDecision = request.VariantId is not null ? "explicit-variant"
-                    : Terms(request.Query).Any(owner.occurrences.ContainsKey) ? "explicit-occurrence"
+                    : request.QueryKind == ExploreQueryKind.Symbol && Terms(request.Query).Any(owner.occurrences.ContainsKey) ? "explicit-occurrence"
                     : excludedScopes > 0 ? "selected-by-explicit-identities" : "unique-matching-scope";
                 return true;
             }
@@ -1189,6 +1245,7 @@ public sealed class ExplorationService
                 Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
             }
             AppendScopeDecision(text, detailCount);
+            AppendHttpGetMatches(text);
             if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
             text.AppendLine("Coverage is the selected index, not proof of runtime consumers or absent unindexed code/tests.");
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
@@ -1288,6 +1345,7 @@ public sealed class ExplorationService
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
             Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
             AppendScopeDecision(text, detailCount);
+            AppendHttpGetMatches(text);
             if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
             if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
@@ -1378,6 +1436,20 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private void AppendHttpGetMatches(StringBuilder text)
+        {
+            if (request.QueryKind != ExploreQueryKind.HttpGetLiteral) return;
+            text.AppendLine("Query kind=http-get-literal; exact captured declaration fragments only; effective routes not evaluated. Missing/omitted metadata does not prove route absence.");
+            foreach (var root in roots)
+            {
+                var sites = httpGetMatches[root.Identity];
+                var first = sites[0];
+                var span = first.HttpGetDeclaration!.TemplateSpan!.Value;
+                var path = owner.files[first.Evidence!.SourceId].RelativePath;
+                text.AppendLine(FormattableString.Invariant($"HttpGet match selector={root.Identity} edge={first.Id} site={JsonSerializer.Serialize(path)} literalSpan={span.Start}:{span.Length} matchingSavedSites={sites.Length} otherSiteDetailsOmitted={sites.Length - 1}"));
+            }
         }
 
         private void AppendOwnerObservation(StringBuilder text)

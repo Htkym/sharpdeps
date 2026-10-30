@@ -73,7 +73,21 @@ Launch `sharpdeps-mcp --root /absolute/workspace --trusted` to permit source rea
 }
 ```
 
-Optional arguments are `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `pathTo`, `freshness`, `format`, `ownerStatus`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 characters; `pathTo` accepts up to 128 characters. The CLI uses `--term`, `--project-id`, `--variant`, `--path-prefix`, `--path-to`, and hyphenated budget flags for the corresponding values.
+Optional arguments are `queryKind`, `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `pathTo`, `freshness`, `format`, `ownerStatus`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 UTF-16 code units; `pathTo` accepts up to 128 characters. The CLI uses `--term`, `--query-kind`, `--project-id`, `--variant`, `--path-prefix`, `--path-to`, and hyphenated budget flags for the corresponding values.
+
+To find methods by a captured HttpGet declaration fragment, explicitly select `queryKind: "http-get-literal"` (CLI `--query-kind http-get-literal`). The default `symbol` mode keeps name, identity and saved-path matching. Literal mode compares the complete decoded saved template exactly, preserving case, slashes, whitespace and the valid empty string. It does not interpret route parameters, wildcards or effective URLs: `items/42` does not match `items/{id}`, and `*` is ordinary text.
+
+```json
+{"name":"explore","arguments":{"queryKind":"http-get-literal","query":"items/{id}","format":"agent"}}
+```
+
+```text
+sharpdeps explore --root /absolute/workspace --query-kind http-get-literal --term "items/{id}" --format agent
+```
+
+An empty template uses `"query": ""` with explicit literal mode; whitespace-only and leading-`--` values are also data in that mode. CLI option order does not change the mode. A consumed `--term "--trusted"` cannot enable source trust; a separate `--trusted` flag retains its normal authorization requirement. Literal mode rejects `pathTo`; follow a returned exact occurrence selector in default Symbol mode to request a saved call witness.
+
+Results identify the declaring occurrence and matching saved attribute sites. Existing project/variant constraints apply; `pathPrefix` filters the matching declaration evidence file, not another partial declaration. Multiple declarations remain qualified alternatives, without choosing an effective endpoint. No match means no matching captured supported declaration in the selected saved view; old, missing or omitted metadata does not prove endpoint absence. Scope, coverage, freshness and output limits still qualify the result. A complete template may be omitted as optional detail, while retained roots keep matching-site attribution. The lookup reads saved metadata without additional source I/O; source bodies still require the usual trust, hash and freshness checks.
 
 Explore returns a single text content block containing the same evidence text as the CLI when using the same format, without a duplicated `structuredContent` object. Clients using the old `status`, `search`, `symbol`, `callers`, `callees`, `impact`, or `context` MCP tools must migrate to `explore`; the existing CLI query commands remain available.
 

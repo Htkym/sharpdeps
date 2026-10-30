@@ -732,7 +732,8 @@ public sealed class ExplorationTests
     public void HttpGetDeclarationsKeepEmptyTemplatesAndSeparateLiteralEvidenceWithinWireBudgets(ExploreFormat format)
     {
         const string note = "declaration fragment only; controller prefixes/tokens/conventions/effective routes not evaluated";
-        foreach (var template in new[] { "", "v1/[controller]/" + new string('路', 180) + "/{id:int}?name=\"例😀\"" })
+        foreach (var template in new[] { "", " ", "--trusted", "*", "hocc_" + new string('0', 64), "items/{id}",
+            "v1/[controller]/" + new string('路', 180) + "/{id:int}?name=\"例😀\"" })
         {
             using var fixture = new Fixture(format: format, httpGetTemplate: template);
             var literal = JsonSerializer.Serialize(template);
@@ -789,6 +790,25 @@ public sealed class ExplorationTests
             if (format == ExploreFormat.Agent) Assert.Contains("kind=Member callerSymbols=0 callerOccurrences=0 savedCallEdges=0", saved.Text);
             AssertWireBudget(saved, Generous);
 
+            var literalSnapshot = fixture.Snapshot with { Graph = graph with { Edges = [edge with { HttpGetDeclaration = declaration }] } };
+            var literalIndex = new RankingIndex(literalSnapshot, fixture.Helper);
+            var literalEngine = new ExplorationService(literalIndex, new QueryWorkspace(fixture.Root), true);
+            var literalRequest = request with { Query = template, PathTo = null, QueryKind = ExploreQueryKind.HttpGetLiteral };
+            var found = literalEngine.Execute(literalRequest);
+            Assert.True(found.Succeeded);
+            Assert.Contains("HttpGet match selector=" + member.Id, found.Text);
+            Assert.Contains($"literalSpan={templateSpan.Start}:{templateSpan.Length} matchingSavedSites=1", found.Text);
+            Assert.Equal(units, JsonSerializer.Serialize(found.Units, QueryJson.Options));
+            AssertWireBudget(found, Generous);
+            var missing = literalEngine.Execute(literalRequest with { Query = template + "x" });
+            Assert.Contains(missing.Errors, error => error.Code == "HTTP_GET_DECLARATION_NOT_FOUND");
+            Assert.Empty(missing.Units);
+            Assert.Empty(literalIndex.Literals);
+            if (template == "items/{id}")
+                foreach (var mismatch in new[] { "ITEMS/{id}", "items/42", "Run" })
+                    Assert.Contains(literalEngine.Execute(literalRequest with { Query = mismatch }).Errors,
+                        error => error.Code == "HTTP_GET_DECLARATION_NOT_FOUND");
+
             var omitted = Execute(new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "nonliteral-template"));
             var omittedLine = Assert.Single(RouteLines(omitted));
             Assert.Contains("declared-http-get=Omitted reason=nonliteral-template", omittedLine);
@@ -821,7 +841,137 @@ public sealed class ExplorationTests
             Assert.Equal(0, inspections);
             AssertSavedLine(Assert.Single(RouteLines(untrusted)));
             AssertWireBudget(untrusted, Generous);
+            var untrustedLiteral = new ExplorationService(literalIndex, untrustedOwner, false).Execute(literalRequest);
+            Assert.True(untrustedLiteral.Succeeded);
+            Assert.Empty(untrustedLiteral.Units);
+            Assert.Contains("HttpGet match selector=" + member.Id, untrustedLiteral.Text);
+            Assert.Equal(0, inspections);
+            if (template.Length > 100)
+            {
+                var literalBudget = Generous with { MaxChars = untrustedLiteral.WireChars - 1, MaxBytes = untrustedLiteral.WireBytes };
+                var trimmed = new ExplorationService(literalIndex, untrustedOwner, false).Execute(literalRequest with { Budget = literalBudget });
+                Assert.True(trimmed.Succeeded);
+                Assert.Contains("HttpGet match selector=" + member.Id, trimmed.Text);
+                Assert.Empty(RouteLines(trimmed));
+                AssertWireBudget(trimmed, literalBudget);
+            }
+            var changedLiteral = literalEngine.Execute(literalRequest);
+            Assert.Empty(changedLiteral.Units);
+            Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", changedLiteral.OmissionReasons);
+            var requireFresh = literalEngine.Execute(literalRequest with { Freshness = QueryFreshnessPolicy.RequireFresh });
+            Assert.False(requireFresh.Succeeded);
+            Assert.Empty(requireFresh.Units);
         }
+    }
+
+    [Fact]
+    public void HttpGetLookupKeepsMatchingOccurrencesAndSitesBeforeScopeAndNodeLimits()
+    {
+        using var fixture = new Fixture(addScopes: true, splitRun: true, httpGetTemplate: "same");
+        var (snapshot, edge) = HttpGetSnapshot(fixture, "same");
+        ExploreRequest Request() => new("same", Budget: Generous, Format: ExploreFormat.Agent)
+            { QueryKind = ExploreQueryKind.HttpGetLiteral };
+        ExploreReply Run(IndexSnapshot saved, ExploreRequest? request = null)
+            => new ExplorationService(new FixedIndex(saved)).Execute(request ?? Request());
+        var onlyA = Run(snapshot);
+        Assert.True(onlyA.Succeeded);
+        Assert.Contains("HttpGet match selector=" + fixture.Occurrence(fixture.RunInt), onlyA.Text);
+        Assert.DoesNotContain("Choose project/variant", onlyA.Text);
+        var otherVariant = Run(snapshot, Request() with { VariantId = fixture.AlternateVariant });
+        Assert.Contains(otherVariant.Errors, error => error.Code == "HTTP_GET_DECLARATION_NOT_FOUND");
+        Assert.Empty(otherVariant.Units);
+
+        // These saved-metadata cases isolate scoping; the publication fixture establishes actual attribute collection.
+        HarnessEdge At(string id, string symbol, string variant)
+        {
+            var occurrence = snapshot.Graph.SymbolOccurrences.Single(value => value.Id == fixture.Occurrence(symbol, variant));
+            var location = occurrence.Location!;
+            var start = location.RawSpan!.Value.Start + 1;
+            return edge with { Id = id, SourceNodeId = symbol, SourceOccurrenceId = occurrence.Id, VariantId = variant,
+                Evidence = location with { RawSpan = new(start, 7) },
+                HttpGetDeclaration = new(HarnessHttpGetDeclarationState.Saved, "same", new(start + 8, 6)) };
+        }
+        var partial = At("http-partial", fixture.RunString, fixture.Variant);
+        var split = snapshot with { Graph = snapshot.Graph with { Edges = [partial] } };
+        Assert.Contains(Run(split, Request() with { PathPrefix = Fixture.PartialPath }).Errors,
+            error => error.Code == "HTTP_GET_DECLARATION_NOT_FOUND");
+        Assert.True(Run(split, Request() with { PathPrefix = Fixture.CorePath }).Succeeded);
+
+        var unrelated = At("http-hidden", fixture.Suspect, fixture.Variant);
+        var duplicates = snapshot with { Graph = snapshot.Graph with { Edges = [unrelated, edge with { Id = "http-duplicate" }, edge] } };
+        var many = Run(duplicates);
+        Assert.True(many.Succeeded);
+        Assert.Equal(2, many.Text.Split('\n').Count(line => line.StartsWith("HttpGet match selector=", StringComparison.Ordinal)));
+        Assert.Contains("matchingSavedSites=2 otherSiteDetailsOmitted=1", many.Text);
+        Assert.Contains("HttpGet match selector=" + fixture.Occurrence(fixture.Suspect), many.Text);
+
+        var alternate = At("http-release", fixture.RunInt, fixture.AlternateVariant);
+        var both = snapshot with { Graph = snapshot.Graph with { Edges = [alternate, edge] } };
+        var unique = Run(both, Request() with { Budget = Generous with { MaxNodes = 1 } });
+        Assert.Contains("SCOPE_AMBIGUOUS", unique.OmissionReasons);
+        Assert.DoesNotContain("HttpGet match selector=", unique.Text);
+        var preferred = Run(both, Request() with { ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.True(preferred.Succeeded);
+        Assert.Contains("HttpGet match selector=" + fixture.Occurrence(fixture.RunInt), preferred.Text);
+        Assert.Contains(fixture.AlternateVariant, preferred.Text);
+        var otherSymbol = snapshot.Graph.SymbolOccurrences.Single(value => value.VariantId == fixture.OtherVariant
+            && snapshot.Graph.Nodes.Single(node => node.Id == value.LogicalSymbolId).Kind == HarnessNodeKind.Member).LogicalSymbolId;
+        var projects = snapshot with { Graph = snapshot.Graph with { Edges = [At("http-other", otherSymbol, fixture.OtherVariant), edge] } };
+        var ambiguous = Run(projects, Request() with { Budget = Generous with { MaxNodes = 1 }, ScopePolicy = ExploreScopePolicy.PreferDebug });
+        Assert.Contains("SCOPE_AMBIGUOUS", ambiguous.OmissionReasons);
+        Assert.DoesNotContain("HttpGet match selector=", ambiguous.Text);
+        Assert.Empty(ambiguous.Units);
+        var identityLiteral = fixture.Occurrence(fixture.RunInt, fixture.AlternateVariant);
+        var opaque = snapshot with { Graph = snapshot.Graph with { Edges = [edge with
+            { HttpGetDeclaration = edge.HttpGetDeclaration! with { Template = identityLiteral } }] } };
+        Assert.True(Run(opaque, Request() with { Query = identityLiteral, ScopePolicy = ExploreScopePolicy.PreferDebug }).Succeeded);
+    }
+
+    [Fact]
+    public void HttpGetLookupMapRetriesCancelledPreparationAndKeepsExactPayloadPins()
+    {
+        using var fixture = new Fixture(httpGetTemplate: "saved");
+        var (snapshot, edge) = HttpGetSnapshot(fixture, "saved");
+        using var cancellation = new CancellationTokenSource();
+        var armed = false;
+        var reads = 0;
+        var observed = new ObservedEdges([edge, edge with { Id = "http-second-site" }], () =>
+        {
+            reads++;
+            if (armed && reads > 1) { armed = false; cancellation.Cancel(); }
+        });
+        var owner = new ExplorationSnapshot(snapshot with { Graph = snapshot.Graph with { Edges = observed } }, default);
+        reads = 0;
+        armed = true;
+        Assert.Throws<OperationCanceledException>(() => owner.GetHttpGetDeclarations("saved", cancellation.Token));
+        Assert.Equal(2, reads);
+        Assert.Equal(new[] { edge.Id, "http-second-site" }, owner.GetHttpGetDeclarations("saved", default).Select(value => value.Id).ToArray());
+        var cachedReads = reads;
+        Assert.Empty(owner.GetHttpGetDeclarations("different", default));
+        Assert.Equal(cachedReads, reads);
+        var original = ExplorationSnapshotCache.Get(snapshot, default);
+        Assert.Single(original.GetHttpGetDeclarations("saved", default));
+        var unavailable = snapshot with { Graph = snapshot.Graph with { Edges = [edge with { HttpGetDeclaration = null },
+            edge with { Id = "http-omitted", HttpGetDeclaration = new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "metadata-budget") }] } };
+        var absent = new ExplorationService(new FixedIndex(unavailable)).Execute(new("saved", Budget: Generous)
+            { QueryKind = ExploreQueryKind.HttpGetLiteral });
+        Assert.Contains(absent.Errors, error => error.Code == "HTTP_GET_DECLARATION_NOT_FOUND");
+        Assert.Contains("Missing/omitted metadata does not prove route absence", absent.Text);
+        Assert.Empty(absent.Units);
+        var changed = snapshot with { Graph = snapshot.Graph with { Edges = [edge with
+            { HttpGetDeclaration = edge.HttpGetDeclaration! with { Template = "other" } }] } };
+        var replacement = ExplorationSnapshotCache.Get(changed, default);
+        Assert.NotSame(original, replacement);
+        Assert.Empty(replacement.GetHttpGetDeclarations("saved", default));
+        Assert.Single(replacement.GetHttpGetDeclarations("other", default));
+        Assert.Single(original.GetHttpGetDeclarations("saved", default));
+        var invalid = new ObservedIndex(() => throw new InvalidOperationException("Validation must precede reading the index."));
+        var engine = new ExplorationService(invalid);
+        foreach (var query in new[] { "\ud800", "\udc00", "\n", new string('x', 1025) })
+            Assert.Throws<ArgumentException>(() => engine.Execute(new(query) { QueryKind = ExploreQueryKind.HttpGetLiteral }));
+        Assert.Throws<ArgumentException>(() => engine.Execute(new("saved") { QueryKind = (ExploreQueryKind)99 }));
+        Assert.Throws<ArgumentException>(() => engine.Execute(new("saved", PathTo: fixture.Occurrence(fixture.RunInt))
+            { QueryKind = ExploreQueryKind.HttpGetLiteral }));
     }
 
     [Fact]
@@ -2037,6 +2187,30 @@ public sealed class ExplorationTests
             if (literal.Length > 128) throw new ArgumentException("The saved index accepts literals up to 128 characters.");
             return [];
         }
+    }
+
+    private static (IndexSnapshot Snapshot, HarnessEdge Edge) HttpGetSnapshot(Fixture fixture, string template)
+    {
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var attribute = HarnessIdentity.ExternalSymbolId(workspace, "saved-mvc-fixture", "type", "T:Microsoft.AspNetCore.Mvc.HttpGetAttribute");
+        var member = fixture.Snapshot.Graph.SymbolOccurrences.Single(value => value.Id == fixture.Occurrence(fixture.RunInt));
+        var start = fixture.RunSpan.Start + 1;
+        var edge = new HarnessEdge("http-get-site", fixture.RunInt, attribute, member.Id, null, fixture.Variant,
+            "attribute", HarnessCertainty.Resolved, "roslyn-declaration", member.Location! with { RawSpan = new(start, 7) },
+            HttpGetDeclaration: new(HarnessHttpGetDeclarationState.Saved, template, new(start + 8, JsonSerializer.Serialize(template).Length)));
+        return (fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        { Nodes = [.. fixture.Snapshot.Graph.Nodes, new(attribute, HarnessNodeKind.ExternalSymbol, "HttpGetAttribute", null, null)], Edges = [edge] } }, edge);
+    }
+
+    private sealed class ObservedEdges(IReadOnlyList<HarnessEdge> edges, Action observe) : IReadOnlyList<HarnessEdge>
+    {
+        public int Count => edges.Count;
+        public HarnessEdge this[int index] { get { observe(); return edges[index]; } }
+        public IEnumerator<HarnessEdge> GetEnumerator()
+        {
+            foreach (var edge in edges) { observe(); yield return edge; }
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private sealed class ObservedNodes(IReadOnlyList<HarnessNode> nodes, Action observe) : IReadOnlyList<HarnessNode>

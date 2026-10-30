@@ -23,7 +23,7 @@ public static class CliApplication
                     index = "--target root-contained.slnx|.sln|.csproj --trusted",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
-                    explore = "--term names-or-file-paths [--project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; path-to requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
+                    explore = "--term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
@@ -285,7 +285,7 @@ public static class CliApplication
         "WORKSPACE_UNTRUSTED" or "INDEX_UNTRUSTED" or "ROOT_ACCESS_DENIED" or "INVALID_SOURCE_ENCODING" => 5,
         "UPDATE_REQUIRED" or "FRESHNESS_UNVERIFIED" or "FRESHNESS_REQUIREMENT_NOT_MET" or "SOURCE_CHANGED_SINCE_SNAPSHOT"
             or "INDEX_NO_SNAPSHOT" or "INDEX_NOT_FOUND" => 3,
-        "SYMBOL_NOT_FOUND" => 2,
+        "SYMBOL_NOT_FOUND" or "HTTP_GET_DECLARATION_NOT_FOUND" => 2,
         "QUERY_TIMEOUT" or "INCOMPLETE_RESULT" or "OUTPUT_BUDGET_TOO_SMALL" => 4,
         "COORDINATOR_SUPERSEDED" => 3,
         _ when code.StartsWith("COORDINATOR_", StringComparison.Ordinal) => 6,

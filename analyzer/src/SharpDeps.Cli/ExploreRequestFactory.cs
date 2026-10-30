@@ -20,20 +20,48 @@ internal static class ExploreRequestFactory
     internal static ExploreRequest Validate(ExploreRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        Text("query", request.Query);
+        QueryText(request.Query, request.QueryKind);
         Text("projectId", request.ProjectId);
         Text("variantId", request.VariantId);
         Text("pathPrefix", request.PathPrefix);
         Text("pathTo", request.PathTo);
         var budget = request.Budget ?? Budget();
-        if (string.IsNullOrWhiteSpace(request.Query)
-            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
+        if (!Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
+            || request.QueryKind == ExploreQueryKind.HttpGetLiteral && request.PathTo is not null
             || budget.MaxNodes is < 1 or > 500 || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
             || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
             throw new CliFailure("ARGUMENT_INVALID", 2);
         return request with { Budget = budget };
     }
+
+    internal static void QueryText(string? value, ExploreQueryKind kind)
+    {
+        if (!Enum.IsDefined(kind)) throw new CliFailure("ARGUMENT_INVALID", 2);
+        if (kind == ExploreQueryKind.Symbol)
+        {
+            Text("query", value);
+            if (string.IsNullOrWhiteSpace(value)) throw new CliFailure("ARGUMENT_INVALID", 2);
+            return;
+        }
+        if (value is null || value.Length > 1024 || value.Any(char.IsControl))
+            throw new CliFailure("ARGUMENT_INVALID", 2);
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]))
+            {
+                if (++i >= value.Length || !char.IsLowSurrogate(value[i])) throw new CliFailure("ARGUMENT_INVALID", 2);
+            }
+            else if (char.IsLowSurrogate(value[i])) throw new CliFailure("ARGUMENT_INVALID", 2);
+        }
+    }
+
+    internal static ExploreQueryKind QueryKind(string? value) => value switch
+    {
+        null or "symbol" => ExploreQueryKind.Symbol,
+        "http-get-literal" => ExploreQueryKind.HttpGetLiteral,
+        _ => throw new CliFailure("ARGUMENT_INVALID", 2)
+    };
 
     internal static QueryFreshnessPolicy Freshness(string? value) => value switch
     {

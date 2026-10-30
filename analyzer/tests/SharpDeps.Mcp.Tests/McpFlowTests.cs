@@ -147,6 +147,62 @@ public sealed class McpFlowTests
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
     }
 
+    [Fact]
+    public async Task HttpGetLiteralMatchesCliWithoutReinterpretingRawValuesOrGrantingSourceTrust()
+    {
+        var identityLike = "hocc_" + new string('a', 64);
+        var literals = new[] { "", "  ", "--trusted", identityLike, "*", " /café/{id} " };
+        using var fixture = new Fixture(httpGetLiterals: literals);
+        var adapter = new McpQueryAdapter(new(fixture.Root));
+        foreach (var (value, kindFirst) in new[]
+        {
+            ("", false), ("", true), ("  ", false), ("--trusted", false), ("--trusted", true),
+            (identityLike, true), ("*", false), (" /café/{id} ", true)
+        })
+        {
+            var (exit, text, result) = await AssertEquivalent(adapter, Literal(value, kindFirst), Arguments(value, kindFirst));
+            Assert.Equal(0, exit);
+            Assert.Contains("Query kind=http-get-literal;", text, StringComparison.Ordinal);
+            var match = Assert.Single(text.Split('\n').Where(line => line.StartsWith("HttpGet match selector=", StringComparison.Ordinal)));
+            Assert.StartsWith($"HttpGet match selector={fixture.HttpGetOccurrences[value]} ", match, StringComparison.Ordinal);
+            Assert.DoesNotContain(Fixture.HttpGetBody, text, StringComparison.Ordinal);
+            AssertWireBudget(result, 12000, 48000);
+        }
+        var trustedArguments = Arguments("--trusted", true);
+        trustedArguments.Add("--trusted");
+        var (trustedExit, trustedText, _) = await AssertEquivalent(new McpQueryAdapter(new(fixture.Root, Trusted: true)),
+            Literal("--trusted", true), trustedArguments);
+        Assert.Equal(0, trustedExit);
+        Assert.Contains($"HttpGet match selector={fixture.HttpGetOccurrences["--trusted"]} ", trustedText, StringComparison.Ordinal);
+        Assert.Contains(Fixture.HttpGetBody, trustedText, StringComparison.Ordinal);
+
+        var (missingExit, missingText, _) = await AssertEquivalent(adapter, Literal("Service", false), Arguments("Service", false));
+        Assert.Equal(2, missingExit);
+        Assert.Contains("HTTP_GET_DECLARATION_NOT_FOUND", missingText, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpGet match selector=", missingText, StringComparison.Ordinal);
+        Assert.DoesNotContain(Fixture.HttpGetBody, missingText, StringComparison.Ordinal);
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+
+        CallToolRequestParams Literal(string value, bool kindFirst)
+        {
+            var properties = new Dictionary<string, JsonElement>();
+            if (kindFirst) properties.Add("queryKind", JsonSerializer.SerializeToElement("http-get-literal"));
+            properties.Add("query", JsonSerializer.SerializeToElement(value));
+            if (!kindFirst) properties.Add("queryKind", JsonSerializer.SerializeToElement("http-get-literal"));
+            properties.Add("format", JsonSerializer.SerializeToElement("agent"));
+            return new() { Name = "explore", Arguments = properties };
+        }
+        List<string> Arguments(string value, bool kindFirst)
+        {
+            var arguments = new List<string> { "explore", "--root", fixture.Root, "--format", "agent" };
+            if (kindFirst) arguments.AddRange(["--query-kind", "http-get-literal"]);
+            arguments.AddRange(["--term", value]);
+            if (!kindFirst) arguments.AddRange(["--query-kind", "http-get-literal"]);
+            return arguments;
+        }
+    }
+
     private static async Task<(int Exit, string Text, CallToolResult Result)> AssertEquivalent(
         McpQueryAdapter adapter, CallToolRequestParams request, IReadOnlyList<string> arguments)
     {
@@ -205,7 +261,20 @@ public sealed class McpFlowTests
             using (var ready = await Reply(1)) Assert.Equal("2025-11-25", ready.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
             await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
-            using (var listed = await Reply(2)) Assert.Equal(allowMutations ? 3 : 1, listed.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength());
+            using (var listed = await Reply(2))
+            {
+                var tools = listed.RootElement.GetProperty("result").GetProperty("tools");
+                Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
+                if (!allowMutations)
+                {
+                    var schema = Assert.Single(tools.EnumerateArray()).GetProperty("inputSchema");
+                    Assert.False(schema.GetProperty("properties").GetProperty("query").TryGetProperty("minLength", out _));
+                    var literal = Assert.Single(schema.GetProperty("anyOf").EnumerateArray(), branch =>
+                        branch.GetProperty("properties").TryGetProperty("queryKind", out var kind)
+                        && kind.TryGetProperty("const", out var value) && value.GetString() == "http-get-literal");
+                    Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+                }
+            }
             await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service"}}}""");
             using (var query = await Reply(3))
             {
@@ -215,6 +284,16 @@ public sealed class McpFlowTests
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains(Fixture.Code.TrimEnd('\n'), source, StringComparison.Ordinal);
                 Assert.DoesNotContain(fixture.SourceHash, source, StringComparison.Ordinal);
+            }
+            if (!allowMutations)
+            {
+                await Send("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"explore","arguments":{"query":"","queryKind":"http-get-literal"}}}""");
+                using var missing = await Reply(7);
+                var result = missing.RootElement.GetProperty("result");
+                Assert.True(result.GetProperty("isError").GetBoolean());
+                Assert.False(result.TryGetProperty("structuredContent", out _));
+                var text = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
+                Assert.Contains("HTTP_GET_DECLARATION_NOT_FOUND", text, StringComparison.Ordinal);
             }
             await Send("""{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"index","arguments":{"arguments":["--target","App.csproj"]}}}""");
             using (var indexed = await Reply(4))
@@ -285,14 +364,40 @@ public sealed class McpFlowTests
         public Guid Workspace { get; } = Guid.NewGuid();
         public string IndexPath => Path.Combine(Root, ".sharpdeps", "index.sqlite");
         public const string Code = "public sealed class Service { public int Value => 7; }\n";
+        public const string HttpGetBody = "=> 7;";
         public string SavedText { get; }
         public string SourceHash { get; }
         public string Project => HarnessIdentity.ProjectId(Workspace, "App.csproj");
         public string Variant => HarnessIdentity.VariantId(Workspace, Project, "net10.0", "Debug");
         public string Symbol { get; }
         public string Occurrence { get; }
-        public Fixture(bool addScopes = false, string? code = null)
+        public IReadOnlyDictionary<string, string> HttpGetOccurrences { get; }
+        public Fixture(bool addScopes = false, string? code = null, IReadOnlyList<string>? httpGetLiterals = null)
         {
+            var httpGetOccurrences = new Dictionary<string, string>(StringComparer.Ordinal);
+            HttpGetOccurrences = httpGetOccurrences;
+            var sites = new List<(string Template, int NameStart, HarnessRawSpan Literal, string MemberName, HarnessRawSpan Declaration)>();
+            if (httpGetLiterals is not null)
+            {
+                Assert.Null(code);
+                var source = new StringBuilder("public sealed class Service {\n");
+                foreach (var template in httpGetLiterals)
+                {
+                    var declarationStart = source.Length + 4;
+                    var memberName = "Lookup" + sites.Count;
+                    source.Append("    [");
+                    var nameStart = source.Length;
+                    source.Append("HttpGet(");
+                    var literalStart = source.Length;
+                    var raw = JsonSerializer.Serialize(template);
+                    source.Append(raw).Append(")]\n");
+                    source.Append("    public int ").Append(memberName).Append("() ").Append(HttpGetBody);
+                    sites.Add((template, nameStart, new(literalStart, raw.Length), memberName,
+                        new(declarationStart, source.Length - declarationStart)));
+                    source.Append('\n');
+                }
+                code = source.Append("}\n").ToString();
+            }
             code ??= Code;
             SavedText = code.TrimEnd('\r', '\n');
             SourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
@@ -309,6 +414,38 @@ public sealed class McpFlowTests
             var variants = new List<HarnessVariant> { new(variant, project, "net10.0", "Debug", null, null, null) };
             var occurrences = new List<HarnessSymbolOccurrence>
             { new(Occurrence, Symbol, variant, location, [location]) };
+            var nodes = new List<HarnessNode>
+            {
+                new(workspace, HarnessNodeKind.Workspace, "Workspace", null, null),
+                new(project, HarnessNodeKind.Project, "App", workspace, null),
+                new(Symbol, HarnessNodeKind.Type, "Service", project, null)
+            };
+            var edges = new List<HarnessEdge>();
+            var search = new List<IndexSearchText> { new(Symbol, "Service", "Service", "", "", "App.cs") };
+            if (sites.Count != 0)
+            {
+                var attribute = HarnessIdentity.ExternalSymbolId(Workspace,
+                    "Microsoft.AspNetCore.Mvc.Core, Version=10.0.0.0, Culture=neutral, PublicKeyToken=adb9793829ddae60",
+                    "type", "T:Microsoft.AspNetCore.Mvc.HttpGetAttribute");
+                nodes.Add(new(attribute, HarnessNodeKind.ExternalSymbol, "HttpGetAttribute", workspace, null));
+                for (var index = 0; index < sites.Count; index++)
+                {
+                    var site = sites[index];
+                    var signature = "M:Service." + site.MemberName;
+                    var member = HarnessIdentity.LogicalSymbolId(Workspace, project, "method", signature);
+                    var occurrence = HarnessIdentity.SymbolOccurrenceId(Workspace, member, variant);
+                    var memberLocation = location with { RawSpan = site.Declaration };
+                    occurrences.Add(new(occurrence, member, variant, memberLocation, [memberLocation]));
+                    nodes.Add(new(member, HarnessNodeKind.Member, site.MemberName, Symbol, null, signature));
+                    httpGetOccurrences.Add(site.Template, occurrence);
+                    edges.Add(new("http-get-" + index, member, attribute, occurrence, null, variant,
+                        "attribute", HarnessCertainty.Resolved, "roslyn-declaration", location with { RawSpan = new(site.NameStart, 7) }, "userSource")
+                    {
+                        HttpGetDeclaration = new(HarnessHttpGetDeclarationState.Saved, site.Template, site.Literal)
+                    });
+                    search.Add(new(member, site.MemberName, "int Service." + site.MemberName + "()", "", "", "App.cs"));
+                }
+            }
             if (addScopes)
             {
                 var alternate = HarnessIdentity.VariantId(Workspace, project, "net10.0", "Release");
@@ -317,11 +454,9 @@ public sealed class McpFlowTests
             }
             var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
                 HarnessGraphContract.IdentityVersion, workspace, "mcp-fixture", 1, HarnessCoverage.Partial,
-                variants,
-                [new(workspace, HarnessNodeKind.Workspace, "Workspace", null, null), new(project, HarnessNodeKind.Project, "App", workspace, null), new(Symbol, HarnessNodeKind.Type, "Service", project, null)],
-                occurrences, [], [], null);
+                variants, nodes, occurrences, edges, [], null);
             using var writer = IndexWriter.Open(Root, IndexPath, Workspace, isTrusted: true);
-            writer.Commit(IndexStage.Create(new IndexSnapshot(graph, [new("App.cs", "App.cs", "source", SourceHash, Encoding.UTF8.GetByteCount(code), code.Length)], [], [], [new(Symbol, "Service", "Service", "", "", "App.cs")])));
+            writer.Commit(IndexStage.Create(new IndexSnapshot(graph, [new("App.cs", "App.cs", "source", SourceHash, Encoding.UTF8.GetByteCount(code), code.Length)], [], [], search)));
         }
         public void Dispose()
         {

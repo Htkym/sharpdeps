@@ -23,6 +23,8 @@ internal sealed class ExplorationSnapshot
     internal readonly Dictionary<string, HarnessNode[]> words;
     internal readonly Dictionary<string, HarnessNode[]> paths;
     internal readonly HashSet<string> savedPaths;
+    private Dictionary<string, IReadOnlyList<HarnessEdge>>? httpGetDeclarations;
+    private SemaphoreSlim? httpGetDeclarationsGate;
 
     internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token)
     {
@@ -74,6 +76,53 @@ internal sealed class ExplorationSnapshot
             savedPaths.Add(Path.GetFileName(file.RelativePath));
         }
         token.ThrowIfCancellationRequested();
+    }
+
+    internal IReadOnlyList<HarnessEdge> GetHttpGetDeclarations(string template, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        token.ThrowIfCancellationRequested();
+        var cached = Volatile.Read(ref httpGetDeclarations);
+        if (cached is null)
+        {
+            var gate = Volatile.Read(ref httpGetDeclarationsGate);
+            if (gate is null)
+            {
+                var created = new SemaphoreSlim(1, 1);
+                gate = Interlocked.CompareExchange(ref httpGetDeclarationsGate, created, null) ?? created;
+                if (!ReferenceEquals(gate, created)) created.Dispose();
+            }
+            gate.Wait(token);
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                cached = Volatile.Read(ref httpGetDeclarations);
+                if (cached is null)
+                {
+                    var grouped = Group(saved.Graph.Edges.Where(edge =>
+                    {
+                        // Rejected edges must also observe the request deadline.
+                        token.ThrowIfCancellationRequested();
+                        return edge.HttpGetDeclaration is { State: HarnessHttpGetDeclarationState.Saved, Template: not null }
+                            && edge.Kind == "attribute" && edge.Certainty == HarnessCertainty.Resolved
+                            && edge.Producer == "roslyn-declaration" && edge.SourceOccurrenceId is { } source
+                            && occurrences.ContainsKey(source);
+                    }), edge => edge.HttpGetDeclaration!.Template!, edge => edge.Id, token);
+                    var prepared = new Dictionary<string, IReadOnlyList<HarnessEdge>>(StringComparer.Ordinal);
+                    foreach (var (key, edges) in grouped)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        prepared.Add(key, Array.AsReadOnly(edges));
+                    }
+                    token.ThrowIfCancellationRequested();
+                    Volatile.Write(ref httpGetDeclarations, prepared);
+                    cached = prepared;
+                }
+            }
+            finally { gate.Release(); }
+        }
+        token.ThrowIfCancellationRequested();
+        return cached.TryGetValue(template, out var declarations) ? declarations : Array.Empty<HarnessEdge>();
     }
 
     private Dictionary<string, HarnessNode[]> SearchLookup(Func<ExplorationSearchMetadata, IEnumerable<string>> keys,

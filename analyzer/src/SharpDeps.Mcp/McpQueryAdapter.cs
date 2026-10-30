@@ -40,7 +40,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
 {
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024,"description":"Names, exact identities, or source paths to explore together."},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["unique","prefer-debug"],"default":"unique","description":"Optionally prefer the single saved Debug variant within one matching project; explicit scopes take precedence."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","minimum":10,"maximum":30000}},"required":["query"],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"Names, exact identities, or source paths by default; exact saved HttpGet declaration text in http-get-literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["unique","prefer-debug"],"default":"unique","description":"Optionally prefer the single saved Debug variant within one matching project; explicit scopes take precedence."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","minimum":10,"maximum":30000}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
@@ -106,8 +106,23 @@ public sealed class McpQueryAdapter(McpHostOptions host)
         var observeOwner = false;
         try
         {
+            var queryKind = ExploreQueryKind.Symbol;
+            if (properties.TryGetValue("queryKind", out var kind))
+            {
+                if (kind.ValueKind != JsonValueKind.String || kind.GetString() is not { } text) throw Invalid();
+                queryKind = ExploreRequestFactory.QueryKind(text);
+            }
             foreach (var (name, value) in properties)
             {
+                if (name == "queryKind") continue;
+                if (name == "query")
+                {
+                    if (value.ValueKind != JsonValueKind.String) throw Invalid();
+                    query = value.GetString();
+                    ExploreRequestFactory.QueryText(query, queryKind);
+                    if (queryKind == ExploreQueryKind.Symbol && query!.StartsWith("--", StringComparison.Ordinal)) throw Invalid();
+                    continue;
+                }
                 if (name == "ownerStatus")
                 {
                     if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw Invalid();
@@ -125,13 +140,12 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                     }
                     continue;
                 }
-                if (name is not ("query" or "projectId" or "variantId" or "pathPrefix" or "pathTo" or "freshness" or "format" or "scopePolicy")) throw Invalid();
+                if (name is not ("projectId" or "variantId" or "pathPrefix" or "pathTo" or "freshness" or "format" or "scopePolicy")) throw Invalid();
                 if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text
                     || string.IsNullOrWhiteSpace(text) || text.Any(char.IsControl) || text.StartsWith("--", StringComparison.Ordinal)) throw Invalid();
                 ExploreRequestFactory.Text(name, text);
                 switch (name)
                 {
-                    case "query": query = text; break;
                     case "projectId": project = text; break;
                     case "variantId": variant = text; break;
                     case "pathPrefix": pathPrefix = text; break;
@@ -145,9 +159,9 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                 ExploreRequestFactory.Freshness(freshness),
                 ExploreRequestFactory.Budget(maxMilliseconds: maxMilliseconds, maxChars: maxChars, maxBytes: maxBytes),
                 ExploreRequestFactory.Format(format, ExploreFormat.Agent), ExploreRequestFactory.ScopePolicy(scopePolicy), pathTo)
-                { ObserveOwner = observeOwner });
+                { ObserveOwner = observeOwner, QueryKind = queryKind });
         }
-        catch (CliFailure) { throw Invalid(); }
+        catch (Exception error) when (error is CliFailure or JsonException or InvalidOperationException) { throw Invalid(); }
     }
 
     private static void AddMutationArguments(CallToolRequestParams request, List<string> arguments)
