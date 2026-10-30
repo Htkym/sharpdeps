@@ -102,9 +102,37 @@ public static class HarnessGraphProjector
                 member.ProjectVariantId, group.SelectMany(m => m.HarnessDeclarations ?? m.Declarations).Distinct().ToArray());
         }
 
+        // A saved registration must retain both roles before external target creation mutates the graph.
+        var retainedRegistrations = new HashSet<CollectedEvidence>();
+        foreach (var group in evidence.Where(IsScopedRegistrationRole).GroupBy(entry =>
+            (entry.SourceVariantId, Owner: entry.CanonicalSourceMemberId ?? entry.Evidence.SourceMemberId ?? entry.Evidence.SourceEntityId,
+                entry.Evidence.SourceEntityId, entry.Evidence.DocumentId, entry.Evidence.SourceContentHash,
+                Start: entry.Evidence.PhysicalSpan?.Start, Length: entry.Evidence.PhysicalSpan?.Length)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pair = group.ToArray();
+            if (pair.Length != 2 || pair.Select(entry => entry.Evidence.Kind).Distinct(StringComparer.Ordinal).Count() != 2
+                || pair.Any(entry => entry.Evidence.Confidence != "resolved" || entry.Access is not null
+                    || entry.HarnessDeclarationOwners is not null || entry.Evidence.PhysicalSpan is null
+                    || string.IsNullOrEmpty(entry.Evidence.SourceContentHash)
+                    || entry.CanonicalTargetMemberId is not null || entry.Evidence.TargetMemberId is not null)
+                || !symbols.TryGetValue(group.Key.Owner, out var registrationOwner)
+                || !variants.TryGetValue(group.Key.SourceVariantId, out var registrationVariant)
+                || registrationOwner.VariantId != registrationVariant.Id
+                || !documents.TryGetValue(group.Key.DocumentId, out var registrationDocument)
+                || registrationDocument.ContentHash != group.Key.SourceContentHash
+                || pair.Any(entry => !RegistrationTargetAvailable(entry)))
+            {
+                Count("roslyn.incompleteDiRegistration", 1);
+                continue;
+            }
+            foreach (var entry in pair) retainedRegistrations.Add(entry);
+        }
+
         foreach (var entry in evidence.SelectMany(ExpandDeclarationOwners))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (IsScopedRegistrationRole(entry) && !retainedRegistrations.Contains(entry)) continue;
             var record = entry.Evidence;
             var sourceKey = entry.CanonicalSourceMemberId ?? record.SourceMemberId ?? record.SourceEntityId;
             if (!symbols.TryGetValue(sourceKey, out var source))
@@ -168,6 +196,10 @@ public static class HarnessGraphProjector
 
         HarnessProjectVariant ProjectFor(string key) => projectByKey.TryGetValue(key, out var p) ? p
             : throw new ArgumentException("Every indexed declaration needs an explicit project variant.", nameof(projects));
+        bool RegistrationTargetAvailable(CollectedEvidence entry)
+            => symbols.ContainsKey(entry.Evidence.TargetEntityId)
+                || entry.TargetIsExternal && entry.TargetSymbol is { Kind: "type", LegacyMemberId: null } target
+                    && target.LegacyTypeId == entry.Evidence.TargetEntityId;
         void Count(string code, int count)
         {
             if (count > 0) diagnostics[code] = checked(diagnostics.GetValueOrDefault(code) + count);
@@ -215,6 +247,10 @@ public static class HarnessGraphProjector
             return occurrence;
         }
     }
+
+    private static bool IsScopedRegistrationRole(CollectedEvidence entry)
+        => entry.Producer == "roslyn-di-registration"
+            && entry.Evidence.Kind is "registers_scoped_service" or "registers_scoped_implementation";
 
     private static IEnumerable<CollectedEvidence> ExpandDeclarationOwners(CollectedEvidence entry)
     {

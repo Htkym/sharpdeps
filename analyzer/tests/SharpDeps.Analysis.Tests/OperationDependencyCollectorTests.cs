@@ -36,7 +36,8 @@ public sealed class OperationDependencyCollectorTests : IDisposable
         SymbolIndex Index,
         IReadOnlyList<CollectedEvidence> Evidence,
         OperationCollectionStats Stats,
-        IReadOnlyList<CollectedEvidence>? HarnessEvidence = null)
+        IReadOnlyList<CollectedEvidence>? HarnessEvidence = null,
+        IReadOnlyDictionary<string, string>? ExternalTypes = null)
     {
         public IndexedType Type(string name)
             => Index.Types.First(type => type.Name == name);
@@ -61,7 +62,7 @@ public sealed class OperationDependencyCollectorTests : IDisposable
     private Collected CollectAllowingErrors(params (string Path, string Text)[] files)
         => CollectCore(allowErrors: true, files);
 
-    private Collected CollectCore(bool allowErrors, params (string Path, string Text)[] files)
+    private Collected CollectCore(bool allowErrors, (string Path, string Text)[] files, bool dependencyInjection = false)
     {
         var root = CreateTemporaryDirectory();
         var trees = new List<SyntaxTree>();
@@ -75,10 +76,17 @@ public sealed class OperationDependencyCollectorTests : IDisposable
 
         var hasTopLevelStatements = trees.Any(tree =>
             tree.GetRoot().ChildNodes().Any(node => node is Microsoft.CodeAnalysis.CSharp.Syntax.GlobalStatementSyntax));
+        var references = PlatformReferences();
+        if (dependencyInjection)
+        {
+            var assembly = typeof(Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions).Assembly.Location;
+            references = references.Where(reference => !string.Equals(reference.Display, assembly, StringComparison.OrdinalIgnoreCase))
+                .Append(MetadataReference.CreateFromFile(assembly)).ToArray();
+        }
         var compilation = CSharpCompilation.Create(
             "Sample",
             trees,
-            PlatformReferences(),
+            references,
             new CSharpCompilationOptions(
                 hasTopLevelStatements ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary));
 
@@ -101,9 +109,141 @@ public sealed class OperationDependencyCollectorTests : IDisposable
             }
         });
 
-        var collector = new OperationDependencyCollector(resolver, documents, index, ProfileHash);
+        var external = dependencyInjection ? new ExternalTypeRegistry() : null;
+        var collector = new OperationDependencyCollector(resolver, documents, index, ProfileHash, external);
         var result = collector.Collect([input]);
-        return new Collected(index, result.Evidence, result.Stats, result.HarnessEvidence);
+        return new Collected(index, result.Evidence, result.Stats, result.HarnessEvidence, external?.Entries);
+    }
+
+    [Fact]
+    public void KeepsRealAddScopedRolesTogetherInHarnessWithoutChangingLegacyCalls()
+    {
+        const string text = """
+            using Microsoft.Extensions.DependencyInjection;
+            namespace Sample;
+            public interface IService { }
+            public sealed class Service : IService { }
+            public sealed class Consumer
+            {
+                public void Register(IServiceCollection services)
+                {
+                    services.AddScoped<IService, Service>();
+                    ServiceCollectionServiceExtensions.AddScoped<System.IDisposable, System.IO.MemoryStream>(services);
+                }
+            }
+            """;
+        var collected = CollectCore(false, [("Registrations.cs", text)], dependencyInjection: true);
+        var harness = Assert.IsAssignableFrom<IReadOnlyList<CollectedEvidence>>(collected.HarnessEvidence);
+        var roles = harness.Except(collected.Evidence).ToArray();
+        Assert.Equal(4, roles.Length);
+        Assert.True(Assert.IsAssignableFrom<ICollection<CollectedEvidence>>(harness).IsReadOnly);
+        Assert.All(collected.Evidence, entry => Assert.Contains(entry, harness));
+        Assert.DoesNotContain(collected.Evidence, entry => entry.Producer == "roslyn-di-registration"
+            || entry.Evidence.Kind.StartsWith("registers_scoped_", StringComparison.Ordinal));
+        var calls = collected.From("Consumer", "calls").ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.All(calls, entry =>
+        {
+            var target = Assert.IsType<HarnessTargetSymbol>(entry.TargetSymbol);
+            Assert.Equal("AddScoped", target.Name);
+            Assert.Contains("Microsoft.Extensions.DependencyInjection.Abstractions,", target.AssemblyIdentity, StringComparison.Ordinal);
+            Assert.Contains("PublicKeyToken=adb9793829ddae60", target.AssemblyIdentity, StringComparison.Ordinal);
+        });
+        var register = Assert.Single(collected.Index.Members, member => member.Name == "Register");
+        var groups = roles.GroupBy(entry => entry.Evidence.PhysicalSpan).ToArray();
+        Assert.Equal(2, groups.Length);
+        foreach (var group in groups)
+        {
+            Assert.Equal(new[] { "registers_scoped_implementation", "registers_scoped_service" },
+                group.Select(entry => entry.Evidence.Kind).Order(StringComparer.Ordinal));
+            Assert.All(group, entry =>
+            {
+                Assert.Equal(register.Id, entry.CanonicalSourceMemberId);
+                Assert.Equal(register.Id, entry.Evidence.SourceMemberId);
+                Assert.Equal(collected.Type("Consumer").Id, entry.Evidence.SourceEntityId);
+                Assert.Equal("var_sample", entry.SourceVariantId);
+                Assert.Null(entry.CanonicalTargetMemberId);
+                Assert.Null(entry.Evidence.TargetMemberId);
+                Assert.Null(entry.Access);
+                Assert.Equal("roslyn-di-registration", entry.Producer);
+                Assert.Equal("resolved", entry.Evidence.Confidence);
+                Assert.Equal("userSource", entry.Evidence.Origin);
+                Assert.Equal(Assert.Single(collected.Index.Documents).ContentHash, entry.Evidence.SourceContentHash);
+                var span = entry.Evidence.PhysicalSpan!;
+                Assert.Contains("AddScoped<", text.Substring(span.Start, span.Length), StringComparison.Ordinal);
+            });
+            var service = Assert.Single(group, entry => entry.Evidence.Kind == "registers_scoped_service");
+            var implementation = Assert.Single(group, entry => entry.Evidence.Kind == "registers_scoped_implementation");
+            Assert.Equal(service.Evidence.DocumentId, implementation.Evidence.DocumentId);
+            Assert.Equal(service.Evidence.SourceContentHash, implementation.Evidence.SourceContentHash);
+        }
+        Assert.Equal(collected.Type("IService").Id, Assert.Single(roles,
+            entry => !entry.TargetIsExternal && entry.Evidence.Kind == "registers_scoped_service").Evidence.TargetEntityId);
+        Assert.Equal(collected.Type("Service").Id, Assert.Single(roles,
+            entry => !entry.TargetIsExternal && entry.Evidence.Kind == "registers_scoped_implementation").Evidence.TargetEntityId);
+        Assert.All(roles.Where(entry => !entry.TargetIsExternal), entry => Assert.Equal("var_sample", entry.TargetVariantId));
+        Assert.All(roles.Where(entry => entry.TargetIsExternal), entry =>
+        {
+            Assert.Null(entry.TargetVariantId);
+            Assert.Equal("type", Assert.IsType<HarnessTargetSymbol>(entry.TargetSymbol).Kind);
+        });
+        Assert.Equal(collected.Evidence.Where(entry => entry.TargetIsExternal).Select(entry => entry.Evidence.TargetTypeId!)
+            .Distinct().Order(StringComparer.Ordinal), collected.ExternalTypes!.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(0, collected.Stats.UnresolvedOperations);
+        Assert.Equal(0, collected.Stats.CandidateOnlySymbols);
+    }
+
+    [Fact]
+    public void OmitsScopedRolesForUnsupportedTypesOverloadsErrorsAndSameNamedSourceApi()
+    {
+        var unsupported = CollectCore(true, [("Unsupported.cs", """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IService { }
+            public sealed class Service : IService { }
+            public sealed class Unrelated { }
+            public sealed class Box<T> : IService { }
+            public sealed class Outer<T> { public sealed class Nested : IService { } }
+            public sealed class Consumer
+            {
+                public void Register(IServiceCollection services)
+                {
+                    services.AddScoped<IService>(_ => new Service());
+                    services.AddScoped(typeof(IService), typeof(Service));
+                    services.AddScoped<IService, Box<int>>();
+                    services.AddScoped<Box<int>, Box<int>>();
+                    services.AddScoped<IService, Outer<int>.Nested>();
+                    services.AddScoped<IService, Unrelated>();
+                    services.AddScoped<IService, Missing>();
+                }
+            }
+            """)], dependencyInjection: true);
+        Assert.DoesNotContain(unsupported.HarnessEvidence ?? unsupported.Evidence,
+            entry => entry.Producer == "roslyn-di-registration");
+        Assert.Contains(unsupported.Evidence, entry => entry.Evidence.Kind == "calls"
+            && entry.TargetSymbol?.Name == "AddScoped");
+
+        var sameName = CollectCore(false, [("SameName.cs", """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IService { }
+            public sealed class Service : IService { }
+            public sealed class Consumer
+            {
+                public void Register(IServiceCollection services)
+                    => ServiceCollectionServiceExtensions.AddScoped<IService, Service>(services);
+            }
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddScoped<TService, TImplementation>(this IServiceCollection services)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+            """)], dependencyInjection: true);
+        Assert.DoesNotContain(sameName.HarnessEvidence ?? sameName.Evidence,
+            entry => entry.Producer == "roslyn-di-registration");
+        Assert.Contains(sameName.Evidence, entry => entry.Evidence.Kind == "calls"
+            && entry.Evidence.TargetTypeId == sameName.Type("ServiceCollectionServiceExtensions").Id);
     }
 
     [Fact]

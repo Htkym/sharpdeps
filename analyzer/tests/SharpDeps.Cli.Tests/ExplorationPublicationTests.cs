@@ -15,6 +15,60 @@ public sealed class ExplorationPublicationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task ScopedRegistrationRolesSurvivePublicationWithoutBecomingCalls()
+    {
+        using var fixture = new Fixture();
+        var dependency = System.Security.SecurityElement.Escape(
+            typeof(Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions).Assembly.Location);
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
+            + "<ItemGroup><Reference Include=\"Microsoft.Extensions.DependencyInjection.Abstractions\"><HintPath>"
+            + dependency + "</HintPath></Reference></ItemGroup></Project>", Fixture.Utf8);
+        const string site = "services.AddScoped<IWork, Worker>()";
+        File.WriteAllText(fixture.SourcePath, """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IWork { }
+            public sealed class Worker : IWork { }
+            public sealed class Startup
+            {
+                public void Configure(IServiceCollection services) { services.AddScoped<IWork, Worker>(); } // 😀
+            }
+            """, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var roles = saved.Graph.Edges.Where(edge => edge.Producer == "roslyn-di-registration").ToArray();
+        Assert.Equal(2, roles.Length);
+        foreach (var edge in roles)
+        {
+            Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+            Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+            var file = Assert.Single(saved.Files, file => file.SourceId == edge.Evidence!.SourceId);
+            var bytes = File.ReadAllBytes(Path.Combine(fixture.Root, file.RelativePath));
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), edge.Evidence!.ContentHash);
+            var span = edge.Evidence.RawSpan!.Value;
+            Assert.Equal(site, Fixture.Utf8.GetString(bytes).Substring(span.Start, span.Length));
+            Assert.Equal(edge.VariantId, saved.Graph.SymbolOccurrences.Single(o => o.Id == edge.TargetOccurrenceId).VariantId);
+            var callers = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callers", QueryKind.Callers,
+                NodeId: edge.TargetNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));
+            Assert.DoesNotContain(callers.Envelope.Items, item => item.Edge?.Producer == "roslyn-di-registration");
+        }
+        foreach (var format in new[] { ExploreFormat.Audit, ExploreFormat.Agent })
+        {
+            var reply = fixture.Engine(reader).Execute(new(roles[0].SourceOccurrenceId!, Format: format, Budget: Budget));
+            Assert.True(reply.Succeeded);
+            Assert.Contains("registers_scoped_service", reply.Text);
+            Assert.Contains("registers_scoped_implementation", reply.Text);
+            Assert.All(reply.Units, unit => Assert.Contains(roles[0].SourceNodeId, unit.SymbolIds));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task DeclarationMemberFactsSurvivePublicationAndRemainSeparateFromCalls()
     {
         using var fixture = new Fixture();

@@ -234,6 +234,65 @@ public sealed class HarnessGraphProjectorTests : IDisposable
         Assert.DoesNotContain(missing.Edges, e => e.Kind == "implements_explicitly");
     }
 
+    [Fact]
+    public void ProjectsScopedRegistrationRolesAsCompleteSitesWithDefiningAndExternalVariants()
+    {
+        var sample = Collect("""
+            using Microsoft.Extensions.DependencyInjection;
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<Library.IService, Library.Implementation>();
+                    services.AddScoped<System.IDisposable, System.IO.MemoryStream>();
+                }
+            }
+            """, twoVariants: true, includeDi: true, referencedSource: """
+            namespace Library;
+            public interface IService { }
+            public sealed class Implementation : IService { }
+            """);
+        var graph = Project(sample);
+        var roles = graph.Edges.Where(edge => edge.Producer == "roslyn-di-registration").ToArray();
+        Assert.Equal(8, roles.Length);
+        foreach (var site in roles.GroupBy(edge => (edge.SourceOccurrenceId, edge.Evidence)))
+        {
+            Assert.Equal(new[] { "registers_scoped_implementation", "registers_scoped_service" },
+                site.Select(edge => edge.Kind).Order(StringComparer.Ordinal));
+            Assert.All(site, edge =>
+            {
+                Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+                Assert.NotNull(edge.Evidence!.RawSpan);
+                Assert.NotEmpty(edge.Evidence.ContentHash!);
+                Assert.Equal(edge.VariantId, graph.SymbolOccurrences.Single(o => o.Id == edge.SourceOccurrenceId).VariantId);
+                var target = graph.SymbolOccurrences.Single(o => o.Id == edge.TargetOccurrenceId);
+                var node = graph.Nodes.Single(n => n.Id == target.LogicalSymbolId);
+                if (node.Kind == HarnessNodeKind.ExternalSymbol) Assert.Equal(edge.VariantId, target.VariantId);
+                else Assert.Equal(graph.Variants.Single(v => v.ProjectId == sample.Projects.Single(p => p.Key == "library10").ProjectId).Id, target.VariantId);
+            });
+        }
+        var restored = HarnessGraphContract.Read(JsonSerializer.Serialize(graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        Assert.Equal(roles.Select(edge => edge.Id), restored.Edges.Where(edge => edge.Producer == "roslyn-di-registration").Select(edge => edge.Id));
+        Assert.Equal(roles.Select(edge => edge.Id), Project(sample, generation: 2).Edges.Where(edge => edge.Producer == "roslyn-di-registration").Select(edge => edge.Id));
+
+        var pair = sample.Evidence.Where(entry => entry.Producer == "roslyn-di-registration" && entry.TargetIsExternal)
+            .GroupBy(entry => (entry.SourceVariantId, entry.Evidence.PhysicalSpan)).First().ToArray();
+        Assert.Equal(2, pair.Length);
+        foreach (var incomplete in new[]
+        {
+            pair.Take(1).ToArray(),
+            pair.Select(entry => entry.Evidence.Kind == "registers_scoped_service" ? entry with
+            { TargetIsExternal = false, TargetSymbol = null, Evidence = entry.Evidence with { TargetEntityId = "missing-type" } } : entry).ToArray()
+        })
+        {
+            var missing = Project(sample with { Evidence = incomplete });
+            Assert.Empty(missing.Edges);
+            Assert.DoesNotContain(missing.Nodes, node => node.Kind == HarnessNodeKind.ExternalSymbol);
+            Assert.Equal(HarnessCoverage.Partial, missing.Coverage);
+            Assert.Contains(missing.Diagnostics!, diagnostic => diagnostic.Code == "roslyn.incompleteDiRegistration" && diagnostic.Count == 1);
+        }
+    }
+
     private sealed record Sample(SymbolIndex Index, IReadOnlyList<CollectedEvidence> Evidence,
         OperationCollectionStats Stats, IReadOnlyList<HarnessProjectVariant> Projects);
 
@@ -242,13 +301,15 @@ public sealed class HarnessGraphProjectorTests : IDisposable
             sample.Projects, sample.Index, sample.Evidence, sample.Stats);
 
     private Sample Collect(string text, bool twoVariants = false, bool includeDeclarations = false,
-        string? referencedSource = null)
+        string? referencedSource = null, bool includeDi = false)
     {
         Directory.CreateDirectory(_root);
         var path = Path.Combine(_root, "Sample.cs");
         File.WriteAllText(path, text);
         var tree = CSharpSyntaxTree.ParseText(text, path: path);
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
+            .Concat(includeDi ? new[] { typeof(Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions).Assembly.Location } : [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)).ToArray();
         CSharpCompilation? library = null;
         if (referencedSource is not null)

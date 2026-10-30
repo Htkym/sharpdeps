@@ -592,6 +592,72 @@ public sealed class ExplorationTests
         Assert.All(bounded.Units, saved => Assert.Equal(fixture.Sources[saved.Path].Substring(saved.Span.Start, saved.Span.Length), saved.Text));
     }
 
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void RegistrationRolePointersStayQualifiedWhenCounterpartsAreMissingOrOmitted(ExploreFormat format)
+    {
+        const string note = "declared role only; counterpart may be omitted; no runtime resolution";
+        using var fixture = new Fixture(huge: true, format: format);
+        var serviceType = fixture.Snapshot.Graph.Nodes.Single(node => node.Id == fixture.Suspect).ParentId!;
+        var service = SavedPathEdge(fixture, "registration-a-service", fixture.RunInt, serviceType) with
+        { Kind = "registers_scoped_service", Producer = "roslyn-di-registration" };
+        var implementation = service with
+        {
+            Id = "registration-b-implementation", Kind = "registers_scoped_implementation",
+            TargetNodeId = fixture.Pump, TargetOccurrenceId = fixture.Occurrence(fixture.Pump)
+        };
+        static string[] RoleLines(ExploreReply reply) => reply.Text.Split('\n')
+            .Where(line => line.Contains("-registers_scoped_", StringComparison.Ordinal)).ToArray();
+        Assert.DoesNotContain(note, fixture.Explore(fixture.Occurrence(fixture.RunInt)).Text);
+
+        foreach (var (edges, budget, shown) in new[]
+        {
+            (new[] { service }, Generous, 1),
+            (new[] { service, implementation }, Generous, 2),
+            (new[] { service, implementation }, Generous with { MaxEdges = 1 }, 1)
+        })
+        {
+            var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = edges } };
+            var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+            var request = fixture.Request(fixture.Occurrence(fixture.RunInt), budget);
+            var reply = engine.Execute(request);
+            Assert.True(reply.Succeeded);
+            Assert.Equal(shown, RoleLines(reply).Length);
+            Assert.All(RoleLines(reply), line => Assert.EndsWith(note, line.TrimEnd('\r'), StringComparison.Ordinal));
+            var unit = Assert.Single(reply.Units);
+            Assert.Equal(new[] { fixture.RunInt }, unit.SymbolIds);
+            Assert.Contains("😀", unit.Text);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+            if (format == ExploreFormat.Agent)
+                Assert.Contains("kind=Member callerSymbols=0 callerOccurrences=0 savedCallEdges=0", reply.Text);
+            if (budget.MaxEdges == 1) Assert.Contains("EDGE_LIMIT", reply.OmissionReasons);
+            AssertWireBudget(reply, budget);
+
+            var path = engine.Execute(request with { PathTo = fixture.Occurrence(serviceType) });
+            Assert.True(path.Succeeded);
+            var header = RetainedPathHeader(path);
+            Assert.DoesNotContain("status=found", header);
+            if (edges.Length == 1) Assert.Contains("status=no-witness", header);
+            Assert.DoesNotContain("Path hop ", path.Text);
+            Assert.Equal(new[] { fixture.RunInt }, Assert.Single(path.Units).SymbolIds);
+            AssertWireBudget(path, budget);
+
+            if (shown == 2)
+            {
+                var smallBudget = Generous with { MaxChars = 2048, MaxBytes = 8192 };
+                var small = engine.Execute(request with { Budget = smallBudget });
+                Assert.All(RoleLines(small), line => Assert.EndsWith(note, line.TrimEnd('\r'), StringComparison.Ordinal));
+                Assert.All(small.Units, saved =>
+                {
+                    Assert.Equal(new[] { fixture.RunInt }, saved.SymbolIds);
+                    Assert.Equal(fixture.Sources[saved.Path].Substring(saved.Span.Start, saved.Span.Length), saved.Text);
+                });
+                AssertWireBudget(small, smallBudget);
+            }
+        }
+    }
+
     [Fact]
     public void AgentTypeHubKeepsRelationlessMemberSelectorsWithoutReadingTheirSource()
     {

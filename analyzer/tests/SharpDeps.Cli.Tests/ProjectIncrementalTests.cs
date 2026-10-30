@@ -53,7 +53,7 @@ public sealed class ProjectIncrementalTests
         var plan = CliProjectReuse.Select(snapshot, proof, proof.StructureHash, newSelections, current, default);
         Assert.NotNull(plan);
         Assert.Equal(["A", "B", "C"], plan.Dirty.Order(StringComparer.Ordinal));
-        Assert.Null(CliProjectReuse.Select(snapshot, proof with { Version = "sharpdeps-cli-project-reuse/3" },
+        Assert.Null(CliProjectReuse.Select(snapshot, proof with { Version = "sharpdeps-cli-project-reuse/4" },
             proof.StructureHash, newSelections, current, default));
         Assert.Null(CliProjectReuse.Select(snapshot, proof, new string('e', 64), newSelections, current, default));
         var unowned = new Dictionary<string, IndexFile>(current) { ["unowned"] = File("unowned", 'a') };

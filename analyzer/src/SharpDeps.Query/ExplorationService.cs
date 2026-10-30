@@ -811,6 +811,10 @@ public sealed class ExplorationService
 
         private static bool BodyEdge(string kind) => kind is "calls" or "constructs" or "reads" or "writes" or "references_member";
 
+        private static string RegistrationRoleNote(string kind)
+            => kind is "registers_scoped_service" or "registers_scoped_implementation"
+                ? " declared role only; counterpart may be omitted; no runtime resolution" : "";
+
         public void PrepareAgentSummary()
         {
             var typeRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Type && root.Reason == "requested")
@@ -1236,7 +1240,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var source = evidence is null ? "none" : sourceAliases[evidence.SourceId];
-                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}");
+                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact symbol for more evidence.");
             foreach (var unit in units)
@@ -1339,7 +1343,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var at = evidence is null ? "unknown" : sourceAliases[evidence.SourceId] + ":" + VerifiedLine(evidence, units);
-                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}");
+                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact selector for more evidence.");
             foreach (var unit in units)
