@@ -235,6 +235,81 @@ public sealed class HarnessGraphProjectorTests : IDisposable
     }
 
     [Fact]
+    public void PreservesExtensionBindingWithoutChangingCallIdentityOrDefiningOccurrences()
+    {
+        var sample = Collect("""
+            using System.Collections.Generic;
+            using System.Linq;
+            using Library;
+            public class Service
+            {
+                public string Run(List<int> items) => items.Convert("saved");
+                public int[] Copy(IEnumerable<int> items) => items.ToArray();
+                public int[] InstanceCopy(List<int> items) => items.ToArray();
+            }
+            """, twoVariants: true, referencedSource: """
+            namespace Library;
+            public static class Extensions
+            {
+                public static R Convert<T, R>(this System.Collections.Generic.IEnumerable<T> items, R result) => result;
+            }
+            """);
+        var graph = Project(sample);
+        var bindings = graph.Edges.Where(edge => edge.ExtensionBinding is not null).ToArray();
+        Assert.Equal(4, bindings.Length);
+        var library = graph.Variants.Single(v => v.ProjectId == sample.Projects.Single(p => p.Key == "library10").ProjectId);
+        foreach (var edge in bindings)
+        {
+            Assert.Equal("calls", edge.Kind);
+            Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+            var binding = Assert.IsType<HarnessExtensionBinding>(edge.ExtensionBinding);
+            Assert.Equal(HarnessExtensionBindingState.Saved, binding.State);
+            Assert.Contains("IEnumerable<int>", binding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+            var target = graph.Nodes.Single(n => n.Id == edge.TargetNodeId);
+            var occurrence = graph.SymbolOccurrences.Single(o => o.Id == edge.TargetOccurrenceId);
+            if (target.Kind == HarnessNodeKind.ExternalSymbol)
+            {
+                Assert.Equal(edge.VariantId, occurrence.VariantId);
+                Assert.Contains("IEnumerable<int>", binding.ReceiverTypeDisplay!, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("List<int>", binding.ReceiverTypeDisplay!, StringComparison.Ordinal);
+                Assert.Equal(library.Id, occurrence.VariantId);
+                Assert.Contains("Convert<int, string>", binding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+            }
+        }
+        var instanceOwner = graph.Nodes.Single(node => node.Kind == HarnessNodeKind.Member && node.Name == "InstanceCopy");
+        var instanceCalls = graph.Edges.Where(edge => edge.SourceNodeId == instanceOwner.Id && edge.Kind == "calls").ToArray();
+        Assert.Equal(2, instanceCalls.Length);
+        Assert.All(instanceCalls, edge =>
+        {
+            Assert.Null(edge.ExtensionBinding);
+            var target = graph.Nodes.Single(node => node.Id == edge.TargetNodeId);
+            Assert.Equal("ToArray", target.Name);
+            Assert.Contains("List", graph.Nodes.Single(node => node.Id == target.ParentId).Name, StringComparison.Ordinal);
+        });
+        var plain = Project(sample with { Evidence = sample.Evidence.Select(entry => entry with { ExtensionBinding = null }).ToArray() });
+        Assert.Equal(plain.Edges, graph.Edges.Select(edge => edge with { ExtensionBinding = null }));
+        Assert.Equal(plain.Nodes, graph.Nodes);
+        var restored = HarnessGraphContract.Read(JsonSerializer.Serialize(graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        Assert.Equal(graph.Edges, restored.Edges);
+        Assert.Equal(graph.Edges, Project(sample, generation: 2).Edges);
+
+        var entry = sample.Evidence.First(value => value.ExtensionBinding is not null);
+        var conflict = entry with { ExtensionBinding = entry.ExtensionBinding! with { ReceiverTypeDisplay = "different saved label" } };
+        var conflicted = Project(sample with { Evidence = sample.Evidence.Append(conflict).ToArray() });
+        var omitted = Assert.Single(conflicted.Edges, edge => edge.ExtensionBinding?.State == HarnessExtensionBindingState.Omitted);
+        Assert.Equal("semantic-unavailable", omitted.ExtensionBinding!.OmissionReason);
+        Assert.Equal(graph.Coverage, conflicted.Coverage);
+
+        var unavailable = Project(sample with { Evidence = sample.Evidence.Select(value => value with
+        { Evidence = value.Evidence with { SourceContentHash = null } }).ToArray() });
+        Assert.DoesNotContain(unavailable.Edges, edge => edge.ExtensionBinding is not null);
+        Assert.Equal(graph.Edges.Count, unavailable.Edges.Count);
+    }
+
+    [Fact]
     public void ProjectsScopedRegistrationRolesAsCompleteSitesWithDefiningAndExternalVariants()
     {
         var sample = Collect("""

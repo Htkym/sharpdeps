@@ -815,6 +815,12 @@ public sealed class ExplorationService
             => kind is "registers_scoped_service" or "registers_scoped_implementation"
                 ? " declared role only; counterpart may be omitted; no runtime resolution" : "";
 
+        private static string ExtensionBindingNote(HarnessExtensionBinding? binding)
+            => binding is null ? "" : (binding.State == HarnessExtensionBindingState.Saved
+                ? $" extension-binding=Saved receiver-type={JsonSerializer.Serialize(binding.ReceiverTypeDisplay)} constructed-method={JsonSerializer.Serialize(binding.ConstructedMethodDisplay)}"
+                : $" extension-binding=Omitted reason={binding.OmissionReason}")
+                + "; compile-time labels only; not runtime dispatch or type identities";
+
         public void PrepareAgentSummary()
         {
             var typeRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Type && root.Reason == "requested")
@@ -1240,7 +1246,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var source = evidence is null ? "none" : sourceAliases[evidence.SourceId];
-                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}");
+                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact symbol for more evidence.");
             foreach (var unit in units)
@@ -1343,7 +1349,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var at = evidence is null ? "unknown" : sourceAliases[evidence.SourceId] + ":" + VerifiedLine(evidence, units);
-                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}");
+                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact selector for more evidence.");
             foreach (var unit in units)

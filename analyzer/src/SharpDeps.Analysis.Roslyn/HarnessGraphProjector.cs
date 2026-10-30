@@ -175,19 +175,30 @@ public static class HarnessGraphProjector
                     record.DocumentId, record.SourceContentHash, location.RawSpan, entry.Producer ?? "roslyn");
                 var edge = new HarnessEdge(id, source.LogicalSymbolId, target.LogicalSymbolId,
                     source.Id, target.Id, source.VariantId, kind, certainty,
-                    entry.Producer ?? "roslyn", location, record.Origin);
+                    entry.Producer ?? "roslyn", location, record.Origin,
+                    kind == "calls" && certainty == HarnessCertainty.Resolved && entry.Producer == "roslyn-operation"
+                        && location.RawSpan is not null && !string.IsNullOrEmpty(location.ContentHash)
+                        ? entry.ExtensionBinding : null);
                 // Duplicate evidence keeps the least certain classification.
-                if (edges.TryGetValue(id, out var previous) && (int)previous.Certainty > (int)edge.Certainty) edge = previous;
+                if (edges.TryGetValue(id, out var previous))
+                {
+                    var conflictingBinding = previous.ExtensionBinding != edge.ExtensionBinding;
+                    if ((int)previous.Certainty > (int)edge.Certainty) edge = previous;
+                    if (edge.Certainty != HarnessCertainty.Resolved) edge = edge with { ExtensionBinding = null };
+                    else if (conflictingBinding) edge = edge with
+                    { ExtensionBinding = new(HarnessExtensionBindingState.Omitted, OmissionReason: "semantic-unavailable") };
+                }
                 edges[id] = edge;
             }
         }
         if (coverage == HarnessCoverage.CompleteWithinScope && diagnostics.Count > 0) coverage = HarnessCoverage.Partial;
+        var bindingDisplayChars = 0;
         var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
             HarnessGraphContract.IdentityVersion, workspaceId, snapshotId, generation, coverage,
             Freeze(variants.Values.OrderBy(v => v.Id, StringComparer.Ordinal)),
             Freeze(nodes.Values.OrderBy(n => n.Id, StringComparer.Ordinal)),
             Freeze(occurrences.Values.OrderBy(o => o.Id, StringComparer.Ordinal)),
-            Freeze(edges.Values.OrderBy(e => e.Id, StringComparer.Ordinal)),
+            Freeze(edges.Values.OrderBy(e => e.Id, StringComparer.Ordinal).Select(BoundExtensionDisplay)),
             Freeze(legacy.OrderBy(l => l.LegacyId, StringComparer.Ordinal).ThenBy(l => l.OccurrenceId, StringComparer.Ordinal)), null,
             Freeze(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal).Select(d => new HarnessGraphDiagnostic(d.Key, d.Value))));
         HarnessGraphContract.ValidateHeader(graph);
@@ -196,6 +207,16 @@ public static class HarnessGraphProjector
 
         HarnessProjectVariant ProjectFor(string key) => projectByKey.TryGetValue(key, out var p) ? p
             : throw new ArgumentException("Every indexed declaration needs an explicit project variant.", nameof(projects));
+        HarnessEdge BoundExtensionDisplay(HarnessEdge edge)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (edge.ExtensionBinding is not { State: HarnessExtensionBindingState.Saved } binding) return edge;
+            var length = (long)(binding.ReceiverTypeDisplay?.Length ?? 0) + (binding.ConstructedMethodDisplay?.Length ?? 0);
+            if (length > HarnessExtensionBinding.MaximumSnapshotDisplayUtf16 - bindingDisplayChars)
+                return edge with { ExtensionBinding = new(HarnessExtensionBindingState.Omitted, OmissionReason: "metadata-budget") };
+            bindingDisplayChars += (int)length;
+            return edge;
+        }
         bool RegistrationTargetAvailable(CollectedEvidence entry)
             => symbols.ContainsKey(entry.Evidence.TargetEntityId)
                 || entry.TargetIsExternal && entry.TargetSymbol is { Kind: "type", LegacyMemberId: null } target

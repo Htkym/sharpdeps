@@ -12,6 +12,76 @@ using Xunit;
 public sealed class IndexStoreTests
 {
     [Fact]
+    public void ExtensionBindingMetadataRoundTripsThroughSqliteWithoutRequiringItOnLegacyCalls()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        var saved = new HarnessExtensionBinding(HarnessExtensionBindingState.Saved,
+            "global::Demo.Receivér", "global::Demo.Extensions.Project<global::System.String>(global::Demo.Receivér)");
+        var omitted = new HarnessExtensionBinding(HarnessExtensionBindingState.Omitted, OmissionReason: "metadata-budget");
+        var call = ExtensionCall(fixture, snapshot, saved);
+        snapshot = snapshot with { Graph = snapshot.Graph with { Edges =
+        [
+            call with { Id = "extension-saved" },
+            call with { Id = "extension-omitted", ExtensionBinding = omitted },
+            call with { Id = "legacy-call", ExtensionBinding = null }
+        ] } };
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var edges = reader.Snapshot().Graph.Edges.ToDictionary(edge => edge.Id, StringComparer.Ordinal);
+        Assert.Equal(saved, edges["extension-saved"].ExtensionBinding);
+        Assert.Equal(omitted, edges["extension-omitted"].ExtensionBinding);
+        Assert.Null(edges["legacy-call"].ExtensionBinding);
+        Assert.All(edges.Values, edge =>
+        {
+            Assert.Equal(call.SourceOccurrenceId, edge.SourceOccurrenceId);
+            Assert.Equal(call.TargetOccurrenceId, edge.TargetOccurrenceId);
+            Assert.Equal(call.Evidence, edge.Evidence);
+        });
+    }
+
+    [Fact]
+    public void StagingRejectsPartialUnsafeOrUnboundExtensionBindingMetadata()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        var saved = new HarnessExtensionBinding(HarnessExtensionBindingState.Saved, "Receiver", "Extensions.Project<Argument>(Receiver)");
+        var call = ExtensionCall(fixture, snapshot, saved);
+        var invalidBindings = new[]
+        {
+            saved with { ReceiverTypeDisplay = null },
+            saved with { ConstructedMethodDisplay = null },
+            saved with { OmissionReason = "metadata-budget" },
+            saved with { ReceiverTypeDisplay = new string('x', HarnessExtensionBinding.MaximumReceiverDisplayUtf16 + 1) },
+            saved with { ConstructedMethodDisplay = new string('x', HarnessExtensionBinding.MaximumMethodDisplayUtf16 + 1) },
+            saved with { ReceiverTypeDisplay = "Receiver\nforged-output" },
+            saved with { ConstructedMethodDisplay = "Method\0forged-output" },
+            saved with { ReceiverTypeDisplay = "\uD800" },
+            saved with { State = (HarnessExtensionBindingState)123 },
+            new(HarnessExtensionBindingState.Omitted, ReceiverTypeDisplay: "partial", OmissionReason: "unsupported-type"),
+            new(HarnessExtensionBindingState.Omitted),
+            new(HarnessExtensionBindingState.Omitted, OmissionReason: "unknown-reason")
+        };
+        foreach (var binding in invalidBindings)
+            Reject(call with { ExtensionBinding = binding });
+        foreach (var edge in new[]
+        {
+            call with { Kind = "references_member" },
+            call with { Certainty = HarnessCertainty.Candidate },
+            call with { Producer = "other-producer" },
+            call with { SourceOccurrenceId = null },
+            call with { TargetOccurrenceId = null },
+            call with { Evidence = null },
+            call with { Evidence = call.Evidence! with { RawSpan = null } },
+            call with { Evidence = call.Evidence! with { ContentHash = null } }
+        }) Reject(edge);
+        Assert.False(File.Exists(fixture.IndexPath));
+
+        void Reject(HarnessEdge edge) => AssertCode("INDEX_INVALID_SNAPSHOT",
+            () => IndexStage.Create(snapshot with { Graph = snapshot.Graph with { Edges = [edge] } }));
+    }
+
+    [Fact]
     public void HeaderProjectionStillRejectsIncompleteStoredGraphCollections()
     {
         using var fixture = new StoreFixture();
@@ -401,6 +471,14 @@ public sealed class IndexStoreTests
             }
         }
     }
+
+    private static HarnessEdge ExtensionCall(StoreFixture fixture, IndexSnapshot snapshot, HarnessExtensionBinding binding)
+        => snapshot.Graph.Edges[0] with
+        {
+            SourceNodeId = fixture.MemberId, SourceOccurrenceId = snapshot.Graph.SymbolOccurrences[0].Id,
+            Kind = "calls", Certainty = HarnessCertainty.Resolved, Producer = "roslyn-operation",
+            Evidence = fixture.CodeLocation, Origin = "userSource", ExtensionBinding = binding
+        };
 
     private static void AssertCode(string expected, Action action)
         => Assert.Equal(expected, Assert.Throws<IndexStoreException>(action).Code);

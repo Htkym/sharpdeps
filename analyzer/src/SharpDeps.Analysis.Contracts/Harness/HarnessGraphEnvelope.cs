@@ -44,6 +44,18 @@ public enum HarnessNodeKind
 }
 public enum HarnessCertainty { Resolved, Candidate, Unresolved }
 public enum HarnessCoverage { CompleteWithinScope, Partial, Failed }
+public enum HarnessExtensionBindingState { Saved, Omitted }
+
+/// <summary>Compile-time display labels at one invocation, not type identities or runtime dispatch.</summary>
+public sealed record HarnessExtensionBinding(HarnessExtensionBindingState State,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReceiverTypeDisplay = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ConstructedMethodDisplay = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OmissionReason = null)
+{
+    public const int MaximumReceiverDisplayUtf16 = 1024;
+    public const int MaximumMethodDisplayUtf16 = 3072;
+    public const int MaximumSnapshotDisplayUtf16 = 16 * 1024 * 1024;
+}
 
 /// <summary>Original UTF-16, zero-based half-open range; null range means unknown.</summary>
 public readonly record struct HarnessRawSpan
@@ -71,7 +83,8 @@ public sealed record HarnessSymbolOccurrence(string Id, string LogicalSymbolId, 
 public sealed record HarnessEdge(string Id, string SourceNodeId, string TargetNodeId,
     string? SourceOccurrenceId, string? TargetOccurrenceId, string? VariantId,
     string Kind, HarnessCertainty Certainty, string Producer, HarnessLocation? Evidence,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Origin = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Origin = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HarnessExtensionBinding? ExtensionBinding = null);
 public sealed record HarnessLegacyReference(int SchemaVersion, string LegacyId, string NodeId, string? OccurrenceId);
 public sealed record HarnessMarkdownIdentity(string ComponentVersion, string CanonicalSourceHash,
     string ParserVersion, string ContractVersion, string ProfileId, string OptionsHash);

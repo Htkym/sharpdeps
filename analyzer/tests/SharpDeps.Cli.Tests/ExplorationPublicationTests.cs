@@ -15,6 +15,52 @@ public sealed class ExplorationPublicationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task ExtensionBindingSurvivesPublicationAsMetadataOnTheSameCall()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(fixture.SourcePath, """
+            using System.Collections.Generic;
+            public static class Extensions
+            {
+                public static R Convert<T, R>(this IEnumerable<T> items, R result) => result;
+            }
+            public class Service
+            {
+                public string Run(List<int> items) => items.Convert("saved"); // 😀
+            }
+            """, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var edge = Assert.Single(saved.Graph.Edges, edge => edge.ExtensionBinding is not null);
+        Assert.Equal("calls", edge.Kind);
+        Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+        Assert.Equal(HarnessExtensionBindingState.Saved, edge.ExtensionBinding!.State);
+        Assert.Contains("List<int>", edge.ExtensionBinding.ReceiverTypeDisplay!, StringComparison.Ordinal);
+        Assert.Contains("Convert<int, string>", edge.ExtensionBinding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+        var source = saved.Files.Single(file => file.SourceId == edge.Evidence!.SourceId);
+        var bytes = File.ReadAllBytes(Path.Combine(fixture.Root, source.RelativePath));
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), edge.Evidence!.ContentHash);
+        Assert.Equal("items.Convert(\"saved\")", Fixture.Utf8.GetString(bytes).Substring(edge.Evidence.RawSpan!.Value.Start, edge.Evidence.RawSpan.Value.Length));
+        foreach (var format in new[] { ExploreFormat.Audit, ExploreFormat.Agent })
+        {
+            var reply = fixture.Engine(reader).Execute(new(edge.SourceOccurrenceId!, Format: format, Budget: Budget));
+            Assert.True(reply.Succeeded);
+            Assert.Contains("extension-binding=Saved", reply.Text);
+            Assert.Contains("compile-time labels only", reply.Text);
+            Assert.Contains("List<int>", reply.Text.Replace("\\u003C", "<", StringComparison.Ordinal).Replace("\\u003E", ">", StringComparison.Ordinal));
+        }
+        var callees = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callees", QueryKind.Callees,
+            NodeId: edge.SourceNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));
+        Assert.Contains(callees.Envelope.Items, item => item.Edge?.Id == edge.Id && item.Edge.ExtensionBinding == edge.ExtensionBinding);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task ScopedRegistrationRolesSurvivePublicationWithoutBecomingCalls()
     {
         using var fixture = new Fixture();

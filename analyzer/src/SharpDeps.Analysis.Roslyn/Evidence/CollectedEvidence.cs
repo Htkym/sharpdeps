@@ -9,6 +9,7 @@ namespace SharpDeps.Analysis.Roslyn.Evidence;
 using Microsoft.CodeAnalysis;
 using SharpDeps.Analysis.Core.Graph;
 using SharpDeps.Analysis.Contracts;
+using SharpDeps.Analysis.Contracts.Harness;
 
 public sealed record CollectedEvidence(
     EvidenceRecord Evidence,
@@ -22,7 +23,8 @@ public sealed record CollectedEvidence(
     string? Access = null,
     HarnessTargetSymbol? TargetSymbol = null,
     string? Producer = null,
-    IReadOnlyList<HarnessDeclarationOwner>? HarnessDeclarationOwners = null)
+    IReadOnlyList<HarnessDeclarationOwner>? HarnessDeclarationOwners = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] HarnessExtensionBinding? ExtensionBinding = null)
 {
     /// <summary>A type that depends on itself must not be reported as a cycle.</summary>
     public bool IsSelfReference => Evidence.SourceEntityId == Evidence.TargetEntityId;

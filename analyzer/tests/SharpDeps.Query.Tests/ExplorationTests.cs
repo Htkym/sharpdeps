@@ -658,6 +658,74 @@ public sealed class ExplorationTests
         }
     }
 
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void ExtensionBindingLabelsStayWholeWithoutChangingCanonicalCallsOrSource(ExploreFormat format)
+    {
+        const string note = "compile-time labels only; not runtime dispatch or type identities";
+        using var fixture = new Fixture(format: format);
+        var edge = SavedPathEdge(fixture, "extension-binding-call", fixture.RunInt, fixture.Helper) with
+        { Producer = "roslyn-operation" };
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt)) with { PathTo = fixture.Occurrence(fixture.Helper) };
+        ExploreReply Execute(HarnessExtensionBinding? binding, QueryBudget? budget = null)
+        {
+            var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+                { Edges = [edge with { ExtensionBinding = binding }] } };
+            return new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
+                .Execute(request with { Budget = budget ?? Generous });
+        }
+        static string[] BindingLines(ExploreReply reply) => reply.Text.Split('\n')
+            .Where(line => line.Contains("extension-binding=", StringComparison.Ordinal)).ToArray();
+
+        var original = Execute(null);
+        Assert.True(original.Succeeded);
+        Assert.Empty(BindingLines(original));
+        var originalUnits = JsonSerializer.Serialize(original.Units, QueryJson.Options);
+        // Saved display fixtures do not establish the collector's semantic binding.
+        var receiver = "global::Demo." + new string('受', 600) + "<global::Demo.項目>";
+        var method = $"global::Demo.結果 global::Demo.拡張.変換<{receiver}>({receiver} source, global::System.Int32 value)";
+        var binding = new HarnessExtensionBinding(HarnessExtensionBindingState.Saved, receiver, method);
+        var saved = Execute(binding);
+        Assert.True(saved.Succeeded);
+        var line = Assert.Single(BindingLines(saved));
+        Assert.Contains("extension-binding=Saved", line);
+        Assert.Contains("receiver-type=" + JsonSerializer.Serialize(receiver), line);
+        Assert.Contains("constructed-method=" + JsonSerializer.Serialize(method), line);
+        Assert.EndsWith(note, line.TrimEnd('\r'), StringComparison.Ordinal);
+        Assert.DoesNotContain("display shortened", line);
+        Assert.Equal(originalUnits, JsonSerializer.Serialize(saved.Units, QueryJson.Options));
+        Assert.Equal(RetainedPathHeader(original), RetainedPathHeader(saved));
+        Assert.Contains("status=found", RetainedPathHeader(saved));
+        Assert.All(saved.Text.Split('\n').Where(value => value.StartsWith("Path hop ", StringComparison.Ordinal)),
+            value => Assert.DoesNotContain("extension-binding=", value));
+        AssertWireBudget(saved, Generous);
+
+        var omitted = Execute(new(HarnessExtensionBindingState.Omitted, OmissionReason: "unsupported-type"));
+        Assert.True(omitted.Succeeded);
+        line = Assert.Single(BindingLines(omitted));
+        Assert.Contains("extension-binding=Omitted reason=unsupported-type", line);
+        Assert.DoesNotContain("receiver-type=", line);
+        Assert.DoesNotContain("constructed-method=", line);
+        Assert.EndsWith(note, line.TrimEnd('\r'), StringComparison.Ordinal);
+        Assert.Equal(originalUnits, JsonSerializer.Serialize(omitted.Units, QueryJson.Options));
+        Assert.Equal(RetainedPathHeader(original), RetainedPathHeader(omitted));
+        AssertWireBudget(omitted, Generous);
+
+        var budget = Generous with { MaxChars = Math.Max(2048, original.WireChars), MaxBytes = Math.Max(8192, original.WireBytes) };
+        var bounded = Execute(binding, budget);
+        Assert.True(bounded.Succeeded);
+        Assert.Contains(bounded.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+        Assert.All(BindingLines(bounded), value =>
+        {
+            Assert.Contains("receiver-type=" + JsonSerializer.Serialize(receiver), value);
+            Assert.Contains("constructed-method=" + JsonSerializer.Serialize(method), value);
+            Assert.EndsWith(note, value.TrimEnd('\r'), StringComparison.Ordinal);
+        });
+        AssertWireBudget(bounded, budget);
+        Assert.Equal(original.Text, Execute(null).Text);
+    }
+
     [Fact]
     public void AgentTypeHubKeepsRelationlessMemberSelectorsWithoutReadingTheirSource()
     {

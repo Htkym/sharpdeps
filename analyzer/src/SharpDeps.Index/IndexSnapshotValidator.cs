@@ -208,6 +208,7 @@ public static class IndexSnapshotValidator
                     "Project proof must own every captured compiler input; shared inputs may have several owners.");
             }
         }
+        long extensionDisplayLength = 0;
         foreach (var edge in graph.Edges)
         {
             token.ThrowIfCancellationRequested();
@@ -233,6 +234,28 @@ public static class IndexSnapshotValidator
                     Require(edge.VariantId == target.VariantId, "Selected target occurrence belongs to another variant.");
             }
             Location(edge.Evidence);
+            if (edge.ExtensionBinding is { } binding)
+            {
+                Require(edge.Kind == "calls" && edge.Certainty == HarnessCertainty.Resolved
+                    && edge.Producer == "roslyn-operation" && edge.SourceOccurrenceId is not null
+                    && edge.TargetOccurrenceId is not null && edge.Evidence is { RawSpan: not null, ContentHash: not null },
+                    "Extension binding metadata needs an occurrence-bound resolved Roslyn call with saved evidence.");
+                Require(Enum.IsDefined(binding.State), "Unknown extension binding state.");
+                if (binding.State == HarnessExtensionBindingState.Saved)
+                {
+                    Require(binding.OmissionReason is null, "Saved extension binding metadata cannot have an omission reason.");
+                    Identifier(binding.ReceiverTypeDisplay!, "Extension receiver display", HarnessExtensionBinding.MaximumReceiverDisplayUtf16);
+                    Identifier(binding.ConstructedMethodDisplay!, "Extension method display", HarnessExtensionBinding.MaximumMethodDisplayUtf16);
+                    extensionDisplayLength = checked(extensionDisplayLength + binding.ReceiverTypeDisplay!.Length
+                        + binding.ConstructedMethodDisplay!.Length);
+                    Require(extensionDisplayLength <= HarnessExtensionBinding.MaximumSnapshotDisplayUtf16,
+                        "Extension binding displays exceed the snapshot text budget.");
+                }
+                else
+                    Require(binding.ReceiverTypeDisplay is null && binding.ConstructedMethodDisplay is null
+                        && binding.OmissionReason is "unsupported-type" or "metadata-budget" or "semantic-unavailable",
+                        "Omitted extension binding metadata needs only a supported omission reason.");
+            }
         }
         Count(graph.LegacyReferences, "Legacy references");
         var legacy = new HashSet<(int Schema, string Legacy, string Node, string? Occurrence)>();

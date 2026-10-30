@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Analysis.Roslyn.Evidence;
@@ -134,10 +135,16 @@ public sealed class OperationDependencyCollectorTests : IDisposable
             """;
         var collected = CollectCore(false, [("Registrations.cs", text)], dependencyInjection: true);
         var harness = Assert.IsAssignableFrom<IReadOnlyList<CollectedEvidence>>(collected.HarnessEvidence);
-        var roles = harness.Except(collected.Evidence).ToArray();
+        var roles = harness.Where(entry => entry.Producer == "roslyn-di-registration").ToArray();
         Assert.Equal(4, roles.Length);
+        Assert.Equal(collected.Evidence.Count + roles.Length, harness.Count);
         Assert.True(Assert.IsAssignableFrom<ICollection<CollectedEvidence>>(harness).IsReadOnly);
-        Assert.All(collected.Evidence, entry => Assert.Contains(entry, harness));
+        Assert.All(collected.Evidence, entry =>
+        {
+            Assert.Null(entry.ExtensionBinding);
+            Assert.Equal(entry, Assert.Single(harness, candidate => candidate.Evidence.Id == entry.Evidence.Id)
+                with { ExtensionBinding = null });
+        });
         Assert.DoesNotContain(collected.Evidence, entry => entry.Producer == "roslyn-di-registration"
             || entry.Evidence.Kind.StartsWith("registers_scoped_", StringComparison.Ordinal));
         var calls = collected.From("Consumer", "calls").ToArray();
@@ -189,6 +196,103 @@ public sealed class OperationDependencyCollectorTests : IDisposable
         });
         Assert.Equal(collected.Evidence.Where(entry => entry.TargetIsExternal).Select(entry => entry.Evidence.TargetTypeId!)
             .Distinct().Order(StringComparer.Ordinal), collected.ExternalTypes!.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(0, collected.Stats.UnresolvedOperations);
+        Assert.Equal(0, collected.Stats.CandidateOnlySymbols);
+    }
+
+    [Fact]
+    public void PreservesConstructedExtensionBindingOnlyInHarnessCallCopies()
+    {
+        var collected = Collect(("Extensions.cs", """
+            #nullable enable
+            using System.Collections.Generic;
+            namespace Sample;
+            public static class Extensions
+            {
+                public static TResult Map<TItem, TResult>(this IEnumerable<TItem> values, TResult fallback) => fallback;
+            }
+            public sealed class Consumer
+            {
+                public string Run(List<int> values) => values.Map("saved");
+                public string[] Array(int[] values) => values.Map(new string[] { "saved" });
+                public string Cast(List<int> values) => ((IEnumerable<int>)values).Map("saved");
+                public string Static(List<int> values) => Extensions.Map<int, string>(values, "saved");
+                public string? Conditional(List<int>? values) => values?.Map("saved");
+                public System.Func<string, string> Group(List<int> values) => values.Map<int, string>;
+            }
+            """));
+        var harness = Assert.IsAssignableFrom<IReadOnlyList<CollectedEvidence>>(collected.HarnessEvidence);
+        Assert.All(collected.Evidence, entry =>
+        {
+            Assert.Null(entry.ExtensionBinding);
+            Assert.Equal(entry, Assert.Single(harness, candidate => candidate.Evidence.Id == entry.Evidence.Id)
+                with { ExtensionBinding = null });
+        });
+        Assert.Equal(collected.Evidence.Count(entry => entry.Evidence.Kind == "calls"),
+            harness.Count(entry => entry.Evidence.Kind == "calls"));
+
+        HarnessExtensionBinding? BindingOf(string name)
+        {
+            var owner = Assert.Single(collected.Index.Members, member => member.Name == name);
+            return Assert.Single(harness, entry => entry.Evidence.Kind == "calls"
+                && entry.CanonicalSourceMemberId == owner.Id).ExtensionBinding;
+        }
+
+        var binding = Assert.IsType<HarnessExtensionBinding>(BindingOf("Run"));
+        Assert.Equal(HarnessExtensionBindingState.Saved, binding.State);
+        Assert.Null(binding.OmissionReason);
+        Assert.Contains("List<int>", binding.ReceiverTypeDisplay!, StringComparison.Ordinal);
+        Assert.Contains("Map<int, string>", binding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+        Assert.Contains("IEnumerable<int>", binding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+        Assert.Contains("this ", binding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+        var array = Assert.IsType<HarnessExtensionBinding>(BindingOf("Array"));
+        Assert.Equal(HarnessExtensionBindingState.Saved, array.State);
+        Assert.Equal("int[]", array.ReceiverTypeDisplay);
+        Assert.Contains("Map<int, string[]>", array.ConstructedMethodDisplay!, StringComparison.Ordinal);
+        var cast = Assert.IsType<HarnessExtensionBinding>(BindingOf("Cast"));
+        Assert.Equal(HarnessExtensionBindingState.Saved, cast.State);
+        Assert.Contains("IEnumerable<int>", cast.ReceiverTypeDisplay!, StringComparison.Ordinal);
+        Assert.DoesNotContain("List<", cast.ReceiverTypeDisplay!, StringComparison.Ordinal);
+        Assert.Null(BindingOf("Static"));
+        Assert.Null(BindingOf("Conditional"));
+        Assert.All(harness.Where(entry => entry.Evidence.Kind == "memberAccess"), entry => Assert.Null(entry.ExtensionBinding));
+        Assert.Equal(3, harness.Count(entry => entry.ExtensionBinding is not null));
+    }
+
+    [Fact]
+    public void OmitsWholeExtensionBindingForOpenTypesAndDisplayBudget()
+    {
+        var longName = "Receiver" + new string('X', HarnessExtensionBinding.MaximumReceiverDisplayUtf16);
+        var collected = Collect(("Extensions.cs", $$"""
+            namespace Sample;
+            public sealed class {{longName}} { }
+            public static class Extensions
+            {
+                public static T Keep<T>(this T value) => value;
+                public static string Read(this {{longName}} value) => "saved";
+            }
+            public sealed class Consumer
+            {
+                public T Open<T>(T value) => value.Keep();
+                public string Long({{longName}} value) => value.Read();
+            }
+            """));
+        var harness = Assert.IsAssignableFrom<IReadOnlyList<CollectedEvidence>>(collected.HarnessEvidence);
+        var calls = collected.From("Consumer", "calls").ToArray();
+        Assert.Equal(2, calls.Length);
+        foreach (var entry in calls)
+        {
+            Assert.Null(entry.ExtensionBinding);
+            var enriched = Assert.Single(harness, candidate => candidate.Evidence.Id == entry.Evidence.Id);
+            Assert.Equal(entry, enriched with { ExtensionBinding = null });
+            var binding = Assert.IsType<HarnessExtensionBinding>(enriched.ExtensionBinding);
+            Assert.Equal(HarnessExtensionBindingState.Omitted, binding.State);
+            Assert.Null(binding.ReceiverTypeDisplay);
+            Assert.Null(binding.ConstructedMethodDisplay);
+            var owner = Assert.Single(collected.Index.Members, member => member.Id == entry.CanonicalSourceMemberId);
+            Assert.Equal(owner.Name == "Open" ? "unsupported-type" : "metadata-budget", binding.OmissionReason);
+        }
+        Assert.Equal(collected.Evidence.Count, harness.Count);
         Assert.Equal(0, collected.Stats.UnresolvedOperations);
         Assert.Equal(0, collected.Stats.CandidateOnlySymbols);
     }

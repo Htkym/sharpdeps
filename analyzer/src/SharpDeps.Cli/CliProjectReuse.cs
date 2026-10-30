@@ -13,7 +13,7 @@ internal sealed record CliProjectSelection(string Key, string VariantId, string 
 /// <summary>Snapshot-neutral collector data, not compilations or executable/source buffers.</summary>
 internal static class CliProjectReuse
 {
-    internal const string Version = "sharpdeps-cli-project-reuse/5";
+    internal const string Version = "sharpdeps-cli-project-reuse/6";
     internal static bool IsExecutionDiagnostic(string code) => code is "cli.semanticVariantsLoaded"
         or "cli.projectCollectorsExtracted" or "cli.projectCollectorsReused"
         || code.StartsWith("cli.projectExtracted.", StringComparison.Ordinal)
