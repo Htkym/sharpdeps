@@ -173,6 +173,67 @@ public sealed class HarnessGraphProjectorTests : IDisposable
         Assert.Single(graph.Edges, e => e.SourceNodeId == run.Id && e.TargetNodeId == changed.Id && e.Kind == "writes");
     }
 
+    [Fact]
+    public void ProjectsMemberDeclarationFactsToDefiningAndExternalOccurrences()
+    {
+        var sample = Collect("""
+            public class Derived : Library.Base<string>, Library.IContract<string>
+            {
+                public override string Convert(string value) => value;
+                string Library.IContract<string>.Convert(string value) => value;
+                public override string ToString() => "saved";
+            }
+            """, twoVariants: true, includeDeclarations: true, referencedSource: """
+            namespace Library;
+            public class Base<T> { public virtual T Convert(T value) => value; }
+            public interface IContract<T> { T Convert(T value); }
+            """);
+        var graph = Project(sample);
+        var facts = graph.Edges.Where(e => e.Kind is "overrides" or "implements_explicitly").ToArray();
+        Assert.Equal(6, facts.Length);
+        Assert.Equal(HarnessCoverage.CompleteWithinScope, graph.Coverage);
+        var libraryVariant = Assert.Single(graph.Variants, v => v.ProjectId == HarnessIdentity.ProjectId(Workspace, "Library.csproj"));
+        Assert.All(facts, edge =>
+        {
+            var source = Assert.Single(graph.SymbolOccurrences, o => o.Id == edge.SourceOccurrenceId);
+            var target = Assert.Single(graph.SymbolOccurrences, o => o.Id == edge.TargetOccurrenceId);
+            Assert.Equal(HarnessNodeKind.Member, Assert.Single(graph.Nodes, n => n.Id == source.LogicalSymbolId).Kind);
+            Assert.Equal(edge.VariantId, source.VariantId);
+            var targetNode = Assert.Single(graph.Nodes, n => n.Id == target.LogicalSymbolId);
+            if (targetNode.Kind == HarnessNodeKind.ExternalSymbol)
+            {
+                Assert.Equal("ToString", targetNode.Name);
+                Assert.Equal(source.VariantId, target.VariantId);
+                Assert.Contains("System.Object.ToString", targetNode.Signature!, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal(HarnessNodeKind.Member, targetNode.Kind);
+                Assert.Equal(libraryVariant.Id, target.VariantId);
+                Assert.NotEqual(source.VariantId, target.VariantId);
+            }
+            Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+            Assert.Equal("roslyn-declaration", edge.Producer);
+            Assert.Equal("userSource", edge.Origin);
+            Assert.NotNull(edge.Evidence?.RawSpan);
+            Assert.NotEmpty(edge.Evidence!.ContentHash!);
+        });
+        Assert.DoesNotContain(graph.Edges, e => e.Kind is "calls" or "constructs");
+        Assert.Equal(facts.Select(e => e.Id), Project(sample, generation: 2).Edges
+            .Where(e => e.Kind is "overrides" or "implements_explicitly").Select(e => e.Id));
+        var restored = HarnessGraphContract.Read(JsonSerializer.Serialize(graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        Assert.Equal(facts.Select(e => e.Id), restored.Edges
+            .Where(e => e.Kind is "overrides" or "implements_explicitly").Select(e => e.Id));
+
+        var missing = Project(sample with
+        {
+            Index = sample.Index with { Members = sample.Index.Members.Where(m => m.ProjectVariantId != "library10").ToArray() }
+        });
+        Assert.Equal(HarnessCoverage.Partial, missing.Coverage);
+        Assert.Contains(missing.Diagnostics!, d => d.Code == "roslyn.missingTarget" && d.Count == 4);
+        Assert.DoesNotContain(missing.Edges, e => e.Kind == "implements_explicitly");
+    }
+
     private sealed record Sample(SymbolIndex Index, IReadOnlyList<CollectedEvidence> Evidence,
         OperationCollectionStats Stats, IReadOnlyList<HarnessProjectVariant> Projects);
 
@@ -180,34 +241,52 @@ public sealed class HarnessGraphProjectorTests : IDisposable
         => HarnessGraphProjector.Project(Workspace, "snapshot", generation, HarnessCoverage.CompleteWithinScope,
             sample.Projects, sample.Index, sample.Evidence, sample.Stats);
 
-    private Sample Collect(string text, bool twoVariants = false, bool includeDeclarations = false)
+    private Sample Collect(string text, bool twoVariants = false, bool includeDeclarations = false,
+        string? referencedSource = null)
     {
         Directory.CreateDirectory(_root);
         var path = Path.Combine(_root, "Sample.cs");
         File.WriteAllText(path, text);
         var tree = CSharpSyntaxTree.ParseText(text, path: path);
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-            .Select(p => MetadataReference.CreateFromFile(p));
-        var compilation = CSharpCompilation.Create("Sample", [tree], references,
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)).ToArray();
+        CSharpCompilation? library = null;
+        if (referencedSource is not null)
+        {
+            var libraryPath = Path.Combine(_root, "Library.cs");
+            File.WriteAllText(libraryPath, referencedSource);
+            library = CSharpCompilation.Create("Library", [CSharpSyntaxTree.ParseText(referencedSource, path: libraryPath)],
+                references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.DoesNotContain(library.GetDiagnostics(), d => d.Severity == DiagnosticSeverity.Error);
+        }
+        var compilation = CSharpCompilation.Create("Sample", [tree],
+            library is null ? references : references.Append(library.ToMetadataReference()),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
         Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(e => e.ToString())));
-        var inputs = twoVariants
+        var sampleInputs = twoVariants
             ? new[] { new SymbolIndexInput("sample10", "Sample", compilation), new SymbolIndexInput("sample9", "Sample", compilation) }
             : new[] { new SymbolIndexInput("sample10", "Sample", compilation) };
+        var inputs = library is null ? sampleInputs : sampleInputs.Append(new("library10", "Library", library)).ToArray();
         var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(_root), _root);
         var index = SymbolIndexBuilder.Build(documents, inputs);
-        var resolver = new SymbolResolver(inputs.ToDictionary(i => i.VariantId,
-            i => (IReadOnlyDictionary<string, string>)new Dictionary<string, string> { ["Sample"] = i.VariantId }));
+        var resolver = new SymbolResolver(inputs.ToDictionary(i => i.VariantId, i =>
+        {
+            var map = new Dictionary<string, string> { [i.Compilation.AssemblyName!] = i.VariantId };
+            if (library is not null) map["Library"] = "library10";
+            return (IReadOnlyDictionary<string, string>)map;
+        }));
         var collector = new OperationDependencyCollector(resolver, documents, index, "fixture");
         var collected = collector.Collect(inputs);
-        var projectId = HarnessIdentity.ProjectId(Workspace, "Sample.csproj");
-        var projects = inputs.Select(i => new HarnessProjectVariant(i.VariantId, projectId, "Sample",
+        var projects = inputs.Select(i => new HarnessProjectVariant(i.VariantId,
+            HarnessIdentity.ProjectId(Workspace, i.ProjectName + ".csproj"), i.ProjectName,
             i.VariantId == "sample9" ? "net9.0" : "net10.0", "Debug")).ToArray();
         var evidence = collected.HarnessEvidence ?? collected.Evidence;
         if (includeDeclarations)
-            evidence = new DeclarationDependencyCollector(resolver, documents, index, "fixture")
-                .Collect(inputs).Concat(evidence).ToArray();
+        {
+            var declaration = new DeclarationDependencyCollector(resolver, documents, index, "fixture").CollectWithHarness(inputs);
+            evidence = (declaration.HarnessEvidence ?? declaration.Evidence).Concat(evidence).ToArray();
+        }
         return new(index, evidence, collected.Stats, projects);
     }
 }

@@ -15,6 +15,71 @@ public sealed class ExplorationPublicationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task DeclarationMemberFactsSurvivePublicationAndRemainSeparateFromCalls()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(fixture.SourcePath, """
+            namespace Demo;
+            public interface IWork { int Run(); }
+            public abstract class Base { public abstract int Run(); }
+            public sealed class Cell : Base, IWork
+            {
+                public override int Run() => 1; // 😀
+                int IWork.Run() => 2;
+            }
+            """, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var overridden = Assert.Single(saved.Graph.Edges, edge => edge.Kind == "overrides");
+        var implemented = Assert.Single(saved.Graph.Edges, edge => edge.Kind == "implements_explicitly");
+        foreach (var edge in new[] { overridden, implemented })
+        {
+            Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+            Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+            Assert.Equal("roslyn-declaration", edge.Producer);
+            Assert.Equal("userSource", edge.Origin);
+            Assert.Equal(edge.VariantId, Assert.Single(saved.Graph.SymbolOccurrences,
+                occurrence => occurrence.Id == edge.SourceOccurrenceId).VariantId);
+            Assert.Equal(edge.VariantId, Assert.Single(saved.Graph.SymbolOccurrences,
+                occurrence => occurrence.Id == edge.TargetOccurrenceId).VariantId);
+            var source = Assert.Single(saved.Files, file => file.SourceId == edge.Evidence!.SourceId);
+            var bytes = File.ReadAllBytes(Path.Combine(fixture.Root, source.RelativePath));
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), edge.Evidence!.ContentHash);
+            var span = edge.Evidence.RawSpan!.Value;
+            Assert.Equal(edge.Kind == "overrides" ? "Run" : "IWork.",
+                Fixture.Utf8.GetString(bytes).Substring(span.Start, span.Length));
+            Assert.Equal(HarnessNodeKind.Member, Assert.Single(saved.Graph.Nodes, node => node.Id == edge.TargetNodeId).Kind);
+        }
+        var pinned = new PinnedQueryIndex(reader);
+        var query = new QueryService(pinned);
+        var scope = new QueryScope(VariantIds: [overridden.VariantId!]);
+        var context = query.Execute(new("declaration", QueryKind.Context, NodeId: overridden.SourceNodeId,
+            Scope: scope, EdgeKinds: ["overrides"], Budget: Budget));
+        Assert.Contains(context.Envelope.Items, item => item.Edge?.Id == overridden.Id);
+        var callers = query.Execute(new("callers", QueryKind.Callers, NodeId: overridden.TargetNodeId,
+            Scope: scope, Budget: Budget));
+        Assert.DoesNotContain(callers.Envelope.Items, item => item.Edge?.Kind is "overrides" or "implements_explicitly");
+
+        var reply = fixture.Engine(reader).Execute(new(overridden.SourceOccurrenceId!, Budget: Budget));
+        Assert.True(reply.Succeeded);
+        Assert.Contains("overrides", reply.Text);
+        Assert.All(reply.Units, unit => Assert.Contains(overridden.SourceNodeId, unit.SymbolIds));
+        Assert.NotEmpty(reply.Units);
+        var output = new StringWriter();
+        var exit = await CliApplication.RunAsync(["explore", "--root", fixture.Root, "--trusted",
+            "--term", overridden.SourceOccurrenceId!, "--format", "audit", "--max-milliseconds", "10000",
+            "--max-chars", "100000", "--max-bytes", "400000"], output, TextWriter.Null, deadline.Token);
+        Assert.Equal(0, exit);
+        Assert.Equal(reply.Text.TrimEnd('\r', '\n'), output.ToString().TrimEnd('\r', '\n'));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task RoslynPublicationAndSavedSearchFollowTypedStateThroughEditRenameAndDelete()
     {
         using var fixture = new Fixture();

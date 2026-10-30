@@ -266,7 +266,9 @@ public static class CliIndexer
                 var declaration = new DeclarationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
                 var operation = new OperationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
                 var collected = operation.Collect([input], token);
-                var ownEvidence = declaration.Collect([input], token).Concat(collected.HarnessEvidence ?? collected.Evidence).ToArray();
+                var declared = declaration.CollectWithHarness([input], token);
+                var ownEvidence = (declared.HarnessEvidence ?? declared.Evidence)
+                    .Concat(collected.HarnessEvidence ?? collected.Evidence).ToArray();
                 extractions.Add(input.VariantId, new(symbolParts[input.VariantId], ownEvidence, collected.Stats));
             }
             var evidence = inputs.SelectMany(i => extractions[i.VariantId].Evidence).ToArray();

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using SharpDeps.Analysis.Core.Graph;
@@ -36,7 +37,9 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
     private sealed record Collected(
         SymbolIndex Index,
         SourceDocumentRegistry Documents,
-        IReadOnlyList<CollectedEvidence> Evidence)
+        IReadOnlyList<CollectedEvidence> Evidence,
+        IReadOnlyList<CollectedEvidence> HarnessEvidence,
+        IReadOnlyDictionary<string, string> ExternalTypes)
     {
         public IndexedType Type(string fullNameOrSimpleName)
             => Index.Types.First(type =>
@@ -51,6 +54,9 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
     }
 
     private Collected Collect(params (string Path, string Text)[] files)
+        => Collect(false, false, files);
+
+    private Collected Collect(bool allowErrors, bool verifyRepeat, params (string Path, string Text)[] files)
     {
         var root = CreateTemporaryDirectory();
         var trees = new List<SyntaxTree>();
@@ -71,7 +77,8 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
         var errors = compilation.GetDiagnostics()
             .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .ToArray();
-        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
+        if (!allowErrors)
+            Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
 
         var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(root), root);
         var input = new SymbolIndexInput("var_sample", "Sample", compilation);
@@ -84,8 +91,119 @@ public sealed class DeclarationDependencyCollectorTests : IDisposable
             }
         });
 
-        var collector = new DeclarationDependencyCollector(resolver, documents, index, ProfileHash);
-        return new Collected(index, documents, collector.Collect([input]));
+        var external = new ExternalTypeRegistry();
+        var collector = new DeclarationDependencyCollector(resolver, documents, index, ProfileHash, external);
+        var firstLegacy = verifyRepeat ? collector.Collect([input]) : null;
+        var legacyExternal = verifyRepeat ? JsonSerializer.Serialize(external.Entries) : null;
+        var result = collector.CollectWithHarness([input]);
+        if (verifyRepeat)
+        {
+            Assert.Equal(JsonSerializer.Serialize(firstLegacy), JsonSerializer.Serialize(result.Evidence));
+            Assert.Equal(legacyExternal, JsonSerializer.Serialize(external.Entries));
+            var repeated = collector.CollectWithHarness([input]);
+            Assert.Equal(JsonSerializer.Serialize(result), JsonSerializer.Serialize(repeated));
+        }
+        return new(index, documents, result.Evidence, result.HarnessEvidence ?? result.Evidence, external.Entries);
+    }
+
+    [Fact]
+    public void KeepsResolvedMemberDeclarationsInHarnessWithoutChangingLegacyEvidence()
+    {
+        const string text = """
+            public interface IContract<T>
+            {
+                T Convert(T value);
+                T Value { get; }
+                T this[int index] { get; }
+                event System.Action Changed;
+            }
+            public class Base<T>
+            {
+                public virtual T Convert(T value) => value;
+                public virtual T Value => default!;
+                public virtual T this[int index] => default!;
+                public virtual event System.Action Changed { add { } remove { } }
+                public virtual event System.Action Field, Other;
+            }
+            public class Derived : Base<string>, IContract<string>
+            {
+                public override string Convert(string value) => value;
+                public override string Value => "saved";
+                public override string this[int index] => "saved";
+                public override event System.Action Changed { add { } remove { } }
+                public override event System.Action Field, Other;
+                string IContract<string>.Convert(string value) => value;
+                string IContract<string>.Value => "saved";
+                string IContract<string>.this[int index] => "saved";
+                event System.Action IContract<string>.Changed { add { } remove { } }
+            }
+            """;
+        var collected = Collect(false, true, ("Members.cs", text));
+        var facts = collected.HarnessEvidence.Except(collected.Evidence).ToArray();
+        Assert.Equal(6, facts.Count(e => e.Evidence.Kind == "overrides"));
+        Assert.Equal(4, facts.Count(e => e.Evidence.Kind == "implements_explicitly"));
+        Assert.DoesNotContain(collected.Evidence, e => e.Evidence.Kind is "overrides" or "implements_explicitly");
+        var members = collected.Index.Members.ToDictionary(m => m.Id, StringComparer.Ordinal);
+        Assert.All(facts, entry =>
+        {
+            var source = members[entry.CanonicalSourceMemberId!];
+            var target = members[entry.CanonicalTargetMemberId!];
+            Assert.Equal(collected.Type("Derived").Id, source.TypeId);
+            Assert.Equal(collected.Type(entry.Evidence.Kind == "overrides" ? "Base" : "IContract").Id, target.TypeId);
+            Assert.Equal(source.Id, entry.Evidence.SourceMemberId);
+            Assert.Equal(target.Id, entry.Evidence.TargetMemberId);
+            Assert.Equal("var_sample", entry.SourceVariantId);
+            Assert.Equal("var_sample", entry.TargetVariantId);
+            Assert.Equal("roslyn-declaration", entry.Producer);
+            Assert.Equal("resolved", entry.Evidence.Confidence);
+            Assert.Equal("userSource", entry.Evidence.Origin);
+            Assert.False(entry.TargetIsExternal);
+            Assert.Null(entry.HarnessDeclarationOwners);
+            var span = Assert.IsType<SharpDeps.Analysis.Contracts.PhysicalSpan>(entry.Evidence.PhysicalSpan);
+            var written = text.Substring(span.Start, span.Length);
+            if (entry.Evidence.Kind == "overrides")
+                Assert.Contains(written, new[] { "Convert", "Value", "this", "Changed", "Field", "Other" });
+            else Assert.Equal("IContract<string>.", written);
+            Assert.Equal(Assert.Single(collected.Index.Documents).ContentHash, entry.Evidence.SourceContentHash);
+        });
+        Assert.Equal(facts.Length, facts.Select(e => e.Evidence.Id).Distinct().Count());
+    }
+
+    [Fact]
+    public void KeepsExternalMemberIdentityWithoutPromotingHidingImplicitOrUnboundDeclarations()
+    {
+        var collected = Collect(true, false, ("Targets.cs", """
+            public interface IContract { void Work(); }
+            public class Base { public virtual void Work() { } }
+            public class Hiding : Base, IContract { public new void Work() { } }
+            public class Outside : System.IDisposable
+            {
+                public override string ToString() => "saved";
+                void System.IDisposable.Dispose() { }
+            }
+            public class Invalid : MissingBase
+            {
+                public override void Gone() { }
+                void MissingContract.Gone() { }
+            }
+            """));
+        var facts = collected.HarnessEvidence.Except(collected.Evidence).ToArray();
+        Assert.Equal(2, facts.Length);
+        Assert.All(facts, entry =>
+        {
+            Assert.Equal(collected.Type("Outside").Id, entry.Evidence.SourceTypeId);
+            Assert.True(entry.TargetIsExternal);
+            Assert.Null(entry.TargetVariantId);
+            var target = Assert.IsType<HarnessTargetSymbol>(entry.TargetSymbol);
+            Assert.Equal("method", target.Kind);
+            Assert.Equal(entry.CanonicalTargetMemberId, target.LegacyMemberId);
+            Assert.Contains("Version=", target.AssemblyIdentity, StringComparison.Ordinal);
+            Assert.Contains("doc:T:System.", target.TypeCanonicalSignature, StringComparison.Ordinal);
+        });
+        var objectOverride = Assert.Single(facts, entry => entry.Evidence.Kind == "overrides");
+        Assert.Equal("ToString", objectOverride.TargetSymbol!.Name);
+        Assert.DoesNotContain(objectOverride.Evidence.TargetTypeId!, collected.ExternalTypes.Keys);
+        Assert.Equal("Dispose", Assert.Single(facts, entry => entry.Evidence.Kind == "implements_explicitly").TargetSymbol!.Name);
     }
 
     [Fact]

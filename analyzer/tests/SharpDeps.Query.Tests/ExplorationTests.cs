@@ -536,6 +536,62 @@ public sealed class ExplorationTests
                 + (format == ExploreFormat.Audit ? "/Resolved-->" : "/Resolved->"), reply.Text);
     }
 
+    [Theory]
+    [InlineData(ExploreFormat.Audit)]
+    [InlineData(ExploreFormat.Agent)]
+    public void DeclarationMemberFactsRemainPointersWithoutBecomingCalls(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, huge: true, format: format);
+        var graph = fixture.Snapshot.Graph;
+        var other = graph.SymbolOccurrences.Single(occurrence => occurrence.VariantId == fixture.OtherVariant
+            && graph.Nodes.Any(node => node.Id == occurrence.LogicalSymbolId && node.Kind == HarnessNodeKind.Member));
+        var overrides = SavedPathEdge(fixture, "decl-override", fixture.RunInt, fixture.Suspect) with
+        { Kind = "overrides", Producer = "roslyn-declaration" };
+        var implementation = SavedPathEdge(fixture, "decl-explicit", fixture.Suspect, fixture.RunInt) with
+        { Kind = "implements_explicitly", Producer = "roslyn-declaration" };
+        var snapshot = fixture.Snapshot with { Graph = graph with { Edges =
+        [
+            overrides, implementation,
+            overrides with { Id = "decl-candidate", Kind = "implements_explicitly", Certainty = HarnessCertainty.Candidate,
+                TargetNodeId = fixture.RunString, TargetOccurrenceId = fixture.Occurrence(fixture.RunString) },
+            overrides with { Id = "decl-outside", TargetNodeId = other.LogicalSymbolId, TargetOccurrenceId = other.Id },
+            implementation with { Id = "decl-release", SourceOccurrenceId = fixture.Occurrence(fixture.Suspect, fixture.AlternateVariant),
+                TargetOccurrenceId = fixture.Occurrence(fixture.RunInt, fixture.AlternateVariant), VariantId = fixture.AlternateVariant,
+                Certainty = HarnessCertainty.Unresolved }
+        ] } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt));
+        var reply = engine.Execute(request);
+
+        Assert.True(reply.Succeeded);
+        var unit = Assert.Single(reply.Units);
+        Assert.Equal(new[] { fixture.RunInt }, unit.SymbolIds);
+        Assert.Contains("😀", unit.Text);
+        Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+        Assert.Contains("Scope project=" + fixture.Project + " variant=" + fixture.Variant, reply.Text);
+        var arrow = format == ExploreFormat.Audit ? "-->" : "->";
+        Assert.Contains("overrides/Resolved" + arrow, reply.Text);
+        Assert.Contains("implements_explicitly/Resolved" + arrow, reply.Text);
+        Assert.Contains("implements_explicitly/Candidate" + arrow, reply.Text);
+        Assert.DoesNotContain("/Unresolved" + arrow, reply.Text);
+        Assert.Contains("outside-selected-scope; not expanded", reply.Text);
+        if (format == ExploreFormat.Agent)
+            Assert.Contains("kind=Member callerSymbols=0 callerOccurrences=0 savedCallEdges=0", reply.Text);
+        AssertWireBudget(reply, request.Budget!);
+
+        var path = engine.Execute(request with { PathTo = fixture.Occurrence(fixture.Suspect) });
+        Assert.True(path.Succeeded);
+        Assert.Contains("status=no-witness", RetainedPathHeader(path));
+        Assert.DoesNotContain("Path hop ", path.Text);
+        Assert.Equal(new[] { fixture.RunInt }, Assert.Single(path.Units).SymbolIds);
+        AssertWireBudget(path, request.Budget!);
+
+        var budget = Generous with { MaxChars = 2048, MaxBytes = 8192 };
+        var bounded = engine.Execute(request with { Budget = budget });
+        AssertWireBudget(bounded, budget);
+        Assert.All(bounded.Units, saved => Assert.Equal(fixture.Sources[saved.Path].Substring(saved.Span.Start, saved.Span.Length), saved.Text));
+    }
+
     [Fact]
     public void AgentTypeHubKeepsRelationlessMemberSelectorsWithoutReadingTheirSource()
     {
