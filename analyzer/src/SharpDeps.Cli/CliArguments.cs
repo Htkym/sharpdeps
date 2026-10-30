@@ -8,9 +8,11 @@ internal sealed class CliArguments
 {
     private readonly Dictionary<string, List<string>> values = new(StringComparer.Ordinal);
     private static readonly HashSet<string> Switches = new(StringComparer.Ordinal)
-    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch", "owner-status" };
+    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch", "owner-status", "dry-run" };
     private static readonly HashSet<string> Repeated = new(StringComparer.Ordinal) { "project", "variant", "edge-kind" };
     private static readonly HashSet<string> Common = new(StringComparer.Ordinal) { "root", "index", "trusted", "quiet", "request-id" };
+    private static readonly HashSet<string> Installation = new(StringComparer.Ordinal)
+    { "client", "config-file", "instructions-file", "mcp-command", "dry-run" };
     private static readonly HashSet<string> Index = new(StringComparer.Ordinal)
     { "target", "configuration", "platform", "project", "tfm", "timeout-seconds" };
     private static readonly HashSet<string> Query = new(StringComparer.Ordinal)
@@ -60,10 +62,11 @@ internal sealed class CliArguments
         if (args.Length == 0 || args is ["--help"] or ["-h"]) return parsed;
         if (args.Length > 200) throw new CliFailure("ARGUMENT_INVALID", 2);
         parsed.Command = args[0].ToLowerInvariant();
-        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help")
+        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help" or "install" or "uninstall")
             && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
-        if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
+        if (parsed.Command is "install" or "uninstall") allowed.UnionWith(Installation);
+        else if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
         else if (parsed.Command == "serve")
         {
             allowed.UnionWith(Index);

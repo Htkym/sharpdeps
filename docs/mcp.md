@@ -98,6 +98,28 @@ With an already installed matching `SharpDeps.Mcp` tool, merge the following `sh
 
 This configuration keeps source reads disabled and exposes only `explore`. Add `--trusted` to the server arguments only when source access is authorized. Copilot folder trust and tool approvals are separate from SharpDeps source trust and permission to index or update. Keep authentication and approval settings under your existing policy; enabling a tool does not pre-approve its calls. See the [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference).
 
+### Dedicated setup files
+
+With a CLI build that exposes `install` and `uninstall`, create a dedicated Copilot CLI configuration and short instruction file at explicit, unused paths. This first installer does not merge or edit an existing config or shared `AGENTS.md`. Use the manual merge example above for those files. The workspace root and both parent directories must already exist, and `--mcp-command` must name the absolute path of your already provisioned tool file. Setup does not execute that command, acquire packages, create an index or change authentication/approval settings.
+
+Preview the generated files without writing either destination:
+
+```bash
+sharpdeps install --client copilot-cli --root /absolute/workspace --config-file /absolute/setup/.mcp.json --instructions-file /absolute/setup/AGENTS.md --mcp-command /absolute/tools/sharpdeps-mcp --dry-run
+```
+
+Remove `--dry-run` to publish the two new files without overwriting either destination. A repeated install with the same exact, unchanged owned pair is a no-op. An existing foreign file, edited owned file or incomplete pair is a conflict. Default source trust is disabled; optional `--trusted` opts into source reads only. Optional `--index` selects a root-contained index. No mutation tools are enabled. Choose destinations your client explicitly loads; creating files alone does not activate them in a running client or alter your shared instruction discovery.
+
+Uninstall requires the same root and destinations; it reads the owned receipt rather than requiring the tool command again:
+
+```bash
+sharpdeps uninstall --client copilot-cli --root /absolute/workspace --config-file /absolute/setup/.mcp.json --instructions-file /absolute/setup/AGENTS.md --dry-run
+```
+
+Without `--dry-run`, uninstall detaches the exact unchanged owned pair into adjacent, uniquely named `.bak` files. It retains those files and does not delete content, unrelated settings, directories, tools or index data. A manually merged configuration is outside this ownership contract. A fingerprint identifies matching generated content; it is not authorization or a lock against concurrent writers.
+
+Publication uses no-overwrite moves. Failures or concurrent edits can produce a nonzero exit with a partial result, failed stage and retained `.tmp`/`.bak` recovery paths. Restoration also refuses to overwrite a recreated target. A concurrent edit may be relocated to a reported backup, and an already open writer can still change that file; backups are not immutable snapshots. Preserve and review both destinations and recovery files before retrying. There is no two-file crash transaction, automatic repair of an incomplete pair or automatic deletion of recovery files. Client connection/discovery changes remain part of your normal client workflow.
+
 ### Portable agent instructions
 
 The following standalone block can be added to an instruction file your client already loads. For Copilot CLI, preserve your existing shared `.agents` arrangement: an `AGENTS.md` in a directory listed by `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` is supported, while `~/.agents/AGENTS.md` alone is not an automatic global instruction location. See [Copilot CLI custom instructions](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-custom-instructions) for discovery and applying changes to sessions.

@@ -18,13 +18,14 @@ public static class CliApplication
             options = CliArguments.Parse(args);
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
-                return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help" },
+                return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall" },
                     root = "--root absolute-directory",
                     index = "--target root-contained.slnx|.sln|.csproj --trusted",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
                     explore = "--term names-or-file-paths [--project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; path-to requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
+                    installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
             if (options.Command == "doctor")
                 return await Reply(stdout, options, new { runtime = RuntimeInformation.FrameworkDescription, sdkProbe = "not-run",
@@ -32,6 +33,15 @@ public static class CliApplication
                     configurationProof = "not-connected",
                     updateMode = "closed-input-project-markdown-or-full-rebuild"
                 });
+            if (options.Command is "install" or "uninstall")
+            {
+                var installation = CliAgentInstallation.Run(options, token);
+                var issues = installation.ErrorCode is { } code
+                    ? new[] { new QueryIssue(code, "Setup is incomplete; preserve retained paths and review both destinations before retrying.") }
+                    : Array.Empty<QueryIssue>();
+                await Reply(stdout, options, installation, issues);
+                return installation.ErrorCode is null ? 0 : installation.ErrorCode == "CANCELLED" ? 130 : 5;
+            }
             // Validate request syntax before opening any stored data.
             var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
             if (exploration is not null)
@@ -283,10 +293,10 @@ public static class CliApplication
         _ => 4
     };
 
-    private static async Task<int> Reply(TextWriter output, CliArguments options, object result)
+    private static async Task<int> Reply(TextWriter output, CliArguments options, object result, QueryIssue[]? issues = null)
     {
         await output.WriteLineAsync(JsonSerializer.Serialize(new { apiVersion = "1", command = options.Command,
-            requestId = options.RequestId, result, errors = Array.Empty<QueryIssue>() }, QueryJson.Options));
+            requestId = options.RequestId, result, errors = issues ?? Array.Empty<QueryIssue>() }, QueryJson.Options));
         return 0;
     }
     private static async Task<int> Error(TextWriter output, CliArguments? options, string code, int exitCode)
