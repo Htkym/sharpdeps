@@ -1007,13 +1007,13 @@ public sealed class ExplorationService
                 var baseline = Size(Render(Units, pending, 0, 0));
                 var shareChars = Math.Max(0, request.Budget!.MaxChars - baseline.Chars) / groups.Length;
                 var shareBytes = Math.Max(0, request.Budget.MaxBytes - baseline.Bytes) / groups.Length;
-                foreach (var group in groups)
+                for (var groupIndex = 0; groupIndex < groups.Length; groupIndex++)
                 {
                     Check();
-                    var used = Size(Render(Units, pending, 0, 0));
+                    var used = groupIndex == 0 ? baseline : Size(Render(Units, pending, 0, 0));
                     var ceiling = (Chars: Math.Min(request.Budget.MaxChars, used.Chars + shareChars),
                         Bytes: Math.Min(request.Budget.MaxBytes, used.Bytes + shareBytes));
-                    foreach (var candidate in group) ReadCandidate(candidate, failedFiles, ceiling);
+                    foreach (var candidate in groups[groupIndex]) ReadCandidate(candidate, failedFiles, ceiling);
                 }
                 // Release unused reservations only after every requested file has had its turn.
                 foreach (var candidate in requested) ReadCandidate(candidate, failedFiles);
