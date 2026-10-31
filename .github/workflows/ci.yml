@@ -148,7 +148,21 @@ jobs:
           dotnet restore tests/fixtures/project-kinds/ProjectKinds.slnx
           dotnet build tests/fixtures/semantic-baseline/src/Generator/Generator.csproj --no-restore
       - name: C# tests
-        run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet
+        run: |
+          # Keep test scratch paths free of macOS temporary-directory symlink ancestors.
+          printf 'Original TMPDIR: %s\n' "${TMPDIR:-<unset>}"
+          export TMPDIR="$(cd "$RUNNER_TEMP" && pwd -P)/sharpdeps-tests"
+          mkdir -p "$TMPDIR"
+          printf 'Test TMPDIR: %s\n' "$TMPDIR"
+          ancestor="$TMPDIR"
+          while [ "$ancestor" != / ]; do
+            if [ -L "$ancestor" ]; then
+              printf 'Unexpected symlink ancestor: %s\n' "$ancestor" >&2
+              exit 1
+            fi
+            ancestor="$(dirname "$ancestor")"
+          done
+          dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet
       - name: Quick and Semantic golden and contract tests
         run: npx vitest run tests/analyzer tests/contract --reporter=default --reporter=json --outputFile=.local/ci/analyzers.json
       - name: Upload macOS verification evidence
@@ -158,3 +172,4 @@ jobs:
           name: macos-verification
           path: .local/ci/
           if-no-files-found: error
+
