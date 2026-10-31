@@ -48,7 +48,7 @@ foreach ($project in $projects) {
     if (Test-Path $lock) {
         dotnet restore $project --locked-mode
     } else {
-        dotnet restore $project -p:RestorePackagesWithLockFile=false
+        dotnet restore $project
     }
     if ($LASTEXITCODE -ne 0) { throw "Restore failed: $project" }
 }
@@ -62,12 +62,12 @@ foreach ($project in $projects) {
     if (-not (Test-Path $project)) { throw "Missing solution project: $project" }
 }
 foreach ($project in $projects) {
-    dotnet format style $project --diagnostics IDE2001 --include . --exclude @excluded --no-restore --verbosity normal
+    dotnet format style $project --diagnostics IDE2001 --exclude @excluded --no-restore --verbosity normal
     if ($LASTEXITCODE -ne 0) { throw "IDE2001 formatting failed: $project" }
 }
 Check-Tokens 'all-source-token-check'
 foreach ($project in $projects) {
-    dotnet format style $project --diagnostics IDE2001 --include . --exclude @excluded --no-restore --verify-no-changes
+    dotnet format style $project --diagnostics IDE2001 --exclude @excluded --no-restore --verify-no-changes
     if ($LASTEXITCODE -ne 0) { throw "IDE2001 verification failed: $project" }
 }
 $changed = @(git diff --name-only)
