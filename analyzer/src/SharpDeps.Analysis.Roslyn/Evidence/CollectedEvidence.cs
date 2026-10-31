@@ -73,7 +73,8 @@ public sealed record HarnessTargetSymbol(
 
 /// <summary>Effective accessibility, including the containing types.</summary>
 public static class PublicSurface
-{    public static bool IsExternallyVisible(ISymbol? symbol)
+{
+    public static bool IsExternallyVisible(ISymbol? symbol)
     {
         for (var current = symbol; current is not null; current = current.ContainingType)
         {

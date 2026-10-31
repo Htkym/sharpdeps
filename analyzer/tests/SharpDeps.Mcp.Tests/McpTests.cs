@@ -21,12 +21,14 @@ public sealed class McpTests
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "index" }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
         {
-            Name = "explore", Arguments = new Dictionary<string, JsonElement>
+            Name = "explore",
+            Arguments = new Dictionary<string, JsonElement>
             { ["arguments"] = JsonSerializer.SerializeToElement(new[] { "--root", root, "--term", "Service" }) }
         }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
         {
-            Name = "explore", Arguments = new Dictionary<string, JsonElement> { ["trusted"] = JsonSerializer.SerializeToElement(true) }
+            Name = "explore",
+            Arguments = new Dictionary<string, JsonElement> { ["trusted"] = JsonSerializer.SerializeToElement(true) }
         }));
         Assert.False(Directory.Exists(root));
         Assert.Equal(3, new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true)).ListTools().Count);
@@ -58,11 +60,23 @@ public sealed class McpTests
     {
         var buffer = new byte[4096];
         using var input = new BoundedMcpInput(new MemoryStream(Encoding.UTF8.GetBytes(new string('a', BoundedMcpInput.MaximumMessageBytes + 1))));
-        await Assert.ThrowsAsync<IOException>(async () => { while (await input.ReadAsync(buffer.AsMemory()) > 0) { } });
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            while (await input.ReadAsync(buffer.AsMemory()) > 0)
+            {
+            }
+        });
         using var invalid = new BoundedMcpInput(new MemoryStream([0xe3, 0x81]));
-        await Assert.ThrowsAsync<IOException>(async () => { while (await invalid.ReadAsync(buffer.AsMemory()) > 0) { } });
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            while (await invalid.ReadAsync(buffer.AsMemory()) > 0)
+            {
+            }
+        });
         using var lines = new BoundedMcpInput(new MemoryStream(Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("日本語\n", 10000)))));
-        while (await lines.ReadAsync(buffer.AsMemory()) > 0) { }
+        while (await lines.ReadAsync(buffer.AsMemory()) > 0)
+        {
+        }
     }
 
     [Theory]

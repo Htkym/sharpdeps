@@ -12,7 +12,8 @@ public static class HarnessIdentity
 
     public static string WorkspaceId(Guid workspaceUuid)
     {
-        if (workspaceUuid == Guid.Empty) throw new ArgumentException("A persisted workspace UUID is required.", nameof(workspaceUuid));
+        if (workspaceUuid == Guid.Empty)
+            throw new ArgumentException("A persisted workspace UUID is required.", nameof(workspaceUuid));
         return "hw_" + workspaceUuid.ToString("N");
     }
 
@@ -51,7 +52,8 @@ public static class HarnessIdentity
     // UUID allocation and persistence belong to the trusted storage owner, not this pure helper.
     public static string DocumentId(Guid workspaceUuid, Guid documentUuid)
     {
-        if (documentUuid == Guid.Empty) throw new ArgumentException("A durable document UUID is required.", nameof(documentUuid));
+        if (documentUuid == Guid.Empty)
+            throw new ArgumentException("A durable document UUID is required.", nameof(documentUuid));
         return Hash("hdoc", WorkspaceId(workspaceUuid), documentUuid.ToString("N"));
     }
 
@@ -61,9 +63,11 @@ public static class HarnessIdentity
     private static string RelativeProjectPath(string value)
     {
         value = Required(value).Replace('\\', '/');
-        if (value.StartsWith('/') || value.Contains(':')) throw new ArgumentException("Use a workspace-relative project seed.");
+        if (value.StartsWith('/') || value.Contains(':'))
+            throw new ArgumentException("Use a workspace-relative project seed.");
         var segments = value.Split('/', StringSplitOptions.RemoveEmptyEntries).Where(s => s != ".").ToArray();
-        if (segments.Length == 0 || segments.Any(s => s == "..")) throw new ArgumentException("Project seed cannot contain parent traversal.");
+        if (segments.Length == 0 || segments.Any(s => s == ".."))
+            throw new ArgumentException("Project seed cannot contain parent traversal.");
         return string.Join('/', segments); // Ordinal case is retained; filesystem aliases require explicit validation.
     }
 
@@ -74,7 +78,8 @@ public static class HarnessIdentity
     {
         ArgumentNullException.ThrowIfNull(value);
         value = value.Trim();
-        if (value.Length == 0) throw new ArgumentException("An identity input cannot be empty.");
+        if (value.Length == 0)
+            throw new ArgumentException("An identity input cannot be empty.");
         return value;
     }
 
@@ -92,13 +97,15 @@ public static class HarnessIdentity
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Append(HarnessGraphContract.IdentityVersion);
         Append(prefix);
-        foreach (var field in fields) Append(field);
+        foreach (var field in fields)
+            Append(field);
         return prefix + "_" + Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
 
         void Append(string? field)
         {
             hash.AppendData(new byte[] { field is null ? (byte)0 : (byte)1 });
-            if (field is null) return;
+            if (field is null)
+                return;
             var bytes = StrictUtf8.GetBytes(field);
             var size = new byte[8];
             BinaryPrimitives.WriteUInt64BigEndian(size, (ulong)bytes.Length);

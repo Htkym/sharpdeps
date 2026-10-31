@@ -11,7 +11,8 @@ internal sealed class QueryCursor
     private readonly byte[] key;
     public QueryCursor(byte[]? key)
     {
-        if (key is not null && key.Length != 32) throw new ArgumentException("Cursor keys must contain 32 bytes.");
+        if (key is not null && key.Length != 32)
+            throw new ArgumentException("Cursor keys must contain 32 bytes.");
         this.key = (key ?? ProcessKey).ToArray();
     }
     public string Encode(QuerySnapshot snapshot, string filter, int offset)
@@ -24,19 +25,25 @@ internal sealed class QueryCursor
     {
         try
         {
-            if (cursor.Length > 4096) return (0, "INVALID_CURSOR");
+            if (cursor.Length > 4096)
+                return (0, "INVALID_CURSOR");
             var parts = cursor.Split('.');
-            if (parts.Length != 2) return (0, "INVALID_CURSOR");
+            if (parts.Length != 2)
+                return (0, "INVALID_CURSOR");
             var bytes = Convert.FromBase64String(parts[0]);
             if (!CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(parts[1]), HMACSHA256.HashData(key, bytes)))
                 return (0, "INVALID_CURSOR");
             var state = JsonSerializer.Deserialize<State>(bytes);
-            if (state is null || state.Offset < 0) return (0, "INVALID_CURSOR");
+            if (state is null || state.Offset < 0)
+                return (0, "INVALID_CURSOR");
             if (state.Workspace != snapshot.WorkspaceId || state.Snapshot != SnapshotKey(snapshot.Id) || state.Generation != snapshot.Generation)
                 return (0, "CURSOR_SNAPSHOT_EXPIRED");
             return state.Filter != filter ? (0, "CURSOR_FILTER_CHANGED") : (state.Offset, null);
         }
-        catch (Exception error) when (error is FormatException or JsonException) { return (0, "INVALID_CURSOR"); }
+        catch (Exception error) when (error is FormatException or JsonException)
+        {
+            return (0, "INVALID_CURSOR");
+        }
     }
     private static string SnapshotKey(string id) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)));
     public static string Fingerprint(QueryRequest request) => Convert.ToHexString(SHA256.HashData(

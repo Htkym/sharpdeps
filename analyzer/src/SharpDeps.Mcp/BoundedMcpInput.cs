@@ -35,8 +35,10 @@ public sealed class BoundedMcpInput(Stream inner) : Stream
     {
         foreach (var value in bytes)
         {
-            if (value == (byte)'\n') lineBytes = 0;
-            else if (++lineBytes > MaximumMessageBytes) throw new IOException("MCP_INPUT_BUDGET_EXCEEDED");
+            if (value == (byte)'\n')
+                lineBytes = 0;
+            else if (++lineBytes > MaximumMessageBytes)
+                throw new IOException("MCP_INPUT_BUDGET_EXCEEDED");
         }
         try
         {
@@ -48,11 +50,15 @@ public sealed class BoundedMcpInput(Stream inner) : Stream
                 bytes = bytes[used..];
             } while (!completed);
         }
-        catch (DecoderFallbackException) { throw new IOException("MCP_INPUT_ENCODING_INVALID"); }
+        catch (DecoderFallbackException)
+        {
+            throw new IOException("MCP_INPUT_ENCODING_INVALID");
+        }
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) inner.Dispose();
+        if (disposing)
+            inner.Dispose();
         base.Dispose(disposing);
     }
 }

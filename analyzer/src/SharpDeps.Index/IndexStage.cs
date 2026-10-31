@@ -9,7 +9,11 @@ public sealed class IndexStage
 {
     internal static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly string serialized;
-    private IndexStage(string serialized, string manifestHash) { this.serialized = serialized; ManifestHash = manifestHash; }
+    private IndexStage(string serialized, string manifestHash)
+    {
+        this.serialized = serialized;
+        ManifestHash = manifestHash;
+    }
     public string ManifestHash { get; }
     public static IndexStage Create(IndexSnapshot snapshot)
     {

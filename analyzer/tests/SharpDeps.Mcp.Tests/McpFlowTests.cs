@@ -22,7 +22,8 @@ public sealed class McpFlowTests
         var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: trusted));
         using var stdout = new StringWriter();
         var arguments = new List<string> { "explore", "--root", fixture.Root, "--term", "Service" };
-        if (trusted) arguments.Add("--trusted");
+        if (trusted)
+            arguments.Add("--trusted");
         var exit = await CliApplication.RunAsync(arguments.ToArray(), stdout, TextWriter.Null);
         var result = await adapter.CallAsync(Explore("Service"));
         Assert.Equal(exit != 0, result.IsError);
@@ -42,8 +43,10 @@ public sealed class McpFlowTests
             Assert.True(unverified.IsError);
             Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), Assert.IsType<TextContentBlock>(Assert.Single(unverified.Content)).Text, StringComparison.Ordinal);
         }
-        else Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
-        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        else
+            Assert.DoesNotContain(Fixture.Code.TrimEnd('\n'), text, StringComparison.Ordinal);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await adapter.CallAsync(Explore("Service"), cancelled.Token));
         using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
@@ -56,7 +59,8 @@ public sealed class McpFlowTests
     {
         using var fixture = new Fixture();
         var analyzer = new DirectoryInfo(AppContext.BaseDirectory);
-        while (analyzer is not null && !File.Exists(Path.Combine(analyzer.FullName, "SharpDeps.Analyzer.slnx"))) analyzer = analyzer.Parent;
+        while (analyzer is not null && !File.Exists(Path.Combine(analyzer.FullName, "SharpDeps.Analyzer.slnx")))
+            analyzer = analyzer.Parent;
         Assert.NotNull(analyzer);
         var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
         var dll = Path.Combine(analyzer.FullName, "src", "SharpDeps.Mcp", "bin", configuration, "net10.0", "SharpDeps.Mcp.dll");
@@ -64,8 +68,10 @@ public sealed class McpFlowTests
         var executable = Environment.GetEnvironmentVariable("SHARPDEPS_MCP_TEST_EXECUTABLE");
         var start = new ProcessStartInfo(executable ?? Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        if (executable is null) start.ArgumentList.Add(dll);
-        foreach (var argument in new[] { "--root", fixture.Root, "--trusted" }) start.ArgumentList.Add(argument);
+        if (executable is null)
+            start.ArgumentList.Add(dll);
+        foreach (var argument in new[] { "--root", fixture.Root, "--trusted" })
+            start.ArgumentList.Add(argument);
         if (allowMutations)
         {
             start.ArgumentList.Add("--allow-mutations");
@@ -78,10 +84,12 @@ public sealed class McpFlowTests
         try
         {
             await Send("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"sharpdeps-test","version":"1"}}}""");
-            using (var ready = await Reply(1)) Assert.Equal("2025-11-25", ready.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
+            using (var ready = await Reply(1))
+                Assert.Equal("2025-11-25", ready.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
             await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
-            using (var listed = await Reply(2)) Assert.Equal(allowMutations ? 3 : 1, listed.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength());
+            using (var listed = await Reply(2))
+                Assert.Equal(allowMutations ? 3 : 1, listed.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength());
             await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service"}}}""");
             using (var query = await Reply(3))
             {
@@ -95,14 +103,17 @@ public sealed class McpFlowTests
             await Send("""{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"index","arguments":{"arguments":["--target","App.csproj"]}}}""");
             using (var indexed = await Reply(4))
             {
-                if (allowMutations) AssertMutation(indexed, "index");
-                else Assert.Equal(-32602, indexed.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+                if (allowMutations)
+                    AssertMutation(indexed, "index");
+                else
+                    Assert.Equal(-32602, indexed.RootElement.GetProperty("error").GetProperty("code").GetInt32());
             }
             if (allowMutations)
             {
                 File.AppendAllText(Path.Combine(fixture.Root, "App.cs"), " public sealed class Added { }");
                 await Send("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update","arguments":{"arguments":["--target","App.csproj"]}}}""");
-                using (var updated = await Reply(5)) AssertMutation(updated, "update");
+                using (var updated = await Reply(5))
+                    AssertMutation(updated, "update");
                 await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added"}}}""");
                 using var saved = await Reply(6);
                 var result = saved.RootElement.GetProperty("result");
@@ -122,9 +133,17 @@ public sealed class McpFlowTests
         finally
         {
             // This test created this exact Process handle; a timed-out fixture must not leave its host running.
-            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
+            if (!process.HasExited)
+            {
+                process.Kill();
+                await process.WaitForExitAsync();
+            }
         }
-        async Task Send(string line) { await process.StandardInput.WriteLineAsync(line); await process.StandardInput.FlushAsync(); }
+        async Task Send(string line)
+        {
+            await process.StandardInput.WriteLineAsync(line);
+            await process.StandardInput.FlushAsync();
+        }
         async Task<JsonDocument> Reply(int id)
         {
             var line = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(90));
@@ -180,7 +199,8 @@ public sealed class McpFlowTests
         {
             var prefix = Path.GetFullPath(Base) + Path.DirectorySeparatorChar;
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            if (!Path.GetFullPath(Root).StartsWith(prefix, comparison)) throw new InvalidOperationException("Fixture cleanup escaped its dedicated root.");
+            if (!Path.GetFullPath(Root).StartsWith(prefix, comparison))
+                throw new InvalidOperationException("Fixture cleanup escaped its dedicated root.");
             Directory.Delete(Root, recursive: true);
         }
     }

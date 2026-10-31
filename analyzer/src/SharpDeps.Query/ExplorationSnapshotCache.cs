@@ -46,7 +46,8 @@ internal sealed class ExplorationSnapshot
         {
             token.ThrowIfCancellationRequested();
             var key = groupKey(value);
-            if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = []);
+            if (!groups.TryGetValue(key, out var group))
+                groups.Add(key, group = []);
             group.Add(value);
         }
         var result = new Dictionary<string, T[]>(StringComparer.Ordinal);
@@ -62,7 +63,9 @@ internal sealed class ExplorationSnapshot
                 });
             }
             catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
-            { throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token); }
+            {
+                throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token);
+            }
             token.ThrowIfCancellationRequested();
             result.Add(key, group.ToArray());
         }
@@ -74,8 +77,10 @@ internal sealed class ExplorationSnapshot
         var current = node;
         while (true)
         {
-            if (current.Kind == HarnessNodeKind.Project) return current.Id;
-            if (current.ParentId is not { } parent || !nodes.TryGetValue(parent, out var next)) return null;
+            if (current.Kind == HarnessNodeKind.Project)
+                return current.Id;
+            if (current.ParentId is not { } parent || !nodes.TryGetValue(parent, out var next))
+                return null;
             current = next;
         }
     }
@@ -92,7 +97,8 @@ internal sealed class ExplorationSnapshot
                     foreach (var location in occurrence.Declarations ?? (occurrence.Location is null ? [] : [occurrence.Location]))
                         yield return location;
         }
-        else if (node.Location is { } location) yield return location;
+        else if (node.Location is { } location)
+            yield return location;
     }
 }
 
@@ -119,7 +125,8 @@ internal static class ExplorationSnapshotCache
         {
             token.ThrowIfCancellationRequested();
             cached = Volatile.Read(ref latest);
-            if (cached is not null && cached.Key == wanted) return cached.Snapshot;
+            if (cached is not null && cached.Key == wanted)
+                return cached.Snapshot;
 
             // Only a miss holds clone bytes; the key is computed from those exact bytes.
             using var bytes = new MemoryStream();
@@ -141,7 +148,10 @@ internal static class ExplorationSnapshotCache
             Volatile.Write(ref latest, new Entry(actual, prepared));
             return prepared;
         }
-        finally { Gate.Release(); }
+        finally
+        {
+            Gate.Release();
+        }
     }
 
     private static Fingerprint Serialize(IndexSnapshot snapshot, Stream destination, CancellationToken token)

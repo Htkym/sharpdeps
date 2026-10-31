@@ -108,7 +108,8 @@ public sealed class SymbolResolver
     {
         var type = Normalize(target);
         var typeId = ResolveTypeId(type, ownerVariantKey);
-        if (type is null || typeId is null) return null;
+        if (type is null || typeId is null)
+            return null;
         var normalized = NormalizeHarnessMember(member);
         var typeSignature = SymbolIndexBuilder.TypeKeyOf(type);
         var typeName = type.ToDisplayString(SymbolIndexBuilder.DisplayFormat);

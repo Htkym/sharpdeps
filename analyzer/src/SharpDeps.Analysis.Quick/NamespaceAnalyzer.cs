@@ -81,7 +81,10 @@ public static class NamespaceAnalyzer
                     bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                     text = DecodeSource(bytes);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
                 catch
                 {
                     collector?.AddSkip(file, "sourceFileUnreadable");
@@ -93,7 +96,10 @@ public static class NamespaceAnalyzer
                 {
                     root = CSharpSyntaxTree.ParseText(text, cancellationToken: cancellationToken).GetRoot(cancellationToken);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
                 catch
                 {
                     collector?.AddSkip(file, "sourceFileUnparsable");
@@ -105,7 +111,11 @@ public static class NamespaceAnalyzer
                 var fileNamespaces = root
                     .DescendantNodes()
                     .OfType<BaseNamespaceDeclarationSyntax>()
-                    .Select(node => { cancellationToken.ThrowIfCancellationRequested(); return FullNamespaceName(node); })
+                    .Select(node =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return FullNamespaceName(node);
+                    })
                     .Where(name => name.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
@@ -431,8 +441,12 @@ public static class NamespaceAnalyzer
             collector.AddTypeDeclaration(new QuickTypeDeclaration(
                 projectPath, documentId, namespaces, namespaceNodes.Length == 0 ? "" : FullNamespaceName(namespaceNodes[0]),
                 chain.Select(node => new QuickTypeSegment(TypeIdentifier(node).ValueText,
-                    node switch { TypeDeclarationSyntax type => type.TypeParameterList?.Parameters.Count ?? 0,
-                        DelegateDeclarationSyntax type => type.TypeParameterList?.Parameters.Count ?? 0, _ => 0 })).ToArray(),
+                    node switch
+                    {
+                        TypeDeclarationSyntax type => type.TypeParameterList?.Parameters.Count ?? 0,
+                        DelegateDeclarationSyntax type => type.TypeParameterList?.Parameters.Count ?? 0,
+                        _ => 0
+                    })).ToArray(),
                 chain.Take(chain.Length - 1).Select(node => ToQuickSpan(node.GetLocation())).ToArray(),
                 syntaxKind, syntaxKind.StartsWith("record", StringComparison.Ordinal) ? "record" : syntaxKind,
                 access.Length == 1 ? access[0].ValueText : "unknown",
@@ -442,7 +456,8 @@ public static class NamespaceAnalyzer
                     || namespaceNodes.Any(node => node.Name.ContainsDiagnostics),
                 ToQuickSpan(declaration.GetLocation())));
 
-            if (declaration is not BaseTypeDeclarationSyntax { BaseList: { } baseList }) continue;
+            if (declaration is not BaseTypeDeclarationSyntax { BaseList: { } baseList })
+                continue;
             foreach (var reference in baseList.Types)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -480,7 +495,8 @@ public static class NamespaceAnalyzer
         while (pending.Count > 0)
         {
             // Reject long left-associated names before building their full path.
-            if (pending.Count + names.Count > limit) break;
+            if (pending.Count + names.Count > limit)
+                break;
             switch (pending.Pop())
             {
                 case IdentifierNameSyntax identifier when !identifier.Identifier.IsMissing && names.Count < limit:

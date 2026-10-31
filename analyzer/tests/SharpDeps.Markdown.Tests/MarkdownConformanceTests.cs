@@ -41,9 +41,12 @@ public sealed class MarkdownConformanceTests
     // including every nested span, source segment, diagnostic and coverage fact.
     private static object? Normalize(object? value)
     {
-        if (value is null || value is string || value.GetType().IsPrimitive || value is decimal) return value;
-        if (value.GetType().IsEnum) return value.ToString();
-        if (value is IEnumerable sequence) return sequence.Cast<object?>().Select(Normalize).ToArray();
+        if (value is null || value is string || value.GetType().IsPrimitive || value is decimal)
+            return value;
+        if (value.GetType().IsEnum)
+            return value.ToString();
+        if (value is IEnumerable sequence)
+            return sequence.Cast<object?>().Select(Normalize).ToArray();
         var properties = value.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(p => p.GetMethod is not null && p.GetIndexParameters().Length == 0
                 && p.Name is not ("RawText" or "ContractVersion" or "ProfileId"))

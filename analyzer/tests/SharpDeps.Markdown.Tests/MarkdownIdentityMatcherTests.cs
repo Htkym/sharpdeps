@@ -35,7 +35,10 @@ public sealed class MarkdownIdentityMatcherTests
         Assert.Equal(Document, Assert.Single(explicitMove).DocumentUuid);
         Assert.All(MarkdownIdentityMatcher.MatchDocuments([new(Document, "a.md", "guide", Hash)],
             [new("a.md", "guide", Hash), new("b.md", "guide", Hash)]), match =>
-        { Assert.Null(match.DocumentUuid); Assert.Equal("duplicate-explicit-id", match.Reason); });
+        {
+            Assert.Null(match.DocumentUuid);
+            Assert.Equal("duplicate-explicit-id", match.Reason);
+        });
     }
 
     [Fact]

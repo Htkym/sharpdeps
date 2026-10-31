@@ -62,7 +62,8 @@ public sealed class IndexReadCancellationTests
         {
             foreach (var value in values)
             {
-                if (++Visited == 2) cancellation.Cancel();
+                if (++Visited == 2)
+                    cancellation.Cancel();
                 yield return value;
             }
         }
@@ -110,7 +111,8 @@ public sealed class IndexReadCancellationTests
             if (!resolved.StartsWith(FixtureBase + Path.DirectorySeparatorChar,
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 throw new InvalidOperationException("Fixture cleanup escaped its directory.");
-            if (Directory.Exists(resolved)) Directory.Delete(resolved, true);
+            if (Directory.Exists(resolved))
+                Directory.Delete(resolved, true);
         }
     }
 }

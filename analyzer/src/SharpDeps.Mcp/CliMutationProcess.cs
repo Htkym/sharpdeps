@@ -17,16 +17,25 @@ internal static class CliMutationProcess
         var assembly = typeof(McpQueryAdapter).Assembly.Location;
         var start = new ProcessStartInfo(Environment.ProcessPath ?? throw Failure())
         {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true
         };
         if (string.Equals(Path.GetFileNameWithoutExtension(start.FileName), "dotnet", StringComparison.OrdinalIgnoreCase))
             start.ArgumentList.Add(assembly);
         foreach (var argument in new[] { "--cli-mutation-helper" }.Concat(arguments))
             start.ArgumentList.Add(argument);
         Process started;
-        try { started = Process.Start(start) ?? throw Failure(); }
-        catch (Exception error) when (error is not OutOfMemoryException) { throw Failure(); }
+        try
+        {
+            started = Process.Start(start) ?? throw Failure();
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            throw Failure();
+        }
         using var process = started;
         using var cancellation = token.Register(CancelHelper);
         var stdout = CaptureAsync(process.StandardOutput, CancelHelper);
@@ -35,7 +44,8 @@ internal static class CliMutationProcess
         {
             await Task.WhenAll(stdout, stderr, process.WaitForExitAsync());
             token.ThrowIfCancellationRequested();
-            if ((await stdout).Truncated || (await stderr).Truncated) throw Failure();
+            if ((await stdout).Truncated || (await stderr).Truncated)
+                throw Failure();
             // SDK discovery can leave non-JSON console lines even after the CLI reply.
             foreach (var line in (await stdout).Text.Split('\n').Reverse())
             {
@@ -52,20 +62,32 @@ internal static class CliMutationProcess
             }
             throw Failure();
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception error) when (error is not OutOfMemoryException) { throw Failure(); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            throw Failure();
+        }
         finally
         {
             CancelHelper();
             // The helper can own the shared lease: preserve admitted clients through CLI DrainAsync.
             await process.WaitForExitAsync();
-            try { await Task.WhenAll(stdout, stderr); }
+            try
+            {
+                await Task.WhenAll(stdout, stderr);
+            }
             catch (Exception error) when (error is IOException or OperationCanceledException or McpProtocolException) { }
         }
 
         void CancelHelper()
         {
-            try { process.StandardInput.Close(); }
+            try
+            {
+                process.StandardInput.Close();
+            }
             catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException) { }
         }
     }
@@ -81,11 +103,19 @@ internal static class CliMutationProcess
             {
                 var retained = Math.Min(count, MaximumOutputChars - text.Length);
                 text.Append(buffer, 0, retained);
-                if (retained != count && !truncated) { truncated = true; cancel(); }
+                if (retained != count && !truncated)
+                {
+                    truncated = true;
+                    cancel();
+                }
                 // Continue draining discarded output so a shared owner can finish other clients.
             }
         }
-        catch { cancel(); throw; }
+        catch
+        {
+            cancel();
+            throw;
+        }
         return (text.ToString(), truncated);
     }
 

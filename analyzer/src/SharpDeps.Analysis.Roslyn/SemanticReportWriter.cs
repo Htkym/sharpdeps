@@ -255,11 +255,13 @@ public static class SemanticReportWriter
         {
             if (reference.TargetVariantKey is null
                 || !variantIdByVariantKey.TryGetValue(reference.SourceVariantKey, out var sourceVariant)
-                || !variantIdByVariantKey.TryGetValue(reference.TargetVariantKey, out var targetVariant)) continue;
+                || !variantIdByVariantKey.TryGetValue(reference.TargetVariantKey, out var targetVariant))
+                continue;
             var source = projectsByVariant[sourceVariant];
             var target = projectsByVariant[targetVariant];
             var relationId = Identity.RelationId("projectEvaluated", source.Id, target.Id, profileHash);
-            if (relations.Any(relation => relation.Id == relationId)) continue;
+            if (relations.Any(relation => relation.Id == relationId))
+                continue;
             var bytes = File.ReadAllBytes(Path.GetFullPath(Path.Combine(rootDirectory, source.RelativePath)));
             var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
             var documentId = Identity.DocumentId(rootId, source.RelativePath, "userSource");

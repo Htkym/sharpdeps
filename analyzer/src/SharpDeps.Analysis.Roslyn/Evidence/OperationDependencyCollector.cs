@@ -228,55 +228,55 @@ public sealed class OperationDependencyCollector
                 return;
 
             case IInvocationOperation invocation:
-            {
-                var target = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
-                if (target.ContainingType is null
-                    || target.ContainingType.TypeKind is TypeKind.Error or TypeKind.Dynamic)
                 {
-                    unresolved++;
+                    var target = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
+                    if (target.ContainingType is null
+                        || target.ContainingType.TypeKind is TypeKind.Error or TypeKind.Dynamic)
+                    {
+                        unresolved++;
+                        return;
+                    }
+
+                    // Virtual and interface calls are recorded against the declaration that
+                    // the compiler bound to; the runtime implementation is not guessed.
+                    if (HasCandidatesOnly(model, invocation.Syntax))
+                    {
+                        candidateOnly++;
+                        return;
+                    }
+
+                    AddEvidence(
+                        input,
+                        owner,
+                        target.ContainingType,
+                        invocation.Syntax,
+                        "calls",
+                        results,
+                        member: target);
                     return;
                 }
-
-                // Virtual and interface calls are recorded against the declaration that
-                // the compiler bound to; the runtime implementation is not guessed.
-                if (HasCandidatesOnly(model, invocation.Syntax))
-                {
-                    candidateOnly++;
-                    return;
-                }
-
-                AddEvidence(
-                    input,
-                    owner,
-                    target.ContainingType,
-                    invocation.Syntax,
-                    "calls",
-                    results,
-                    member: target);
-                return;
-            }
 
             case IMethodReferenceOperation methodReference:
-            {
-                var target = methodReference.Method.ReducedFrom ?? methodReference.Method;
-                if (target.ContainingType is null
-                    || target.ContainingType.TypeKind is TypeKind.Error or TypeKind.Dynamic)
                 {
-                    unresolved++;
-                    return;
-                }
-                if (HasCandidatesOnly(model, methodReference.Syntax))
-                {
-                    candidateOnly++;
-                    return;
-                }
+                    var target = methodReference.Method.ReducedFrom ?? methodReference.Method;
+                    if (target.ContainingType is null
+                        || target.ContainingType.TypeKind is TypeKind.Error or TypeKind.Dynamic)
+                    {
+                        unresolved++;
+                        return;
+                    }
+                    if (HasCandidatesOnly(model, methodReference.Syntax))
+                    {
+                        candidateOnly++;
+                        return;
+                    }
 
-                // Taking a delegate/event handler is a reference, not a call to its runtime target.
-                // Keep new occurrences out of report-v2 and its external-type registry.
-                AddEvidence(input, owner, target.ContainingType, methodReference.Syntax,
-                    "memberAccess", methodReferences, member: target, harnessOnly: true);
-                return;
-            }
+                    // Taking a delegate/event handler is a reference, not a call to its runtime target.
+                    // Keep new occurrences out of report-v2 and its external-type registry.
+                    AddEvidence(input, owner, target.ContainingType, methodReference.Syntax,
+                        "memberAccess", methodReferences, member: target, harnessOnly: true);
+                    return;
+                }
 
             case IPropertyReferenceOperation property:
                 if (property.Property.ContainingType is null)
@@ -383,18 +383,18 @@ public sealed class OperationDependencyCollector
                 return;
 
             case INameOfOperation nameOf:
-            {
-                // The child identifies the member or type whose name is used; a local or
-                // parameter name has no type dependency.
-                var referenced = ReferencedTypeOf(nameOf.ChildOperations.FirstOrDefault());
-                if (referenced is null)
                 {
+                    // The child identifies the member or type whose name is used; a local or
+                    // parameter name has no type dependency.
+                    var referenced = ReferencedTypeOf(nameOf.ChildOperations.FirstOrDefault());
+                    if (referenced is null)
+                    {
+                        return;
+                    }
+
+                    AddEvidence(input, owner, referenced, nameOf.Syntax, "compileTimeName", results);
                     return;
                 }
-
-                AddEvidence(input, owner, referenced, nameOf.Syntax, "compileTimeName", results);
-                return;
-            }
 
             case IInvalidOperation:
                 unresolved++;
@@ -427,7 +427,8 @@ public sealed class OperationDependencyCollector
     private static string? AccessOf(IOperation reference)
     {
         for (var ancestor = reference.Parent; ancestor is not null; ancestor = ancestor.Parent)
-            if (ancestor is INameOfOperation) return null;
+            if (ancestor is INameOfOperation)
+                return null;
 
         var storage = reference;
         // A tuple assignment writes its elements; receivers inside those elements still read.

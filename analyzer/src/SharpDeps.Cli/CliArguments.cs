@@ -28,7 +28,8 @@ internal sealed class CliArguments
     public IReadOnlyList<string>? Many(string name) => values.TryGetValue(name, out var list) ? list : null;
     public int Number(string name, int fallback, int min, int max)
     {
-        if (!Has(name)) return fallback;
+        if (!Has(name))
+            return fallback;
         if (!int.TryParse(Get(name), NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < min || value > max)
             throw new CliFailure("ARGUMENT_INVALID", 2);
         return value;
@@ -37,40 +38,55 @@ internal sealed class CliArguments
     public static CliArguments Parse(string[] args)
     {
         var parsed = new CliArguments();
-        if (args.Length == 0 || args is ["--help"] or ["-h"]) return parsed;
-        if (args.Length > 200) throw new CliFailure("ARGUMENT_INVALID", 2);
+        if (args.Length == 0 || args is ["--help"] or ["-h"])
+            return parsed;
+        if (args.Length > 200)
+            throw new CliFailure("ARGUMENT_INVALID", 2);
         parsed.Command = args[0].ToLowerInvariant();
         if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help")
-            && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
+            && !Enum.TryParse<QueryKind>(parsed.Command, true, out _))
+            throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
-        if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
+        if (parsed.Command is "index" or "update")
+            allowed.UnionWith(Index);
         else if (parsed.Command == "serve")
         {
             allowed.UnionWith(Index);
             allowed.UnionWith(["watch", "watch-resync-seconds"]);
         }
-        else if (parsed.Command == "explore") allowed.UnionWith(Explore);
-        else if (parsed.Command is not ("help" or "doctor" or "serve" or "coordinator-status")) allowed.UnionWith(Query);
+        else if (parsed.Command == "explore")
+            allowed.UnionWith(Explore);
+        else if (parsed.Command is not ("help" or "doctor" or "serve" or "coordinator-status"))
+            allowed.UnionWith(Query);
         for (var i = 1; i < args.Length; i++)
         {
             var argument = args[i];
-            if (!argument.StartsWith("--", StringComparison.Ordinal)) throw new CliFailure("ARGUMENT_INVALID", 2);
+            if (!argument.StartsWith("--", StringComparison.Ordinal))
+                throw new CliFailure("ARGUMENT_INVALID", 2);
             var name = argument[2..];
-            if (!allowed.Contains(name)) throw new CliFailure("ARGUMENT_UNKNOWN", 2);
+            if (!allowed.Contains(name))
+                throw new CliFailure("ARGUMENT_UNKNOWN", 2);
             var value = "true";
             if (!Switches.Contains(name))
             {
-                if (++i >= args.Length || args[i].StartsWith("--", StringComparison.Ordinal)) throw new CliFailure("ARGUMENT_REQUIRED", 2);
+                if (++i >= args.Length || args[i].StartsWith("--", StringComparison.Ordinal))
+                    throw new CliFailure("ARGUMENT_REQUIRED", 2);
                 value = args[i];
-                if (value.Length > 8192 || value.Length == 0 || value.Any(char.IsControl)) throw new CliFailure("ARGUMENT_INVALID", 2);
+                if (value.Length > 8192 || value.Length == 0 || value.Any(char.IsControl))
+                    throw new CliFailure("ARGUMENT_INVALID", 2);
             }
-            if (!parsed.values.TryGetValue(name, out var list)) parsed.values.Add(name, list = []);
-            else if (!Repeated.Contains(name)) throw new CliFailure("ARGUMENT_DUPLICATE", 2);
+            if (!parsed.values.TryGetValue(name, out var list))
+                parsed.values.Add(name, list = []);
+            else if (!Repeated.Contains(name))
+                throw new CliFailure("ARGUMENT_DUPLICATE", 2);
             list.Add(value);
         }
-        if (parsed.RequestId.Length > 64 || string.IsNullOrWhiteSpace(parsed.RequestId)) throw new CliFailure("ARGUMENT_INVALID", 2);
-        if (parsed.Has("kind") && parsed.Command != "query") throw new CliFailure("ARGUMENT_INVALID", 2);
-        if (parsed.Has("tfm") && !parsed.Has("project")) throw new CliFailure("PROJECT_SELECTION_REQUIRED", 2);
+        if (parsed.RequestId.Length > 64 || string.IsNullOrWhiteSpace(parsed.RequestId))
+            throw new CliFailure("ARGUMENT_INVALID", 2);
+        if (parsed.Has("kind") && parsed.Command != "query")
+            throw new CliFailure("ARGUMENT_INVALID", 2);
+        if (parsed.Has("tfm") && !parsed.Has("project"))
+            throw new CliFailure("PROJECT_SELECTION_REQUIRED", 2);
         if (parsed.Command == "serve" && !parsed.Has("watch")
             && (Index.Any(parsed.Has) || parsed.Has("watch-resync-seconds")))
             throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
@@ -121,7 +137,8 @@ internal sealed class CliArguments
         foreach (var field in new[] { "term", "id", "project-id" })
             if (Get(field) is { } value && (value.Length > 128 || string.IsNullOrWhiteSpace(value)))
                 throw new CliFailure("ARGUMENT_INVALID", 2);
-        if (Get("path-prefix") is { Length: > 512 }) throw new CliFailure("ARGUMENT_INVALID", 2);
+        if (Get("path-prefix") is { Length: > 512 })
+            throw new CliFailure("ARGUMENT_INVALID", 2);
         var ids = Get("ids")?.Split(',', StringSplitOptions.None);
         if (ids is not null && (ids.Length > 64 || ids.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 128)))
             throw new CliFailure("ARGUMENT_INVALID", 2);

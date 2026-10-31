@@ -35,24 +35,30 @@ internal static class IndexPaths
             RejectLinks(path);
             if (input.Deleted)
             {
-                if (File.Exists(path) || Directory.Exists(path)) Changed();
+                if (File.Exists(path) || Directory.Exists(path))
+                    Changed();
                 continue;
             }
             try
             {
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (stream.Length != input.ByteLength) Changed();
+                if (stream.Length != input.ByteLength)
+                    Changed();
                 var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-                if (hash != input.ContentHash) Changed();
+                if (hash != input.ContentHash)
+                    Changed();
                 if (input.Utf16Length is { } length)
                 {
                     stream.Position = 0;
                     using var reader = new StreamReader(stream, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false);
-                    if (reader.ReadToEnd().Length != length) Changed();
+                    if (reader.ReadToEnd().Length != length)
+                        Changed();
                 }
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or DecoderFallbackException)
-            { throw new IndexStoreException("SOURCE_CHANGED_SINCE_STAGING", "An input cannot be verified against the staged manifest.", error); }
+            {
+                throw new IndexStoreException("SOURCE_CHANGED_SINCE_STAGING", "An input cannot be verified against the staged manifest.", error);
+            }
         }
         token.ThrowIfCancellationRequested();
         static void Changed() => throw new IndexStoreException("SOURCE_CHANGED_SINCE_STAGING", "An input changed after staging.");

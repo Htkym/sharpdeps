@@ -60,15 +60,23 @@ internal sealed class CliCoordinator : IAsyncDisposable
             writer.IndexPath, "sharpdeps-" + instance.ToString("N"), process.Id, process.StartTime.ToUniversalTime().ToString("o"));
         // Prepare the actual listener before publishing its endpoint. Ownership still comes only from writer.
         var first = NewPipe();
-        try { CoordinatorProtocol.Publish(Owner); }
-        catch { first.Dispose(); throw; }
+        try
+        {
+            CoordinatorProtocol.Publish(Owner);
+        }
+        catch
+        {
+            first.Dispose();
+            throw;
+        }
         runner = RunBatchesAsync();
         listener = ListenAsync(first);
     }
 
     internal CoordinatorReply Status(string requestId)
     {
-        lock (gate) return new(CoordinatorProtocol.Version, Owner.Instance, requestId, committedRevision,
+        lock (gate)
+            return new(CoordinatorProtocol.Version, Owner.Instance, requestId, committedRevision,
             desiredRevision, state == "idle" && watch is { NativeAvailable: false } ? "degraded" : state,
             committed, watchError);
     }
@@ -77,7 +85,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
     {
         lock (gate)
         {
-            if (!accepting || stopping || watch is not null) throw new CliFailure("COORDINATOR_BUSY", 6);
+            if (!accepting || stopping || watch is not null)
+                throw new CliFailure("COORDINATOR_BUSY", 6);
             watch = new(this, selection, resyncPeriod);
             desiredRevision = checked(desiredRevision + 1);
             state = "dirty";
@@ -85,15 +94,24 @@ internal sealed class CliCoordinator : IAsyncDisposable
         }
     }
 
-    internal CoordinatorWatch? Watch { get { lock (gate) return watch; } }
+    internal CoordinatorWatch? Watch
+    {
+        get
+        {
+            lock (gate)
+                return watch;
+        }
+    }
 
     internal void WatchDirty(CoordinatorWatch source)
     {
         lock (gate)
         {
-            if (stopping || !ReferenceEquals(watch, source)) return;
+            if (stopping || !ReferenceEquals(watch, source))
+                return;
             desiredRevision = checked(desiredRevision + 1);
-            if (state != "updating") state = "dirty";
+            if (state != "updating")
+                state = "dirty";
         }
     }
 
@@ -101,9 +119,11 @@ internal sealed class CliCoordinator : IAsyncDisposable
     {
         lock (gate)
         {
-            if (stopping || !ReferenceEquals(watch, source)) return;
+            if (stopping || !ReferenceEquals(watch, source))
+                return;
             watchError = code;
-            if (state != "updating") state = "degraded";
+            if (state != "updating")
+                state = "degraded";
         }
     }
 
@@ -117,11 +137,13 @@ internal sealed class CliCoordinator : IAsyncDisposable
             if (stoppedWatch is not null)
             {
                 desiredRevision = checked(desiredRevision + 1);
-                if (!stopping && state != "updating") state = "dirty";
+                if (!stopping && state != "updating")
+                    state = "dirty";
                 watchError = null;
             }
         }
-        if (stoppedWatch is not null) await stoppedWatch.DisposeAsync();
+        if (stoppedWatch is not null)
+            await stoppedWatch.DisposeAsync();
     }
 
     internal async Task<CoordinatorReply> UpdateAsync(CoordinatorUpdate update, string requestId, CancellationToken clientToken,
@@ -130,7 +152,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
         var waiter = new Waiter(requestId, clientToken);
         lock (gate)
         {
-            if (!accepting || stopping) throw new CliFailure("COORDINATOR_STOPPING", 6);
+            if (!accepting || stopping)
+                throw new CliFailure("COORDINATOR_STOPPING", 6);
             clientToken.ThrowIfCancellationRequested();
             if (pending.Sum(batch => batch.Waiters.Count) >= 64 || pending.Count >= 16)
                 throw new CliFailure("COORDINATOR_BUSY", 6);
@@ -144,7 +167,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 signal.Release();
             }
             batch.Waiters.Add(waiter);
-            if (state != "updating") state = "dirty";
+            if (state != "updating")
+                state = "dirty";
             RequestAccepted?.Invoke(requestId);
         }
         // This token belongs solely to this waiter; it never cancels the shared operation.
@@ -163,7 +187,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 long captured;
                 lock (gate)
                 {
-                    if (pending.Count == 0) continue;
+                    if (pending.Count == 0)
+                        continue;
                     batch = pending[0];
                     pending.RemoveAt(0);
                     captured = desiredRevision;
@@ -186,8 +211,10 @@ internal sealed class CliCoordinator : IAsyncDisposable
                     CoordinatorResult result;
                     lock (gate)
                     {
-                        if (stopping) throw new CliFailure("COORDINATOR_STOPPING", 6);
-                        if (captured != desiredRevision) throw new CliFailure("COORDINATOR_SUPERSEDED", 3);
+                        if (stopping)
+                            throw new CliFailure("COORDINATOR_STOPPING", 6);
+                        if (captured != desiredRevision)
+                            throw new CliFailure("COORDINATOR_SUPERSEDED", 3);
                         operation.Token.ThrowIfCancellationRequested();
                         // Keep revision admission locked through the entire transaction/publication.
                         writer.Commit(IndexStage.Create(built.Snapshot), operation.Token, () =>
@@ -206,7 +233,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
                         committed = result;
                         verifyQueryInputs = built.VerifyQueryInputs;
                         committedRevision = captured;
-                        if (batch.VerifyWatchInputs is not null) watchError = null;
+                        if (batch.VerifyWatchInputs is not null)
+                            watchError = null;
                         state = pending.Count == 0 ? "idle" : "dirty";
                         Complete(batch, captured, result, null);
                     }
@@ -251,7 +279,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
         {
             lock (gate)
             {
-                foreach (var batch in pending) Complete(batch, desiredRevision, null, "COORDINATOR_STOPPING");
+                foreach (var batch in pending)
+                    Complete(batch, desiredRevision, null, "COORDINATOR_STOPPING");
                 pending.Clear();
             }
         }
@@ -285,20 +314,40 @@ internal sealed class CliCoordinator : IAsyncDisposable
             while (!admission.IsCancellationRequested)
             {
                 await slots.WaitAsync(admission.Token);
-                try { await pipe!.WaitForConnectionAsync(admission.Token); }
-                catch { slots.Release(); throw; }
+                try
+                {
+                    await pipe!.WaitForConnectionAsync(admission.Token);
+                }
+                catch
+                {
+                    slots.Release();
+                    throw;
+                }
                 var connected = pipe;
                 pipe = null;
                 var task = SessionAsync(connected);
-                lock (gate) sessions.Add(task);
-                _ = task.ContinueWith(completed => { lock (gate) sessions.Remove(completed); },
+                lock (gate)
+                    sessions.Add(task);
+                _ = task.ContinueWith(completed =>
+                {
+                    lock (gate)
+                        sessions.Remove(completed);
+                },
                     CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 pipe = NewPipe();
             }
         }
         catch (OperationCanceledException) when (admission.IsCancellationRequested) { }
-        catch (IOException) { lock (gate) state = "degraded"; lifetime.Cancel(); }
-        finally { pipe?.Dispose(); }
+        catch (IOException)
+        {
+            lock (gate)
+                state = "degraded";
+            lifetime.Cancel();
+        }
+        finally
+        {
+            pipe?.Dispose();
+        }
     }
 
     private async Task SessionAsync(NamedPipeServerStream pipe)
@@ -317,13 +366,20 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 request = await CoordinatorProtocol.ReadAsync<CoordinatorRequest>(pipe, handshake.Token);
                 Validate(request);
                 CoordinatorReply reply;
-                if (request.Operation == "status") reply = Status(request.RequestId);
+                if (request.Operation == "status")
+                    reply = Status(request.RequestId);
                 else if (request.Operation == "verify-query")
                 {
                     disconnect = WatchDisconnectAsync(pipe, session);
                     await queryProofSlot.WaitAsync(session.Token);
-                    try { reply = await Task.Run(() => VerifyQuery(request, session.Token), session.Token); }
-                    finally { queryProofSlot.Release(); }
+                    try
+                    {
+                        reply = await Task.Run(() => VerifyQuery(request, session.Token), session.Token);
+                    }
+                    finally
+                    {
+                        queryProofSlot.Release();
+                    }
                 }
                 else
                 {
@@ -344,8 +400,11 @@ internal sealed class CliCoordinator : IAsyncDisposable
                     try
                     {
                         var status = Status(request.RequestId);
-                        await CoordinatorProtocol.WriteAsync(pipe, status with { Result = null,
-                            ErrorCode = ErrorCode(error, lifetime.IsCancellationRequested) }, session.Token);
+                        await CoordinatorProtocol.WriteAsync(pipe, status with
+                        {
+                            Result = null,
+                            ErrorCode = ErrorCode(error, lifetime.IsCancellationRequested)
+                        }, session.Token);
                     }
                     catch (Exception writeError) when (writeError is IOException or OperationCanceledException or ObjectDisposedException) { }
                 }
@@ -353,7 +412,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
             finally
             {
                 session.Cancel();
-                if (disconnect is not null) await disconnect;
+                if (disconnect is not null)
+                    await disconnect;
                 slots.Release();
             }
         }
@@ -361,15 +421,18 @@ internal sealed class CliCoordinator : IAsyncDisposable
 
     private void Validate(CoordinatorRequest request)
     {
-        if (request.Protocol != CoordinatorProtocol.Version) throw new CliFailure("COORDINATOR_PROTOCOL_MISMATCH", 6);
+        if (request.Protocol != CoordinatorProtocol.Version)
+            throw new CliFailure("COORDINATOR_PROTOCOL_MISMATCH", 6);
         if (request.Instance != Owner.Instance || request.WorkspaceUuid != Owner.WorkspaceUuid
             || !CliPaths.SamePath(request.Root, Owner.Root) || !CliPaths.SamePath(request.IndexPath, Owner.IndexPath)
             || string.IsNullOrWhiteSpace(request.RequestId) || request.RequestId.Length > 64 || request.RequestId.Any(char.IsControl)
             || request.Operation is not ("status" or "update" or "verify-query") || request.Arguments is null
             || request.Arguments.Length > 200 || request.Arguments.Any(argument => argument is null || argument.Length > 8192))
             throw new CliFailure("COORDINATOR_REQUEST_INVALID", 6);
-        if (request.Operation is "update" or "verify-query" && !request.Trusted) throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
-        if (request.Operation == "status" && request.Arguments.Length != 0) throw new CliFailure("COORDINATOR_REQUEST_INVALID", 6);
+        if (request.Operation is "update" or "verify-query" && !request.Trusted)
+            throw new CliFailure("WORKSPACE_UNTRUSTED", 5);
+        if (request.Operation == "status" && request.Arguments.Length != 0)
+            throw new CliFailure("COORDINATOR_REQUEST_INVALID", 6);
         if (request.Operation == "verify-query" && (request.Arguments.Length != 2
             || !long.TryParse(request.Arguments[1], System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture, out var generation) || generation < 1))
@@ -410,24 +473,34 @@ internal sealed class CliCoordinator : IAsyncDisposable
             session.Cancel();
         }
         catch (Exception error) when (error is IOException or OperationCanceledException or ObjectDisposedException)
-        { if (!session.IsCancellationRequested) session.Cancel(); }
+        {
+            if (!session.IsCancellationRequested)
+                session.Cancel();
+        }
     }
 
     internal async Task DrainAsync()
     {
         await StopWatchAsync();
         // Close admission while preserving already admitted work, including other clients.
-        lock (gate) accepting = false;
+        lock (gate)
+            accepting = false;
         admission.Cancel();
         await listener;
         Task[] admitted;
-        lock (gate) admitted = sessions.ToArray();
+        lock (gate)
+            admitted = sessions.ToArray();
         await Task.WhenAll(admitted); // response writes complete before the shared lifetime is cancelled
         while (true)
         {
             lock (gate)
             {
-                if (pending.Count == 0 && state != "updating") { stopping = true; state = "stopping"; break; }
+                if (pending.Count == 0 && state != "updating")
+                {
+                    stopping = true;
+                    state = "stopping";
+                    break;
+                }
             }
             await Task.Delay(20, lifetime.Token);
         }
@@ -437,7 +510,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
     {
         lock (gate)
         {
-            if (disposed) return;
+            if (disposed)
+                return;
             disposed = true;
             accepting = false;
             stopping = true;
@@ -449,7 +523,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
         await listener;
         await runner;
         Task[] admitted;
-        lock (gate) admitted = sessions.ToArray();
+        lock (gate)
+            admitted = sessions.ToArray();
         await Task.WhenAll(admitted);
         // Keep a stale bounded descriptor for diagnosis. Only a newly acquired OS lease can replace it.
         writer.Dispose();

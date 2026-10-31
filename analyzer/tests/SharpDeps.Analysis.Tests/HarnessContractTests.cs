@@ -70,13 +70,19 @@ public sealed class HarnessContractTests
         var missingCoverage = JsonSerializer.Serialize(graph with { Coverage = HarnessCoverage.Partial }, HarnessGraphJsonContext.Default.HarnessGraphEnvelope)
             .Replace("\"coverage\": \"Partial\",", "", StringComparison.Ordinal);
         Assert.Throws<JsonException>(() => HarnessGraphContract.Read(missingCoverage));
-        var withEdge = graph with { Edges = [new("edge-1", symbol, symbol, occurrence, occurrence,
-            variant, "references", HarnessCertainty.Candidate, "fixture", null)] };
+        var withEdge = graph with
+        {
+            Edges = [new("edge-1", symbol, symbol, occurrence, occurrence,
+            variant, "references", HarnessCertainty.Candidate, "fixture", null)]
+        };
         var missingCertainty = JsonSerializer.Serialize(withEdge, HarnessGraphJsonContext.Default.HarnessGraphEnvelope)
             .Replace("\"certainty\": \"Candidate\",", "", StringComparison.Ordinal);
         Assert.Throws<JsonException>(() => HarnessGraphContract.Read(missingCertainty));
-        var withSpan = graph with { Nodes = [new(symbol, HarnessNodeKind.Type, "Service", null,
-            new("source-1", null, null, new HarnessRawSpan(1, 0)))] };
+        var withSpan = graph with
+        {
+            Nodes = [new(symbol, HarnessNodeKind.Type, "Service", null,
+            new("source-1", null, null, new HarnessRawSpan(1, 0)))]
+        };
         var badSpan = JsonSerializer.Serialize(withSpan, HarnessGraphJsonContext.Default.HarnessGraphEnvelope)
             .Replace("\"start\": 1", "\"start\": -1", StringComparison.Ordinal);
         Assert.Throws<JsonException>(() => HarnessGraphContract.Read(badSpan));

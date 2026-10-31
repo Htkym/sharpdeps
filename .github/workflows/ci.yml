@@ -53,6 +53,11 @@ jobs:
       - name: C# tests
         run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release
 
+      - name: Verify C# control-statement layout
+        run: |
+          dotnet format style analyzer/SharpDeps.Analyzer.slnx --diagnostics IDE2001 --no-restore --verify-no-changes
+          dotnet format whitespace analyzer/SharpDeps.Analyzer.slnx --exclude tests/fixtures --no-restore --verify-no-changes
+
       - name: TypeScript and analyzer contract tests
         run: npm test
 

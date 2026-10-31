@@ -32,8 +32,11 @@ public sealed class ExplorationTests
         Assert.Same(first, ExplorationSnapshotCache.Get(same, default));
         var changedText = fixture.Sources[Fixture.CorePath].Replace("value + count", "value - count", StringComparison.Ordinal);
         var changed = fixture.NewGeneration(changedText);
-        var replacement = changed with { Graph = changed.Graph with
-        { Generation = fixture.Snapshot.Graph.Generation, SnapshotId = fixture.Snapshot.Graph.SnapshotId } };
+        var replacement = changed with
+        {
+            Graph = changed.Graph with
+            { Generation = fixture.Snapshot.Graph.Generation, SnapshotId = fixture.Snapshot.Graph.SnapshotId }
+        };
         var changedEntry = ExplorationSnapshotCache.Get(replacement, default);
         Assert.NotSame(first, changedEntry);
         Assert.Equal(Fixture.Hash(changedText), changedEntry.files[Fixture.CorePath].ContentHash);
@@ -49,7 +52,11 @@ public sealed class ExplorationTests
         using var fixture = new Fixture();
         using var caller = new CancellationTokenSource();
         var reads = 0;
-        var observed = new ObservedIndex(() => { reads++; return fixture.Snapshot; });
+        var observed = new ObservedIndex(() =>
+        {
+            reads++;
+            return fixture.Snapshot;
+        });
         var engine = new ExplorationService(observed, new QueryWorkspace(fixture.Root), true);
         Assert.Equal(0, reads);
         caller.Cancel();
@@ -59,7 +66,11 @@ public sealed class ExplorationTests
         Assert.Equal(0, reads);
 
         using var deadline = new CancellationTokenSource();
-        var expiring = new ObservedIndex(() => { deadline.Cancel(); return fixture.Snapshot; });
+        var expiring = new ObservedIndex(() =>
+        {
+            deadline.Cancel();
+            return fixture.Snapshot;
+        });
         var expired = new ExplorationService(expiring, new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request(fixture.RunInt), deadlineToken: deadline.Token);
         Assert.Contains(expired.Errors, error => error.Code == "QUERY_TIMEOUT");
@@ -67,8 +78,11 @@ public sealed class ExplorationTests
         Assert.Empty(expired.Units);
 
         using var duringPreparation = new CancellationTokenSource();
-        var interrupted = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
-        { Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, duringPreparation.Cancel) } };
+        var interrupted = fixture.Snapshot with
+        {
+            Graph = fixture.Snapshot.Graph with
+            { Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, duringPreparation.Cancel) }
+        };
         var interruptedReply = new ExplorationService(new FixedIndex(interrupted), new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request(fixture.RunInt), duringPreparation.Token);
         Assert.True(duringPreparation.IsCancellationRequested);
@@ -177,7 +191,8 @@ public sealed class ExplorationTests
         Assert.All(reply.Units, unit =>
         {
             Assert.True(unit.CompleteSavedRange);
-            if (unit.Path.EndsWith(".cs", StringComparison.Ordinal)) Assert.Equal("unknown", unit.BodyAvailability);
+            if (unit.Path.EndsWith(".cs", StringComparison.Ordinal))
+                Assert.Equal("unknown", unit.BodyAvailability);
             Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
             Assert.Equal(Fixture.Hash(fixture.Sources[unit.Path]), unit.ContentHash);
             Assert.Equal(fixture.Sources[unit.Path][..unit.Span.Start].Count(character => character == '\n') + 1, unit.FirstLine);
@@ -194,23 +209,33 @@ public sealed class ExplorationTests
         var suspectType = fixture.Snapshot.Graph.Nodes.Single(node => node.Id == fixture.Suspect).ParentId!;
         var incoming = helper with
         {
-            Id = "incoming-caller", SourceNodeId = fixture.Suspect, SourceOccurrenceId = fixture.Occurrence(fixture.Suspect),
-            TargetNodeId = fixture.RunInt, TargetOccurrenceId = fixture.Occurrence(fixture.RunInt),
+            Id = "incoming-caller",
+            SourceNodeId = fixture.Suspect,
+            SourceOccurrenceId = fixture.Occurrence(fixture.Suspect),
+            TargetNodeId = fixture.RunInt,
+            TargetOccurrenceId = fixture.Occurrence(fixture.RunInt),
             Evidence = fixture.Snapshot.Graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.Suspect)).Location
         };
         var signature = helper with
         {
-            Id = "signature-type", Kind = "signature", TargetNodeId = suspectType,
+            Id = "signature-type",
+            Kind = "signature",
+            TargetNodeId = suspectType,
             TargetOccurrenceId = fixture.Occurrence(suspectType)
         };
         var reference = helper with
         {
-            Id = "delegate-reference", Kind = "references_member", TargetNodeId = fixture.RunString,
+            Id = "delegate-reference",
+            Kind = "references_member",
+            TargetNodeId = fixture.RunString,
             TargetOccurrenceId = fixture.Occurrence(fixture.RunString)
         };
         var unknown = signature with { Id = "unknown-relation", Kind = "future_relation" };
-        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
-        { Edges = new[] { incoming, signature, reference, unknown }.Concat(fixture.Snapshot.Graph.Edges).ToArray() } };
+        var snapshot = fixture.Snapshot with
+        {
+            Graph = fixture.Snapshot.Graph with
+            { Edges = new[] { incoming, signature, reference, unknown }.Concat(fixture.Snapshot.Graph.Edges).ToArray() }
+        };
         var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request(fixture.RunInt));
 
@@ -239,12 +264,15 @@ public sealed class ExplorationTests
         using var fixture = new Fixture(addScopes: true, dense: true, ownerGap: ownerGap);
         var query = fixture.RunInt + " " + fixture.RunString;
         var request = fixture.Request(query, pathPrefix: Fixture.CorePath);
-        var withoutSavedParent = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        var withoutSavedParent = fixture.Snapshot with
         {
-            SymbolOccurrences = fixture.Snapshot.Graph.SymbolOccurrences.Select(item =>
-                item.LogicalSymbolId == fixture.Pump && item.VariantId == fixture.Variant
-                    ? item with { Declarations = null } : item).ToArray()
-        } };
+            Graph = fixture.Snapshot.Graph with
+            {
+                SymbolOccurrences = fixture.Snapshot.Graph.SymbolOccurrences.Select(item =>
+                    item.LogicalSymbolId == fixture.Pump && item.VariantId == fixture.Variant
+                        ? item with { Declarations = null } : item).ToArray()
+            }
+        };
         var fragments = new ExplorationService(new FixedIndex(withoutSavedParent), new QueryWorkspace(fixture.Root), true)
             .Execute(request);
         var reply = fixture.Engine().Execute(request);
@@ -291,11 +319,14 @@ public sealed class ExplorationTests
         using var fixture = new Fixture(dense: true, splitRun: true);
         var ids = new[] { fixture.RunInt, fixture.RunString, fixture.Count, fixture.Total, fixture.Helper, fixture.Finish, fixture.Clamp };
         var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } };
-        var withoutSavedParent = snapshot with { Graph = snapshot.Graph with
+        var withoutSavedParent = snapshot with
         {
-            SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(item => item.LogicalSymbolId == fixture.Pump
-                ? item with { Declarations = null } : item).ToArray()
-        } };
+            Graph = snapshot.Graph with
+            {
+                SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(item => item.LogicalSymbolId == fixture.Pump
+                    ? item with { Declarations = null } : item).ToArray()
+            }
+        };
         var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
         var fragmentsEngine = new ExplorationService(new FixedIndex(withoutSavedParent), new QueryWorkspace(fixture.Root), true);
         var request = fixture.Request(string.Join(" ", ids), Generous with { MaxChars = 8192, MaxBytes = 32768 });
@@ -313,7 +344,8 @@ public sealed class ExplorationTests
             var baseline = fragmentsEngine.Execute(request with { Budget = budget });
             if (!candidate.Succeeded || !candidate.Units.Any(unit => unit.Role == "saved-owner-declaration")
                 || ids.Any(id => !candidate.Units.Any(unit => unit.SymbolIds.Contains(id)))
-                || ids.All(id => baseline.Units.Any(unit => unit.SymbolIds.Contains(id)))) continue;
+                || ids.All(id => baseline.Units.Any(unit => unit.SymbolIds.Contains(id))))
+                continue;
             AssertWireBudget(candidate, budget);
             promoted = candidate;
             fragments = baseline;
@@ -355,7 +387,8 @@ public sealed class ExplorationTests
         Assert.True(owner.CompleteSavedRange);
         Assert.Equal(Fixture.Hash(fixture.Sources[Fixture.CorePath]), owner.ContentHash);
         Assert.Equal(fixture.Sources[Fixture.CorePath].Substring(owner.Span.Start, owner.Span.Length), owner.Text);
-        foreach (var id in ids) Assert.Contains(id, owner.SymbolIds);
+        foreach (var id in ids)
+            Assert.Contains(id, owner.SymbolIds);
         Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.PartialPath);
         Assert.Contains("OMITTED_UNITS", reply.OmissionReasons);
         AssertWireBudget(reply, request.Budget!);
@@ -370,7 +403,8 @@ public sealed class ExplorationTests
         for (var step = 1; step <= 32; step++)
         {
             var chars = reply.WireChars - step * 16;
-            if (chars < 2048) break;
+            if (chars < 2048)
+                break;
             var budget = request.Budget! with { MaxChars = chars };
             var candidate = engine.Execute(request with { Budget = budget });
             attempts.Add($"budget={chars} wire={candidate.WireChars}/{candidate.WireBytes} units="
@@ -378,7 +412,8 @@ public sealed class ExplorationTests
                 + " missing=" + ids.Count(id => !candidate.Units.Any(unit => unit.SymbolIds.Contains(id)))
                 + " omissions=" + string.Join(",", candidate.OmissionReasons));
             if (!candidate.Succeeded || !candidate.Units.Any(unit => unit.SourceId == owner.SourceId
-                && unit.Span == owner.Span && ids.All(unit.SymbolIds.Contains))) continue;
+                && unit.Span == owner.Span && ids.All(unit.SymbolIds.Contains)))
+                continue;
             Assert.True(chars < reply.WireChars);
             AssertWireBudget(candidate, budget);
             pressured = candidate;
@@ -411,7 +446,8 @@ public sealed class ExplorationTests
         Assert.Equal(owner.Text, boundedOwner.Text);
         Assert.Equal("unknown", boundedOwner.BodyAvailability);
         Assert.True(boundedOwner.CompleteSavedRange);
-        foreach (var id in ids) Assert.Contains(id, boundedOwner.SymbolIds);
+        foreach (var id in ids)
+            Assert.Contains(id, boundedOwner.SymbolIds);
         Assert.DoesNotContain(bounded.Units, unit => unit.Path == Fixture.PartialPath);
         Assert.Contains("Omitted saved units=1;", bounded.Text);
         AssertWireBudget(bounded, exact);
@@ -487,7 +523,8 @@ public sealed class ExplorationTests
         foreach (var group in reply.Units.GroupBy(unit => unit.SourceId))
         {
             var ranges = group.OrderBy(unit => unit.Span.Start).ToArray();
-            for (var index = 1; index < ranges.Length; index++) Assert.True(ranges[index - 1].Span.End <= ranges[index].Span.Start);
+            for (var index = 1; index < ranges.Length; index++)
+                Assert.True(ranges[index - 1].Span.End <= ranges[index].Span.Start);
         }
     }
 
@@ -516,8 +553,11 @@ public sealed class ExplorationTests
         var edge = fixture.Snapshot.Graph.Edges.Single(item => item.Id == "read-state");
         var extra = Enumerable.Range(0, 12).Select(index => edge with
         { Id = "a-state-" + index.ToString("D2", CultureInfo.InvariantCulture), Origin = new string('o', 80) });
-        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
-        { Edges = extra.Concat(fixture.Snapshot.Graph.Edges).ToArray() } };
+        var snapshot = fixture.Snapshot with
+        {
+            Graph = fixture.Snapshot.Graph with
+            { Edges = extra.Concat(fixture.Snapshot.Graph.Edges).ToArray() }
+        };
         var budget = Generous with { MaxChars = 3200, MaxBytes = 12800 };
         var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request(fixture.RunInt + " " + Fixture.PartialPath, budget));
@@ -575,8 +615,11 @@ public sealed class ExplorationTests
         Assert.Equal(helperBeforeRun ? -1 : 1, Math.Sign(StringComparer.Ordinal.Compare(fixture.Helper, fixture.RunInt)));
         var stateEdge = fixture.Snapshot.Graph.Edges.Single(edge => edge.Id == "read-state");
         var extra = Enumerable.Range(0, 12).Select(index => stateEdge with { Id = "a-state-" + index.ToString("D2", CultureInfo.InvariantCulture) });
-        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
-        { Edges = extra.Concat(fixture.Snapshot.Graph.Edges).ToArray() } };
+        var snapshot = fixture.Snapshot with
+        {
+            Graph = fixture.Snapshot.Graph with
+            { Edges = extra.Concat(fixture.Snapshot.Graph.Edges).ToArray() }
+        };
         var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request("Pump"));
         Assert.True(reply.Succeeded);
@@ -601,8 +644,12 @@ public sealed class ExplorationTests
         using var fixture = new Fixture(workspaceUuid: Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.True(StringComparer.Ordinal.Compare(fixture.Helper, fixture.RunInt) < 0);
         var direct = fixture.Snapshot.Graph.Edges.Single(edge => edge.Id == "direct-helper");
-        var unadmitted = direct with { Id = "a-unadmitted", TargetNodeId = fixture.RunInt,
-            TargetOccurrenceId = fixture.Occurrence(fixture.RunInt) };
+        var unadmitted = direct with
+        {
+            Id = "a-unadmitted",
+            TargetNodeId = fixture.RunInt,
+            TargetOccurrenceId = fixture.Occurrence(fixture.RunInt)
+        };
         var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [unadmitted, direct] } };
         var budget = Generous with { MaxEdges = 1 };
         var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
@@ -635,8 +682,11 @@ public sealed class ExplorationTests
         using var fixture = new Fixture();
         var logical = fixture.Snapshot.Graph.Edges.Single(edge => edge.Id == "candidate") with
         { Id = "a-logical", SourceOccurrenceId = null, TargetOccurrenceId = null, VariantId = null, Kind = "unscoped_relation" };
-        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
-        { Edges = new[] { logical }.Concat(fixture.Snapshot.Graph.Edges).ToArray() } };
+        var snapshot = fixture.Snapshot with
+        {
+            Graph = fixture.Snapshot.Graph with
+            { Edges = new[] { logical }.Concat(fixture.Snapshot.Graph.Edges).ToArray() }
+        };
         var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request(fixture.RunInt));
         var identity = Assert.Single(reply.Text.Split('\n'), line => line.Contains(" id=" + fixture.RunInt + " ", StringComparison.Ordinal));
@@ -683,8 +733,10 @@ public sealed class ExplorationTests
             File.WriteAllText(fixture.CoreFullPath, fixture.Sources[Fixture.CorePath].Replace("value + count", "value - count", StringComparison.Ordinal), Fixture.Utf8);
             File.SetLastWriteTimeUtc(fixture.CoreFullPath, timestamp);
         }
-        else if (change == "delete") File.Delete(fixture.CoreFullPath);
-        else File.Move(fixture.CoreFullPath, Path.Combine(fixture.Root, "src", "Renamed.cs"));
+        else if (change == "delete")
+            File.Delete(fixture.CoreFullPath);
+        else
+            File.Move(fixture.CoreFullPath, Path.Combine(fixture.Root, "src", "Renamed.cs"));
 
         var reply = engine.Execute(fixture.Request(fixture.RunInt + " " + fixture.RunString));
         Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.CorePath);
@@ -702,7 +754,8 @@ public sealed class ExplorationTests
         var workspace = new QueryWorkspace(fixture.Root, _ =>
         {
             var current = ++inspections;
-            if (cancel && current == 2) cancellation.Cancel();
+            if (cancel && current == 2)
+                cancellation.Cancel();
             return new(fixture.Inventory(), current == 1);
         });
         var reply = fixture.Engine(workspace).Execute(fixture.Request(fixture.RunInt) with
@@ -769,7 +822,8 @@ public sealed class ExplorationTests
         public IndexSnapshot Snapshot => read();
         public IReadOnlyList<IndexSearchHit> Search(string literal, int limit)
         {
-            if (literal.Length > 128) throw new ArgumentException("The saved index accepts literals up to 128 characters.");
+            if (literal.Length > 128)
+                throw new ArgumentException("The saved index accepts literals up to 128 characters.");
             return [];
         }
     }
@@ -777,10 +831,21 @@ public sealed class ExplorationTests
     private sealed class ObservedNodes(IReadOnlyList<HarnessNode> nodes, Action observe) : IReadOnlyList<HarnessNode>
     {
         public int Count => nodes.Count;
-        public HarnessNode this[int index] { get { observe(); return nodes[index]; } }
+        public HarnessNode this[int index]
+        {
+            get
+            {
+                observe();
+                return nodes[index];
+            }
+        }
         public IEnumerator<HarnessNode> GetEnumerator()
         {
-            foreach (var node in nodes) { observe(); yield return node; }
+            foreach (var node in nodes)
+            {
+                observe();
+                yield return node;
+            }
         }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
@@ -840,7 +905,8 @@ public sealed class ExplorationTests
                 splitRunText = "public partial int Run(string value)\r\n{\r\n"
                     + string.Concat(Enumerable.Repeat("value += \"検証😀\";\r\n", 650)) + "return value.Length;\r\n}";
             }
-            if (caseDistinct) runString = runString.Replace("Run(", "run(", StringComparison.Ordinal);
+            if (caseDistinct)
+                runString = runString.Replace("Run(", "run(", StringComparison.Ordinal);
             run = "public int Run(int value)\r\n{\r\nint Next() => value + count;\r\n// 😀 \" \\\r\n"
                 + (huge ? string.Concat(Enumerable.Repeat("value += 1; // 検証😀\r\n", 650)) : "")
                 + "return " + (dense ? "Finish(Helper(Next()))" : "Helper(Next())") + ";\r\n}";
@@ -851,7 +917,8 @@ public sealed class ExplorationTests
             Sources.Add(PartialPath, splitRunText is null ? ExtraText : "partial class Pump\r\n{\r\n" + splitRunText + "\r\n}\r\n");
             Sources.Add(SuspectPath, "class Suspect { " + hidden + " }\r\n");
             Sources.Add(DocumentPath, Markdown);
-            if (addScopes) Sources.Add(OtherProjectPath, "class Pump { public int Run(int value) { return value; } }\r\n");
+            if (addScopes)
+                Sources.Add(OtherProjectPath, "class Pump { public int Run(int value) { return value; } }\r\n");
             foreach (var (path, text) in Sources)
             {
                 var full = Path.Combine(Root, path);
@@ -881,7 +948,8 @@ public sealed class ExplorationTests
             {
                 Graph = Snapshot.Graph with
                 {
-                    Generation = 2, SnapshotId = "fixture-2",
+                    Generation = 2,
+                    SnapshotId = "fixture-2",
                     Nodes = Snapshot.Graph.Nodes.Select(node => node with { Location = Update(node.Location) }).ToArray(),
                     SymbolOccurrences = Snapshot.Graph.SymbolOccurrences.Select(occurrence => occurrence with
                     { Location = Update(occurrence.Location), Declarations = occurrence.Declarations?.Select(location => Update(location)!).ToArray() }).ToArray(),
@@ -970,7 +1038,8 @@ public sealed class ExplorationTests
             {
                 nodes.Add(new(id, HarnessNodeKind.Member, name, Pump, null, signature));
                 var declarations = new List<HarnessLocation> { Location(CorePath, Span(CorePath, text)) };
-                if (otherPart is not null) declarations.Add(Location(PartialPath, Span(PartialPath, otherPart)));
+                if (otherPart is not null)
+                    declarations.Add(Location(PartialPath, Span(PartialPath, otherPart)));
                 AddOccurrence(id, Variant, declarations);
             }
             void AddOccurrence(string id, string variant, IReadOnlyList<HarnessLocation> declarations)
@@ -990,7 +1059,8 @@ public sealed class ExplorationTests
             var expected = FixtureBase + Path.DirectorySeparatorChar;
             if (!Path.GetFullPath(Root).StartsWith(expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 throw new InvalidOperationException("Fixture cleanup escaped its dedicated directory.");
-            if (Directory.Exists(Root)) Directory.Delete(Root, true);
+            if (Directory.Exists(Root))
+                Directory.Delete(Root, true);
         }
     }
 }

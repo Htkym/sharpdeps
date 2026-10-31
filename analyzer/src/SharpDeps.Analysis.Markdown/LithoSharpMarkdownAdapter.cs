@@ -20,7 +20,8 @@ public sealed class LithoSharpMarkdownAdapter
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SnapshotId);
-        if (request.Generation < 0) throw new ArgumentOutOfRangeException(nameof(request.Generation));
+        if (request.Generation < 0)
+            throw new ArgumentOutOfRangeException(nameof(request.Generation));
         var workspaceId = HarnessIdentity.WorkspaceId(request.WorkspaceUuid);
         var documentId = HarnessIdentity.DocumentId(request.WorkspaceUuid, request.DocumentUuid);
         var options = request.Options ?? new MarkdownParseOptions();
@@ -61,12 +62,15 @@ public sealed class LithoSharpMarkdownAdapter
             var durable = tokens.TryGetValue(section.LocalKey, out var token);
             var id = durable ? HarnessIdentity.SectionId(request.WorkspaceUuid, documentId, token!)
                 : LocalId("section", section.LocalKey);
-            if (!seenIds.Add(id)) throw new ArgumentException("Section bindings map distinct sections to the same identity.");
+            if (!seenIds.Add(id))
+                throw new ArgumentException("Section bindings map distinct sections to the same identity.");
             sectionIds.Add(section.LocalKey, id);
             var heading = section.HeadingLocalKey is null ? null : headingByKey.GetValueOrDefault(section.HeadingLocalKey);
             sections.Add(new(id, durable, section, heading));
-            if (!durable) reasons.Add("section-identity-pending");
-            if (heading is not null) search.Add(new(id, "heading", heading.Text));
+            if (!durable)
+                reasons.Add("section-identity-pending");
+            if (heading is not null)
+                search.Add(new(id, "heading", heading.Text));
         }
         var ownerRanges = sections.Where(s => s.Source.SubtreeSpan is { Length: > 0 })
             .OrderBy(s => s.Source.SubtreeSpan!.Value.Start)
@@ -76,10 +80,12 @@ public sealed class LithoSharpMarkdownAdapter
         {
             var parent = binding.Source.ParentLocalKey is null ? documentId
                 : sectionIds.GetValueOrDefault(binding.Source.ParentLocalKey);
-            if (parent is null) reasons.Add("section-parent-unavailable");
+            if (parent is null)
+                reasons.Add("section-parent-unavailable");
             nodes.Add(new(binding.NodeId, HarnessNodeKind.Section, binding.Heading?.Text.Text ?? "preamble",
                 parent, Location(binding.Source.SubtreeSpan)));
-            if (parent is not null) AddEdge(parent, binding.NodeId, "contains", binding.Source.SubtreeSpan,
+            if (parent is not null)
+                AddEdge(parent, binding.NodeId, "contains", binding.Source.SubtreeSpan,
                 binding.Source.SubtreeSpan is null ? HarnessCertainty.Unresolved : HarnessCertainty.Resolved);
         }
         if (facts.FrontMatter.State != MarkdownFrontMatterState.Absent)
@@ -124,10 +130,14 @@ public sealed class LithoSharpMarkdownAdapter
             cancellationToken.ThrowIfCancellationRequested();
             search.Add(new(region.RawSpan is { } span ? Owner(span) : documentId, region.Kind, region.Content));
         }
-        if (facts.Status != MarkdownParseStatus.Complete) reasons.Add("parser-" + facts.Status.ToString().ToLowerInvariant());
-        if (facts.Coverage.RawPositions != MarkdownCoverageState.Complete) reasons.Add("raw-positions-incomplete");
-        if (facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete) reasons.Add("decoded-mapping-incomplete");
-        foreach (var diagnostic in facts.Diagnostics) reasons.Add("parser-diagnostic." + diagnostic.Id);
+        if (facts.Status != MarkdownParseStatus.Complete)
+            reasons.Add("parser-" + facts.Status.ToString().ToLowerInvariant());
+        if (facts.Coverage.RawPositions != MarkdownCoverageState.Complete)
+            reasons.Add("raw-positions-incomplete");
+        if (facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete)
+            reasons.Add("decoded-mapping-incomplete");
+        foreach (var diagnostic in facts.Diagnostics)
+            reasons.Add("parser-diagnostic." + diagnostic.Id);
         var coverage = facts.Status == MarkdownParseStatus.Failed ? HarnessCoverage.Failed
             : facts.Status != MarkdownParseStatus.Complete || facts.Coverage.RawPositions != MarkdownCoverageState.Complete
                 || facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete || reasons.Count > 0
@@ -147,12 +157,15 @@ public sealed class LithoSharpMarkdownAdapter
         string Owner(RawSpan span)
         {
             // Binary lookup and parent walk avoid a full section scan for every search/link/fence fact.
-            var low = 0; var high = ownerRanges.Length;
+            var low = 0;
+            var high = ownerRanges.Length;
             while (low < high)
             {
                 var middle = low + (high - low) / 2;
-                if (ownerRanges[middle].Source.SubtreeSpan!.Value.Start <= span.Start) low = middle + 1;
-                else high = middle;
+                if (ownerRanges[middle].Source.SubtreeSpan!.Value.Start <= span.Start)
+                    low = middle + 1;
+                else
+                    high = middle;
             }
             var candidate = low > 0 ? ownerRanges[low - 1] : null;
             while (candidate is not null)
@@ -172,7 +185,8 @@ public sealed class LithoSharpMarkdownAdapter
         string LocalId(string kind, string key) => SnapshotId(documentId, request, facts, kind, key);
         void AddMetadataSearch(string key, MarkdownYamlNode value)
         {
-            if (value.Kind == MarkdownYamlKind.Scalar) search.Add(new(documentId, "metadata:" + key, value.Scalar));
+            if (value.Kind == MarkdownYamlKind.Scalar)
+                search.Add(new(documentId, "metadata:" + key, value.Scalar));
             else if (key == "tags" && value.Kind == MarkdownYamlKind.Sequence)
                 foreach (var item in value.Children.Where(c => c.Kind == MarkdownYamlKind.Scalar))
                     search.Add(new(documentId, "metadata:tags", item.Scalar));
@@ -183,15 +197,20 @@ public sealed class LithoSharpMarkdownAdapter
     {
         var values = new List<MarkdownMetadataValue>();
         var ignored = new List<string>();
-        if (root?.Kind != MarkdownYamlKind.Mapping) return (values, ignored);
+        if (root?.Kind != MarkdownYamlKind.Mapping)
+            return (values, ignored);
         foreach (var (key, value) in Entries(root))
         {
-            if (key is "title" or "tags") values.Add(new(key, value));
+            if (key is "title" or "tags")
+                values.Add(new(key, value));
             else if (key == "sharpdeps" && value.Kind == MarkdownYamlKind.Mapping)
                 foreach (var (nested, child) in Entries(value))
-                    if (nested is "id" or "symbols") values.Add(new("sharpdeps." + nested, child));
-                    else ignored.Add("sharpdeps." + nested);
-            else ignored.Add(key);
+                    if (nested is "id" or "symbols")
+                        values.Add(new("sharpdeps." + nested, child));
+                    else
+                        ignored.Add("sharpdeps." + nested);
+            else
+                ignored.Add(key);
         }
         return (values, ignored);
 
@@ -212,7 +231,8 @@ public sealed class LithoSharpMarkdownAdapter
             facts.TextHash, facts.ParserVersion, facts.OptionsHash, kind, key })
         {
             hash.AppendData(new byte[] { value is null ? (byte)0 : (byte)1 });
-            if (value is null) continue;
+            if (value is null)
+                continue;
             var bytes = StrictUtf8.GetBytes(value);
             var size = new byte[8];
             BinaryPrimitives.WriteUInt64BigEndian(size, (ulong)bytes.Length);

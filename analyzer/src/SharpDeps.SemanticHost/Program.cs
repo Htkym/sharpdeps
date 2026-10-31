@@ -247,8 +247,12 @@ internal static class CliOptions
                     {
                         variants = JsonSerializer.Deserialize<ProjectVariantSelection[]>(args[++index], new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     }
-                    catch (JsonException) { return null; }
-                    if (variants is null || variants.Any(item => string.IsNullOrWhiteSpace(item.ProjectLogicalId) || string.IsNullOrWhiteSpace(item.TargetFramework))) return null;
+                    catch (JsonException)
+                    {
+                        return null;
+                    }
+                    if (variants is null || variants.Any(item => string.IsNullOrWhiteSpace(item.ProjectLogicalId) || string.IsNullOrWhiteSpace(item.TargetFramework)))
+                        return null;
                     break;
                 case "--solution" when index + 1 < args.Length:
                     solution = args[++index];

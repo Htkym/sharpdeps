@@ -41,7 +41,8 @@ internal static class QuickTypeMapper
                 var fileScope = declaration.IsFileScoped ? documents[declaration.DocumentId].RelativePath : null;
                 var key = CanonicalKey(declaration, fileScope);
                 // A conflicted outer declaration must never merge its nested types.
-                if (incompleteParent) key += "|parent:" + string.Join(',', parents.Select(parent => parent?.Id ?? "missing"));
+                if (incompleteParent)
+                    key += "|parent:" + string.Join(',', parents.Select(parent => parent?.Id ?? "missing"));
                 return (Declaration: declaration, Key: key, FileScope: fileScope, IncompleteParent: incompleteParent);
             });
             foreach (var candidate in candidates.GroupBy(item => (Variant: variants[item.Declaration.ProjectPath], item.Key))
@@ -58,11 +59,13 @@ internal static class QuickTypeMapper
                     var partition = partitionGroup.ToArray();
                     var first = partition[0];
                     var key = candidate.Key.Key;
-                    if (conflict) key += FormattableString.Invariant($"|decl:{first.Declaration.DocumentId}:{first.Declaration.Span.Start}:{first.Declaration.Span.Length}:{first.Declaration.SyntaxKind}");
+                    if (conflict)
+                        key += FormattableString.Invariant($"|decl:{first.Declaration.DocumentId}:{first.Declaration.Span.Start}:{first.Declaration.Span.Length}:{first.Declaration.SyntaxKind}");
                     var group = new Group(Identity.TypeId(candidate.Key.Variant, key), candidate.Key.Variant,
                         string.Join('.', first.Declaration.NamespaceSegments), first.FileScope, conflict,
                         partition.Select(entry => entry.Declaration).ToArray());
-                    if (!typeIds.Add(group.Id)) throw new InvalidDataException("Quick type identity collision: " + group.Id);
+                    if (!typeIds.Add(group.Id))
+                        throw new InvalidDataException("Quick type identity collision: " + group.Id);
                     conflictTypeId ??= group.Id;
                     groups.Add(group);
                     foreach (var declaration in group.Declarations)
@@ -115,7 +118,8 @@ internal static class QuickTypeMapper
                      .ThenBy(reference => reference.Span.Start))
         {
             var ownerKey = (reference.ProjectPath, reference.DocumentId, reference.DeclarationStart, reference.DeclarationLength);
-            if (!byDeclaration.TryGetValue(ownerKey, out var source)) continue;
+            if (!byDeclaration.TryGetValue(ownerKey, out var source))
+                continue;
             var owner = owners[ownerKey];
             string? refusal = incomplete ? "InventoryIncomplete" : source.Conflicted ? "DeclarationConflict" : null;
             if (refusal is null && (reference.Shape == "unsupported"
@@ -151,15 +155,22 @@ internal static class QuickTypeMapper
         {
             writer.WriteStartArray();
             writer.WriteStartArray();
-            foreach (var segment in declaration.NamespaceSegments) writer.WriteStringValue(segment);
+            foreach (var segment in declaration.NamespaceSegments)
+                writer.WriteStringValue(segment);
             writer.WriteEndArray();
             writer.WriteStartArray();
             foreach (var segment in declaration.TypeSegments)
             {
-                writer.WriteStartArray(); writer.WriteStringValue(segment.Name); writer.WriteNumberValue(segment.Arity); writer.WriteEndArray();
+                writer.WriteStartArray();
+                writer.WriteStringValue(segment.Name);
+                writer.WriteNumberValue(segment.Arity);
+                writer.WriteEndArray();
             }
             writer.WriteEndArray();
-            if (fileScope is null) writer.WriteNullValue(); else writer.WriteStringValue(fileScope);
+            if (fileScope is null)
+                writer.WriteNullValue();
+            else
+                writer.WriteStringValue(fileScope);
             writer.WriteEndArray();
         }
         return "quick-syntax-v1:" + Encoding.UTF8.GetString(stream.ToArray());

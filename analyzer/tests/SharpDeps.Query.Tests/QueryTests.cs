@@ -70,11 +70,16 @@ public sealed class QueryTests
         var snapshot = fixture.Snapshot(1);
         var document = snapshot.Graph.Nodes.Single(n => n.Kind == HarnessNodeKind.Document);
         var mention = new HarnessNode("doc-mention", HarnessNodeKind.SymbolMention, "Service", document.Id, document.Location);
-        snapshot = snapshot with { Graph = snapshot.Graph with {
-            Nodes = [.. snapshot.Graph.Nodes, mention],
-            Edges = [.. snapshot.Graph.Edges,
+        snapshot = snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Nodes = [.. snapshot.Graph.Nodes, mention],
+                Edges = [.. snapshot.Graph.Edges,
                 new("doc-contains", document.Id, mention.Id, null, null, null, "contains", HarnessCertainty.Resolved, "document structure", document.Location),
-                new("doc-candidate", mention.Id, fixture.A, null, null, fixture.Variant, "references_symbol", HarnessCertainty.Candidate, "symbol mention", document.Location)] } };
+                new("doc-candidate", mention.Id, fixture.A, null, null, fixture.Variant, "references_symbol", HarnessCertainty.Candidate, "symbol mention", document.Location)]
+            }
+        };
         using var writer = fixture.Writer();
         writer.Commit(IndexStage.Create(snapshot));
         using var reader = fixture.Reader();
@@ -189,10 +194,23 @@ public sealed class QueryTests
         Assert.True(normal.Succeeded);
         Assert.NotNull(normal.Envelope.NextCursor);
         // The pre-option request shape must still authenticate already-issued ordinary Symbol cursors.
-        var oldShape = new {
-            RequestId = "", request.Kind, request.Term, request.NodeId, request.Ids, request.Scope,
-            request.EdgeKinds, request.IncludeCandidates, request.IncludeDocuments, request.Dependents,
-            request.Freshness, request.RequireComplete, request.PageSize, Cursor = (string?)null, request.Budget
+        var oldShape = new
+        {
+            RequestId = "",
+            request.Kind,
+            request.Term,
+            request.NodeId,
+            request.Ids,
+            request.Scope,
+            request.EdgeKinds,
+            request.IncludeCandidates,
+            request.IncludeDocuments,
+            request.Dependents,
+            request.Freshness,
+            request.RequireComplete,
+            request.PageSize,
+            Cursor = (string?)null,
+            request.Budget
         };
         var oldFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(oldShape, QueryJson.Options))));
         using var state = JsonDocument.Parse(Convert.FromBase64String(normal.Envelope.NextCursor!.Split('.')[0]));
@@ -223,10 +241,15 @@ public sealed class QueryTests
     {
         using var fixture = new StoreFixture();
         var snapshot = fixture.Snapshot(1, withoutEdges: true);
-        snapshot = snapshot with { Graph = snapshot.Graph with {
-            Nodes = snapshot.Graph.Nodes.Select(n => n.Id == fixture.A ? n with { Location = null } : n).ToArray(),
-            SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(o => o.LogicalSymbolId == fixture.A
-                ? o with { Location = null, Declarations = null } : o).ToArray() } };
+        snapshot = snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Nodes = snapshot.Graph.Nodes.Select(n => n.Id == fixture.A ? n with { Location = null } : n).ToArray(),
+                SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(o => o.LogicalSymbolId == fixture.A
+                    ? o with { Location = null, Declarations = null } : o).ToArray()
+            }
+        };
         using var writer = fixture.Writer();
         writer.Commit(IndexStage.Create(snapshot));
         using var reader = fixture.Reader();
@@ -256,14 +279,17 @@ public sealed class QueryTests
             ? location with { ContentHash = hash } : location;
         var first = snapshot.Graph.SymbolOccurrences.Single(o => o.Id == fixture.Occurrence(fixture.A)).Location!;
         var second = new HarnessLocation("other/Other.cs", "fixture-v1", hash, new(17, 8));
-        return snapshot with {
+        return snapshot with
+        {
             Files = snapshot.Files.Select(f => f.SourceId == "other/Other.cs"
                 ? f with { ContentHash = hash, ByteLength = StoreFixture.Utf8.GetByteCount(text), Utf16Length = text.Length } : f).ToArray(),
-            Graph = snapshot.Graph with {
+            Graph = snapshot.Graph with
+            {
                 Nodes = snapshot.Graph.Nodes.Select(n => n with { Location = Updated(n.Location) }).ToArray(),
                 SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(o => o.Id == fixture.Occurrence(fixture.A)
                     ? o with { Declarations = [first, second] }
-                    : o with { Location = Updated(o.Location), Declarations = o.Declarations?.Select(l => Updated(l)!).ToArray() }).ToArray() }
+                    : o with { Location = Updated(o.Location), Declarations = o.Declarations?.Select(l => Updated(l)!).ToArray() }).ToArray()
+            }
         };
     }
 
@@ -399,13 +425,26 @@ public sealed class QueryTests
         using var writer = fixture.Writer();
         var saved = fixture.Snapshot(1, withoutEdges: true, partialDeclarations: true);
         var alternateLocation = saved.Graph.SymbolOccurrences.Single(o => o.LogicalSymbolId == fixture.D).Location!;
-        saved = saved with { Graph = saved.Graph with { SymbolOccurrences = [.. saved.Graph.SymbolOccurrences,
+        saved = saved with
+        {
+            Graph = saved.Graph with
+            {
+                SymbolOccurrences = [.. saved.Graph.SymbolOccurrences,
             .. saved.Graph.SymbolOccurrences.Where(o => new[] { fixture.B, fixture.C, fixture.E }.Contains(o.LogicalSymbolId))
                 .Select(o => o with { Id = fixture.Occurrence(o.LogicalSymbolId, fixture.AlternateVariant),
-                    VariantId = fixture.AlternateVariant, Location = alternateLocation, Declarations = [alternateLocation] })] } };
+                    VariantId = fixture.AlternateVariant, Location = alternateLocation, Declarations = [alternateLocation] })]
+            }
+        };
         void Commit(long generation, params HarnessEdge[] edges)
-            => writer.Commit(IndexStage.Create(saved with { Graph = saved.Graph with {
-                Generation = generation, SnapshotId = "snapshot-" + generation, Edges = edges } }));
+            => writer.Commit(IndexStage.Create(saved with
+            {
+                Graph = saved.Graph with
+                {
+                    Generation = generation,
+                    SnapshotId = "snapshot-" + generation,
+                    Edges = edges
+                }
+            }));
         HarnessEdge Edge(string id, string from, string to, string sourceVariant, string? targetVariant)
             => new(id, from, to, fixture.Occurrence(from, sourceVariant),
                 targetVariant is null ? null : fixture.Occurrence(to, targetVariant), sourceVariant,
@@ -542,15 +581,28 @@ public sealed class QueryTests
         Assert.Equal("estimate", reply.Envelope.Budget.TokenCountKind);
         Error(query.Execute(request with { RequireComplete = true }), "INCOMPLETE_RESULT");
 
-        writer.Commit(IndexStage.Create(snapshot with { Graph = snapshot.Graph with {
-            Generation = 2, SnapshotId = "snapshot-2", Coverage = HarnessCoverage.Partial } }));
+        writer.Commit(IndexStage.Create(snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Generation = 2,
+                SnapshotId = "snapshot-2",
+                Coverage = HarnessCoverage.Partial
+            }
+        }));
         using var partialReader = fixture.Reader();
         Error(fixture.Query(partialReader).Execute(new("coverage", QueryKind.Status, RequireComplete: true, Budget: Generous)), "INCOMPLETE_RESULT");
 
         // A legal long snapshot ID can exceed a nominally valid minimum envelope budget.
         // Rejection must happen before output trimming; an endless minimal-error loop is not a response.
-        writer.Commit(IndexStage.Create(snapshot with { Graph = snapshot.Graph with {
-            Generation = 3, SnapshotId = new string('s', 2048) } }));
+        writer.Commit(IndexStage.Create(snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Generation = 3,
+                SnapshotId = new string('s', 2048)
+            }
+        }));
         using var longReader = fixture.Reader();
         var longQuery = fixture.Query(longReader);
         Assert.Throws<ArgumentException>(() => longQuery.Execute(new("small", QueryKind.Status,
@@ -601,9 +653,14 @@ public sealed class QueryTests
         using var writer = fixture.Writer();
         writer.Commit(IndexStage.Create(fixture.Snapshot(1, withoutEdges: true)));
         using var reader = fixture.Reader();
-        foreach (var relative in StoreFixture.InputPaths) File.Delete(Path.Combine(fixture.Root, relative));
+        foreach (var relative in StoreFixture.InputPaths)
+            File.Delete(Path.Combine(fixture.Root, relative));
         var inspections = 0;
-        var workspace = new QueryWorkspace(fixture.Root, _ => { inspections++; throw new InvalidOperationException("Source inventory must not be called."); });
+        var workspace = new QueryWorkspace(fixture.Root, _ =>
+        {
+            inspections++;
+            throw new InvalidOperationException("Source inventory must not be called.");
+        });
         var query = fixture.Query(reader, workspace, trusted: false);
         var request = new QueryRequest("saved", QueryKind.Context, NodeId: fixture.A, Budget: Generous);
         var reply = query.Execute(request);
@@ -655,7 +712,11 @@ public sealed class QueryTests
         var reply = query.Execute(new("union", QueryKind.Context, Ids: [fixture.A, fixture.B, fixture.C],
             Scope: new(VariantIds: [fixture.Variant]), Budget: Generous));
         Assert.True(reply.Succeeded);
-        Assert.All(reply.Envelope.Items, i => { Assert.NotEmpty(i.Reason); Assert.NotNull(i.Evidence); });
+        Assert.All(reply.Envelope.Items, i =>
+        {
+            Assert.NotEmpty(i.Reason);
+            Assert.NotNull(i.Evidence);
+        });
         var snippet = Assert.Single(All(reply), i => i.Snippet is not null).Snippet!;
         Assert.Equal(new HarnessRawSpan(0, 30), snippet.Span);
         Assert.Equal(StoreFixture.Code[..30], snippet.Text);
@@ -832,7 +893,8 @@ public sealed class QueryTests
             var allowed = Path.GetFullPath(FixtureBase) + Path.DirectorySeparatorChar;
             var resolved = Path.GetFullPath(Root);
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            if (!resolved.StartsWith(allowed, comparison)) throw new InvalidOperationException("Fixture cleanup escaped its dedicated run.");
+            if (!resolved.StartsWith(allowed, comparison))
+                throw new InvalidOperationException("Fixture cleanup escaped its dedicated run.");
             Directory.Delete(resolved, recursive: true);
         }
     }

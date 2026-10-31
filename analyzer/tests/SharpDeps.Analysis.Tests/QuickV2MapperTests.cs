@@ -339,8 +339,10 @@ public sealed class QuickV2MapperTests : IDisposable
         var root = CreateTemporaryDirectory();
         var projects = sources.Select(source => source.Path.Split('/')[0]).Distinct(StringComparer.Ordinal).ToArray();
         Write(root, "Syntax.sln", Sln(projects.Select(name => (name, $"{name}/{name}.csproj")).ToArray()));
-        foreach (var project in projects) Write(root, $"{project}/{project}.csproj", Project());
-        foreach (var source in sources) Write(root, source.Path, source.Content);
+        foreach (var project in projects)
+            Write(root, $"{project}/{project}.csproj", Project());
+        foreach (var source in sources)
+            Write(root, source.Path, source.Content);
         var collector = new QuickSourceIndexCollector(Identity.WorkspaceRootId(root), root);
         var report = await QuickAnalyzer.AnalyzeAsync(Path.Combine(root, "Syntax.sln"), 60, 200, collector);
         var index = collector.Build();

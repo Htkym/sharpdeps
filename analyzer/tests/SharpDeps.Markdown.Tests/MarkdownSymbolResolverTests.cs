@@ -129,8 +129,11 @@ public sealed class MarkdownSymbolResolverTests
         var fence = Assert.Single(result.Mentions, m => m.Origin == MarkdownMentionOrigin.CodeFence);
         Assert.Equal(HarnessCertainty.Resolved, fence.Certainty);
         Assert.Equal("App.Service", fence.Snippet);
-        var merged = projection.Graph with { Nodes = projection.Graph.Nodes.Concat(catalog.Graph.Nodes
-            .Where(n => n.Kind == HarnessNodeKind.Type)).ToArray() };
+        var merged = projection.Graph with
+        {
+            Nodes = projection.Graph.Nodes.Concat(catalog.Graph.Nodes
+            .Where(n => n.Kind == HarnessNodeKind.Type)).ToArray()
+        };
         var graph = MarkdownSymbolResolver.ProjectGraph(merged, result);
         Assert.Contains(graph.Edges, e => e.SourceNodeId == fence.Id && e.Certainty == HarnessCertainty.Resolved
             && e.Kind == "mentions_symbol" && e.Origin == "CodeFence");
@@ -316,7 +319,8 @@ public sealed class MarkdownSymbolResolverTests
         var merged = projection.Graph with
         {
             Nodes = projection.Graph.Nodes.Concat(catalog.Graph.Nodes).ToArray(),
-            Variants = catalog.Graph.Variants, SymbolOccurrences = catalog.Graph.SymbolOccurrences
+            Variants = catalog.Graph.Variants,
+            SymbolOccurrences = catalog.Graph.SymbolOccurrences
         };
         var projected = MarkdownSymbolResolver.ProjectGraph(merged, resolution);
         Assert.Equal(HarnessCoverage.Partial, projected.Coverage);
@@ -352,11 +356,23 @@ public sealed class MarkdownSymbolResolverTests
         var symbol = Symbol("App.Service", "Service", "T:App.Service", "App");
         var catalog = Catalog(projection, symbol);
         Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(projection, raw + " ", catalog));
-        var wrongSource = projection with { Graph = projection.Graph with { Nodes = projection.Graph.Nodes.Select(n =>
-            n.Kind == HarnessNodeKind.Document ? n with { Location = n.Location! with { SourceId = "other.md" } } : n).ToArray() } };
+        var wrongSource = projection with
+        {
+            Graph = projection.Graph with
+            {
+                Nodes = projection.Graph.Nodes.Select(n =>
+            n.Kind == HarnessNodeKind.Document ? n with { Location = n.Location! with { SourceId = "other.md" } } : n).ToArray()
+            }
+        };
         Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(wrongSource, raw, catalog));
-        var wrongVersion = projection with { Graph = projection.Graph with { Nodes = projection.Graph.Nodes.Select(n =>
-            n.Kind == HarnessNodeKind.Document ? n with { Location = n.Location! with { SourceVersion = "other-version" } } : n).ToArray() } };
+        var wrongVersion = projection with
+        {
+            Graph = projection.Graph with
+            {
+                Nodes = projection.Graph.Nodes.Select(n =>
+            n.Kind == HarnessNodeKind.Document ? n with { Location = n.Location! with { SourceVersion = "other-version" } } : n).ToArray()
+            }
+        };
         Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(wrongVersion, raw, catalog));
         Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(projection, raw,
             catalog with { Symbols = new[] { symbol with { NodeId = "legacy-opaque-id" } } }));
@@ -386,7 +402,12 @@ public sealed class MarkdownSymbolResolverTests
         var variants = symbols.Where(s => s.VariantId is not null).DistinctBy(s => s.VariantId).Select(s =>
             new HarnessVariant(s.VariantId!, ProjectId, s.VariantId == Net9 ? "net9.0" : "net10.0", "Debug", null, null, null)).ToArray();
         // The symbol producer's coverage is independent of the Markdown document's pending section identities.
-        return new(projection.Graph with { Coverage = HarnessCoverage.CompleteWithinScope,
-            Nodes = nodes, SymbolOccurrences = occurrences, Variants = variants }, Array.AsReadOnly(symbols));
+        return new(projection.Graph with
+        {
+            Coverage = HarnessCoverage.CompleteWithinScope,
+            Nodes = nodes,
+            SymbolOccurrences = occurrences,
+            Variants = variants
+        }, Array.AsReadOnly(symbols));
     }
 }

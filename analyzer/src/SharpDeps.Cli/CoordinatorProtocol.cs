@@ -35,7 +35,8 @@ internal static class CoordinatorProtocol
     internal static async Task WriteAsync<T>(Stream stream, T value, CancellationToken token)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, Json);
-        if (bytes.Length > MaximumFrameBytes) throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
+        if (bytes.Length > MaximumFrameBytes)
+            throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, bytes.Length);
         await stream.WriteAsync(header, token);
@@ -48,7 +49,8 @@ internal static class CoordinatorProtocol
         var header = new byte[4];
         await stream.ReadExactlyAsync(header, token);
         var size = BinaryPrimitives.ReadInt32LittleEndian(header);
-        if (size is < 2 or > MaximumFrameBytes) throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
+        if (size is < 2 or > MaximumFrameBytes)
+            throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
         var bytes = new byte[size];
         await stream.ReadExactlyAsync(bytes, token);
         return Decode<T>(bytes);
@@ -65,8 +67,14 @@ internal static class CoordinatorProtocol
             return JsonSerializer.Deserialize<T>(bytes, Json)
                 ?? throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
         }
-        catch (JsonException) { throw new CliFailure("COORDINATOR_FRAME_INVALID", 6); }
-        catch (DecoderFallbackException) { throw new CliFailure("COORDINATOR_FRAME_INVALID", 6); }
+        catch (JsonException)
+        {
+            throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
+        }
 
         static void Check(JsonElement element)
         {
@@ -75,12 +83,14 @@ internal static class CoordinatorProtocol
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var property in element.EnumerateObject())
                 {
-                    if (!names.Add(property.Name)) throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
+                    if (!names.Add(property.Name))
+                        throw new CliFailure("COORDINATOR_FRAME_INVALID", 6);
                     Check(property.Value);
                 }
             }
             else if (element.ValueKind == JsonValueKind.Array)
-                foreach (var item in element.EnumerateArray()) Check(item);
+                foreach (var item in element.EnumerateArray())
+                    Check(item);
         }
     }
 
@@ -88,13 +98,16 @@ internal static class CoordinatorProtocol
     {
         var path = MetadataPath(indexPath);
         CliPaths.RejectLinks(path);
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path))
+            return null;
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-        if (stream.Length is < 2 or > 8192) throw new CliFailure("COORDINATOR_OWNER_INVALID", 6);
+        if (stream.Length is < 2 or > 8192)
+            throw new CliFailure("COORDINATOR_OWNER_INVALID", 6);
         var bytes = new byte[checked((int)stream.Length)];
         stream.ReadExactly(bytes);
         var owner = Decode<CoordinatorOwner>(bytes);
-        if (owner.Protocol != Version) throw new CliFailure("COORDINATOR_PROTOCOL_MISMATCH", 6);
+        if (owner.Protocol != Version)
+            throw new CliFailure("COORDINATOR_PROTOCOL_MISMATCH", 6);
         if (owner.Instance == Guid.Empty || owner.WorkspaceUuid != uuid || !CliPaths.SamePath(owner.Root, root) || !CliPaths.SamePath(owner.IndexPath, indexPath)
             || owner.Endpoint != "sharpdeps-" + owner.Instance.ToString("N") || owner.ProcessId < 1
             || !DateTimeOffset.TryParse(owner.ProcessStartUtc, out _))
@@ -116,11 +129,16 @@ internal static class CoordinatorProtocol
                 JsonSerializer.Serialize(stream, owner, Json);
                 stream.Flush(true);
             }
-            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             CliPaths.RejectLinks(path);
             File.Move(temporary, path, overwrite: true);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
     }
 
     internal static async Task<CoordinatorReply?> TrySendAsync(CoordinatorOwner owner,
@@ -128,8 +146,14 @@ internal static class CoordinatorProtocol
     {
         using var pipe = new NamedPipeClientStream(".", owner.Endpoint, PipeDirection.InOut,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-        try { await pipe.ConnectAsync(750, token); }
-        catch (TimeoutException) { return null; } // Metadata alone does not prove whether the lease is free.
+        try
+        {
+            await pipe.ConnectAsync(750, token);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        } // Metadata alone does not prove whether the lease is free.
         try
         {
             await WriteAsync(pipe, request, token);
@@ -142,6 +166,8 @@ internal static class CoordinatorProtocol
             return reply;
         }
         catch (IOException) when (!token.IsCancellationRequested)
-        { throw new CliFailure("COORDINATOR_RESULT_UNKNOWN", 6); }
+        {
+            throw new CliFailure("COORDINATOR_RESULT_UNKNOWN", 6);
+        }
     }
 }
