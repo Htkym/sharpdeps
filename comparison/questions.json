@@ -1,1 +1,232 @@
-{"corpora":[{"actualIndexedCount":null,"applicationCSharp":81,"buildCSharp":1,"commit":"8aa617abed5dd645f8f9d99578a3e07b4e2e52e7","configuration":"Release","questions":[{"evaluatorOnlySources":[{"git_blob":"c044ecc58eaf3b14f4baf0dcb0ea72534c599f25","lines":"15-22,40-41","path":"src/Conduit/Features/Articles/ArticlesController.cs"}],"expectedFacts":["The list Get overload takes tag, author, favorited, limit, offset and CancellationToken and sends List.Query.","The slug Get overload takes string slug and CancellationToken and sends Details.Query.","GetFeed is a separate method, not one of the two Get overloads."],"id":"rw-get-overloads","initialNativeArguments":{"codegraphExplore":"Show the Get overloads declared by Conduit.Features.Articles.ArticlesController and the request type each sends.","sharpdepsTerm":"ArticlesController Get"},"question":"Show the Get overloads declared by Conduit.Features.Articles.ArticlesController and the request type each sends.","stop":"Correct two declaring signatures and their source bodies/request expressions; ambiguity or missing overload/body stays incomplete."},{"evaluatorOnlySources":[{"git_blob":"c044ecc58eaf3b14f4baf0dcb0ea72534c599f25","lines":"45-48","path":"src/Conduit/Features/Articles/ArticlesController.cs"},{"git_blob":"60c6f17097617a437f5a2ef7957602c174c16487","lines":"38,46-105","path":"src/Conduit/Features/Articles/Create.cs"},{"git_blob":"33df7ff798daceabf11a90fecbbd0acb3a163452","lines":"21-27,171-201","path":"src/Conduit/Infrastructure/ConduitContext.cs"}],"expectedFacts":["ArticlesController.Create accepts Create.Command, sends it through mediator and returns status 201.","Conduit.Features.Articles.Create.Command implements IRequest<ArticleEnvelope>; Create.Handler declares IRequestHandler<Command,ArticleEnvelope> and a Handle method.","Handle reads the current author, looks up/adds tags, chooses a nonconflicting slug, adds Article and ArticleTag records and calls context.SaveChangesAsync.","ConduitContext declares Articles, Tags and ArticleTags DbSets and overrides SaveChangesAsync, forwarding to base and mapping known duplicate-identity provider failures to a conflict RestException."],"id":"rw-article-persistence","initialNativeArguments":{"codegraphExplore":"Starting at ArticlesController.Create, find the declared article command handler and the source that writes the article/tag records and customizes saving.","sharpdepsTerm":"ArticlesController Create"},"question":"Starting at ArticlesController.Create, find the declared article command handler and the source that writes the article/tag records and customizes saving.","stop":"Source witnesses for controller, declared handler eligibility and persistence calls/override across three files. Do not require or assert a proven runtime mediator-to-handler edge; preserve unknown/candidate/generated dispatch."},{"evaluatorOnlySources":[{"git_blob":"eec6768ab86e28cfd0e939f2f49048413e9cc017","lines":"17-53","path":"src/Conduit/Features/Profiles/ProfileReader.cs"},{"git_blob":"33df7ff798daceabf11a90fecbbd0acb3a163452","lines":"23","path":"src/Conduit/Infrastructure/ConduitContext.cs"}],"expectedFacts":["ReadProfile(string username,CancellationToken) queries context.Persons without tracking and matches Username.","A missing requested person throws a NotFound RestException for profile.","The method maps PersonToProfile; only when currentPersonId is nonnull does it load the current person's Following/Followers.","A missing current person in that branch throws a NotFound RestException for user; an absent current identity skips that branch.","ConduitContext.Persons is declared as DbSet<Person>."],"id":"rw-profile-reader","initialNativeArguments":{"codegraphExplore":"Show ProfileReader.ReadProfile, the persistence member it reads, and the branches for a missing requested profile or missing current user.","sharpdepsTerm":"ProfileReader ReadProfile"},"question":"Show ProfileReader.ReadProfile, the persistence member it reads, and the branches for a missing requested profile or missing current user.","stop":"Correct service body/branches and Persons declaration; no requirement to reconstruct generated mapper implementation or execute HTTP/database requests."}],"repository":"https://github.com/realworld-apps/aspnetcore-realworld-example-app","role":"Small explicit public alternative, not the historical official corpus","scope":"All tracked source input; full three-project solution. 106 source paths are not 78 historical indexed files.","sharpdepsTarget":"Conduit.slnx","submodule":"RealWorld API-test gitlink not initialized; not part of selected C# scope","testCSharp":24,"trackedBlobs":146,"trackedCSharp":106},{"actualIndexedCount":null,"commit":"83d0d0e7f76e23e2e085c8ff67d28b772d35967d","configuration":"Release","outsideThosePrefixesCSharp":1932,"questions":[{"boundary":null,"evaluatorOnlySources":[{"end":1737,"path":"Emby.Server.Implementations/Library/LibraryManager.cs","start":1689}],"expectedFacts":["BaseItem? GetItemById(Guid id) rejects an empty Guid, checks the cache, retrieves and registers a found item.","T? GetItemById<T>(Guid id) where T:BaseItem delegates to the non-generic overload and returns a type match or null.","T? GetItemById<T>(Guid id, Guid userId) resolves a user or null for empty user ID and delegates to the User? overload.","T? GetItemById<T>(Guid id, User? user) applies ItemIsVisible to the typed item."],"id":"J1-overloads","initialNativeArguments":{"codegraphExplore":"In LibraryManager, what GetItemById overloads exist, and how do the generic/user-aware overloads delegate or filter the result?","sharpdepsTerm":"LibraryManager GetItemById"},"question":"In LibraryManager, what GetItemById overloads exist, and how do the generic/user-aware overloads delegate or filter the result?"},{"boundary":null,"evaluatorOnlySources":[{"end":38,"path":"MediaBrowser.Model/Configuration/LibraryOptions.cs","start":9},{"end":59,"path":"MediaBrowser.Model/Configuration/LibraryOptions.cs","start":43},{"end":151,"path":"MediaBrowser.Model/Configuration/LibraryOptions.cs","start":138}],"expectedFacts":["EnableRealtimeMonitor is a bool property.","PathInfos is MediaPathInfo[] and the constructor initializes it to an empty array.","TypeOptions is TypeOptions[] initialized to an empty array.","GetTypeOptions(string type) compares options.Type with OrdinalIgnoreCase, returning the matching options or null."],"id":"J2-type","initialNativeArguments":{"codegraphExplore":"What does LibraryOptions expose for realtime monitoring, paths and per-type options, and how does GetTypeOptions match a type?","sharpdepsTerm":"LibraryOptions"},"question":"What does LibraryOptions expose for realtime monitoring, paths and per-type options, and how does GetTypeOptions match a type?"},{"boundary":"Source-declared scheduling/explicit-cast flow. No inferred winning DI binding, interface runtime dispatch, scheduling success or globally confirmed call-path claim.","evaluatorOnlySources":[{"end":352,"path":"Jellyfin.Api/Controllers/LibraryController.cs","start":337},{"end":168,"path":"MediaBrowser.Controller/Library/ILibraryManager.cs","start":168},{"end":1432,"path":"Emby.Server.Implementations/Library/LibraryManager.cs","start":1403},{"end":64,"path":"Emby.Server.Implementations/ScheduledTasks/Tasks/RefreshMediaLibraryTask.cs","start":57}],"expectedFacts":["RefreshLibrary is declared for HttpPost Library/Refresh, calls the ILibraryManager field's ValidateMediaLibrary with Progress<double> and CancellationToken.None, logs exceptions and returns NoContent.","ILibraryManager declares Task ValidateMediaLibrary(IProgress<double>, CancellationToken).","LibraryManager.ValidateMediaLibrary queues RefreshMediaLibraryTask through CancelIfRunningAndQueue and returns Task.CompletedTask; its completion is not the scan's completion.","RefreshMediaLibraryTask.ExecuteAsync checks cancellation, reports zero, then explicitly casts its library manager to LibraryManager and awaits ValidateMediaLibraryInternal.","ValidateMediaLibraryInternal marks scan running, stops the library monitor, awaits PerformLibraryValidation and restores monitor/state in finally."],"id":"J3-multi-file","initialNativeArguments":{"codegraphExplore":"Trace how LibraryController.RefreshLibrary starts a scan across the controller, library manager and scheduled task. Does the controller's awaited call itself wait for the scan to finish?","sharpdepsTerm":"LibraryController RefreshLibrary"},"question":"Trace how LibraryController.RefreshLibrary starts a scan across the controller, library manager and scheduled task. Does the controller's awaited call itself wait for the scan to finish?"}],"releaseMapping":"39 Release and 2 Debug (Keyframes/Hls) source mappings; preserve official solution","releaseTag":"v12.4","repository":"https://github.com/jellyfin/jellyfin","role":"Large official-manifest repository, newly fixed source revision","scope":"Entire pinned source input; natural full Jellyfin.sln. Two fuzz projects are outside solution; report actual tool coverage.","sharpdepsTarget":"Jellyfin.sln","solutionProjects":41,"testOrFuzzPrefixCSharp":315,"trackedBlobs":2655,"trackedCSharp":2247,"trackedProjects":43}],"protocol":{"corpusInput":"Full identical pinned tracked repository in separate isolated copies; no submodule initialization or source trimming","followups":"Only selectors/names/paths present in that tool returned evidence; stop on sufficiency,cap,error or unsupported outcome","goldenData":"This file stays outside indexed corpus inputs; evaluator expected facts/paths are not query hints","initialCalls":1,"maxCallsPerQuestion":3,"maxReturnedEvidenceFollowups":2,"maxTotalQueryCalls":36,"metric":"Non-TTY complete CLI stdout: raw UTF-8 bytes and decoded UTF-16 characters, including normal line endings; stderr separate","nativeSettings":{"codegraph":"Native adaptive defaults, maxFiles not forced","sharpdeps":"Agent12000chars/48000bytes/1000ms RequireUnique"},"nativeSyntaxMappingPredeclared":true,"noClaims":["LLM accuracy","autonomous convergence","token savings","general performance","runtime dispatch proof"],"opaqueInitialIds":false,"sameQuestionPerTool":true,"successPaddingRetries":0,"warmups":0},"scope":"New small/large comparison; source-only freeze, no execution"}
+{
+  "corpora": [
+    {
+      "actualIndexedCount": null,
+      "applicationCSharp": 81,
+      "buildCSharp": 1,
+      "commit": "8aa617abed5dd645f8f9d99578a3e07b4e2e52e7",
+      "configuration": "Release",
+      "questions": [
+        {
+          "evaluatorOnlySources": [
+            {
+              "git_blob": "c044ecc58eaf3b14f4baf0dcb0ea72534c599f25",
+              "lines": "15-22,40-41",
+              "path": "src/Conduit/Features/Articles/ArticlesController.cs"
+            }
+          ],
+          "expectedFacts": [
+            "The list Get overload takes tag, author, favorited, limit, offset and CancellationToken and sends List.Query.",
+            "The slug Get overload takes string slug and CancellationToken and sends Details.Query.",
+            "GetFeed is a separate method, not one of the two Get overloads."
+          ],
+          "id": "rw-get-overloads",
+          "initialNativeArguments": {
+            "codegraphExplore": "Show the Get overloads declared by Conduit.Features.Articles.ArticlesController and the request type each sends.",
+            "sharpdepsTerm": "ArticlesController Get"
+          },
+          "question": "Show the Get overloads declared by Conduit.Features.Articles.ArticlesController and the request type each sends.",
+          "stop": "Correct two declaring signatures and their source bodies/request expressions; ambiguity or missing overload/body stays incomplete."
+        },
+        {
+          "evaluatorOnlySources": [
+            {
+              "git_blob": "c044ecc58eaf3b14f4baf0dcb0ea72534c599f25",
+              "lines": "45-48",
+              "path": "src/Conduit/Features/Articles/ArticlesController.cs"
+            },
+            {
+              "git_blob": "60c6f17097617a437f5a2ef7957602c174c16487",
+              "lines": "38,46-105",
+              "path": "src/Conduit/Features/Articles/Create.cs"
+            },
+            {
+              "git_blob": "33df7ff798daceabf11a90fecbbd0acb3a163452",
+              "lines": "21-27,171-201",
+              "path": "src/Conduit/Infrastructure/ConduitContext.cs"
+            }
+          ],
+          "expectedFacts": [
+            "ArticlesController.Create accepts Create.Command, sends it through mediator and returns status 201.",
+            "Conduit.Features.Articles.Create.Command implements IRequest<ArticleEnvelope>; Create.Handler declares IRequestHandler<Command,ArticleEnvelope> and a Handle method.",
+            "Handle reads the current author, looks up/adds tags, chooses a nonconflicting slug, adds Article and ArticleTag records and calls context.SaveChangesAsync.",
+            "ConduitContext declares Articles, Tags and ArticleTags DbSets and overrides SaveChangesAsync, forwarding to base and mapping known duplicate-identity provider failures to a conflict RestException."
+          ],
+          "id": "rw-article-persistence",
+          "initialNativeArguments": {
+            "codegraphExplore": "Starting at ArticlesController.Create, find the declared article command handler and the source that writes the article/tag records and customizes saving.",
+            "sharpdepsTerm": "ArticlesController Create"
+          },
+          "question": "Starting at ArticlesController.Create, find the declared article command handler and the source that writes the article/tag records and customizes saving.",
+          "stop": "Source witnesses for controller, declared handler eligibility and persistence calls/override across three files. Do not require or assert a proven runtime mediator-to-handler edge; preserve unknown/candidate/generated dispatch."
+        },
+        {
+          "evaluatorOnlySources": [
+            {
+              "git_blob": "eec6768ab86e28cfd0e939f2f49048413e9cc017",
+              "lines": "17-53",
+              "path": "src/Conduit/Features/Profiles/ProfileReader.cs"
+            },
+            {
+              "git_blob": "33df7ff798daceabf11a90fecbbd0acb3a163452",
+              "lines": "23",
+              "path": "src/Conduit/Infrastructure/ConduitContext.cs"
+            }
+          ],
+          "expectedFacts": [
+            "ReadProfile(string username,CancellationToken) queries context.Persons without tracking and matches Username.",
+            "A missing requested person throws a NotFound RestException for profile.",
+            "The method maps PersonToProfile; only when currentPersonId is nonnull does it load the current person's Following/Followers.",
+            "A missing current person in that branch throws a NotFound RestException for user; an absent current identity skips that branch.",
+            "ConduitContext.Persons is declared as DbSet<Person>."
+          ],
+          "id": "rw-profile-reader",
+          "initialNativeArguments": {
+            "codegraphExplore": "Show ProfileReader.ReadProfile, the persistence member it reads, and the branches for a missing requested profile or missing current user.",
+            "sharpdepsTerm": "ProfileReader ReadProfile"
+          },
+          "question": "Show ProfileReader.ReadProfile, the persistence member it reads, and the branches for a missing requested profile or missing current user.",
+          "stop": "Correct service body/branches and Persons declaration; no requirement to reconstruct generated mapper implementation or execute HTTP/database requests."
+        }
+      ],
+      "repository": "https://github.com/realworld-apps/aspnetcore-realworld-example-app",
+      "role": "Small explicit public alternative, not the historical official corpus",
+      "scope": "All tracked source input; full three-project solution. 106 source paths are not 78 historical indexed files.",
+      "sharpdepsTarget": "Conduit.slnx",
+      "submodule": "RealWorld API-test gitlink not initialized; not part of selected C# scope",
+      "testCSharp": 24,
+      "trackedBlobs": 146,
+      "trackedCSharp": 106
+    },
+    {
+      "actualIndexedCount": null,
+      "commit": "83d0d0e7f76e23e2e085c8ff67d28b772d35967d",
+      "configuration": "Release",
+      "outsideThosePrefixesCSharp": 1932,
+      "questions": [
+        {
+          "boundary": null,
+          "evaluatorOnlySources": [
+            {
+              "end": 1737,
+              "path": "Emby.Server.Implementations/Library/LibraryManager.cs",
+              "start": 1689
+            }
+          ],
+          "expectedFacts": [
+            "BaseItem? GetItemById(Guid id) rejects an empty Guid, checks the cache, retrieves and registers a found item.",
+            "T? GetItemById<T>(Guid id) where T:BaseItem delegates to the non-generic overload and returns a type match or null.",
+            "T? GetItemById<T>(Guid id, Guid userId) resolves a user or null for empty user ID and delegates to the User? overload.",
+            "T? GetItemById<T>(Guid id, User? user) applies ItemIsVisible to the typed item."
+          ],
+          "id": "J1-overloads",
+          "initialNativeArguments": {
+            "codegraphExplore": "In LibraryManager, what GetItemById overloads exist, and how do the generic/user-aware overloads delegate or filter the result?",
+            "sharpdepsTerm": "LibraryManager GetItemById"
+          },
+          "question": "In LibraryManager, what GetItemById overloads exist, and how do the generic/user-aware overloads delegate or filter the result?"
+        },
+        {
+          "boundary": null,
+          "evaluatorOnlySources": [
+            { "end": 38, "path": "MediaBrowser.Model/Configuration/LibraryOptions.cs", "start": 9 },
+            {
+              "end": 59,
+              "path": "MediaBrowser.Model/Configuration/LibraryOptions.cs",
+              "start": 43
+            },
+            {
+              "end": 151,
+              "path": "MediaBrowser.Model/Configuration/LibraryOptions.cs",
+              "start": 138
+            }
+          ],
+          "expectedFacts": [
+            "EnableRealtimeMonitor is a bool property.",
+            "PathInfos is MediaPathInfo[] and the constructor initializes it to an empty array.",
+            "TypeOptions is TypeOptions[] initialized to an empty array.",
+            "GetTypeOptions(string type) compares options.Type with OrdinalIgnoreCase, returning the matching options or null."
+          ],
+          "id": "J2-type",
+          "initialNativeArguments": {
+            "codegraphExplore": "What does LibraryOptions expose for realtime monitoring, paths and per-type options, and how does GetTypeOptions match a type?",
+            "sharpdepsTerm": "LibraryOptions"
+          },
+          "question": "What does LibraryOptions expose for realtime monitoring, paths and per-type options, and how does GetTypeOptions match a type?"
+        },
+        {
+          "boundary": "Source-declared scheduling/explicit-cast flow. No inferred winning DI binding, interface runtime dispatch, scheduling success or globally confirmed call-path claim.",
+          "evaluatorOnlySources": [
+            { "end": 352, "path": "Jellyfin.Api/Controllers/LibraryController.cs", "start": 337 },
+            {
+              "end": 168,
+              "path": "MediaBrowser.Controller/Library/ILibraryManager.cs",
+              "start": 168
+            },
+            {
+              "end": 1432,
+              "path": "Emby.Server.Implementations/Library/LibraryManager.cs",
+              "start": 1403
+            },
+            {
+              "end": 64,
+              "path": "Emby.Server.Implementations/ScheduledTasks/Tasks/RefreshMediaLibraryTask.cs",
+              "start": 57
+            }
+          ],
+          "expectedFacts": [
+            "RefreshLibrary is declared for HttpPost Library/Refresh, calls the ILibraryManager field's ValidateMediaLibrary with Progress<double> and CancellationToken.None, logs exceptions and returns NoContent.",
+            "ILibraryManager declares Task ValidateMediaLibrary(IProgress<double>, CancellationToken).",
+            "LibraryManager.ValidateMediaLibrary queues RefreshMediaLibraryTask through CancelIfRunningAndQueue and returns Task.CompletedTask; its completion is not the scan's completion.",
+            "RefreshMediaLibraryTask.ExecuteAsync checks cancellation, reports zero, then explicitly casts its library manager to LibraryManager and awaits ValidateMediaLibraryInternal.",
+            "ValidateMediaLibraryInternal marks scan running, stops the library monitor, awaits PerformLibraryValidation and restores monitor/state in finally."
+          ],
+          "id": "J3-multi-file",
+          "initialNativeArguments": {
+            "codegraphExplore": "Trace how LibraryController.RefreshLibrary starts a scan across the controller, library manager and scheduled task. Does the controller's awaited call itself wait for the scan to finish?",
+            "sharpdepsTerm": "LibraryController RefreshLibrary"
+          },
+          "question": "Trace how LibraryController.RefreshLibrary starts a scan across the controller, library manager and scheduled task. Does the controller's awaited call itself wait for the scan to finish?"
+        }
+      ],
+      "releaseMapping": "39 Release and 2 Debug (Keyframes/Hls) source mappings; preserve official solution",
+      "releaseTag": "v12.4",
+      "repository": "https://github.com/jellyfin/jellyfin",
+      "role": "Large official-manifest repository, newly fixed source revision",
+      "scope": "Entire pinned source input; natural full Jellyfin.sln. Two fuzz projects are outside solution; report actual tool coverage.",
+      "sharpdepsTarget": "Jellyfin.sln",
+      "solutionProjects": 41,
+      "testOrFuzzPrefixCSharp": 315,
+      "trackedBlobs": 2655,
+      "trackedCSharp": 2247,
+      "trackedProjects": 43
+    }
+  ],
+  "protocol": {
+    "corpusInput": "Full identical pinned tracked repository in separate isolated copies; no submodule initialization or source trimming",
+    "followups": "Only selectors/names/paths present in that tool returned evidence; stop on sufficiency,cap,error or unsupported outcome",
+    "goldenData": "This file stays outside indexed corpus inputs; evaluator expected facts/paths are not query hints",
+    "initialCalls": 1,
+    "maxCallsPerQuestion": 3,
+    "maxReturnedEvidenceFollowups": 2,
+    "maxTotalQueryCalls": 36,
+    "metric": "Non-TTY complete CLI stdout: raw UTF-8 bytes and decoded UTF-16 characters, including normal line endings; stderr separate",
+    "nativeSettings": {
+      "codegraph": "Native adaptive defaults, maxFiles not forced",
+      "sharpdeps": "Agent12000chars/48000bytes/1000ms RequireUnique"
+    },
+    "nativeSyntaxMappingPredeclared": true,
+    "noClaims": [
+      "LLM accuracy",
+      "autonomous convergence",
+      "token savings",
+      "general performance",
+      "runtime dispatch proof"
+    ],
+    "opaqueInitialIds": false,
+    "sameQuestionPerTool": true,
+    "successPaddingRetries": 0,
+    "warmups": 0
+  },
+  "scope": "New small/large comparison; source-only freeze, no execution"
+}
