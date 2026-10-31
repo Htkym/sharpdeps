@@ -1,0 +1,67 @@
+name: CodeGraph comparison (explicit only)
+
+# This workflow never runs as part of the normal CI. It starts only when a
+# human dispatches it, or when a push's head commit message carries the
+# explicit [comparison] marker. The comparison itself is a later phase;
+# the stages here are prepare (fixed inputs + tools) and smoke (the
+# collection path on a minimal fixture).
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Stage to run'
+        type: choice
+        options:
+          - prepare
+          - smoke
+        default: smoke
+      corpus:
+        description: 'Corpus to prepare'
+        type: choice
+        options:
+          - all
+          - small
+          - large
+        default: all
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+jobs:
+  comparison:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[comparison]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js (CodeGraph runtime)
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Prepare comparison inputs and tools
+        shell: pwsh
+        run: ./comparison/prepare.ps1 -Root "${{ runner.temp }}/scg" -Stage All -Corpus "${{ inputs.corpus || 'all' }}"
+
+      - name: Smoke the comparison plumbing
+        if: github.event_name == 'push' || inputs.stage == 'smoke'
+        shell: pwsh
+        run: ./comparison/smoke.ps1 -Root "${{ runner.temp }}/scg"
+
+      - name: Upload comparison preparation outputs
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: comparison-prep-${{ github.run_id }}
+          path: ${{ runner.temp }}/scg/o
+          retention-days: 7
+          if-no-files-found: warn
