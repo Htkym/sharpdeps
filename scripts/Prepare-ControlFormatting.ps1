@@ -65,10 +65,18 @@ foreach ($project in $projects) {
     dotnet format style $project --diagnostics IDE2001 --exclude @excluded --no-restore --verbosity normal
     if ($LASTEXITCODE -ne 0) { throw "IDE2001 formatting failed: $project" }
 }
+foreach ($project in $projects) {
+    dotnet format whitespace $project --exclude @excluded --no-restore --verbosity normal
+    if ($LASTEXITCODE -ne 0) { throw "Whitespace formatting failed: $project" }
+}
 Check-Tokens 'all-source-token-check'
 foreach ($project in $projects) {
     dotnet format style $project --diagnostics IDE2001 --exclude @excluded --no-restore --verify-no-changes
     if ($LASTEXITCODE -ne 0) { throw "IDE2001 verification failed: $project" }
+}
+foreach ($project in $projects) {
+    dotnet format whitespace $project --exclude @excluded --no-restore --verify-no-changes
+    if ($LASTEXITCODE -ne 0) { throw "Whitespace verification failed: $project" }
 }
 $changed = @(git diff --name-only)
 if ($LASTEXITCODE -ne 0) { throw 'git diff failed' }
@@ -82,5 +90,5 @@ git diff --check
 if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
 git diff --binary --output="$out/control-format.patch" -- '*.cs'
 if ($LASTEXITCODE -ne 0) { throw 'Patch generation failed' }
-[ordered]@{ sourceCommit = $env:GITHUB_SHA; sdk = (dotnet --version); completed = $true; changedFiles = $changed; scope = 'IDE2001 only; hand-written C# projects; fixture/template/generated exclusions in editorconfig'; projects = $projects; excludedPaths = $excluded; tests = 'Not run: this job produces a reviewed formatting proposal, not release acceptance' } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'summary.json')
-"IDE2001 proposal: $($changed.Count) changed source files; token checks passed; no commit or push." >> $env:GITHUB_STEP_SUMMARY
+[ordered]@{ sourceCommit = $env:GITHUB_SHA; sdk = (dotnet --version); completed = $true; changedFiles = $changed; scope = 'IDE2001 and whitespace only; hand-written C# projects; fixture/template/generated exclusions in editorconfig'; projects = $projects; excludedPaths = $excluded; tests = 'Not run: this job produces a reviewed formatting proposal, not release acceptance' } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'summary.json')
+"Control formatting proposal: $($changed.Count) changed source files; token checks passed; no commit or push." >> $env:GITHUB_STEP_SUMMARY
