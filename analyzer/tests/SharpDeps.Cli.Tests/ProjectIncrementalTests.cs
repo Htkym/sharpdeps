@@ -42,7 +42,11 @@ public sealed class ProjectIncrementalTests
             new("B", "vB", "pB", ["b", "shared"], []), new("C", "vC", "pC", ["shared"], []),
             new("D", "vD", "pD", [], []) };
         var newSelections = oldSelections.Select(s => s.Key == "B" ? s with { SourceIds = ["b", "shared", "added"] } : s).ToArray();
-        if (delete) { (before, after) = (after, before); (oldSelections, newSelections) = (newSelections, oldSelections); }
+        if (delete)
+        {
+            (before, after) = (after, before);
+            (oldSelections, newSelections) = (newSelections, oldSelections);
+        }
         // Retained shared content also changes: both B and C must be dirty; D remains reusable.
         var current = after.Select(f => f.SourceId == "shared" ? File("shared", 'b') : f).ToDictionary(f => f.SourceId);
         var data = JsonSerializer.SerializeToElement(new CliProjectReuse.Extraction(new([], [], [], false), [],

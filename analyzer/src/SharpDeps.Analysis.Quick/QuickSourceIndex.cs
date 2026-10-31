@@ -164,7 +164,8 @@ public sealed class QuickSourceIndexCollector
             _types.Add(declaration);
             _retainedTypeNameUnits += units;
         }
-        else OmitTypeDeclaration();
+        else
+            OmitTypeDeclaration();
     }
 
     public void AddTypeReference(QuickTypeBaseReference reference)
@@ -175,7 +176,8 @@ public sealed class QuickSourceIndexCollector
             _typeReferences.Add(reference);
             _retainedTypeNameUnits += units;
         }
-        else _typeReferencesOmitted++;
+        else
+            _typeReferencesOmitted++;
     }
 
     public void OmitTypeDeclaration() => _typeDeclarationsOmitted++;

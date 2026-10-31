@@ -202,150 +202,150 @@ public sealed class DeclarationDependencyCollector
         switch (member)
         {
             case MethodDeclarationSyntax method:
-            {
-                var symbol = model.GetDeclaredSymbol(method);
-                Emit(
-                    model,
-                    input,
-                    [method.ReturnType],
-                    method.ParameterList.Parameters,
-                    sourceTypeId,
-                    symbol,
-                    method.ConstraintClauses,
-                    method.AttributeLists,
-                    results);
-                return;
-            }
-
-            case ConstructorDeclarationSyntax constructor:
-            {
-                Emit(
-                    model,
-                    input,
-                    [],
-                    constructor.ParameterList.Parameters,
-                    sourceTypeId,
-                    model.GetDeclaredSymbol(constructor),
-                    SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                    constructor.AttributeLists,
-                    results);
-                return;
-            }
-
-            case PropertyDeclarationSyntax property:
-            {
-                var symbol = model.GetDeclaredSymbol(property);
-                Emit(
-                    model,
-                    input,
-                    [property.Type],
-                    null,
-                    sourceTypeId,
-                    symbol,
-                    SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                    property.AttributeLists,
-                    results);
-                return;
-            }
-
-            case IndexerDeclarationSyntax indexer:
-            {
-                Emit(
-                    model,
-                    input,
-                    [indexer.Type],
-                    indexer.ParameterList.Parameters,
-                    sourceTypeId,
-                    model.GetDeclaredSymbol(indexer),
-                    SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                    indexer.AttributeLists,
-                    results);
-                return;
-            }
-
-            case EventDeclarationSyntax eventDeclaration:
-            {
-                Emit(
-                    model,
-                    input,
-                    [eventDeclaration.Type],
-                    null,
-                    sourceTypeId,
-                    model.GetDeclaredSymbol(eventDeclaration),
-                    SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                    eventDeclaration.AttributeLists,
-                    results);
-                return;
-            }
-
-            case FieldDeclarationSyntax field:
-            {
-                foreach (var variable in field.Declaration.Variables)
                 {
-                    var symbol = model.GetDeclaredSymbol(variable);
+                    var symbol = model.GetDeclaredSymbol(method);
                     Emit(
                         model,
                         input,
-                        [field.Declaration.Type],
+                        [method.ReturnType],
+                        method.ParameterList.Parameters,
+                        sourceTypeId,
+                        symbol,
+                        method.ConstraintClauses,
+                        method.AttributeLists,
+                        results);
+                    return;
+                }
+
+            case ConstructorDeclarationSyntax constructor:
+                {
+                    Emit(
+                        model,
+                        input,
+                        [],
+                        constructor.ParameterList.Parameters,
+                        sourceTypeId,
+                        model.GetDeclaredSymbol(constructor),
+                        SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
+                        constructor.AttributeLists,
+                        results);
+                    return;
+                }
+
+            case PropertyDeclarationSyntax property:
+                {
+                    var symbol = model.GetDeclaredSymbol(property);
+                    Emit(
+                        model,
+                        input,
+                        [property.Type],
                         null,
                         sourceTypeId,
                         symbol,
                         SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                        field.AttributeLists,
+                        property.AttributeLists,
                         results);
+                    return;
                 }
 
-                return;
-            }
-
-            case EventFieldDeclarationSyntax eventField:
-            {
-                foreach (var variable in eventField.Declaration.Variables)
+            case IndexerDeclarationSyntax indexer:
                 {
                     Emit(
                         model,
                         input,
-                        [eventField.Declaration.Type],
-                        null,
+                        [indexer.Type],
+                        indexer.ParameterList.Parameters,
                         sourceTypeId,
-                        model.GetDeclaredSymbol(variable),
+                        model.GetDeclaredSymbol(indexer),
                         SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                        eventField.AttributeLists,
+                        indexer.AttributeLists,
                         results);
+                    return;
                 }
 
-                return;
-            }
+            case EventDeclarationSyntax eventDeclaration:
+                {
+                    Emit(
+                        model,
+                        input,
+                        [eventDeclaration.Type],
+                        null,
+                        sourceTypeId,
+                        model.GetDeclaredSymbol(eventDeclaration),
+                        SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
+                        eventDeclaration.AttributeLists,
+                        results);
+                    return;
+                }
+
+            case FieldDeclarationSyntax field:
+                {
+                    foreach (var variable in field.Declaration.Variables)
+                    {
+                        var symbol = model.GetDeclaredSymbol(variable);
+                        Emit(
+                            model,
+                            input,
+                            [field.Declaration.Type],
+                            null,
+                            sourceTypeId,
+                            symbol,
+                            SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
+                            field.AttributeLists,
+                            results);
+                    }
+
+                    return;
+                }
+
+            case EventFieldDeclarationSyntax eventField:
+                {
+                    foreach (var variable in eventField.Declaration.Variables)
+                    {
+                        Emit(
+                            model,
+                            input,
+                            [eventField.Declaration.Type],
+                            null,
+                            sourceTypeId,
+                            model.GetDeclaredSymbol(variable),
+                            SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
+                            eventField.AttributeLists,
+                            results);
+                    }
+
+                    return;
+                }
 
             case OperatorDeclarationSyntax @operator:
-            {
-                Emit(
-                    model,
-                    input,
-                    [@operator.ReturnType],
-                    @operator.ParameterList.Parameters,
-                    sourceTypeId,
-                    model.GetDeclaredSymbol(@operator),
-                    SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                    @operator.AttributeLists,
-                    results);
-                return;
-            }
+                {
+                    Emit(
+                        model,
+                        input,
+                        [@operator.ReturnType],
+                        @operator.ParameterList.Parameters,
+                        sourceTypeId,
+                        model.GetDeclaredSymbol(@operator),
+                        SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
+                        @operator.AttributeLists,
+                        results);
+                    return;
+                }
 
             case ConversionOperatorDeclarationSyntax conversion:
-            {
-                Emit(
-                    model,
-                    input,
-                    [conversion.Type],
-                    conversion.ParameterList.Parameters,
-                    sourceTypeId,
-                    model.GetDeclaredSymbol(conversion),
-                    SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
-                    conversion.AttributeLists,
-                    results);
-                return;
-            }
+                {
+                    Emit(
+                        model,
+                        input,
+                        [conversion.Type],
+                        conversion.ParameterList.Parameters,
+                        sourceTypeId,
+                        model.GetDeclaredSymbol(conversion),
+                        SyntaxFactory.List<TypeParameterConstraintClauseSyntax>(),
+                        conversion.AttributeLists,
+                        results);
+                    return;
+                }
 
             default:
                 return;

@@ -28,18 +28,30 @@ public sealed class CliMarkdownInputTests
         var config = Path.Combine(fixture.Root, "NuGet.Config");
         File.WriteAllText(config, "<configuration><packageSources><clear /></packageSources></configuration>");
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-        { WorkingDirectory = fixture.Root, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true };
+        {
+            WorkingDirectory = fixture.Root,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
         foreach (var argument in new[] { "restore", fixture.Options.Target, "--configfile", config, "--verbosity", "quiet" })
             start.ArgumentList.Add(argument);
         using (var restore = Process.Start(start) ?? throw new InvalidOperationException("Offline fixture restore did not start."))
         {
             var stdout = restore.StandardOutput.ReadToEndAsync();
             var stderr = restore.StandardError.ReadToEndAsync();
-            try { await restore.WaitForExitAsync(deadline.Token); }
+            try
+            {
+                await restore.WaitForExitAsync(deadline.Token);
+            }
             finally
             {
-                if (!restore.HasExited) { restore.Kill(entireProcessTree: true); await restore.WaitForExitAsync(); }
+                if (!restore.HasExited)
+                {
+                    restore.Kill(entireProcessTree: true);
+                    await restore.WaitForExitAsync();
+                }
             }
             Assert.True(restore.ExitCode == 0, await stdout + await stderr);
         }
@@ -173,8 +185,11 @@ public sealed class CliMarkdownInputTests
             Assert.Equal(MarkdownParseStatus.Complete, facts.Status);
             var sections = MarkdownIdentityMatcher.MatchSections(Options.WorkspaceUuid, document, raw, facts, null,
                 () => Guid.NewGuid().ToString("N"));
-            var projection = adapter.Analyze(request with { SectionTokens = sections.SectionTokens,
-                SectionIdentityTextHash = sections.TextHash }, true);
+            var projection = adapter.Analyze(request with
+            {
+                SectionTokens = sections.SectionTokens,
+                SectionIdentityTextHash = sections.TextHash
+            }, true);
             Assert.Equal(HarnessCoverage.CompleteWithinScope, projection.Graph.Coverage);
             return new(projection.Graph, [new("readme", "README.md", "markdown", hash, bytes.Length, raw.Length)],
                 [new(document, "README.md", null, hash, scope, facts.ParserVersion, facts.ContractVersion, facts.ProfileId,

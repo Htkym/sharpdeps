@@ -61,10 +61,14 @@ public sealed class SourceDocumentRegistry
     {
         var mapped = syntax.SyntaxTree.GetMappedLineSpan(syntax.Span);
         var physical = syntax.SyntaxTree.GetLineSpan(syntax.Span);
-        if (!mapped.IsValid || (!mapped.HasMappedPath && mapped.StartLinePosition == physical.StartLinePosition)) return null;
+        if (!mapped.IsValid || (!mapped.HasMappedPath && mapped.StartLinePosition == physical.StartLinePosition))
+            return null;
         var directory = Path.GetDirectoryName(Path.GetFullPath(syntax.SyntaxTree.FilePath)) ?? _rootDirectory;
         string fullPath;
-        try { fullPath = Path.GetFullPath(mapped.Path, directory); }
+        try
+        {
+            fullPath = Path.GetFullPath(mapped.Path, directory);
+        }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return null;

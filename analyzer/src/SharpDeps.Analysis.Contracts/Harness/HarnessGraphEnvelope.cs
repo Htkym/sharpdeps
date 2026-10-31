@@ -18,8 +18,14 @@ public static class HarnessGraphContract
             ValidateHeader(graph);
             return graph;
         }
-        catch (ArgumentException error) { throw new JsonException("Invalid harness graph input.", error); }
-        catch (OverflowException error) { throw new JsonException("Invalid harness graph range.", error); }
+        catch (ArgumentException error)
+        {
+            throw new JsonException("Invalid harness graph input.", error);
+        }
+        catch (OverflowException error)
+        {
+            throw new JsonException("Invalid harness graph range.", error);
+        }
     }
 
     // Header validation does not validate the storage/query graph.
@@ -51,7 +57,8 @@ public readonly record struct HarnessRawSpan
     [JsonConstructor]
     public HarnessRawSpan(int start, int length)
     {
-        if (start < 0 || length < 0) throw new ArgumentOutOfRangeException(nameof(start));
+        if (start < 0 || length < 0)
+            throw new ArgumentOutOfRangeException(nameof(start));
         _ = checked(start + length);
         Start = start;
         Length = length;

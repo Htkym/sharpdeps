@@ -639,10 +639,20 @@ public sealed class OperationDependencyCollectorTests : IDisposable
             """));
         var expected = new Dictionary<string, string?>
         {
-            ["Read"] = "read", ["Write"] = "write", ["Compound"] = "readWrite",
-            ["Increment"] = "readWrite", ["Ref"] = "readWrite", ["Out"] = "write", ["In"] = "read",
-            ["Changed"] = "write", ["Property"] = "write", ["Receiver"] = "read", ["NameOnly"] = null,
-            ["TupleLeft"] = "write", ["TupleRight"] = "write", ["Optional"] = "readWrite"
+            ["Read"] = "read",
+            ["Write"] = "write",
+            ["Compound"] = "readWrite",
+            ["Increment"] = "readWrite",
+            ["Ref"] = "readWrite",
+            ["Out"] = "write",
+            ["In"] = "read",
+            ["Changed"] = "write",
+            ["Property"] = "write",
+            ["Receiver"] = "read",
+            ["NameOnly"] = null,
+            ["TupleLeft"] = "write",
+            ["TupleRight"] = "write",
+            ["Optional"] = "readWrite"
         };
         foreach (var (name, access) in expected)
         {

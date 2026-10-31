@@ -147,7 +147,8 @@ public static class SemanticLoader
                     && csharp.Any(candidate => candidate.Id == reference.ProjectId)))
                     throw new InvalidOperationException($"The selected TFMs conflict with evaluated ProjectReferences in '{project.Name}'. Choose compatible TFMs or Automatic.");
             }
-            foreach (var project in csharp.Where(project => !selected.Contains(project.Id))) solution = solution.RemoveProject(project.Id);
+            foreach (var project in csharp.Where(project => !selected.Contains(project.Id)))
+                solution = solution.RemoveProject(project.Id);
         }
 
         var addedReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -505,11 +506,13 @@ public static class SemanticLoader
     /// </summary>
     private static string ReadProjectKind(Project project, List<ProbeLimitation> limitations)
     {
-        if (project.FilePath is null) return "unknown";
+        if (project.FilePath is null)
+            return "unknown";
         try
         {
             var root = XDocument.Load(project.FilePath).Root;
-            if (root is null) return "unknown";
+            if (root is null)
+                return "unknown";
             var outputType = project.CompilationOptions?.OutputKind switch
             {
                 OutputKind.ConsoleApplication => "Exe",
@@ -669,7 +672,8 @@ public static class SemanticLoader
 
         foreach (var diagnostic in diagnostics)
         {
-            if (diagnostic.Kind != "Failure") continue;
+            if (diagnostic.Kind != "Failure")
+                continue;
             foreach (Match match in pattern.Matches(diagnostic.Message))
             {
                 if (!failures.ContainsKey(match.Value))

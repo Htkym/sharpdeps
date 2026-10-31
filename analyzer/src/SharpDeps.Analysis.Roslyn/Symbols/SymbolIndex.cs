@@ -420,7 +420,7 @@ public static class SymbolIndexBuilder
         }
 
         return symbol.DeclaredAccessibility switch
-    {
+        {
             Microsoft.CodeAnalysis.Accessibility.Public => "public",
             Microsoft.CodeAnalysis.Accessibility.Internal => "internal",
             Microsoft.CodeAnalysis.Accessibility.Protected => "protected",

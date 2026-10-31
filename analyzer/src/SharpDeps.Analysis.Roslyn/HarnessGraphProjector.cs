@@ -129,14 +129,16 @@ public static class HarnessGraphProjector
                 "candidate" or "inferred" => HarnessCertainty.Candidate,
                 _ => HarnessCertainty.Unresolved
             };
-            if (certainty != HarnessCertainty.Resolved) Count("roslyn.nonResolvedEvidence", 1);
+            if (certainty != HarnessCertainty.Resolved)
+                Count("roslyn.nonResolvedEvidence", 1);
             if (string.IsNullOrEmpty(record.SourceContentHash) || record.PhysicalSpan is null)
                 Count("roslyn.sourceEvidenceUnavailable", 1);
             var location = new HarnessLocation(record.DocumentId, null, record.SourceContentHash,
                 record.PhysicalSpan is { } span ? new(span.Start, span.Length) : null);
             var kinds = entry.Access switch
             {
-                "read" => new[] { "reads" }, "write" => new[] { "writes" },
+                "read" => new[] { "reads" },
+                "write" => new[] { "writes" },
                 "readWrite" => new[] { "reads", "writes" },
                 null => new[] { record.Kind == "memberAccess" ? "references_member" : record.Kind },
                 _ => throw new ArgumentException("Unsupported access provenance.", nameof(evidence))
@@ -149,11 +151,13 @@ public static class HarnessGraphProjector
                     source.Id, target.Id, source.VariantId, kind, certainty,
                     entry.Producer ?? "roslyn", location, record.Origin);
                 // Duplicate evidence keeps the least certain classification.
-                if (edges.TryGetValue(id, out var previous) && (int)previous.Certainty > (int)edge.Certainty) edge = previous;
+                if (edges.TryGetValue(id, out var previous) && (int)previous.Certainty > (int)edge.Certainty)
+                    edge = previous;
                 edges[id] = edge;
             }
         }
-        if (coverage == HarnessCoverage.CompleteWithinScope && diagnostics.Count > 0) coverage = HarnessCoverage.Partial;
+        if (coverage == HarnessCoverage.CompleteWithinScope && diagnostics.Count > 0)
+            coverage = HarnessCoverage.Partial;
         var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
             HarnessGraphContract.IdentityVersion, workspaceId, snapshotId, generation, coverage,
             Freeze(variants.Values.OrderBy(v => v.Id, StringComparer.Ordinal)),
@@ -170,7 +174,8 @@ public static class HarnessGraphProjector
             : throw new ArgumentException("Every indexed declaration needs an explicit project variant.", nameof(projects));
         void Count(string code, int count)
         {
-            if (count > 0) diagnostics[code] = checked(diagnostics.GetValueOrDefault(code) + count);
+            if (count > 0)
+                diagnostics[code] = checked(diagnostics.GetValueOrDefault(code) + count);
         }
         void AddSymbol(string legacyId, string logicalId, HarnessNodeKind kind, string name, string parentId,
             string signature, string key, IReadOnlyList<SymbolDeclarationLocation> declarations)
@@ -194,7 +199,8 @@ public static class HarnessGraphProjector
         {
             if (!documents.TryGetValue(declaration.DocumentId, out var document))
                 throw new ArgumentException("A declaration's source document is missing.", nameof(index));
-            if (string.IsNullOrEmpty(document.ContentHash)) Count("roslyn.sourceEvidenceUnavailable", 1);
+            if (string.IsNullOrEmpty(document.ContentHash))
+                Count("roslyn.sourceEvidenceUnavailable", 1);
             return new(document.Id, null, document.ContentHash, new(declaration.Start, declaration.Length));
         }
         HarnessSymbolOccurrence External(HarnessTargetSymbol symbol, string key)

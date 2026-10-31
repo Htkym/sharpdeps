@@ -53,7 +53,8 @@ public sealed class CliTests
     public void ConcurrentProofReadersCannotLoseByteCharges()
     {
         var budget = new CliReuseProof.ProofBudget(default, new(default), git: true);
-        for (var index = 0; index < 63; index++) budget.Bytes(1024 * 1024);
+        for (var index = 0; index < 63; index++)
+            budget.Bytes(1024 * 1024);
         Parallel.For(0, 1000, _ => budget.Bytes(1024));
         Assert.Equal("Reuse proof byte budget exceeded.",
             Assert.Throws<IOException>(() => budget.Bytes(25000)).Message);
@@ -71,7 +72,10 @@ public sealed class CliTests
         var target = HarnessIdentity.LogicalSymbolId(fixture.Uuid, primary.ProjectId, "method", "M:Service.Run");
         var tail = HarnessIdentity.LogicalSymbolId(fixture.Uuid, primary.ProjectId, "method", "M:Service.Other");
         string Occurrence(string node, string variant) => HarnessIdentity.SymbolOccurrenceId(fixture.Uuid, node, variant);
-        var graph = saved.Graph with { SnapshotId = "markdown-connectivity", Generation = 2,
+        var graph = saved.Graph with
+        {
+            SnapshotId = "markdown-connectivity",
+            Generation = 2,
             Variants = [.. saved.Graph.Variants, new(alternate, primary.ProjectId, "net9.0", "Debug", null, null, null)],
             Nodes = [.. saved.Graph.Nodes, new(target, HarnessNodeKind.Member, "Run", parent.Id, parent.Location),
                 new(tail, HarnessNodeKind.Member, "Other", parent.Id, parent.Location)],
@@ -80,7 +84,8 @@ public sealed class CliTests
                     Occurrence(node, variant), node, variant, parent.Location, [parent.Location!])))],
             Edges = new[] { primary.Id, alternate }.Select(variant => new HarnessEdge("calls-" + variant,
                 target, tail, Occurrence(target, variant), Occurrence(tail, variant), variant,
-                "calls", HarnessCertainty.Resolved, "fixture-semantic", parent.Location)).ToArray() };
+                "calls", HarnessCertainty.Resolved, "fixture-semantic", parent.Location)).ToArray()
+        };
         const string raw = "---\nsharpdeps:\n  symbols:\n    - documentationId: M:Service.Run\n---\n# Guide\n\nService.Run\n";
         File.WriteAllText(Path.Combine(fixture.Root, "readme.md"), raw, new UTF8Encoding(false));
         var documentUuid = Guid.NewGuid();
@@ -89,22 +94,32 @@ public sealed class CliTests
         var adapter = new LithoSharpMarkdownAdapter();
         var parsed = adapter.Analyze(request, true);
         var tokens = parsed.Facts.Sections.ToDictionary(s => s.LocalKey, s => "regression:" + s.LocalKey);
-        var projection = adapter.Analyze(request with { SectionTokens = tokens,
-            SectionIdentityTextHash = parsed.Facts.TextHash }, true);
-        graph = graph with { Nodes = graph.Nodes.Concat(projection.Graph.Nodes).DistinctBy(n => n.Id).ToArray(),
-            Edges = graph.Edges.Concat(projection.Graph.Edges).ToArray(), Markdown = projection.Graph.Markdown };
+        var projection = adapter.Analyze(request with
+        {
+            SectionTokens = tokens,
+            SectionIdentityTextHash = parsed.Facts.TextHash
+        }, true);
+        graph = graph with
+        {
+            Nodes = graph.Nodes.Concat(projection.Graph.Nodes).DistinctBy(n => n.Id).ToArray(),
+            Edges = graph.Edges.Concat(projection.Graph.Edges).ToArray(),
+            Markdown = projection.Graph.Markdown
+        };
         var catalog = new MarkdownSymbolCatalog(graph, new[] { primary.Id, alternate }.Select(variant =>
             new MarkdownSymbolCandidate(target, "Service.Run", "Run", "M:Service.Run", VariantId: variant)).ToArray());
         var resolution = MarkdownSymbolResolver.Resolve(projection, raw, catalog);
         var projected = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
         var stamp = projected.Markdown!;
-        var snapshot = saved with { Graph = projected,
+        var snapshot = saved with
+        {
+            Graph = projected,
             Files = [.. saved.Files, new("readme.md", "readme.md", "markdown", parsed.Facts.TextHash,
                 Encoding.UTF8.GetByteCount(raw), raw.Length)],
             Documents = [new(documentUuid, "readme.md", null, parsed.Facts.TextHash, graph.WorkspaceId,
                 stamp.ParserVersion, stamp.ContractVersion, stamp.ProfileId, stamp.OptionsHash,
                 projection.Sections.Select(s => new IndexSectionIdentity(s.Source.LocalKey,
-                    tokens[s.Source.LocalKey], null, null)).ToArray())] };
+                    tokens[s.Source.LocalKey], null, null)).ToArray())]
+        };
         using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
         writer.Commit(IndexStage.Create(snapshot));
         using var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
@@ -300,8 +315,14 @@ public sealed class CliTests
             }
             using var latest = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
             var previous = latest.Snapshot();
-            return new(previous with { Graph = previous.Graph with { Generation = previous.Graph.Generation + 1,
-                SnapshotId = Guid.NewGuid().ToString("N") } }, () => Interlocked.Increment(ref publications));
+            return new(previous with
+            {
+                Graph = previous.Graph with
+                {
+                    Generation = previous.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            }, () => Interlocked.Increment(ref publications));
         });
         owner.RequestAccepted = id =>
         {
@@ -380,8 +401,14 @@ public sealed class CliTests
         var sdk = CliSdkSelection.Capture(fixture.Root);
         using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
         var previous = pinned.Snapshot();
-        var next = previous with { Graph = previous.Graph with { Generation = previous.Graph.Generation + 1,
-            SnapshotId = Guid.NewGuid().ToString("N") } };
+        var next = previous with
+        {
+            Graph = previous.Graph with
+            {
+                Generation = previous.Graph.Generation + 1,
+                SnapshotId = Guid.NewGuid().ToString("N")
+            }
+        };
         var stage = IndexStage.Create(next);
         using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
         var buildGuardCalled = false;
@@ -429,7 +456,11 @@ public sealed class CliTests
             Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
                 IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
         }
-        finally { foreach (var connection in connections) connection.Dispose(); }
+        finally
+        {
+            foreach (var connection in connections)
+                connection.Dispose();
+        }
     }
 
     [Fact]
@@ -457,11 +488,18 @@ public sealed class CliTests
         var incrementalBuilds = 0;
         await using var owner = new CliCoordinator(writer, (update, token) =>
         {
-            if (!update.Full) Interlocked.Increment(ref incrementalBuilds);
+            if (!update.Full)
+                Interlocked.Increment(ref incrementalBuilds);
             using var reader = IndexReader.Open(customIndex, fixture.Uuid);
             var prior = reader.Snapshot();
-            var snapshot = prior with { Graph = prior.Graph with {
-                Generation = prior.Graph.Generation + 1, SnapshotId = Guid.NewGuid().ToString("N") } };
+            var snapshot = prior with
+            {
+                Graph = prior.Graph with
+                {
+                    Generation = prior.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            };
             if (update.Full && File.Exists(recoveryInput)
                 && File.ReadAllBytes(recoveryInput).SequenceEqual(new byte[] { 1, 0, 2, 0 }))
                 Volatile.Write(ref recoveredSnapshot, snapshot.Graph.SnapshotId);
@@ -498,9 +536,14 @@ public sealed class CliTests
         await WaitUntilAsync(() =>
         {
             var expected = Volatile.Read(ref recoveredSnapshot);
-            if (expected is null || owner.Status("periodic").Result?.SnapshotId != expected) return false;
+            if (expected is null || owner.Status("periodic").Result?.SnapshotId != expected)
+                return false;
             var committed = IndexReader.Open(customIndex, fixture.Uuid);
-            if (committed.Snapshot().Graph.SnapshotId != expected) { committed.Dispose(); return false; }
+            if (committed.Snapshot().Graph.SnapshotId != expected)
+            {
+                committed.Dispose();
+                return false;
+            }
             recoveredReader = committed; // Pin this observed full commit before the next periodic stage.
             return true;
         }, deadline.Token);
@@ -572,7 +615,8 @@ public sealed class CliTests
 
     private static async Task WaitUntilAsync(Func<bool> ready, CancellationToken token)
     {
-        while (!ready()) await Task.Delay(20, token);
+        while (!ready())
+            await Task.Delay(20, token);
     }
 
     private static string Code(string json)
@@ -582,7 +626,8 @@ public sealed class CliTests
     }
     private static async Task<(int Exit, string Json, string Progress)> Run(params string[] arguments)
     {
-        var output = new StringWriter(); var progress = new StringWriter();
+        var output = new StringWriter();
+        var progress = new StringWriter();
         var exit = await CliApplication.RunAsync(arguments, output, progress);
         return (exit, output.ToString(), progress.ToString());
     }
@@ -603,10 +648,15 @@ public sealed class CliTests
         public Fixture(bool seed = true)
         {
             Directory.CreateDirectory(Root);
-            if (!seed) return;
+            if (!seed)
+                return;
             Directory.CreateDirectory(Path.Combine(Root, ".sharpdeps"));
-            File.WriteAllText(Path.Combine(Root, ".sharpdeps/workspace.json"), JsonSerializer.Serialize(new {
-                schemaVersion = 1, workspaceUuid = uuid, cursorKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) }));
+            File.WriteAllText(Path.Combine(Root, ".sharpdeps/workspace.json"), JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                workspaceUuid = uuid,
+                cursorKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            }));
             var bytes = new UTF8Encoding(false).GetBytes(Text);
             File.WriteAllBytes(Path.Combine(Root, "Service.cs"), bytes);
             var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

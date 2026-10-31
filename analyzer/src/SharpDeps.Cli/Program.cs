@@ -1,7 +1,11 @@
 using SharpDeps.Cli;
 
 using var cancellation = new CancellationTokenSource();
-Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
+Console.CancelKeyPress += (_, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    cancellation.Cancel();
+};
 if (args is ["--vscode-mutation-helper", ..])
     return await CliMutationEntry.RunAsync(args[1..], Console.OpenStandardInput(), Console.Out,
         Console.Error, cancellation.Token);

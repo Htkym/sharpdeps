@@ -14,15 +14,30 @@ public static class CliMutationEntry
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
         // Do not delay normal exit waiting for a parent that keeps stdin open.
         _ = CancelOnInputAsync();
-        try { return await CliApplication.RunAsync(arguments, output, error, stop.Token); }
-        finally { stop.Cancel(); }
+        try
+        {
+            return await CliApplication.RunAsync(arguments, output, error, stop.Token);
+        }
+        finally
+        {
+            stop.Cancel();
+        }
 
         async Task CancelOnInputAsync()
         {
-            try { await input.ReadExactlyAsync(new byte[1], stop.Token); }
+            try
+            {
+                await input.ReadExactlyAsync(new byte[1], stop.Token);
+            }
             catch (IOException) { }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
-            try { stop.Cancel(); }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            {
+                return;
+            }
+            try
+            {
+                stop.Cancel();
+            }
             catch (ObjectDisposedException) { }
         }
     }

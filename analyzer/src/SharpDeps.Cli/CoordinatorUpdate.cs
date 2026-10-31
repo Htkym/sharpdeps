@@ -27,8 +27,15 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
     }
 
     // Client timeout/request ID/quiet do not affect the requested extraction. The owner imposes its own deadline.
-    internal string Key => System.Text.Json.JsonSerializer.Serialize(new { Target = KeyPath(Options.Target), Options.Configuration,
-        Options.Platform, Projects = Options.ProjectPaths?.Select(KeyPath).Order(StringComparer.Ordinal).ToArray(), Options.TargetFramework, Full });
+    internal string Key => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        Target = KeyPath(Options.Target),
+        Options.Configuration,
+        Options.Platform,
+        Projects = Options.ProjectPaths?.Select(KeyPath).Order(StringComparer.Ordinal).ToArray(),
+        Options.TargetFramework,
+        Full
+    });
 
     private static string KeyPath(string path) => OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
 
@@ -36,9 +43,12 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
     {
         var args = new List<string> { Full ? "index" : "update", "--root", Options.Root, "--index", Options.IndexPath,
             "--trusted", "--target", Options.Target, "--configuration", Options.Configuration };
-        if (Options.Platform is { } platform) args.AddRange(["--platform", platform]);
-        foreach (var project in Options.ProjectPaths ?? []) args.AddRange(["--project", project]);
-        if (Options.TargetFramework is { } framework) args.AddRange(["--tfm", framework]);
+        if (Options.Platform is { } platform)
+            args.AddRange(["--platform", platform]);
+        foreach (var project in Options.ProjectPaths ?? [])
+            args.AddRange(["--project", project]);
+        if (Options.TargetFramework is { } framework)
+            args.AddRange(["--tfm", framework]);
         return args.ToArray();
     }
 }
@@ -52,16 +62,22 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
     {
         var options = update.Options with { TimeoutSeconds = 300 };
         CliSdkSelection selected;
-        try { selected = CliSdkSelection.Capture(Path.GetDirectoryName(options.Target)!); }
+        try
+        {
+            selected = CliSdkSelection.Capture(Path.GetDirectoryName(options.Target)!);
+        }
         catch (CliFailure failure) when (selection is not null && failure.Code == "CLI_SDK_UNAVAILABLE")
-        { throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6); }
+        {
+            throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
+        }
         if (selection is not null && !selection.SameSdk(selected))
             throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
         selected.VerifyRegistered(Path.GetDirectoryName(options.Target)!);
         // Locator initializes MSBuild environment variables. Capture the publication stamp after that
         // initialization, and bind the owner to SDK identity rather than a target's ancestor path list.
         var current = CliSdkSelection.Capture(Path.GetDirectoryName(options.Target)!);
-        if (!selected.SameSdk(current)) throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
+        if (!selected.SameSdk(current))
+            throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
         selection ??= current;
         IndexSnapshot? previous = null;
         try
@@ -93,9 +109,14 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
         => () =>
         {
             CliSdkSelection selected;
-            try { selected = CliSdkSelection.Capture(directory); }
+            try
+            {
+                selected = CliSdkSelection.Capture(directory);
+            }
             catch (CliFailure failure) when (failure.Code == "CLI_SDK_UNAVAILABLE")
-            { throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6); }
+            {
+                throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
+            }
             if (current != selected)
                 throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
             current.VerifyRegistered(directory);
@@ -119,9 +140,14 @@ internal sealed record CliSdkSelection(string SdkPath, string Version, string In
             // Include absence: a newly nearer global.json changes the selection proof.
             var identity = OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
             hash.AppendData(Encoding.UTF8.GetBytes(identity + "\0"));
-            if (!File.Exists(path)) { hash.AppendData([0]); continue; }
+            if (!File.Exists(path))
+            {
+                hash.AppendData([0]);
+                continue;
+            }
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (stream.Length > 1024 * 1024) throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
+            if (stream.Length > 1024 * 1024)
+                throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);
             var bytes = new byte[checked((int)stream.Length)];
             stream.ReadExactly(bytes);
             hash.AppendData([1]);
@@ -133,21 +159,29 @@ internal sealed record CliSdkSelection(string SdkPath, string Version, string In
         try
         {
             var sdk = Microsoft.Build.Locator.MSBuildLocator.QueryVisualStudioInstances(
-                new Microsoft.Build.Locator.VisualStudioInstanceQueryOptions { WorkingDirectory = directory,
+                new Microsoft.Build.Locator.VisualStudioInstanceQueryOptions
+                {
+                    WorkingDirectory = directory,
                     DiscoveryTypes = Microsoft.Build.Locator.DiscoveryType.DotNetSdk,
                     // A global.json SDK may live in a different installation from the registered one.
                     // Discover it for the guard; actual registration must still match before publication.
-                    AllowAllDotnetLocations = true }).FirstOrDefault();
-            if (sdk is null) throw new CliFailure("CLI_SDK_UNAVAILABLE", 4);
+                    AllowAllDotnetLocations = true
+                }).FirstOrDefault();
+            if (sdk is null)
+                throw new CliFailure("CLI_SDK_UNAVAILABLE", 4);
             return new(sdk.MSBuildPath, sdk.Version.ToString(), Convert.ToHexString(hash.GetHashAndReset()));
         }
-        catch (InvalidOperationException) { throw new CliFailure("CLI_SDK_UNAVAILABLE", 4); }
+        catch (InvalidOperationException)
+        {
+            throw new CliFailure("CLI_SDK_UNAVAILABLE", 4);
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void VerifyRegistered(string directory)
     {
-        if (!SemanticEnvironment.TryRegister(directory, out _)) throw new CliFailure("CLI_SDK_UNAVAILABLE", 4);
+        if (!SemanticEnvironment.TryRegister(directory, out _))
+            throw new CliFailure("CLI_SDK_UNAVAILABLE", 4);
         var actual = SemanticEnvironment.Describe(directory);
         if (!CliPaths.SamePath(actual.MsBuildPath, SdkPath) || actual.SdkVersion != Version)
             throw new CliFailure("COORDINATOR_SDK_RESTART_REQUIRED", 6);

@@ -31,10 +31,14 @@ public sealed class MarkdownSymbolResolution
         HarnessCoverage catalogCoverage,
         IReadOnlyList<MarkdownSymbolMention> mentions, IReadOnlyList<string> reasons)
     {
-        WorkspaceId = workspaceId; DocumentId = documentId; DocumentLocation = documentLocation;
-        SnapshotId = snapshotId; Generation = generation;
+        WorkspaceId = workspaceId;
+        DocumentId = documentId;
+        DocumentLocation = documentLocation;
+        SnapshotId = snapshotId;
+        Generation = generation;
         CatalogCoverage = catalogCoverage;
-        Mentions = mentions; Reasons = reasons;
+        Mentions = mentions;
+        Reasons = reasons;
         TokenIndex = Index(mentions.SelectMany(m => new[] { m.Token,
             m.Token.StartsWith("global::", StringComparison.Ordinal) ? m.Token[8..] : m.Token }.Select(t => (t, m.Id))));
         TargetIndex = Index(mentions.SelectMany(m => m.CandidateNodeIds.Select(t => (t, m.Id))));
@@ -113,7 +117,8 @@ public static class MarkdownSymbolResolver
             reasons.Add("inline-code-kind-unavailable: shared DTO merges inline code into body text; body bindings remain heuristic");
         if (facts.FrontMatter.State is MarkdownFrontMatterState.Invalid or MarkdownFrontMatterState.Unterminated or MarkdownFrontMatterState.Unknown)
             reasons.Add("front-matter-not-usable: no explicit symbol mapping was inferred from invalid/unknown YAML");
-        if (catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope) reasons.Add(CatalogIncomplete);
+        if (catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope)
+            reasons.Add(CatalogIncomplete);
         var result = Result(projection.Graph, document.Id, mentions, reasons, catalog.Graph.Coverage);
         cancellationToken.ThrowIfCancellationRequested();
         return result;
@@ -123,7 +128,8 @@ public static class MarkdownSymbolResolver
             cancellationToken.ThrowIfCancellationRequested();
             if (node.Kind == MarkdownYamlKind.Sequence)
             {
-                foreach (var child in node.Children) AddMetadata(child);
+                foreach (var child in node.Children)
+                    AddMetadata(child);
                 return;
             }
             if (node.Kind == MarkdownYamlKind.Scalar)
@@ -160,7 +166,8 @@ public static class MarkdownSymbolResolver
 
         void AddText(MarkdownTextProjection text, RawSpan? region, string? owner, MarkdownMentionOrigin origin)
         {
-            if (text.Text is not { } decoded) return;
+            if (text.Text is not { } decoded)
+                return;
             foreach (Match match in Names.Matches(decoded))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -184,7 +191,8 @@ public static class MarkdownSymbolResolver
         void AddEvidence(string token, string selector, string owner, MarkdownMentionOrigin origin,
             MarkdownSymbolScope selectedScope, HarnessRawSpan[] fragments, MarkdownMappingPrecision precision)
         {
-            if (fragments.Any(s => s.End > rawText.Length)) throw new ArgumentException("Parser mapping is outside raw source.");
+            if (fragments.Any(s => s.End > rawText.Length))
+                throw new ArgumentException("Parser mapping is outside raw source.");
             HarnessRawSpan? covering = fragments.Length == 0 ? null : new(fragments.Min(s => s.Start),
                 fragments.Max(s => s.End) - fragments.Min(s => s.Start));
             var snippet = fragments.Length == 0 ? null : string.Concat(fragments.Select(s => rawText.Substring(s.Start, s.Length)));
@@ -220,7 +228,8 @@ public static class MarkdownSymbolResolver
             return affected is null || affected.Contains(m.Id) ? Bind(m, catalog) : m;
         }).ToArray();
         var reasons = previous.Reasons.Where(r => r != CatalogIncomplete).ToList();
-        if (catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope) reasons.Add(CatalogIncomplete);
+        if (catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope)
+            reasons.Add(CatalogIncomplete);
         var result = new MarkdownSymbolResolution(previous.WorkspaceId, previous.DocumentId, previous.DocumentLocation,
             previous.SnapshotId, previous.Generation, catalog.Graph.Coverage,
             Array.AsReadOnly(mentions), Array.AsReadOnly(reasons.ToArray()));
@@ -229,7 +238,9 @@ public static class MarkdownSymbolResolver
 
         void Include(IReadOnlyDictionary<string, IReadOnlyList<string>> index, IReadOnlyList<string> keys)
         {
-            foreach (var key in keys) if (index.TryGetValue(key, out var ids)) affected!.UnionWith(ids);
+            foreach (var key in keys)
+                if (index.TryGetValue(key, out var ids))
+                    affected!.UnionWith(ids);
         }
     }
 
@@ -262,10 +273,14 @@ public static class MarkdownSymbolResolver
                     o.LogicalSymbolId == target && o.VariantId == m.Scope.VariantId).Id,
                 m.Scope.VariantId, m.Relation, m.Certainty, "markdown-symbol-resolver", m.Location,
                 m.Origin.ToString())))).ToArray();
-        return graph with { Nodes = Array.AsReadOnly(nodes), Edges = Array.AsReadOnly(edges),
+        return graph with
+        {
+            Nodes = Array.AsReadOnly(nodes),
+            Edges = Array.AsReadOnly(edges),
             Coverage = graph.Coverage == HarnessCoverage.Failed ? graph.Coverage
                 : resolution.Reasons.Count != 0 || resolution.Mentions.Any(m => m.Certainty != HarnessCertainty.Resolved)
-                    ? HarnessCoverage.Partial : graph.Coverage };
+                    ? HarnessCoverage.Partial : graph.Coverage
+        };
     }
 
     // Length prefixes preserve null/empty and prevent scope-key collisions; this is an index key, not a persistent ID.
@@ -298,10 +313,15 @@ public static class MarkdownSymbolResolver
             || mention.RawFragments.Count == 0;
         var certainty = ids.Length == 0 ? HarnessCertainty.Unresolved
             : ids.Length == 1 && !uncertain ? HarnessCertainty.Resolved : HarnessCertainty.Candidate;
-        return mention with { Certainty = certainty, TargetNodeId = certainty == HarnessCertainty.Resolved ? ids[0] : null,
-            CandidateNodeIds = Array.AsReadOnly(ids), Reason = incompleteCatalog ? CatalogIncomplete : ids.Length == 0
+        return mention with
+        {
+            Certainty = certainty,
+            TargetNodeId = certainty == HarnessCertainty.Resolved ? ids[0] : null,
+            CandidateNodeIds = Array.AsReadOnly(ids),
+            Reason = incompleteCatalog ? CatalogIncomplete : ids.Length == 0
                 ? mention.Selector == "sourceId" ? "code-file-alias-or-symbol-not-provided" : "no-matching-symbol"
-                : ids.Length > 1 ? "ambiguous-symbol" : uncertain ? "heuristic-or-unknown-source-mapping" : null };
+                : ids.Length > 1 ? "ambiguous-symbol" : uncertain ? "heuristic-or-unknown-source-mapping" : null
+        };
     }
 
     private static bool MatchesScope(MarkdownSymbolCandidate symbol, MarkdownSymbolScope scope)
@@ -315,7 +335,8 @@ public static class MarkdownSymbolResolver
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(catalog.Symbols);
         HarnessGraphContract.ValidateHeader(catalog.Graph);
-        if (catalog.Graph.WorkspaceId != workspaceId) throw new ArgumentException("Symbol catalog belongs to another workspace.");
+        if (catalog.Graph.WorkspaceId != workspaceId)
+            throw new ArgumentException("Symbol catalog belongs to another workspace.");
         var nodes = catalog.Graph.Nodes.Where(n => n.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol)
             .Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var symbol in catalog.Symbols)

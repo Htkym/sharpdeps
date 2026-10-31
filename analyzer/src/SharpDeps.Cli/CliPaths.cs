@@ -18,7 +18,8 @@ internal sealed record CliWorkspaceState(int SchemaVersion, Guid WorkspaceUuid, 
         CliPaths.RejectLinks(path);
         if (!File.Exists(path))
         {
-            if (!create) throw new CliFailure("WORKSPACE_STATE_MISSING", 3);
+            if (!create)
+                throw new CliFailure("WORKSPACE_STATE_MISSING", 3);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             CliPaths.RejectLinks(path);
             var state = new CliWorkspaceState(1, Guid.NewGuid(), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
@@ -31,23 +32,44 @@ internal sealed record CliWorkspaceState(int SchemaVersion, Guid WorkspaceUuid, 
                     JsonSerializer.Serialize(stream, state, QueryJson.Options);
                     stream.Flush(true);
                 }
-                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                try { File.Move(temporary, path, overwrite: false); }
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                try
+                {
+                    File.Move(temporary, path, overwrite: false);
+                }
                 catch (IOException) when (File.Exists(path)) { } // A concurrent first owner won; use its identity.
             }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            finally
+            {
+                if (File.Exists(temporary))
+                    File.Delete(temporary);
+            }
         }
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (input.Length is < 1 or > 4096) throw new CliFailure("WORKSPACE_STATE_INVALID", 6);
+        if (input.Length is < 1 or > 4096)
+            throw new CliFailure("WORKSPACE_STATE_INVALID", 6);
         CliWorkspaceState? saved;
-        try { saved = JsonSerializer.Deserialize<CliWorkspaceState>(input, QueryJson.Options); }
-        catch (JsonException) { throw new CliFailure("WORKSPACE_STATE_INVALID", 6); }
+        try
+        {
+            saved = JsonSerializer.Deserialize<CliWorkspaceState>(input, QueryJson.Options);
+        }
+        catch (JsonException)
+        {
+            throw new CliFailure("WORKSPACE_STATE_INVALID", 6);
+        }
         if (saved is null || saved.SchemaVersion != 1 || saved.WorkspaceUuid == Guid.Empty)
             throw new CliFailure("WORKSPACE_STATE_INVALID", 6);
-        try { if (Convert.FromBase64String(saved.CursorKey).Length != 32) throw new FormatException(); }
+        try
+        {
+            if (Convert.FromBase64String(saved.CursorKey).Length != 32)
+                throw new FormatException();
+        }
         catch (Exception error) when (error is FormatException or ArgumentNullException)
-        { throw new CliFailure("WORKSPACE_STATE_INVALID", 6); }
+        {
+            throw new CliFailure("WORKSPACE_STATE_INVALID", 6);
+        }
         return saved;
     }
 }
@@ -64,9 +86,11 @@ internal static class CliPaths
         if (!Path.IsPathFullyQualified(value) || IsNetwork(value))
             throw new CliFailure("ROOT_INVALID", 5);
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(value));
-        if (IsNetwork(root)) throw new CliFailure("ROOT_INVALID", 5);
+        if (IsNetwork(root))
+            throw new CliFailure("ROOT_INVALID", 5);
         RejectLinks(root);
-        if (!Directory.Exists(root)) throw new CliFailure("ROOT_INVALID", 5);
+        if (!Directory.Exists(root))
+            throw new CliFailure("ROOT_INVALID", 5);
         return root;
     }
 

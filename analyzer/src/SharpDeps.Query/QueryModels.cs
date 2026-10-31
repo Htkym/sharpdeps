@@ -77,7 +77,11 @@ public interface IQueryIndex
 public sealed class PinnedQueryIndex : IQueryIndex
 {
     private readonly IndexReader reader;
-    public PinnedQueryIndex(IndexReader reader, CancellationToken token = default) { this.reader = reader; Snapshot = reader.Snapshot(token); }
+    public PinnedQueryIndex(IndexReader reader, CancellationToken token = default)
+    {
+        this.reader = reader;
+        Snapshot = reader.Snapshot(token);
+    }
     public IndexSnapshot Snapshot { get; }
     public IReadOnlyList<IndexSearchHit> Search(string literal, int limit) => reader.Search(literal, limit);
     public IndexSnapshot ReadSnapshot(CancellationToken token) => reader.Snapshot(token);
@@ -88,8 +92,11 @@ public static class QueryJson
     public static JsonSerializerOptions Options { get; } = MakeOptions();
     private static JsonSerializerOptions MakeOptions()
     {
-        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
         options.Converters.Add(new JsonStringEnumConverter());
         options.MakeReadOnly(populateMissingResolver: true);
         return options;

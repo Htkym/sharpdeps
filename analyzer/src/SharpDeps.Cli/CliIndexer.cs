@@ -24,7 +24,11 @@ public sealed class CliIndexException : Exception
 {
     public CliIndexException(string code, int exitCode = 4) : this(code, code, exitCode) { }
     public CliIndexException(string code, string message, int exitCode = 4, Exception? inner = null)
-        : base(message, inner) { Code = code; ExitCode = exitCode; }
+        : base(message, inner)
+    {
+        Code = code;
+        ExitCode = exitCode;
+    }
     public string Code { get; }
     public int ExitCode { get; }
 }
@@ -87,7 +91,8 @@ public static class CliIndexer
         foreach (var path in WalkInputs(root, options.IndexPath, token))
             await Capture(path, IsMarkdown(path) ? "markdown" : "configuration");
         await Capture(target, "configuration");
-        foreach (var path in selectedPaths) await Capture(path, "configuration");
+        foreach (var path in selectedPaths)
+            await Capture(path, "configuration");
         var initialInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
 
@@ -176,7 +181,8 @@ public static class CliIndexer
             foreach (var reference in inputs.SelectMany(i => i.Compilation.References)
                 .OfType<Microsoft.CodeAnalysis.PortableExecutableReference>())
             {
-                if (reference.FilePath is not { } path || !Path.IsPathFullyQualified(path)) continue;
+                if (reference.FilePath is not { } path || !Path.IsPathFullyQualified(path))
+                    continue;
                 var full = Path.GetFullPath(path);
                 var relative = Path.GetRelativePath(root, full);
                 if (relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
@@ -200,7 +206,8 @@ public static class CliIndexer
                     if (string.IsNullOrWhiteSpace(tree.FilePath))
                         throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED");
                     var sourcePath = InsideRoot(root, tree.FilePath);
-                    if (!File.Exists(sourcePath)) throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
+                    if (!File.Exists(sourcePath))
+                        throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
                         "Every syntax input must be a verifiable physical file inside the selected root.");
                     var captured = await Capture(sourcePath, "source");
                     var compilationText = tree.GetText(token).ToString();
@@ -218,7 +225,7 @@ public static class CliIndexer
                         || (registered.ContentHash != captured.File.ContentHash && captured.File.ByteLength != 0))
                         throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                     manifest[captured.File.RelativePath] = captured with
-                        { File = captured.File with { SourceId = registered.Id, Kind = "source" } };
+                    { File = captured.File with { SourceId = registered.Id, Kind = "source" } };
                     ownedSources.Add(registered.Id);
                 }
                 projectSources.Add(input.VariantId, ownedSources);
@@ -282,23 +289,31 @@ public static class CliIndexer
             diagnostics["cli.configurationInventoryUnverified"] = 1;
             diagnostics["cli.semanticVariantsLoaded"] = inputs.Length;
             diagnostics["cli.projectCollectorsExtracted"] = extracted.Count;
-            if (reused.Count > 0) diagnostics["cli.projectCollectorsReused"] = reused.Count;
+            if (reused.Count > 0)
+                diagnostics["cli.projectCollectorsReused"] = reused.Count;
             foreach (var project in projects)
             {
                 var variant = HarnessIdentity.VariantId(options.WorkspaceUuid, project.ProjectId, project.TargetFramework,
                     project.Configuration, project.Platform, project.RuntimeIdentifier);
                 diagnostics[(reused.Contains(project.Key) ? "cli.projectReused." : "cli.projectExtracted.") + variant] = 1;
             }
-            if (loaded.Report.Diagnostics.Count != 0) diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
-            if (loaded.Report.Limitations.Count != 0) diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
+            if (loaded.Report.Diagnostics.Count != 0)
+                diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
+            if (loaded.Report.Limitations.Count != 0)
+                diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
             var compilerErrors = variants.Sum(v => v.ErrorDiagnosticCount);
-            if (compilerErrors != 0) diagnostics["cli.compilerErrors"] = compilerErrors;
-            graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
-                .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
+            if (compilerErrors != 0)
+                diagnostics["cli.compilerErrors"] = compilerErrors;
+            graph = graph with
+            {
+                Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
+                .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray())
+            };
 
             catalogSymbols = MakeCatalog(graph, symbols, evidence, manifest.Values.Where(i => i.File.Kind == "project")
                 .ToDictionary(i => i.File.SourceId, i => i.File.RelativePath, StringComparer.Ordinal));
-            if (reused.Count > 0) afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
+            if (reused.Count > 0)
+                afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
             var afterFingerprint = fullFingerprint is null ? null : CliReuseProof.Capture(root, fullFingerprint.SdkPath, token);
             var stableInputsAfter = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
             var inputHash = afterFingerprint is null ? null : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token);
@@ -348,7 +363,8 @@ public static class CliIndexer
         {
             token.ThrowIfCancellationRequested();
             var match = matches.Single(m => m.RelativePath == item.Input.File.RelativePath);
-            if (match.Reason == "duplicate-explicit-id") throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
+            if (match.Reason == "duplicate-explicit-id")
+                throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
             var uuid = match.DocumentUuid ?? Guid.NewGuid();
             var old = previous?.Documents.SingleOrDefault(d => d.DocumentUuid == uuid);
             var scope = old?.ScopeId ?? workspaceId;
@@ -361,8 +377,11 @@ public static class CliIndexer
                 old.Sections.Select(s => new MarkdownSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray());
             var sections = MarkdownIdentityMatcher.MatchSections(options.WorkspaceUuid, uuid, item.Input.Text,
                 facts, oldSections, () => Guid.NewGuid().ToString("N"), token);
-            var projection = adapter.Analyze(request with { SectionTokens = sections.SectionTokens,
-                SectionIdentityTextHash = sections.TextHash }, true, token);
+            var projection = adapter.Analyze(request with
+            {
+                SectionTokens = sections.SectionTokens,
+                SectionIdentityTextHash = sections.TextHash
+            }, true, token);
             identities.Add(new(uuid, item.Input.File.RelativePath, item.ExplicitId, item.Input.File.ContentHash,
                 scope, sections.Snapshot.ParserVersion, sections.Snapshot.ContractVersion, sections.Snapshot.ProfileId,
                 sections.Snapshot.OptionsHash, sections.Snapshot.Sections.Select(s =>
@@ -381,10 +400,14 @@ public static class CliIndexer
             foreach (var reason in projection.ProjectionReasons.Concat(resolution.Reasons).Distinct(StringComparer.Ordinal))
                 diagnostics["markdown." + reason] = diagnostics.GetValueOrDefault("markdown." + reason) + 1;
         }
-        graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
-            .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
+        graph = graph with
+        {
+            Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
+            .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray())
+        };
         var search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
-        foreach (var input in manifest.Values) await Verify(input, root, token);
+        foreach (var input in manifest.Values)
+            await Verify(input, root, token);
         if (reuseProof is not null)
         {
             var relativeTarget = Path.GetRelativePath(root, target).Replace('\\', '/');
@@ -395,7 +418,8 @@ public static class CliIndexer
             identities.ToArray(), [], search);
         IndexSnapshotValidator.Validate(snapshot);
         var finalInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
-        if (initialInputs != finalInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+        if (initialInputs != finalInputs)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var publicationInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         token.ThrowIfCancellationRequested();
@@ -414,7 +438,8 @@ public static class CliIndexer
             IndexSnapshotValidator.ValidateRelativePath(relative);
             if (manifest.TryGetValue(relative, out var old))
             {
-                if (!PathComparer.Equals(old.AbsolutePath, path)) throw new CliIndexException("CLI_PATH_ALIAS");
+                if (!PathComparer.Equals(old.AbsolutePath, path))
+                    throw new CliIndexException("CLI_PATH_ALIAS");
                 return old;
             }
             var text = await ReadInput(path, token);
@@ -450,30 +475,42 @@ public static class CliIndexer
         if (!markdownPaths.SetEquals(files.Where(f => !f.Deleted && f.Kind == "markdown").Select(f => f.RelativePath)))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var hash = FingerprintInputs(root, options.IndexPath, includeOutputs: true, token).GetAwaiter().GetResult();
-        if (hash is null || hash != expectedInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+        if (hash is null || hash != expectedInputs)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var proof = files.SingleOrDefault(f => PathComparer.Equals(f.RelativePath,
             Path.GetRelativePath(root, InsideRoot(root, options.Target)).Replace('\\', '/')))?.Reuse;
-        if (proof is null) return;
+        if (proof is null)
+            return;
         var current = CliReuseProof.Capture(root, proof.SdkPath, token);
         if (hash is null || !CliReuseProof.Matches(proof, current, OptionsHash(options, root, InsideRoot(root, options.Target)), hash))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
     }
 
     private static string OptionsHash(CliIndexOptions options, string root, string target)
-        => Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new {
-            root, target, options.WorkspaceUuid, options.Configuration, options.Platform, options.TargetFramework,
+        => Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            root,
+            target,
+            options.WorkspaceUuid,
+            options.Configuration,
+            options.Platform,
+            options.TargetFramework,
             projects = (options.ProjectPaths ?? []).Select(p => InsideRoot(root, p)).Order(StringComparer.Ordinal).ToArray()
         })))).ToLowerInvariant();
 
     private static bool ReferenceInsideProof(string path, string root, string sdk, string? packageRoot)
     {
-        if (!Path.IsPathFullyQualified(path)) return false;
+        if (!Path.IsPathFullyQualified(path))
+            return false;
         var full = Path.GetFullPath(path);
         var dotnet = Directory.GetParent(sdk)?.Parent?.FullName;
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (full.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison)) return true;
-        if (packageRoot is not null && full.StartsWith(packageRoot + Path.DirectorySeparatorChar, comparison)) return true;
-        if (dotnet is null) return false;
+        if (full.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison))
+            return true;
+        if (packageRoot is not null && full.StartsWith(packageRoot + Path.DirectorySeparatorChar, comparison))
+            return true;
+        if (dotnet is null)
+            return false;
         return new[] { sdk, Path.Combine(dotnet, "packs", "Microsoft.NETCore.App.Ref"), Path.Combine(dotnet, "shared"),
             Path.Combine(dotnet, "host"), Path.Combine(dotnet, "sdk-manifests"), Path.Combine(dotnet, "metadata") }
             .Any(directory => full.StartsWith(Path.TrimEndingDirectorySeparator(directory) + Path.DirectorySeparatorChar, comparison));
@@ -491,8 +528,13 @@ public static class CliIndexer
             .ToDictionary(g => g.Key, g => g.Select(n => n.Id).ToArray(), StringComparer.Ordinal);
         var queue = new Queue<string>(removed);
         while (queue.TryDequeue(out var id))
-            foreach (var child in children.GetValueOrDefault(id) ?? []) if (removed.Add(child)) queue.Enqueue(child);
-        return saved with { SnapshotId = snapshotId, Generation = generation,
+            foreach (var child in children.GetValueOrDefault(id) ?? [])
+                if (removed.Add(child))
+                    queue.Enqueue(child);
+        return saved with
+        {
+            SnapshotId = snapshotId,
+            Generation = generation,
             Nodes = saved.Nodes.Where(n => !removed.Contains(n.Id)).ToArray(),
             Edges = saved.Edges.Where(e => !removed.Contains(e.SourceNodeId) && !removed.Contains(e.TargetNodeId)).ToArray(),
             Markdown = null,
@@ -534,10 +576,13 @@ public static class CliIndexer
         try
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var paths = new List<string>(); var directoryPaths = new List<string>();
+            var paths = new List<string>();
+            var directoryPaths = new List<string>();
             var foundSources = new HashSet<string>(PathComparer);
-            var directories = new Stack<string>(); directories.Push(root);
-            var count = 0; long total = 0;
+            var directories = new Stack<string>();
+            directories.Push(root);
+            var count = 0;
+            long total = 0;
             var absoluteIndex = InsideRoot(root, indexPath);
             while (directories.TryPop(out var directory))
             {
@@ -545,7 +590,8 @@ public static class CliIndexer
                 foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                 {
                     token.ThrowIfCancellationRequested();
-                    if (++count > MaximumWalkEntries) return null;
+                    if (++count > MaximumWalkEntries)
+                        return null;
                     var attributes = File.GetAttributes(path);
                     var name = Path.GetFileName(path);
                     if ((attributes & FileAttributes.Directory) != 0)
@@ -553,30 +599,39 @@ public static class CliIndexer
                         if (name.Equals(".git", StringComparison.OrdinalIgnoreCase)
                             || name.Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)
                             || !includeOutputs && (name.Equals("obj", StringComparison.OrdinalIgnoreCase)
-                                || name.Equals("bin", StringComparison.OrdinalIgnoreCase))) continue;
-                        if ((attributes & FileAttributes.ReparsePoint) != 0) return null;
+                                || name.Equals("bin", StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                        if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            return null;
                         directoryPaths.Add(path);
                         directories.Push(path);
                     }
                     else
                     {
-                        if (IsIndexOutput(path, absoluteIndex)) continue;
-                        if ((attributes & FileAttributes.ReparsePoint) != 0) return null;
-                        if (includeMarkdown || !IsMarkdown(path)) paths.Add(path);
+                        if (IsIndexOutput(path, absoluteIndex))
+                            continue;
+                        if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            return null;
+                        if (includeMarkdown || !IsMarkdown(path))
+                            paths.Add(path);
                     }
                 }
             }
             foreach (var path in directoryPaths.Order(StringComparer.Ordinal))
             {
-                token.ThrowIfCancellationRequested(); RejectLinks(path);
+                token.ThrowIfCancellationRequested();
+                RejectLinks(path);
                 var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
                 var bytes = StrictUtf8.GetBytes("directory:" + relative);
-                var size = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(size, bytes.Length);
-                hash.AppendData(size); hash.AppendData(bytes);
+                var size = new byte[8];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(size, bytes.Length);
+                hash.AppendData(size);
+                hash.AppendData(bytes);
             }
             foreach (var path in paths.Order(StringComparer.Ordinal))
             {
-                token.ThrowIfCancellationRequested(); RejectLinks(path);
+                token.ThrowIfCancellationRequested();
+                RejectLinks(path);
                 var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
                 if (ownedSourcePaths?.Contains(relative) == true)
                 {
@@ -586,29 +641,40 @@ public static class CliIndexer
                     continue;
                 }
                 var pathBytes = StrictUtf8.GetBytes("file:" + relative);
-                var pathLength = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
-                hash.AppendData(pathLength); hash.AppendData(pathBytes);
+                var pathLength = new byte[8];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
+                hash.AppendData(pathLength);
+                hash.AppendData(pathBytes);
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
-                if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes) return null;
+                if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes)
+                    return null;
                 total = checked(total + stream.Length);
-                if (total > IndexSnapshotValidator.MaximumInputTotalBytes) return null;
+                if (total > IndexSnapshotValidator.MaximumInputTotalBytes)
+                    return null;
                 using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-                var expectedLength = stream.Length; long read = 0;
+                var expectedLength = stream.Length;
+                long read = 0;
                 var buffer = new byte[65536];
                 for (int bytes; (bytes = await stream.ReadAsync(buffer, token)) != 0;)
                 {
                     read = checked(read + bytes);
-                    if (read > expectedLength) return null;
+                    if (read > expectedLength)
+                        return null;
                     content.AppendData(buffer, 0, bytes);
                 }
-                if (read != expectedLength || stream.Length != expectedLength) return null;
-                hash.AppendData(content.GetHashAndReset()); RejectLinks(path);
+                if (read != expectedLength || stream.Length != expectedLength)
+                    return null;
+                hash.AppendData(content.GetHashAndReset());
+                RejectLinks(path);
             }
-            if (ownedSourcePaths is not null && !foundSources.SetEquals(ownedSourcePaths)) return null;
+            if (ownedSourcePaths is not null && !foundSources.SetEquals(ownedSourcePaths))
+                return null;
             return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or OverflowException or CliFailure)
-        { return null; }
+        {
+            return null;
+        }
     }
 
     private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasUtf8Bom);
@@ -616,7 +682,8 @@ public static class CliIndexer
 
     private static IEnumerable<string> WalkInputs(string root, string indexPath, CancellationToken token)
     {
-        var directories = new Stack<string>(); directories.Push(root);
+        var directories = new Stack<string>();
+        directories.Push(root);
         var count = 0;
         while (directories.TryPop(out var directory))
         {
@@ -624,13 +691,19 @@ public static class CliIndexer
             foreach (var path in Directory.EnumerateFileSystemEntries(directory))
             {
                 token.ThrowIfCancellationRequested();
-                if (++count > MaximumWalkEntries) throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
-                if (IsIndexOutput(path, indexPath)) continue;
+                if (++count > MaximumWalkEntries)
+                    throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                if (IsIndexOutput(path, indexPath))
+                    continue;
                 var attributes = File.GetAttributes(path);
-                if ((attributes & FileAttributes.Directory) != 0 && ExcludedDirectories.Contains(Path.GetFileName(path))) continue;
-                if ((attributes & FileAttributes.ReparsePoint) != 0) throw new CliIndexException("CLI_LINK_INPUT_REJECTED");
-                if ((attributes & FileAttributes.Directory) != 0) directories.Push(path);
-                else if (IsMarkdown(path) || IsConfiguration(path)) yield return path;
+                if ((attributes & FileAttributes.Directory) != 0 && ExcludedDirectories.Contains(Path.GetFileName(path)))
+                    continue;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new CliIndexException("CLI_LINK_INPUT_REJECTED");
+                if ((attributes & FileAttributes.Directory) != 0)
+                    directories.Push(path);
+                else if (IsMarkdown(path) || IsConfiguration(path))
+                    yield return path;
             }
         }
     }
@@ -650,13 +723,20 @@ public static class CliIndexer
             throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         var bytes = new byte[checked((int)stream.Length)];
         await stream.ReadExactlyAsync(bytes, token);
-        if (await stream.ReadAsync(new byte[1], token) != 0) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+        if (await stream.ReadAsync(new byte[1], token) != 0)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var hasUtf8Bom = bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf });
         string text;
-        try { text = StrictUtf8.GetString(bytes); }
+        try
+        {
+            text = StrictUtf8.GetString(bytes);
+        }
         catch (DecoderFallbackException error)
-        { throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require strict UTF-8.", inner: error); }
-        if (text.Contains('\0')) throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "NUL/binary and UTF-16 inputs are unsupported.");
+        {
+            throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require strict UTF-8.", inner: error);
+        }
+        if (text.Contains('\0'))
+            throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "NUL/binary and UTF-16 inputs are unsupported.");
         RejectLinks(path);
         return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, hasUtf8Bom);
     }
@@ -683,25 +763,34 @@ public static class CliIndexer
         if (left.WorkspaceId != right.WorkspaceId || left.SnapshotId != right.SnapshotId || left.Generation != right.Generation
             || (left.Markdown is not null && right.Markdown is not null && left.Markdown != right.Markdown))
             throw new CliIndexException("CLI_GRAPH_MERGE_CONFLICT");
-        return left with { Nodes = MergeById(left.Nodes, right.Nodes, n => n.Id),
+        return left with
+        {
+            Nodes = MergeById(left.Nodes, right.Nodes, n => n.Id),
             Variants = MergeById(left.Variants, right.Variants, v => v.Id),
             SymbolOccurrences = MergeById(left.SymbolOccurrences, right.SymbolOccurrences, o => o.Id),
             Edges = MergeById(left.Edges, right.Edges, e => e.Id),
             LegacyReferences = Array.AsReadOnly(left.LegacyReferences.Concat(right.LegacyReferences).Distinct().ToArray()),
             Markdown = left.Markdown ?? right.Markdown,
             Coverage = left.Coverage == HarnessCoverage.Failed || right.Coverage == HarnessCoverage.Failed ? HarnessCoverage.Failed
-                : left.Coverage == HarnessCoverage.Partial || right.Coverage == HarnessCoverage.Partial ? HarnessCoverage.Partial : HarnessCoverage.CompleteWithinScope };
+                : left.Coverage == HarnessCoverage.Partial || right.Coverage == HarnessCoverage.Partial ? HarnessCoverage.Partial : HarnessCoverage.CompleteWithinScope
+        };
     }
 
     private static HarnessGraphEnvelope AlignCompilationLocations(HarnessGraphEnvelope graph, IReadOnlyDictionary<string, int> offsets)
     {
         // Roslyn may consume a real UTF-8 BOM, whereas the saved-source reader retains U+FEFF.
         // Only the exact byte-BOM + compilation-text comparison above permits this one-code-unit shift.
-        return graph with { Nodes = Array.AsReadOnly(graph.Nodes.Select(n => n with { Location = Align(n.Location) }).ToArray()),
-            SymbolOccurrences = Array.AsReadOnly(graph.SymbolOccurrences.Select(o => o with {
-                Location = Align(o.Location), Declarations = o.Declarations is null ? null
-                    : Array.AsReadOnly(o.Declarations.Select(l => Align(l)!).ToArray()) }).ToArray()),
-            Edges = Array.AsReadOnly(graph.Edges.Select(AlignEdge).ToArray()) };
+        return graph with
+        {
+            Nodes = Array.AsReadOnly(graph.Nodes.Select(n => n with { Location = Align(n.Location) }).ToArray()),
+            SymbolOccurrences = Array.AsReadOnly(graph.SymbolOccurrences.Select(o => o with
+            {
+                Location = Align(o.Location),
+                Declarations = o.Declarations is null ? null
+                    : Array.AsReadOnly(o.Declarations.Select(l => Align(l)!).ToArray())
+            }).ToArray()),
+            Edges = Array.AsReadOnly(graph.Edges.Select(AlignEdge).ToArray())
+        };
 
         HarnessLocation? Align(HarnessLocation? location) => location is { RawSpan: { } span }
             && offsets.TryGetValue(location.SourceId, out var offset) && offset == 1
@@ -709,12 +798,17 @@ public static class CliIndexer
         HarnessEdge AlignEdge(HarnessEdge edge)
         {
             var evidence = Align(edge.Evidence);
-            if (evidence == edge.Evidence) return edge;
+            if (evidence == edge.Evidence)
+                return edge;
             if (edge.SourceOccurrenceId is null || edge.TargetOccurrenceId is null || evidence?.ContentHash is null)
                 throw new CliIndexException("CLI_SOURCE_COORDINATES_INCONSISTENT");
-            return edge with { Evidence = evidence, Id = HarnessIdentity.EdgeId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
+            return edge with
+            {
+                Evidence = evidence,
+                Id = HarnessIdentity.EdgeId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
                 edge.SourceOccurrenceId, edge.TargetOccurrenceId, edge.Kind, evidence.SourceId, evidence.ContentHash,
-                evidence.RawSpan, edge.Producer) };
+                evidence.RawSpan, edge.Producer)
+            };
         }
     }
 
@@ -775,14 +869,17 @@ public static class CliIndexer
         {
             foreach (var reference in legacy.GetValueOrDefault(oldId) ?? [])
             {
-                if (reference.OccurrenceId is null) continue;
+                if (reference.OccurrenceId is null)
+                    continue;
                 var occurrence = occurrences[reference.OccurrenceId];
                 var locations = occurrence.Declarations ?? (occurrence.Location is { } primary ? [primary] : []);
-                if (locations.Count == 0) result.Add(new(reference.NodeId, fullName, shortName, documentationId,
-                    projects[occurrence.VariantId], ns, occurrence.VariantId));
-                else foreach (var location in locations)
+                if (locations.Count == 0)
                     result.Add(new(reference.NodeId, fullName, shortName, documentationId,
-                        projects[occurrence.VariantId], ns, occurrence.VariantId, location.SourceId));
+                    projects[occurrence.VariantId], ns, occurrence.VariantId));
+                else
+                    foreach (var location in locations)
+                        result.Add(new(reference.NodeId, fullName, shortName, documentationId,
+                            projects[occurrence.VariantId], ns, occurrence.VariantId, location.SourceId));
             }
         }
     }
@@ -794,7 +891,9 @@ public static class CliIndexer
         {
             // The shared link target is relative to this document, not implicitly to workspace root.
             var local = Path.GetRelativePath(documentDirectory, input.AbsolutePath).Replace('\\', '/');
-            Add(local); if (!local.StartsWith("../", StringComparison.Ordinal)) Add("./" + local);
+            Add(local);
+            if (!local.StartsWith("../", StringComparison.Ordinal))
+                Add("./" + local);
             void Add(string alias)
             {
                 if (result.TryGetValue(alias, out var old) && old != input.File.SourceId)

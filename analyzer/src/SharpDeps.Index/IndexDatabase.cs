@@ -26,8 +26,14 @@ internal static class IndexDatabase
         if (readOnly && (!File.Exists(path + "-wal") || !File.Exists(path + "-shm")))
             throw new IndexStoreException("INDEX_RECOVERY_REQUIRED", "A trusted writer must prepare existing WAL sidecars before a saved read.");
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        { DataSource=path, Mode=readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
-            Cache=SqliteCacheMode.Private, Pooling=false, ForeignKeys=true, DefaultTimeout=3 }.ToString());
+        {
+            DataSource = path,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false,
+            ForeignKeys = true,
+            DefaultTimeout = 3
+        }.ToString());
         try
         {
             connection.Open();
@@ -35,45 +41,59 @@ internal static class IndexDatabase
             var persist = 1;
             if (sqlite3_file_control(connection.Handle!.DangerousGetHandle(), "main", 10, ref persist) != 0)
                 throw new IndexStoreException("INDEX_WAL_UNAVAILABLE", "The native VFS cannot preserve WAL sidecars.");
-            if (readOnly) Execute(connection, null, "PRAGMA query_only=ON;");
+            if (readOnly)
+                Execute(connection, null, "PRAGMA query_only=ON;");
             return connection;
         }
-        catch { connection.Dispose(); throw; }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
-    [DllImport("e_sqlite3", CallingConvention=CallingConvention.Cdecl)]
+    [DllImport("e_sqlite3", CallingConvention = CallingConvention.Cdecl)]
     private static extern int sqlite3_file_control(IntPtr database,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string databaseName, int operation, ref int value);
 
     public static SqliteCommand Command(SqliteConnection connection, SqliteTransaction? transaction, string sql,
         params (string Name, object? Value)[] values)
     {
-        var command=connection.CreateCommand(); command.Transaction=transaction; command.CommandText=sql;
-        foreach (var (name,value) in values) command.Parameters.AddWithValue(name,value ?? DBNull.Value);
+        var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        foreach (var (name, value) in values)
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         return command;
     }
     public static void Execute(SqliteConnection connection, SqliteTransaction? transaction, string sql,
         params (string Name, object? Value)[] values)
-    { using var command=Command(connection,transaction,sql,values);command.ExecuteNonQuery(); }
+    {
+        using var command = Command(connection, transaction, sql, values);
+        command.ExecuteNonQuery();
+    }
     public static object? Scalar(SqliteConnection connection, SqliteTransaction? transaction, string sql,
         params (string Name, object? Value)[] values)
-    { using var command=Command(connection,transaction,sql,values);return command.ExecuteScalar(); }
+    {
+        using var command = Command(connection, transaction, sql, values);
+        return command.ExecuteScalar();
+    }
     public static void CheckMetadata(SqliteConnection connection, SqliteTransaction? transaction, string workspace)
     {
-        if (Convert.ToInt32(Scalar(connection,transaction,"PRAGMA user_version;")) != SchemaVersion
-            || Convert.ToInt32(Scalar(connection,transaction,"PRAGMA application_id;")) != ApplicationId)
+        if (Convert.ToInt32(Scalar(connection, transaction, "PRAGMA user_version;")) != SchemaVersion
+            || Convert.ToInt32(Scalar(connection, transaction, "PRAGMA application_id;")) != ApplicationId)
             throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "The index schema is unsupported.");
-        if ((string?)Scalar(connection,transaction,"SELECT workspace_id FROM metadata WHERE singleton=1") != workspace)
+        if ((string?)Scalar(connection, transaction, "SELECT workspace_id FROM metadata WHERE singleton=1") != workspace)
             throw new IndexStoreException("INDEX_WORKSPACE_MISMATCH", "The persisted workspace UUID differs.");
     }
     public static void Create(SqliteConnection c, string workspace)
     {
-        using var transaction=c.BeginTransaction();
-        Execute(c,transaction,Schema);
-        Execute(c,transaction,"INSERT INTO metadata(singleton,workspace_id,active_generation) VALUES(1,$workspace,NULL)",("$workspace",workspace));
-        Execute(c,transaction,$"PRAGMA user_version={SchemaVersion}; PRAGMA application_id={ApplicationId};");
+        using var transaction = c.BeginTransaction();
+        Execute(c, transaction, Schema);
+        Execute(c, transaction, "INSERT INTO metadata(singleton,workspace_id,active_generation) VALUES(1,$workspace,NULL)", ("$workspace", workspace));
+        Execute(c, transaction, $"PRAGMA user_version={SchemaVersion}; PRAGMA application_id={ApplicationId};");
         transaction.Commit();
         // Publish version header before any readonly schema inspection.
-        Execute(c,null,"PRAGMA wal_checkpoint(FULL);");
+        Execute(c, null, "PRAGMA wal_checkpoint(FULL);");
     }
     public static string SearchTable(long generation)
     {

@@ -15,7 +15,8 @@ public sealed class IndexStoreTests
     public void HeaderProjectionStillRejectsIncompleteStoredGraphCollections()
     {
         using var fixture = new StoreFixture();
-        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using (var writer = fixture.Writer())
+            writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
         using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
             IndexDatabase.Execute(connection, null, "UPDATE generations SET graph_json=json_set(graph_json,'$.nodes',NULL)");
         Assert.Throws<System.Text.Json.JsonException>(() => { using var reader = fixture.Reader(); });
@@ -202,7 +203,7 @@ public sealed class IndexStoreTests
 
         // A future writer sets SQLite user_version; checkpoint it so the read-only header probe sees it.
         using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = fixture.IndexPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString()))
+        { DataSource = fixture.IndexPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();
@@ -249,7 +250,8 @@ public sealed class IndexStoreTests
         using var fixture = new StoreFixture();
         var signatureOnly = HarnessIdentity.LogicalSymbolId(fixture.Workspace, fixture.ProjectId, "method", "M:App.UseService");
         var snapshot = RankedSnapshot(fixture, 1);
-        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using (var writer = fixture.Writer())
+            writer.Commit(IndexStage.Create(snapshot));
         using var reader = fixture.Reader();
         Assert.Equal(fixture.SectionId, Assert.Single(reader.Search("定の手")).NodeId);
         var hits = reader.Search("Service");
@@ -317,9 +319,12 @@ public sealed class IndexStoreTests
         var signatureOnly = HarnessIdentity.LogicalSymbolId(fixture.Workspace, fixture.ProjectId, "method", "M:App.UseService");
         return snapshot with
         {
-            Graph = snapshot.Graph with { Nodes = snapshot.Graph.Nodes.Concat(
+            Graph = snapshot.Graph with
+            {
+                Nodes = snapshot.Graph.Nodes.Concat(
                 [new HarnessNode(signatureOnly, HarnessNodeKind.Member, "Use", fixture.ProjectId, fixture.CodeLocation,
-                    "App.Service Configure()")]).ToArray() },
+                    "App.Service Configure()")]).ToArray()
+            },
             SearchText = [snapshot.SearchText[0], snapshot.SearchText[1] with { Body = "Service の設定の手順を説明する。" },
                 new(signatureOnly, "Use", "App.Service Configure()", "", "", "src/App.cs")]
         };
@@ -356,8 +361,11 @@ public sealed class IndexStoreTests
         Assert.True(File.Exists(probe), "The build must copy the writer-lock probe beside the test assembly.");
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
         start.ArgumentList.Add(probe);
         start.ArgumentList.Add(fixture.Root);
@@ -377,9 +385,15 @@ public sealed class IndexStoreTests
             while (true)
             {
                 timeout.Token.ThrowIfCancellationRequested();
-                try { recoveredWriter = fixture.Writer(); break; }
+                try
+                {
+                    recoveredWriter = fixture.Writer();
+                    break;
+                }
                 catch (IndexStoreException error) when (error.Code == "INDEX_BUSY")
-                { await Task.Delay(25, timeout.Token); }
+                {
+                    await Task.Delay(25, timeout.Token);
+                }
             }
             using var recovered = recoveredWriter;
             recovered.Commit(IndexStage.Create(fixture.Snapshot(1, "Recovered")));

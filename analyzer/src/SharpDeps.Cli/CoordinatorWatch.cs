@@ -20,7 +20,8 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
     {
         if (CliIndexer.IsWatchExcluded(selection.Options.Root, change.FullPath, selection.Options.IndexPath)
             && (change is not RenamedEventArgs rename
-                || CliIndexer.IsWatchExcluded(selection.Options.Root, rename.OldFullPath, selection.Options.IndexPath))) return;
+                || CliIndexer.IsWatchExcluded(selection.Options.Root, rename.OldFullPath, selection.Options.IndexPath)))
+            return;
         Invalidate();
     }
 
@@ -33,12 +34,14 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
     private void Invalidate()
     {
         // Advance before taking the owner gate: transaction guards can see an event while admission is locked.
-        if (Volatile.Read(ref ending) != 0) return;
+        if (Volatile.Read(ref ending) != 0)
+            return;
         Interlocked.Increment(ref revision);
         owner.WatchDirty(this);
         lock (nativeGate)
         {
-            if (Volatile.Read(ref ending) == 0 && wake.CurrentCount == 0) wake.Release();
+            if (Volatile.Read(ref ending) == 0 && wake.CurrentCount == 0)
+                wake.Release();
         }
     }
 
@@ -46,7 +49,8 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
     {
         lock (nativeGate)
         {
-            if (Volatile.Read(ref ending) != 0 || NativeAvailable || !notificationsEnabled) return;
+            if (Volatile.Read(ref ending) != 0 || NativeAvailable || !notificationsEnabled)
+                return;
             native?.Dispose();
             native = null;
             try
@@ -79,7 +83,8 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
         lock (nativeGate)
         {
             notificationsEnabled = enabled;
-            if (native is not null) native.EnableRaisingEvents = enabled;
+            if (native is not null)
+                native.EnableRaisingEvents = enabled;
             Volatile.Write(ref nativeAvailable, native is not null && enabled ? 1 : 0);
         }
     }
@@ -105,18 +110,23 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
                         VerifyRevision(captured);
                         var current = CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, operationToken)
                             .GetAwaiter().GetResult();
-                        if (current != inputs) throw new CliFailure("WATCH_INPUT_CHANGED", 3);
+                        if (current != inputs)
+                            throw new CliFailure("WATCH_INPUT_CHANGED", 3);
                         VerifyRevision(captured);
                     });
-                    if (reply.ErrorCode is { } code) owner.WatchFailed(this, code);
+                    if (reply.ErrorCode is { } code)
+                        owner.WatchFailed(this, code);
                 }
                 catch (Exception error) when (error is not OutOfMemoryException
                     && !(error is OperationCanceledException && stopped.IsCancellationRequested))
-                { owner.WatchFailed(this, CliCoordinator.ErrorCode(error)); }
+                {
+                    owner.WatchFailed(this, CliCoordinator.ErrorCode(error));
+                }
 
                 // Even an unchanged root hash needs full extraction: ancestor config, SDK and external inputs may change.
                 full = !await wake.WaitAsync(resyncPeriod, stopped.Token);
-                if (full) owner.WatchDirty(this);
+                if (full)
+                    owner.WatchDirty(this);
             }
         }
         catch (OperationCanceledException) when (stopped.IsCancellationRequested) { }
@@ -130,7 +140,11 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref ending, 1) != 0) { await worker; return; }
+        if (Interlocked.Exchange(ref ending, 1) != 0)
+        {
+            await worker;
+            return;
+        }
         lock (nativeGate)
         {
             stopped.Cancel();

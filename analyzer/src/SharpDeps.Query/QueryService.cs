@@ -24,7 +24,9 @@ public sealed class QueryService
 
     public QueryService(IQueryIndex index, QueryWorkspace? workspace = null, bool isTrusted = false, byte[]? cursorKey = null)
     {
-        this.index = index; trusted = isTrusted; this.workspace = isTrusted ? workspace : null;
+        this.index = index;
+        trusted = isTrusted;
+        this.workspace = isTrusted ? workspace : null;
         // Freeze producer-owned arrays before deriving any adjacency or query output.
         saved = JsonSerializer.Deserialize<IndexSnapshot>(JsonSerializer.Serialize(index.Snapshot, QueryJson.Options), QueryJson.Options)!;
         _ = IndexStage.Create(saved); // Complete storage validation, including references and source spans.
@@ -44,10 +46,18 @@ public sealed class QueryService
         Validate(request);
         ValidateParent(request);
         // Clone input collections as well: cursor filters and selection use the same immutable request.
-        request = request with { Budget = request.Budget ?? new QueryBudget(), Scope = request.Scope is null ? null :
-            request.Scope with { VariantIds = request.Scope.VariantIds?.ToArray(),
-                ResultKinds = request.Scope.ResultKinds?.Distinct().Order().ToArray() }, Ids = request.Ids?.ToArray(),
-            EdgeKinds = request.EdgeKinds?.ToArray() };
+        request = request with
+        {
+            Budget = request.Budget ?? new QueryBudget(),
+            Scope = request.Scope is null ? null :
+            request.Scope with
+            {
+                VariantIds = request.Scope.VariantIds?.ToArray(),
+                ResultKinds = request.Scope.ResultKinds?.Distinct().Order().ToArray()
+            },
+            Ids = request.Ids?.ToArray(),
+            EdgeKinds = request.EdgeKinds?.ToArray()
+        };
         ValidateMinimumBudget(request);
         var work = new Work(request, cancellationToken);
         var freshness = new QueryFreshness("unverified", null, [], ["input hashes, inventory and configuration not checked"]);
@@ -58,8 +68,10 @@ public sealed class QueryService
                 work.Error("UPDATE_REQUIRED", "Request a trusted coordinator update, then open a new query reader.");
             else if (request.Freshness == QueryFreshnessPolicy.RequireFresh)
             {
-                if (!trusted) work.Error("WORKSPACE_UNTRUSTED", "Fresh source verification requires workspace trust.");
-                else if (workspace is null) work.Error("FRESHNESS_UNVERIFIED", "Supply a complete input inventory and configuration verification.");
+                if (!trusted)
+                    work.Error("WORKSPACE_UNTRUSTED", "Fresh source verification requires workspace trust.");
+                else if (workspace is null)
+                    work.Error("FRESHNESS_UNVERIFIED", "Supply a complete input inventory and configuration verification.");
                 else
                 {
                     freshness = workspace.Verify(saved, work.Token);
@@ -77,7 +89,8 @@ public sealed class QueryService
                 {
                     var decoded = cursors.Decode(request.Cursor, summary, filter);
                     offset = decoded.Offset;
-                    if (decoded.Error is { } error) work.Error(error, "Restart the query without a cursor.");
+                    if (decoded.Error is { } error)
+                        work.Error(error, "Restart the query without a cursor.");
                 }
                 if (work.Errors.Count == 0)
                 {
@@ -86,12 +99,14 @@ public sealed class QueryService
                     // Classification is an output filter, not an adjacency barrier. Hidden
                     // document/mention structure still participates in bounded traversal.
                     work.Items.RemoveAll(item => !ResultAllowed(item, request.Scope));
-                    if (request.Kind != QueryKind.Browse && offset > work.Items.Count) work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
+                    if (request.Kind != QueryKind.Browse && offset > work.Items.Count)
+                        work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
                     else
                     {
                         var page = work.Items.Skip(request.Kind == QueryKind.Browse ? 0 : offset).Take(request.PageSize).ToList();
                         var hasMore = request.Kind == QueryKind.Browse ? work.BrowseHasMore : offset + page.Count < work.Items.Count;
-                        if (hasMore) work.Reasons.Add("PAGE_LIMIT");
+                        if (hasMore)
+                            work.Reasons.Add("PAGE_LIMIT");
                         if (request.Kind == QueryKind.Context && workspace is not null)
                             AddSnippets(work, page, ref freshness);
                         if (request.Freshness == QueryFreshnessPolicy.RequireFresh && work.Errors.Count == 0)
@@ -113,14 +128,26 @@ public sealed class QueryService
         }
         catch (OperationCanceledException)
         {
-            if (cancellationToken.IsCancellationRequested) work.Error("CANCELLED", "The query was cancelled.");
-            else { work.Reasons.Add("TIME_LIMIT"); work.Error("QUERY_TIMEOUT", "Retry with a narrower query or a larger time budget."); }
+            if (cancellationToken.IsCancellationRequested)
+                work.Error("CANCELLED", "The query was cancelled.");
+            else
+            {
+                work.Reasons.Add("TIME_LIMIT");
+                work.Error("QUERY_TIMEOUT", "Retry with a narrower query or a larger time budget.");
+            }
         }
         catch (QuerySourceException error)
-        { work.Error(error.Code, "Verify the workspace inputs and retry.", error.RelativePath); }
+        {
+            work.Error(error.Code, "Verify the workspace inputs and retry.", error.RelativePath);
+        }
         catch (IndexStoreException error)
-        { work.Error(error.Code, "Reopen or rebuild the saved index through the trusted coordinator."); }
-        finally { work.Timer.Dispose(); }
+        {
+            work.Error(error.Code, "Reopen or rebuild the saved index through the trusted coordinator.");
+        }
+        finally
+        {
+            work.Timer.Dispose();
+        }
         return Finish(work, Snapshot(freshness, request.Scope), [], 0, "", false, errorOnly: true);
     }
 
@@ -137,7 +164,8 @@ public sealed class QueryService
     private void Select(Work work, int browseOffset)
     {
         var request = work.Request;
-        if (request.Kind == QueryKind.Status) return;
+        if (request.Kind == QueryKind.Status)
+            return;
         if (request.Kind == QueryKind.Browse)
         {
             var matched = 0;
@@ -145,17 +173,25 @@ public sealed class QueryService
             {
                 work.Check();
                 if (!InScope(node, request.Scope) || !ResultAllowed(node, request.Scope)
-                    || (!request.IncludeDocuments && IsDocument(node.Kind))) continue;
-                if (matched++ < browseOffset) continue;
+                    || (!request.IncludeDocuments && IsDocument(node.Kind)))
+                    continue;
+                if (matched++ < browseOffset)
+                    continue;
                 if (work.Items.Count == request.PageSize || !work.Add(NodeItem(node, "browse", [], request.Scope)))
-                { work.BrowseHasMore = true; return; }
+                {
+                    work.BrowseHasMore = true;
+                    return;
+                }
             }
-            if (browseOffset > matched) work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
+            if (browseOffset > matched)
+                work.Error("INVALID_CURSOR", "Restart the query without a cursor.");
             return;
         }
         if (request.Kind == QueryKind.Search)
         {
-            foreach (var item in Search(work)) if (!work.Add(item)) break;
+            foreach (var item in Search(work))
+                if (!work.Add(item))
+                    break;
             return;
         }
         var seeds = request.Ids ?? (request.NodeId is null ? [] : new[] { request.NodeId });
@@ -163,16 +199,23 @@ public sealed class QueryService
         {
             var matches = Search(work);
             var maximum = request.Kind == QueryKind.Context ? Math.Min(8, request.Budget!.MaxNodes) : request.Budget!.MaxNodes;
-            if (matches.Count > maximum) work.Reasons.Add("NODE_LIMIT");
+            if (matches.Count > maximum)
+                work.Reasons.Add("NODE_LIMIT");
             seeds = matches.Take(maximum).Select(i => i.Id).ToArray();
         }
         var selected = new List<string>();
         foreach (var id in seeds.Distinct(StringComparer.Ordinal))
         {
             work.Check();
-            if (!nodes.TryGetValue(id, out var node)) { work.Error("SYMBOL_NOT_FOUND", "Select an exact node ID from search."); continue; }
-            if (!InScope(node, request.Scope)) continue;
-            if (!work.Add(NodeItem(node, "selected", [], request.Scope))) break;
+            if (!nodes.TryGetValue(id, out var node))
+            {
+                work.Error("SYMBOL_NOT_FOUND", "Select an exact node ID from search.");
+                continue;
+            }
+            if (!InScope(node, request.Scope))
+                continue;
+            if (!work.Add(NodeItem(node, "selected", [], request.Scope)))
+                break;
             selected.Add(id);
         }
         if (request.Kind == QueryKind.Symbol)
@@ -180,22 +223,27 @@ public sealed class QueryService
             foreach (var occurrence in saved.Graph.SymbolOccurrences)
             {
                 work.Check();
-                if (!selected.Contains(occurrence.LogicalSymbolId) || !VariantAllowed(occurrence.VariantId, request.Scope)) continue;
+                if (!selected.Contains(occurrence.LogicalSymbolId) || !VariantAllowed(occurrence.VariantId, request.Scope))
+                    continue;
                 if (request.IncludeDeclarationRows)
                 {
-                    if (!AddDeclarationRows(work, occurrence)) break;
+                    if (!AddDeclarationRows(work, occurrence))
+                        break;
                     continue;
                 }
                 var selectedDeclarations = (occurrence.Declarations ?? []).Where(l => LocationInScope(l, request.Scope))
                     .Take(request.Budget!.MaxNodes + 1).ToArray();
-                if (selectedDeclarations.Length > request.Budget.MaxNodes) work.Reasons.Add("DECLARATION_LIMIT");
+                if (selectedDeclarations.Length > request.Budget.MaxNodes)
+                    work.Reasons.Add("DECLARATION_LIMIT");
                 var declarations = selectedDeclarations.Take(request.Budget.MaxNodes).ToArray();
                 var location = LocationInScope(occurrence.Location, request.Scope) ? occurrence.Location : declarations.FirstOrDefault();
-                if (request.Scope?.PathPrefix is not null && location is null) continue;
+                if (request.Scope?.PathPrefix is not null && location is null)
+                    continue;
                 var filtered = occurrence with { Location = location, Declarations = declarations };
                 if (!work.Add(new(occurrence.Id, "declaration", nodes[occurrence.LogicalSymbolId].Name,
                     "symbol occurrence in selected variant", HarnessCertainty.Resolved, PathOf(location),
-                    location, [], Occurrence: filtered))) break;
+                    location, [], Occurrence: filtered)))
+                    break;
             }
             return;
         }
@@ -205,8 +253,10 @@ public sealed class QueryService
             foreach (var occurrence in saved.Graph.SymbolOccurrences)
             {
                 work.Check();
-                if (!reached.Contains(new(occurrence.LogicalSymbolId, occurrence.Id, occurrence.VariantId))) continue;
-                if (!AddDeclarationRows(work, occurrence)) return;
+                if (!reached.Contains(new(occurrence.LogicalSymbolId, occurrence.Id, occurrence.VariantId)))
+                    continue;
+                if (!AddDeclarationRows(work, occurrence))
+                    return;
             }
         }
     }
@@ -218,10 +268,12 @@ public sealed class QueryService
         foreach (var declaration in declarations)
         {
             work.Check();
-            if (!LocationInScope(declaration, work.Request.Scope)) continue;
+            if (!LocationInScope(declaration, work.Request.Scope))
+                continue;
             if (!work.Add(new(occurrence.Id + "/" + number++, "declaration", nodes[occurrence.LogicalSymbolId].Name,
                 "declaration in selected variant", HarnessCertainty.Resolved, PathOf(declaration), declaration, [],
-                Occurrence: occurrence with { Location = declaration, Declarations = [declaration] }))) return false;
+                Occurrence: occurrence with { Location = declaration, Declarations = [declaration] })))
+                return false;
         }
         return true;
     }
@@ -230,12 +282,14 @@ public sealed class QueryService
     {
         var term = work.Request.Term!;
         var ranks = index.Search(term, 500).ToDictionary(h => h.NodeId, StringComparer.Ordinal);
-        if (ranks.Count == 500) work.Reasons.Add("SEARCH_CANDIDATE_LIMIT");
+        if (ranks.Count == 500)
+            work.Reasons.Add("SEARCH_CANDIDATE_LIMIT");
         var text = saved.SearchText.ToDictionary(t => t.NodeId, StringComparer.Ordinal);
         var comparer = Comparer<(int Priority, double Rank, QueryItem Item)>.Create((a, b) =>
         {
             var compared = a.Priority.CompareTo(b.Priority);
-            if (compared == 0) compared = a.Rank.CompareTo(b.Rank);
+            if (compared == 0)
+                compared = a.Rank.CompareTo(b.Rank);
             return compared == 0 ? StringComparer.Ordinal.Compare(a.Item.Id, b.Item.Id) : compared;
         });
         var results = new SortedSet<(int Priority, double Rank, QueryItem Item)>(comparer);
@@ -243,7 +297,8 @@ public sealed class QueryService
         foreach (var node in saved.Graph.Nodes)
         {
             work.Check();
-            if (!InScope(node, work.Request.Scope) || !ResultAllowed(node, work.Request.Scope)) continue;
+            if (!InScope(node, work.Request.Scope) || !ResultAllowed(node, work.Request.Scope))
+                continue;
             var exactPath = LocationsFor(node, work.Request.Scope).Any(l => LocationInScope(l, work.Request.Scope) && PathOf(l) == term);
             var exactId = node.Id == term;
             var exactName = node.Name.Equals(term, StringComparison.Ordinal) || node.Signature == term;
@@ -253,14 +308,17 @@ public sealed class QueryService
                 || (node.Signature?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || (stored is not null && new[] { stored.Name, stored.Signature, stored.Heading, stored.Body, stored.Path }
                     .Any(s => s.Contains(term, StringComparison.OrdinalIgnoreCase)));
-            if (!exactId && !exactName && !exactPath && hit is null && !substring) continue;
+            if (!exactId && !exactName && !exactPath && hit is null && !substring)
+                continue;
             var reason = exactId ? "exact ID" : exactName ? "exact name/signature" : exactPath ? "exact path" : hit?.MatchMethod ?? "literal-substring";
             var item = NodeItem(node, reason, [], work.Request.Scope) with { Rank = hit?.Rank, MatchMethod = reason };
             results.Add((exactId ? 0 : exactName ? 1 : exactPath ? 2 : hit is not null ? 3 : 4, hit?.Rank ?? 0, item));
             candidateCount++;
-            if (results.Count > 500) results.Remove(results.Max);
+            if (results.Count > 500)
+                results.Remove(results.Max);
         }
-        if (candidateCount > 500) work.Reasons.Add("SEARCH_CANDIDATE_LIMIT");
+        if (candidateCount > 500)
+            work.Reasons.Add("SEARCH_CANDIDATE_LIMIT");
         return results.Select(r => r.Item).ToList();
     }
 
@@ -269,7 +327,8 @@ public sealed class QueryService
     private void ValidateParent(QueryRequest request)
     {
         var scope = request.Scope;
-        if (scope?.ParentId is not { } id) return;
+        if (scope?.ParentId is not { } id)
+            return;
         if (request.Kind is not (QueryKind.Browse or QueryKind.Search)
             || scope.Kind is not (null or HarnessNodeKind.Type)
             || !nodes.TryGetValue(id, out var parent) || parent.Kind != HarnessNodeKind.Namespace
@@ -293,7 +352,8 @@ public sealed class QueryService
             if (variants.Length == 0)
             {
                 var position = new WalkPosition(id, null, null);
-                visited.Add(position); frontier.Add((position, []));
+                visited.Add(position);
+                frontier.Add((position, []));
             }
             foreach (var occurrence in variants)
             {
@@ -301,9 +361,11 @@ public sealed class QueryService
                 if (!VariantAllowed(occurrence.VariantId, request.Scope)
                     || (request.Scope?.PathPrefix is not null && !(occurrence.Declarations
                         ?? (occurrence.Location is null ? [] : new[] { occurrence.Location }))
-                        .Any(l => LocationInScope(l, request.Scope)))) continue;
+                        .Any(l => LocationInScope(l, request.Scope))))
+                    continue;
                 var position = new WalkPosition(id, occurrence.Id, occurrence.VariantId);
-                visited.Add(position); frontier.Add((position, []));
+                visited.Add(position);
+                frontier.Add((position, []));
             }
         }
         var edgeIds = new HashSet<string>(StringComparer.Ordinal);
@@ -315,25 +377,33 @@ public sealed class QueryService
                 foreach (var (edge, reverse) in WalkEdges(current.Position.Id, request))
                 {
                     work.Check();
-                    if (!TryAdvance(current.Position, edge, reverse, request, out var neighbour, out var canExpand)) continue;
+                    if (!TryAdvance(current.Position, edge, reverse, request, out var neighbour, out var canExpand))
+                        continue;
                     var node = nodes[neighbour.Id];
                     var via = current.Via.Append(edge.Id).ToArray();
                     // Budget both endpoints before adding the connecting edge, including cycles.
-                    if (!work.CanNode(neighbour.Id)) { work.Reasons.Add("NODE_LIMIT"); continue; }
+                    if (!work.CanNode(neighbour.Id))
+                    {
+                        work.Reasons.Add("NODE_LIMIT");
+                        continue;
+                    }
                     if (edgeIds.Add(edge.Id))
                     {
                         if (!work.Add(new(edge.Id, edge.Kind, node.Name, request.Kind == QueryKind.Impact ?
                             "impact review candidate via " + edge.Kind : "related via " + edge.Kind, edge.Certainty,
-                            PathOf(edge.Evidence), edge.Evidence, via, Edge: edge))) return visited;
+                            PathOf(edge.Evidence), edge.Evidence, via, Edge: edge)))
+                            return visited;
                         var occurrence = neighbour.OccurrenceId is null ? null : occurrences[neighbour.OccurrenceId];
                         var location = occurrence is null ? (IsDocument(node.Kind) ? LocationFor(node, request.Scope) : null)
                             : (occurrence.Declarations ?? (occurrence.Location is null ? [] : new[] { occurrence.Location }))
                                 .FirstOrDefault(l => LocationInScope(l, request.Scope));
                         if (!work.Add(new(node.Id, node.Kind.ToString(), node.Name, "related via " + edge.Kind,
-                            edge.Certainty, PathOf(location), location, via, Node: node with { Location = location }))) return visited;
+                            edge.Certainty, PathOf(location), location, via, Node: node with { Location = location })))
+                            return visited;
                     }
                     // Candidates are leaves. A resolved edge after a candidate hop cannot strengthen that path.
-                    if (canExpand && edge.Certainty == HarnessCertainty.Resolved && visited.Add(neighbour)) next.Add((neighbour, via));
+                    if (canExpand && edge.Certainty == HarnessCertainty.Resolved && visited.Add(neighbour))
+                        next.Add((neighbour, via));
                 }
             }
             frontier = next;
@@ -357,59 +427,75 @@ public sealed class QueryService
     private bool TryAdvance(WalkPosition current, HarnessEdge edge, bool reverse, QueryRequest request,
         out WalkPosition next, out bool canExpand)
     {
-        next = default; canExpand = false;
-        if (!VariantAllowed(edge.VariantId, request.Scope) || !EdgeAllowed(edge, request)) return false;
+        next = default;
+        canExpand = false;
+        if (!VariantAllowed(edge.VariantId, request.Scope) || !EdgeAllowed(edge, request))
+            return false;
         var hereOccurrence = reverse ? edge.TargetOccurrenceId : edge.SourceOccurrenceId;
         var nextOccurrence = reverse ? edge.SourceOccurrenceId : edge.TargetOccurrenceId;
         // Logical-only relationships remain visible as leaves, without binding a known occurrence.
         canExpand = current.OccurrenceId == hereOccurrence;
-        if (!canExpand && (current.OccurrenceId is null || hereOccurrence is not null)) return false;
+        if (!canExpand && (current.OccurrenceId is null || hereOccurrence is not null))
+            return false;
         var endpointVariant = nextOccurrence is null ? null : occurrences[nextOccurrence].VariantId;
         // Occurrence-less document/file hops retain the selected variant; they cannot bridge variants.
         var edgeVariant = edge.VariantId ?? endpointVariant;
         if ((current.OccurrenceId is null || !canExpand) && current.VariantId is not null && edgeVariant is not null
-            && current.VariantId != edgeVariant) return false;
+            && current.VariantId != edgeVariant)
+            return false;
         var variant = endpointVariant ?? current.VariantId ?? edge.VariantId;
-        if (!VariantAllowed(variant, request.Scope)) return false;
+        if (!VariantAllowed(variant, request.Scope))
+            return false;
         if (nextOccurrence is not null && request.Scope?.PathPrefix is not null)
         {
             var occurrence = occurrences[nextOccurrence];
             if (!(occurrence.Declarations ?? (occurrence.Location is null ? [] : new[] { occurrence.Location }))
-                .Any(l => LocationInScope(l, request.Scope))) return false;
+                .Any(l => LocationInScope(l, request.Scope)))
+                return false;
         }
         var id = reverse ? edge.SourceNodeId : edge.TargetNodeId;
         var node = nodes[id];
-        if (!InScope(node, request.Scope) || (!request.IncludeDocuments && IsDocument(node.Kind))) return false;
+        if (!InScope(node, request.Scope) || (!request.IncludeDocuments && IsDocument(node.Kind)))
+            return false;
         next = new(id, nextOccurrence, variant);
         return true;
     }
     private static bool EdgeAllowed(HarnessEdge edge, QueryRequest request)
     {
-        if (!request.IncludeCandidates && edge.Certainty != HarnessCertainty.Resolved) return false;
-        if (request.EdgeKinds is not null) return request.EdgeKinds.Contains(edge.Kind, StringComparer.Ordinal);
+        if (!request.IncludeCandidates && edge.Certainty != HarnessCertainty.Resolved)
+            return false;
+        if (request.EdgeKinds is not null)
+            return request.EdgeKinds.Contains(edge.Kind, StringComparer.Ordinal);
         if (request.Kind is QueryKind.Callers or QueryKind.Callees)
             return edge.Kind is "calls" or "constructs" or "dispatch_candidates" or "candidate_relation";
         return true;
     }
     private bool InScope(HarnessNode node, QueryScope? scope)
     {
-        if (scope is null) return true;
-        if (scope.ParentId is { } parentId && (node.ParentId != parentId || node.Kind != HarnessNodeKind.Type)) return false;
-        if (scope.Kind is { } kind && node.Kind != kind) return false;
+        if (scope is null)
+            return true;
+        if (scope.ParentId is { } parentId && (node.ParentId != parentId || node.Kind != HarnessNodeKind.Type))
+            return false;
+        if (scope.Kind is { } kind && node.Kind != kind)
+            return false;
         if (scope.PathPrefix is { } prefix)
         {
-            if (LocationFor(node, scope) is null) return false;
+            if (LocationFor(node, scope) is null)
+                return false;
         }
         if (scope.ProjectId is { } project)
         {
             var current = node;
-            while (current.Id != project && current.ParentId is { } parent) current = nodes[parent];
-            if (current.Id != project) return false;
+            while (current.Id != project && current.ParentId is { } parent)
+                current = nodes[parent];
+            if (current.Id != project)
+                return false;
         }
         if (scope.VariantIds is { Count: > 0 } variants && !IsDocument(node.Kind))
         {
             if (!saved.Graph.SymbolOccurrences.Any(o => o.LogicalSymbolId == node.Id && variants.Contains(o.VariantId))
-                && !saved.Graph.Variants.Any(v => v.ProjectId == node.Id && variants.Contains(v.Id))) return false;
+                && !saved.Graph.Variants.Any(v => v.ProjectId == node.Id && variants.Contains(v.Id)))
+                return false;
         }
         return true;
     }
@@ -419,7 +505,8 @@ public sealed class QueryService
         or HarnessNodeKind.FrontMatter or HarnessNodeKind.CodeFence or HarnessNodeKind.LinkTarget or HarnessNodeKind.SymbolMention;
     private QueryResultKind ResultKind(HarnessNode node)
     {
-        if (IsDocument(node.Kind)) return QueryResultKind.Docs;
+        if (IsDocument(node.Kind))
+            return QueryResultKind.Docs;
         if (node.Kind == HarnessNodeKind.SourceFile)
             return files.GetValueOrDefault(node.Location?.SourceId ?? "")?.Kind switch
             {
@@ -435,17 +522,21 @@ public sealed class QueryService
             && (scope?.ResultKinds is null || scope.ResultKinds.Contains(ResultKind(node)));
     private bool ResultAllowed(QueryItem item, QueryScope? scope)
     {
-        if (item.Node is { } node) return ResultAllowed(node, scope);
-        if (item.Occurrence is { } occurrence) return ResultAllowed(nodes[occurrence.LogicalSymbolId], scope);
+        if (item.Node is { } node)
+            return ResultAllowed(node, scope);
+        if (item.Occurrence is { } occurrence)
+            return ResultAllowed(nodes[occurrence.LogicalSymbolId], scope);
         // Never emit an edge with an endpoint excluded by this display condition.
-        if (item.Edge is { } edge) return ResultAllowed(nodes[edge.SourceNodeId], scope)
+        if (item.Edge is { } edge)
+            return ResultAllowed(nodes[edge.SourceNodeId], scope)
             && ResultAllowed(nodes[edge.TargetNodeId], scope);
         return true;
     }
     private string? PathOf(HarnessLocation? location) => location is null ? null : files.GetValueOrDefault(location.SourceId)?.RelativePath;
     private bool LocationInScope(HarnessLocation? location, QueryScope? scope)
     {
-        if (scope?.PathPrefix is not { } prefix) return true;
+        if (scope?.PathPrefix is not { } prefix)
+            return true;
         var path = PathOf(location);
         return path is not null && (path == prefix || path.StartsWith(prefix.TrimEnd('/') + "/", StringComparison.Ordinal));
     }
@@ -456,7 +547,8 @@ public sealed class QueryService
     private IEnumerable<HarnessLocation> LocationsFor(HarnessNode node, QueryScope? scope)
     {
         // Variant and path must be supported by the same declaration, especially for partial symbols.
-        if ((scope?.VariantIds is null || IsDocument(node.Kind)) && node.Location is { } primary) yield return primary;
+        if ((scope?.VariantIds is null || IsDocument(node.Kind)) && node.Location is { } primary)
+            yield return primary;
         foreach (var occurrence in saved.Graph.SymbolOccurrences)
             if (occurrence.LogicalSymbolId == node.Id && VariantAllowed(occurrence.VariantId, scope))
                 foreach (var location in occurrence.Declarations ?? (occurrence.Location is null ? [] : new[] { occurrence.Location }))
@@ -478,7 +570,8 @@ public sealed class QueryService
         foreach (var group in groups)
         {
             work.Check();
-            if (!files.TryGetValue(group.Key, out var file)) continue;
+            if (!files.TryGetValue(group.Key, out var file))
+                continue;
             try
             {
                 var text = new UTF8Encoding(false, true).GetString(workspace!.Read(file, work.Token));
@@ -497,16 +590,23 @@ public sealed class QueryService
                         unions[^1] = (previous.Owner, new(previous.Span.Start,
                             Math.Max(previous.Span.End, current.Span.End) - previous.Span.Start));
                     }
-                    else unions.Add((current.index, current.Span));
+                    else
+                        unions.Add((current.index, current.Span));
                 }
                 foreach (var (owner, span) in unions)
                 {
                     work.Check();
                     var length = Math.Min(span.Length, charsRemaining);
-                    if (length > 0 && span.Start + length < text.Length && char.IsHighSurrogate(text[span.Start + length - 1])) length--;
-                    if (span.Start < text.Length && char.IsLowSurrogate(text[span.Start])) { work.Reasons.Add("SNIPPET_BOUNDARY"); continue; }
+                    if (length > 0 && span.Start + length < text.Length && char.IsHighSurrogate(text[span.Start + length - 1]))
+                        length--;
+                    if (span.Start < text.Length && char.IsLowSurrogate(text[span.Start]))
+                    {
+                        work.Reasons.Add("SNIPPET_BOUNDARY");
+                        continue;
+                    }
                     var included = new HarnessRawSpan(span.Start, length);
-                    if (length != span.Length) work.Reasons.Add("SNIPPET_CHAR_LIMIT");
+                    if (length != span.Length)
+                        work.Reasons.Add("SNIPPET_CHAR_LIMIT");
                     page[owner] = page[owner] with { Snippet = Snippet(file, included, text) };
                     charsRemaining -= length;
                 }
@@ -520,41 +620,52 @@ public sealed class QueryService
             }
             catch (QuerySourceException error)
             {
-                if (changed.Add(file.RelativePath)) work.Diagnostics.Add(new(error.Code, "Snippet omitted; update the index and retry.", file.RelativePath));
+                if (changed.Add(file.RelativePath))
+                    work.Diagnostics.Add(new(error.Code, "Snippet omitted; update the index and retry.", file.RelativePath));
                 if (work.Request.Freshness == QueryFreshnessPolicy.RequireFresh)
                     work.Error(error.Code, "The required source freshness could not be verified.", file.RelativePath);
             }
         }
-        if (changed.Count > 0) freshness = new("dirty", DateTimeOffset.UtcNow, changed.Order(StringComparer.Ordinal).ToArray(),
+        if (changed.Count > 0)
+            freshness = new("dirty", DateTimeOffset.UtcNow, changed.Order(StringComparer.Ordinal).ToArray(),
             ["only requested snippets checked; complete inventory and configuration remain unverified"]);
-        if (work.Errors.Count > 0) page.Clear();
+        if (work.Errors.Count > 0)
+            page.Clear();
         static QuerySnippet Snippet(IndexFile file, HarnessRawSpan span, string text)
             => new(file.SourceId, file.ContentHash, span, text.Substring(span.Start, span.Length), span.Start > 0, span.End < text.Length);
     }
 
     private QueryReply Finish(Work work, QuerySnapshot snapshot, List<QueryItem> page, int offset, string filter, bool hasMore, bool errorOnly = false)
     {
-        page = page.Select(item => item with { ResultKind = item.Node is { } node ? ResultKind(node)
-            : item.Occurrence is { } occurrence ? ResultKind(nodes[occurrence.LogicalSymbolId]) : null }).ToList();
-        if (snapshot.VariantCount > snapshot.VariantIds.Count) work.Reasons.Add("VARIANT_METADATA_LIMIT");
+        page = page.Select(item => item with
+        {
+            ResultKind = item.Node is { } node ? ResultKind(node)
+            : item.Occurrence is { } occurrence ? ResultKind(nodes[occurrence.LogicalSymbolId]) : null
+        }).ToList();
+        if (snapshot.VariantCount > snapshot.VariantIds.Count)
+            work.Reasons.Add("VARIANT_METADATA_LIMIT");
         if (snapshot.DirtyPathCount > snapshot.DirtyPaths.Count || snapshot.UnverifiedCount > snapshot.Unverified.Count)
             work.Reasons.Add("FRESHNESS_METADATA_LIMIT");
         foreach (var diagnostic in (saved.Graph.Diagnostics ?? []).Take(16))
             work.Diagnostics.Add(new(diagnostic.Code.Length <= 64 ? diagnostic.Code : "GRAPH_DIAGNOSTIC", "Saved graph diagnostic count: " + diagnostic.Count));
-        if ((saved.Graph.Diagnostics?.Count ?? 0) > 16) work.Reasons.Add("DIAGNOSTIC_LIMIT");
+        if ((saved.Graph.Diagnostics?.Count ?? 0) > 16)
+            work.Reasons.Add("DIAGNOSTIC_LIMIT");
         var budget = work.Request.Budget!;
         var minimalError = false;
         while (true)
         {
-            if (!errorOnly) work.Check();
+            if (!errorOnly)
+                work.Check();
             if (work.Request.RequireComplete && (saved.Graph.Coverage != HarnessCoverage.CompleteWithinScope || work.Reasons.Count > 0))
                 work.Error("INCOMPLETE_RESULT", "Retry with complete coverage and sufficient query/output budgets.");
             var selectedRemainder = work.Request.Kind == QueryKind.Browse
                 ? page.Count < work.Items.Count : offset + page.Count < work.Items.Count;
             var next = (hasMore || selectedRemainder) && page.Count > 0 && work.Errors.Count == 0
                 ? cursors.Encode(snapshot, filter, offset + page.Count) : null;
-            var errors = work.Errors.Take(8).ToArray(); var diagnostics = work.Diagnostics.Take(16).ToArray();
-            if (work.Errors.Count > errors.Length || work.Diagnostics.Count > diagnostics.Length) work.Reasons.Add("DIAGNOSTIC_LIMIT");
+            var errors = work.Errors.Take(8).ToArray();
+            var diagnostics = work.Diagnostics.Take(16).ToArray();
+            if (work.Errors.Count > errors.Length || work.Diagnostics.Count > diagnostics.Length)
+                work.Reasons.Add("DIAGNOSTIC_LIMIT");
             var envelope = new QueryEnvelope("1", work.Request.RequestId, snapshot,
                 page.Where(i => i.Certainty == HarnessCertainty.Resolved).ToArray(),
                 page.Where(i => i.Certainty == HarnessCertainty.Candidate).ToArray(),
@@ -566,22 +677,44 @@ public sealed class QueryService
             string json;
             while (true)
             {
-                if (!errorOnly) work.Check();
+                if (!errorOnly)
+                    work.Check();
                 json = JsonSerializer.Serialize(envelope, QueryJson.Options);
                 var bytes = Encoding.UTF8.GetByteCount(json);
-                if (envelope.Budget.UsedChars == json.Length && envelope.Budget.UsedBytes == bytes) break;
-                envelope = envelope with { Budget = envelope.Budget with { UsedChars = json.Length, UsedBytes = bytes,
-                    EstimatedTokens = (json.Length + 3) / 4 } };
+                if (envelope.Budget.UsedChars == json.Length && envelope.Budget.UsedBytes == bytes)
+                    break;
+                envelope = envelope with
+                {
+                    Budget = envelope.Budget with
+                    {
+                        UsedChars = json.Length,
+                        UsedBytes = bytes,
+                        EstimatedTokens = (json.Length + 3) / 4
+                    }
+                };
             }
             if (json.Length <= budget.MaxChars && envelope.Budget.UsedBytes <= budget.MaxBytes)
-            { if (!errorOnly) work.Check(); return new(envelope, json); }
+            {
+                if (!errorOnly)
+                    work.Check();
+                return new(envelope, json);
+            }
             work.Reasons.Add("OUTPUT_LIMIT");
-            if (page.Count > 0) { page.RemoveRange(page.Count / 2, page.Count - page.Count / 2); continue; }
+            if (page.Count > 0)
+            {
+                page.RemoveRange(page.Count / 2, page.Count - page.Count / 2);
+                continue;
+            }
             // Bound optional metadata too, retaining counts and a structured budget error.
             if (snapshot.DirtyPaths.Count > 0 || snapshot.Unverified.Count > 0 || snapshot.VariantIds.Count > 0)
-            { snapshot = snapshot with { DirtyPaths = [], Unverified = [], VariantIds = [] }; continue; }
-            work.Diagnostics.Clear(); work.Errors.Clear();
-            if (minimalError) throw new ArgumentException("The output budget cannot hold the required error metadata.");
+            {
+                snapshot = snapshot with { DirtyPaths = [], Unverified = [], VariantIds = [] };
+                continue;
+            }
+            work.Diagnostics.Clear();
+            work.Errors.Clear();
+            if (minimalError)
+                throw new ArgumentException("The output budget cannot hold the required error metadata.");
             minimalError = true;
             work.Error("OUTPUT_BUDGET_TOO_SMALL", "Increase the output budget or narrow the query.");
             // ValidateMinimumBudget reserves the real snapshot metadata; retain a finite failure exit.
@@ -633,7 +766,8 @@ public sealed class QueryService
         private int edgeCount;
         public Work(QueryRequest request, CancellationToken token)
         {
-            Request = request; Timer = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Request = request;
+            Timer = CancellationTokenSource.CreateLinkedTokenSource(token);
             Timer.CancelAfter(request.Budget!.MaxMilliseconds);
         }
         public QueryRequest Request { get; }
@@ -644,19 +778,40 @@ public sealed class QueryService
         public List<QueryIssue> Diagnostics { get; } = [];
         public List<QueryIssue> Errors { get; } = [];
         public HashSet<string> Reasons { get; } = new(StringComparer.Ordinal);
-        public void Check() { Token.ThrowIfCancellationRequested(); if (clock.ElapsedMilliseconds > Request.Budget!.MaxMilliseconds) throw new OperationCanceledException(); }
+        public void Check()
+        {
+            Token.ThrowIfCancellationRequested();
+            if (clock.ElapsedMilliseconds > Request.Budget!.MaxMilliseconds)
+                throw new OperationCanceledException();
+        }
         public bool CanNode(string id) => nodeIds.Contains(id) || nodeIds.Count < Request.Budget!.MaxNodes;
         public bool Add(QueryItem item)
         {
             Check();
-            if (itemIds.Contains(item.Id + "/" + item.Certainty)) return true;
-            if ((item.Node is not null || item.Occurrence is not null) && !CanNode(item.Id)) { Reasons.Add("NODE_LIMIT"); return false; }
-            if (item.Edge is not null && edgeCount >= Request.Budget!.MaxEdges) { Reasons.Add("EDGE_LIMIT"); return false; }
-            if (item.Node is not null || item.Occurrence is not null) nodeIds.Add(item.Id);
-            if (item.Edge is not null) edgeCount++;
-            itemIds.Add(item.Id + "/" + item.Certainty); Items.Add(item); return true;
+            if (itemIds.Contains(item.Id + "/" + item.Certainty))
+                return true;
+            if ((item.Node is not null || item.Occurrence is not null) && !CanNode(item.Id))
+            {
+                Reasons.Add("NODE_LIMIT");
+                return false;
+            }
+            if (item.Edge is not null && edgeCount >= Request.Budget!.MaxEdges)
+            {
+                Reasons.Add("EDGE_LIMIT");
+                return false;
+            }
+            if (item.Node is not null || item.Occurrence is not null)
+                nodeIds.Add(item.Id);
+            if (item.Edge is not null)
+                edgeCount++;
+            itemIds.Add(item.Id + "/" + item.Certainty);
+            Items.Add(item);
+            return true;
         }
         public void Error(string code, string message, string? path = null)
-        { if (!Errors.Any(e => e.Code == code && e.Path == path)) Errors.Add(new(code, message, path)); }
+        {
+            if (!Errors.Any(e => e.Code == code && e.Path == path))
+                Errors.Add(new(code, message, path));
+        }
     }
 }

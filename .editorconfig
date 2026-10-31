@@ -1,0 +1,14 @@
+root = true
+
+[*.cs]
+csharp_style_allow_embedded_statements_on_same_line_experimental = false
+dotnet_diagnostic.IDE2001.severity = warning
+csharp_preserve_single_line_statements = false
+indent_style = space
+indent_size = 4
+
+[tests/fixtures/**/*.cs]
+dotnet_diagnostic.IDE2001.severity = none
+
+[*.{g,generated}.cs]
+dotnet_diagnostic.IDE2001.severity = none

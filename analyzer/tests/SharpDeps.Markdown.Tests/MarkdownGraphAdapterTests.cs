@@ -30,14 +30,22 @@ public sealed class MarkdownGraphAdapterTests
         Assert.Equal(HarnessIdentity.DocumentId(Workspace, Document), document.Id);
         Assert.Equal(request.RawText.Length, document.Location!.RawSpan!.Value.End);
         Assert.Equal("version-a", document.Location.SourceVersion);
-        Assert.All(projection.Sections, s => { Assert.False(s.Durable); Assert.StartsWith("hmdf_", s.NodeId); });
+        Assert.All(projection.Sections, s =>
+        {
+            Assert.False(s.Durable);
+            Assert.StartsWith("hmdf_", s.NodeId);
+        });
         Assert.Equal(HarnessCoverage.Partial, projection.Graph.Coverage);
         Assert.Contains(projection.Graph.Edges.Where(e => e.Kind == "markdown-link"), e => e.Certainty == HarnessCertainty.Candidate);
         var tokens = projection.Facts.Sections.Select((s, i) => (s.LocalKey, Token: "persisted-fixture:" + i))
             .ToDictionary(s => s.LocalKey, s => s.Token, StringComparer.Ordinal);
         var bound = request with { SectionTokens = tokens, SectionIdentityTextHash = projection.Facts.TextHash, SnapshotId = "snapshot-b", Generation = 2 };
         var durable = adapter.Analyze(bound, true);
-        Assert.All(durable.Sections, s => { Assert.True(s.Durable); Assert.StartsWith("hsec_", s.NodeId); });
+        Assert.All(durable.Sections, s =>
+        {
+            Assert.True(s.Durable);
+            Assert.StartsWith("hsec_", s.NodeId);
+        });
         Assert.Throws<ArgumentException>(() => adapter.Analyze(bound with { SectionIdentityTextHash = new string('0', 64) }, true));
         if (tokens.Count > 1)
             Assert.Throws<ArgumentException>(() => adapter.Analyze(bound with { SectionTokens = tokens.Keys.ToDictionary(k => k, _ => "same-token") }, true));
@@ -118,8 +126,11 @@ public sealed class MarkdownGraphAdapterTests
         var parsed = adapter.Analyze(request, true);
         var sections = MarkdownIdentityMatcher.MatchSections(Workspace, Document, request.RawText, parsed.Facts, null,
             () => Guid.NewGuid().ToString("N"));
-        var projected = adapter.Analyze(request with { SectionTokens = sections.SectionTokens,
-            SectionIdentityTextHash = sections.TextHash }, true);
+        var projected = adapter.Analyze(request with
+        {
+            SectionTokens = sections.SectionTokens,
+            SectionIdentityTextHash = sections.TextHash
+        }, true);
 
         Assert.Equal(MarkdownParseStatus.Partial, projected.Facts.Status);
         Assert.Equal(MarkdownCoverageState.Complete, projected.Facts.Coverage.RawPositions);

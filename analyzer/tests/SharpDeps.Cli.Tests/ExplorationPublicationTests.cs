@@ -150,8 +150,13 @@ public sealed class ExplorationPublicationTests
         public async Task Restore(CancellationToken token)
         {
             var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-            { WorkingDirectory = Root, UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true };
+            {
+                WorkingDirectory = Root,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
             start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
             start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
             foreach (var argument in new[] { "restore", Options.Target, "--configfile", RestoreConfig, "--verbosity", "quiet" })
@@ -159,8 +164,18 @@ public sealed class ExplorationPublicationTests
             using var process = Process.Start(start) ?? throw new InvalidOperationException("Offline fixture restore did not start.");
             var output = process.StandardOutput.ReadToEndAsync();
             var errors = process.StandardError.ReadToEndAsync();
-            try { await process.WaitForExitAsync(token); }
-            finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
+            try
+            {
+                await process.WaitForExitAsync(token);
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
+            }
             Assert.True(process.ExitCode == 0, await output + await errors);
         }
 
@@ -169,7 +184,8 @@ public sealed class ExplorationPublicationTests
             if (Path.GetDirectoryName(Path.GetFullPath(Root)) != Path.TrimEndingDirectorySeparator(Path.GetFullPath(Base))
                 || Path.GetDirectoryName(Path.GetFullPath(RestoreConfig)) != Path.TrimEndingDirectorySeparator(Path.GetFullPath(Base)))
                 throw new InvalidOperationException("Fixture cleanup escaped its temporary directory.");
-            if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true);
+            if (Directory.Exists(Root))
+                Directory.Delete(Root, recursive: true);
             File.Delete(RestoreConfig);
         }
     }
