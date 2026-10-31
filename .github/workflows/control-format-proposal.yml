@@ -1,0 +1,28 @@
+name: Control-statement formatting proposal
+on:
+  push:
+    branches: ['ci/format-dev-proposal-20261031']
+permissions:
+  contents: read
+jobs:
+  proposal:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; existing lock
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0; existing lock
+        with:
+          dotnet-version: 10.0.x
+      - name: Prepare and verify IDE2001-only patch
+        shell: pwsh
+        run: ./scripts/Prepare-ControlFormatting.ps1
+      - name: Upload verified formatting proposal
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; existing lock
+        with:
+          name: control-format-proposal-${{ github.sha }}
+          path: ${{ runner.temp }}/control-format-output/
+          retention-days: 3
+          if-no-files-found: error
