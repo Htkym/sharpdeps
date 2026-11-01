@@ -11,12 +11,14 @@
 
     Query phase: for each fixed question and each tool, one initial call in
     the tool's native syntax, then at most -MaxFollowups follow-up calls.
-    A follow-up candidate is executed only when its required evidence string
-    literally appears in that tool's accumulated stdout. The loop stops on
-    sufficiency markers, the follow-up cap, an error exit, a timeout, an
-    unsupported outcome, exhausted evidence-based candidates, or the global
-    call cap. Errors, timeouts, caps and unsupported outcomes are recorded
-    as results, not treated as runner failures.
+    A follow-up candidate is executed only when the selector it would send
+    (its text) literally appears in that tool's accumulated stdout; a
+    candidate's 'requires' string is an additional gate, never a
+    substitute. The loop stops on sufficiency markers, the follow-up cap,
+    an error exit, a timeout, an explicitly diagnosed unsupported outcome,
+    exhausted evidence-based candidates, or the global call cap. Errors,
+    timeouts, caps and unsupported outcomes are recorded as results, not
+    treated as runner failures.
 
     Metrics per call come from Invoke-ComparisonQuery: non-TTY stdout as raw
     UTF-8 bytes and decoded UTF-16 code units, stderr kept separate.
@@ -65,6 +67,11 @@ if (-not $Root) {
         $Root = Join-Path (Split-Path $PSScriptRoot -Parent) '.scg'
     }
 }
+# Normalize to an absolute path before deriving or serializing any path;
+# a relative Root would make the tools resolve corpus paths beneath the
+# wrong working directory. Resolution is relative to the caller's
+# PowerShell location and also handles a Root that does not exist yet.
+$Root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Root)
 $pins = Get-Content (Join-Path $PSScriptRoot 'pins.json') -Raw | ConvertFrom-Json
 
 if ($CorpusSpecPath) {
@@ -152,6 +159,22 @@ if ($ListOnly) {
     $listSummary | ConvertTo-Json -Depth 6 | Set-Content -Path $listPath -Encoding utf8
     Write-Output $listPath
     return
+}
+
+# Run-time validation: the recorded repository and commit come from the
+# spec, so verify the actual copies still match them before setup indexes
+# anything (and before queries when -SkipSetup skips setup). Copies that
+# are Git checkouts are checked with the same validator preparation uses.
+# An explicitly supplied spec whose copies are not Git checkouts is the
+# documented non-Git smoke fixture and is exempt.
+foreach ($copyProp in $spec.copies.PSObject.Properties) {
+    $copyPath = $copyProp.Value
+    if (Test-Path (Join-Path $copyPath '.git')) {
+        Assert-CopyContent $copyPath $spec.commit
+    }
+    elseif (-not $CorpusSpecPath) {
+        throw "Corpus copy $copyPath is not a Git checkout. Run prepare.ps1 first."
+    }
 }
 
 $toolsDir = Join-Path $Root 't'
@@ -247,6 +270,9 @@ if (-not $SkipSetup) {
                 -WorkingDirectory $spec.copies.sharpdeps `
                 -TimeoutSeconds $QueryTimeoutSeconds -OutBase (Join-Path $OutputDir 'setup-sharpdeps-status')
             $summary.setup.sharpdeps += $status
+            if ($status.timedOut -or $status.exitCode -ne 0 -or -not $status.collectionComplete) {
+                $setupFailed.sharpdeps = $true
+            }
         }
     }
 }
@@ -315,7 +341,11 @@ function Invoke-ToolQuestion {
                 if ($candidate.PSObject.Properties['requires'] -and $candidate.requires) {
                     $requires = $candidate.requires
                 }
-                if ($accumulated.Contains($requires)) {
+                # The selector actually sent (the candidate text) must
+                # itself appear in this tool's returned evidence;
+                # 'requires' is only an additional gate, never a
+                # substitute for the selector being returned.
+                if ($accumulated.Contains($candidate.text) -and $accumulated.Contains($requires)) {
                     $next = $candidate
                     break
                 }
@@ -392,7 +422,7 @@ function Invoke-ToolQuestion {
         if (Test-Path $result.stderrPath) {
             $stderrText = [System.IO.File]::ReadAllText($result.stderrPath, [System.Text.Encoding]::UTF8)
         }
-        if ($accumulated -match '(?i)\bunsupported\b' -or $stderrText -match '(?i)\bunsupported\b') {
+        if (Test-ExplicitUnsupported $accumulated -or Test-ExplicitUnsupported $stderrText) {
             $record.stopReason = 'unsupported'
             break
         }

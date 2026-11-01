@@ -29,10 +29,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Invoke-Query.ps1')
 
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path $PSScriptRoot -Parent
 }
+# Normalize to absolute paths before any derived path is created or
+# serialized; Resolution is relative to the caller's PowerShell location and also handles a Root that does not exist yet.
+$RepoRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoRoot)
 if (-not $Root) {
     if ($env:SCG_ROOT) {
         $Root = $env:SCG_ROOT
@@ -44,6 +48,7 @@ if (-not $Root) {
         $Root = Join-Path $RepoRoot '.scg'
     }
 }
+$Root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Root)
 
 $inputsDir = Join-Path $Root 'i'
 $toolsDir = Join-Path $Root 't'
@@ -82,36 +87,6 @@ function Save-Manifest {
     $manifest.finishedAtUtc = [DateTime]::UtcNow.ToString('o')
     $manifest | ConvertTo-Json -Depth 8 |
         Set-Content -Path (Join-Path $runDir 'prepare-manifest.json') -Encoding utf8
-}
-
-function Assert-CopyContent {
-    param(
-        [Parameter(Mandatory)] [string]$Path,
-        [Parameter(Mandatory)] [string]$ExpectedCommit
-    )
-    # The copy must be exactly the pinned commit: HEAD equality alone would
-    # miss tracked files edited in place, so the working tree is compared
-    # against HEAD as well. The only tolerated untracked entries are the
-    # two tools' own output directories.
-    $head = (git -C $Path rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $head -ne $ExpectedCommit) {
-        throw "Copy $Path is at '$head', expected '$ExpectedCommit'. Refusing to reuse or overwrite it."
-    }
-    $porcelain = @(git -C $Path status --porcelain)
-    if ($LASTEXITCODE -ne 0) {
-        throw "git status failed in $Path."
-    }
-    foreach ($line in $porcelain) {
-        if ($line.StartsWith('??')) {
-            $rel = $line.Substring(3).Trim().Trim('"')
-            if (-not ($rel -match '^\.codegraph(/|$)' -or $rel -match '^\.sharpdeps(/|$)')) {
-                throw "Unexpected untracked content in $Path : $rel. Refusing to reuse or overwrite it."
-            }
-        }
-        else {
-            throw "Tracked content in $Path differs from the pinned commit: $line. Refusing to reuse or overwrite it."
-        }
-    }
 }
 
 function Invoke-Logged {

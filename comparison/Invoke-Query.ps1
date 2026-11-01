@@ -16,13 +16,17 @@
     the pipes) makes the collection incomplete: the captures stay on disk
     for diagnosis but must not be treated as a valid result.
 
-    Cleanup: while a call runs, the caller's descendant process ids are
-    snapshotted (parent links are only reliable while the parent lives).
-    On timeout the process tree is killed and any wait for its exit is
-    bounded; when the parent has already exited but descendants linger
-    (for example a daemon holding the pipes), the snapshotted descendants
-    are killed explicitly. Stop-ComparisonProcesses applies the same
-    cleanup to every registered process.
+    Cleanup: while a call runs, the caller's descendants are snapshotted
+    as ownership identities (PID plus process start time) and union-merged
+    across refreshes, because parent links are only reliable while the
+    parent lives. On timeout the process tree is killed and any wait for
+    its exit is bounded; when the parent has already exited but
+    descendants linger (for example a daemon holding the pipes), the
+    recorded descendants are killed — but only when the PID's current
+    start time still matches the recorded identity, so a reused PID is
+    never touched. A descendant that reparents before its first
+    observation on Linux can still be missed; no claim of complete
+    coverage is made there.
 #>
 
 $script:ComparisonProcesses = @()
@@ -87,12 +91,43 @@ function Get-DescendantProcessIds {
     return $found
 }
 
-function Stop-ProcessIds {
-    param([AllowEmptyCollection()] [int[]]$Ids)
-    # Deepest descendants first, so nothing can respawn a parent chain.
-    foreach ($id in @($Ids) | Sort-Object -Descending) {
+function Merge-DescendantIdentities {
+    param(
+        [Parameter(Mandatory)] [int]$RootProcessId,
+        [Parameter(Mandatory)] [hashtable]$Known
+    )
+    # Union-merge the current descendants into $Known as pid -> process
+    # start time (UTC ticks). Once observed, an identity is kept even if
+    # a later snapshot no longer lists the process (for example after it
+    # was reparented on Linux), so cleanup never loses track of a process
+    # it already saw. The start time is the ownership identity: a reused
+    # PID has a different start time and is not ours.
+    foreach ($id in @(Get-DescendantProcessIds $RootProcessId)) {
+        if ($Known.ContainsKey($id)) {
+            continue
+        }
+        try {
+            $Known[$id] = (Get-Process -Id $id -ErrorAction Stop).StartTime.ToUniversalTime().Ticks
+        }
+        catch {
+            # Raced with the process exiting; nothing to record.
+        }
+    }
+}
+
+function Stop-ProcessIdentities {
+    param([Parameter(Mandatory)] [hashtable]$Known)
+    # Deepest descendants first (highest pids are not necessarily the
+    # deepest, but killing the recorded set as a group is what matters).
+    # A process is terminated only when its current start time still
+    # matches the recorded identity; a mismatch means the PID was reused
+    # by an unrelated process, which must not be touched.
+    foreach ($id in @($Known.Keys | Sort-Object -Descending)) {
         try {
             $p = Get-Process -Id $id -ErrorAction Stop
+            if ($p.StartTime.ToUniversalTime().Ticks -ne $Known[$id]) {
+                continue
+            }
             $p.Kill()
             [void]$p.WaitForExit(2000)
         }
@@ -104,9 +139,9 @@ function Stop-ProcessIds {
 
 function Stop-ComparisonProcesses {
     foreach ($entry in $script:ComparisonProcesses) {
-        $descendants = @()
+        $known = @{}
         try {
-            $descendants = @(Get-DescendantProcessIds $entry.Id)
+            Merge-DescendantIdentities $entry.Id $known
         }
         catch {
             # Snapshot is best effort; the direct cleanup below still runs.
@@ -120,7 +155,7 @@ function Stop-ComparisonProcesses {
         catch {
             # Best effort cleanup; the original outcome stands.
         }
-        Stop-ProcessIds $descendants
+        Stop-ProcessIdentities $known
     }
     $script:ComparisonProcesses = @()
 }
@@ -128,15 +163,81 @@ function Stop-ComparisonProcesses {
 function Test-CountedCalls {
     param([AllowEmptyCollection()] $Calls)
     # A call counts toward the comparison only when its output was
-    # collected completely, the tool exited successfully, and the output
-    # is non-empty. Error text on stdout never counts.
+    # collected completely, the tool exited successfully, the output is
+    # non-empty, and the recorded metrics agree with the capture file:
+    # the byte count and the UTF-16 code-unit count are recomputed from
+    # the actual stdout file, so broken measurement plumbing (or a
+    # missing capture) can never be certified.
     $list = @($Calls)
-    $valid = @($list | Where-Object {
-            $_.stdoutBytes -gt 0 -and $_.exitCode -eq 0 -and $_.collectionComplete
-        })
+    $valid = @()
+    foreach ($call in $list) {
+        if (-not ($call.stdoutBytes -gt 0 -and $call.exitCode -eq 0 -and $call.collectionComplete)) {
+            continue
+        }
+        if (-not $call.stdoutPath -or -not (Test-Path $call.stdoutPath)) {
+            continue
+        }
+        $actualBytes = (Get-Item $call.stdoutPath).Length
+        $actualUnits = [System.IO.File]::ReadAllText($call.stdoutPath, [System.Text.Encoding]::UTF8).Length
+        if ($actualBytes -ne $call.stdoutBytes -or $actualUnits -ne $call.stdoutUtf16Units) {
+            continue
+        }
+        $valid += $call
+    }
     return [ordered]@{
         ok     = ($list.Count -gt 0 -and $valid.Count -eq $list.Count)
         detail = "calls=$($list.Count) validCounted=$($valid.Count)"
+    }
+}
+
+function Test-ExplicitUnsupported {
+    param([AllowEmptyString()] [string]$Text)
+    # Only an explicit tool diagnostic counts as an unsupported outcome:
+    # a JSON status or code field naming an unsupported result, or one of
+    # the tools' dashed diagnostic codes (for example
+    # "unsupported-symbol-mapping"). The bare word inside returned source
+    # (a comment, an identifier, a string literal) is evidence, not a
+    # diagnostic, and never classifies the outcome.
+    if (-not $Text) {
+        return $false
+    }
+    if ($Text -match '"(?:status|code)"\s*:\s*"unsupported') {
+        return $true
+    }
+    if ($Text -match '\bunsupported-[a-z]') {
+        return $true
+    }
+    return $false
+}
+
+function Assert-CopyContent {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$ExpectedCommit
+    )
+    # The copy must be exactly the pinned commit: HEAD equality alone would
+    # miss tracked files edited in place, so the working tree is compared
+    # against HEAD as well. The only tolerated untracked entries are the
+    # two tools' own output directories. Shared by prepare.ps1 (before a
+    # copy is reused or created) and run.ps1 (before setup or queries).
+    $head = (git -C $Path rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -ne $ExpectedCommit) {
+        throw "Copy $Path is at '$head', expected '$ExpectedCommit'. Refusing to reuse or overwrite it."
+    }
+    $porcelain = @(git -C $Path status --porcelain)
+    if ($LASTEXITCODE -ne 0) {
+        throw "git status failed in $Path."
+    }
+    foreach ($line in $porcelain) {
+        if ($line.StartsWith('??')) {
+            $rel = $line.Substring(3).Trim().Trim('"')
+            if (-not ($rel -match '^\.codegraph(/|$)' -or $rel -match '^\.sharpdeps(/|$)')) {
+                throw "Unexpected untracked content in $Path : $rel. Refusing to reuse or overwrite it."
+            }
+        }
+        else {
+            throw "Tracked content in $Path differs from the pinned commit: $line. Refusing to reuse or overwrite it."
+        }
     }
 }
 
@@ -176,7 +277,7 @@ function Invoke-ComparisonQuery {
     $timedOut = $false
     $exitCode = $null
     $streamGraceExpired = $false
-    $descendants = @()
+    $descendantIdentity = @{}
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     [void]$process.Start()
     $script:ComparisonProcesses += $process
@@ -204,7 +305,7 @@ function Invoke-ComparisonQuery {
             }
             $exited = $process.WaitForExit($sliceMs)
             if (-not $exited -and ([DateTime]::UtcNow - $lastSnapshot).TotalSeconds -ge 2) {
-                $descendants = @(Get-DescendantProcessIds $process.Id)
+                Merge-DescendantIdentities $process.Id $descendantIdentity
                 $lastSnapshot = [DateTime]::UtcNow
             }
         }
@@ -214,7 +315,7 @@ function Invoke-ComparisonQuery {
         }
         if (-not $exited) {
             $timedOut = $true
-            $descendants = @(Get-DescendantProcessIds $process.Id)
+            Merge-DescendantIdentities $process.Id $descendantIdentity
             $process.Kill($true)
             # Bounded: a killed process that still does not exit must not
             # hang the run; the finally block retries once more, bounded.
@@ -235,7 +336,7 @@ function Invoke-ComparisonQuery {
         if ($streamGraceExpired) {
             # The parent has exited but descendants still hold the pipes;
             # remove them so nothing the run started is left behind.
-            Stop-ProcessIds $descendants
+            Stop-ProcessIdentities $descendantIdentity
         }
     }
     finally {
@@ -251,15 +352,15 @@ function Invoke-ComparisonQuery {
         }
         # Refresh the descendant set now that the parent has finished:
         # on Windows the recorded parent ids still identify orphans of
-        # an exited parent, and on every platform this merges in
-        # anything the in-wait snapshots captured.
+        # an exited parent, and the merge keeps every identity observed
+        # while the parent was alive, so nothing already seen is lost.
         try {
-            $descendants = @($descendants + @(Get-DescendantProcessIds $process.Id) | Select-Object -Unique)
+            Merge-DescendantIdentities $process.Id $descendantIdentity
         }
         catch {
             # Snapshot is best effort; the captured set still applies.
         }
-        Stop-ProcessIds $descendants
+        Stop-ProcessIdentities $descendantIdentity
     }
     $stdoutBytes = 0
     $stdoutUnits = 0

@@ -20,8 +20,8 @@ points only; it does not run the comparison and publishes no results.
   prefix/cache with `--ignore-scripts` (integrity checked against
   `pins.json` first), and builds `SharpDeps.Cli` from this checkout,
   recording the source commit in `build-info.json`. Every step logs its
-  exit code and output under `<Root>/o/logs` and stops at the first
-  failure.
+  exit code and output under that run's own folder,
+  `<Root>/o/prepare-<timestamp>/logs`, and stops at the first failure.
 - `smoke.ps1` — builds a minimal two-file C# fixture and runs the real
   runner against it, verifying the collection path, the byte/character
   counting, and the stop conditions (sufficiency and the follow-up cap).

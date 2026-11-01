@@ -35,6 +35,8 @@ if (-not $Root) {
         $Root = Join-Path (Split-Path $PSScriptRoot -Parent) '.scg'
     }
 }
+# Normalize to an absolute path before deriving any path from it.
+$Root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Root)
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $smokeDir = Join-Path $Root "o/smoke-$stamp"
@@ -129,7 +131,7 @@ $fixtureQuestions = [ordered]@{
                     }
                     sufficiencyMarkers = @('Greet(string name, string title, string suffix)')
                     followupCandidates = @(
-                        [ordered]@{ tool = 'sharpdeps'; text = 'Greeter Greet'; requires = 'Greeter' }
+                        [ordered]@{ tool = 'sharpdeps'; text = 'Greeter'; requires = 'Greeter' }
                         [ordered]@{ tool = 'sharpdeps'; text = 'Greet'; requires = 'Greet' }
                         [ordered]@{ tool = 'codegraph'; text = 'Greeter'; requires = 'Greeter' }
                         [ordered]@{ tool = 'codegraph'; text = 'Greet'; requires = 'Greet' }
@@ -155,14 +157,6 @@ $spec | ConvertTo-Json -Depth 5 | Set-Content -Path $specPath -Encoding utf8
 
 $runOutputDir = Join-Path $smokeDir 'run'
 $runScript = Join-Path $PSScriptRoot 'run.ps1'
-try {
-    $summaryPath = & $runScript -Root $Root -CorpusSpecPath $specPath -QuestionsPath $questionsPath `
-        -OutputDir $runOutputDir -CodeGraphInitArguments $CodeGraphInitArguments | Select-Object -Last 1
-}
-finally {
-    Stop-ComparisonProcesses
-}
-$runSummary = Get-Content $summaryPath -Raw | ConvertFrom-Json
 
 $checks = @()
 function Add-Check {
@@ -170,23 +164,43 @@ function Add-Check {
     $script:checks += [ordered]@{ name = $Name; ok = $Ok; detail = $Detail }
 }
 
-Add-Check 'run-summary-readable' $true $summaryPath
-foreach ($tool in 'sharpdeps', 'codegraph') {
-    $setup = @($runSummary.setup.$tool)
-    $setupOk = $setup.Count -gt 0 -and -not ($setup | Where-Object { $_.timedOut -or -not $_.collectionComplete -or $_.exitCode -ne 0 })
-    $setupDetail = ($setup | ForEach-Object { "exit=$($_.exitCode) timedOut=$($_.timedOut)" }) -join '; '
-    Add-Check "setup-$tool" $setupOk $setupDetail
-    $allCalls = @()
-    foreach ($q in $runSummary.questions) {
-        $allCalls += @($q.tools.$tool.calls)
+# The summary is written even when the runner throws or its summary
+# cannot be read back: a failed smoke still leaves a success=false
+# report before the smoke exits non-zero.
+$summaryPath = $null
+$runError = $null
+try {
+    try {
+        $summaryPath = & $runScript -Root $Root -CorpusSpecPath $specPath -QuestionsPath $questionsPath `
+            -OutputDir $runOutputDir -CodeGraphInitArguments $CodeGraphInitArguments | Select-Object -Last 1
     }
-    $counting = Test-CountedCalls $allCalls
-    Add-Check "query-counting-$tool" $counting.ok $counting.detail
+    finally {
+        Stop-ComparisonProcesses
+    }
+    $runSummary = Get-Content $summaryPath -Raw | ConvertFrom-Json
+
+    Add-Check 'run-summary-readable' $true $summaryPath
+    foreach ($tool in 'sharpdeps', 'codegraph') {
+        $setup = @($runSummary.setup.$tool)
+        $setupOk = $setup.Count -gt 0 -and -not ($setup | Where-Object { $_.timedOut -or -not $_.collectionComplete -or $_.exitCode -ne 0 })
+        $setupDetail = ($setup | ForEach-Object { "exit=$($_.exitCode) timedOut=$($_.timedOut)" }) -join '; '
+        Add-Check "setup-$tool" $setupOk $setupDetail
+        $allCalls = @()
+        foreach ($q in $runSummary.questions) {
+            $allCalls += @($q.tools.$tool.calls)
+        }
+        $counting = Test-CountedCalls $allCalls
+        Add-Check "query-counting-$tool" $counting.ok $counting.detail
+    }
+    $fqOverloads = $runSummary.questions | Where-Object { $_.id -eq 'fq-overloads' }
+    $fqCap = $runSummary.questions | Where-Object { $_.id -eq 'fq-cap' }
+    Add-Check 'stop-sufficiency-sharpdeps' ($fqOverloads.tools.sharpdeps.stopReason -eq 'sufficiency') "actual=$($fqOverloads.tools.sharpdeps.stopReason)"
+    Add-Check 'stop-cap-sharpdeps' ($fqCap.tools.sharpdeps.stopReason -eq 'cap' -and @($fqCap.tools.sharpdeps.calls).Count -eq 3) "actual=$($fqCap.tools.sharpdeps.stopReason) calls=$(@($fqCap.tools.sharpdeps.calls).Count)"
 }
-$fqOverloads = $runSummary.questions | Where-Object { $_.id -eq 'fq-overloads' }
-$fqCap = $runSummary.questions | Where-Object { $_.id -eq 'fq-cap' }
-Add-Check 'stop-sufficiency-sharpdeps' ($fqOverloads.tools.sharpdeps.stopReason -eq 'sufficiency') "actual=$($fqOverloads.tools.sharpdeps.stopReason)"
-Add-Check 'stop-cap-sharpdeps' ($fqCap.tools.sharpdeps.stopReason -eq 'cap' -and @($fqCap.tools.sharpdeps.calls).Count -eq 3) "actual=$($fqCap.tools.sharpdeps.stopReason) calls=$(@($fqCap.tools.sharpdeps.calls).Count)"
+catch {
+    $runError = $_.Exception.Message
+    Add-Check 'smoke-run-completed' $false "error: $runError"
+}
 
 $failedChecks = @($checks | Where-Object { -not $_.ok })
 $smokeSummary = [ordered]@{
@@ -197,9 +211,15 @@ $smokeSummary = [ordered]@{
     success       = ($failedChecks.Count -eq 0)
     finishedAtUtc = [DateTime]::UtcNow.ToString('o')
 }
+if ($runError) {
+    $smokeSummary.error = $runError
+}
 $smokeSummaryPath = Join-Path $smokeDir 'smoke-summary.json'
 $smokeSummary | ConvertTo-Json -Depth 6 | Set-Content -Path $smokeSummaryPath -Encoding utf8
 Write-Output $smokeSummaryPath
+if ($runError) {
+    throw "Smoke failed: $runError. See $smokeSummaryPath"
+}
 if ($failedChecks.Count -gt 0) {
     $names = ($failedChecks | ForEach-Object { $_.name }) -join ', '
     throw "Smoke failed: required check(s) failed: $names. See $smokeSummaryPath"
