@@ -40,11 +40,18 @@
     names with a candidate for that tool are continued. Terminal states
     (setup-failed, error, timeout, collection-incomplete, unsupported,
     sufficiency, cap, total-cap) are never resumed.
-    Corpus pins, questions, initial texts, tool builds and budgets are
-    validated against the preserved run; missing captures, count or total
-    mismatches, and condition mismatches reject the resume. A re-resume
-    from a resume output never re-executes an already-executed call: used
-    follow-up selectors are seeded from the preserved records.
+    Corpus pins, copies, questions, initial texts, tool builds and budgets
+    are validated against the preserved run; missing captures (query and
+    setup), count or total mismatches, capture metrics recomputed from the
+    files, and call/stopReason inconsistencies reject the resume. Setup
+    capture paths are rebased to the new directory like query captures.
+    A re-resume from a resume output never re-executes an
+    already-executed call: used follow-up selectors are seeded from the
+    preserved records. A seeded record whose plan markers are already
+    satisfied by the preserved evidence stops as 'sufficiency' without a
+    further call. Fresh summaries record their budgets so a later resume
+    compares them exactly; a legacy summary without budgets metadata may
+    only resume with the protocol defaults, recorded as unverified.
 #>
 [CmdletBinding()]
 param(
@@ -205,6 +212,13 @@ function Initialize-ResumeState {
             throw "Preserved corpus $field '$($preserved.corpus.$field)' does not match current spec '$($Spec.$field)'."
         }
     }
+    if ($preserved.corpus.PSObject.Properties['copies']) {
+        foreach ($copyProp in $Spec.copies.PSObject.Properties) {
+            if ($preserved.corpus.copies.PSObject.Properties[$copyProp.Name] -and $preserved.corpus.copies.($copyProp.Name) -ne $copyProp.Value) {
+                throw "Preserved corpus copy '$($copyProp.Name)' '$($preserved.corpus.copies.($copyProp.Name))' does not match current spec '$($copyProp.Value)'."
+            }
+        }
+    }
     if ($preserved.environment.codegraphVersion -ne $Pins.codegraph.version) {
         throw "Preserved CodeGraph version '$($preserved.environment.codegraphVersion)' does not match current '$($Pins.codegraph.version)'."
     }
@@ -214,14 +228,27 @@ function Initialize-ResumeState {
     if ($preserved.environment.sharpdepsSdk -ne $BuildInfo.sdkVersion) {
         throw "Preserved SharpDeps SDK '$($preserved.environment.sharpdepsSdk)' does not match current '$($BuildInfo.sdkVersion)'."
     }
+    $preservedBudgets = $null
     if ($preserved.PSObject.Properties['resume'] -and $preserved.resume.PSObject.Properties['budgets']) {
-        $b = $preserved.resume.budgets
-        if ($b.maxTotalCalls -ne $MaxTotalCalls -or $b.maxFollowups -ne $MaxFollowups -or $b.queryTimeoutSeconds -ne $QueryTimeoutSeconds -or $b.setupTimeoutSeconds -ne $SetupTimeoutSeconds) {
+        $preservedBudgets = $preserved.resume.budgets
+    }
+    elseif ($preserved.PSObject.Properties['budgets']) {
+        $preservedBudgets = $preserved.budgets
+    }
+    if ($preservedBudgets) {
+        if ($preservedBudgets.maxTotalCalls -ne $MaxTotalCalls -or $preservedBudgets.maxFollowups -ne $MaxFollowups -or $preservedBudgets.queryTimeoutSeconds -ne $QueryTimeoutSeconds -or $preservedBudgets.setupTimeoutSeconds -ne $SetupTimeoutSeconds) {
             throw "Resume budgets do not match the preserved run's budgets."
         }
+        $preservedBudgetsVerified = $true
     }
     elseif ($MaxTotalCalls -ne 36 -or $MaxFollowups -ne 2 -or $QueryTimeoutSeconds -ne 300 -or $SetupTimeoutSeconds -ne 1800) {
-        throw "Resuming an original summary requires the protocol budgets (36 total calls, 2 follow-ups, 300s query, 1800s setup)."
+        throw "Resuming a summary without budgets metadata requires the protocol budgets (36 total calls, 2 follow-ups, 300s query, 1800s setup)."
+    }
+    else {
+        # Legacy summaries predate persisted budgets; the defaults
+        # requirement above is the explicit policy, recorded as
+        # unverified in the new summary rather than silently assumed.
+        $preservedBudgetsVerified = $false
     }
     $currentIds = @($CorpusQuestions.questions | ForEach-Object { $_.id })
     $preservedIds = @($preserved.questions | ForEach-Object { $_.id })
@@ -235,6 +262,17 @@ function Initialize-ResumeState {
         foreach ($rec in $preserved.setup.$tool) {
             if ($rec.timedOut -or $rec.exitCode -ne 0 -or -not $rec.collectionComplete) {
                 $setupFailed[$tool] = $true
+            }
+        }
+    }
+    foreach ($tool in 'codegraph','sharpdeps') {
+        foreach ($rec in $preserved.setup.$tool) {
+            foreach ($pathField in 'stdoutPath','stderrPath') {
+                if (-not $rec.PSObject.Properties[$pathField] -or -not $rec.$pathField) { continue }
+                $leaf = Split-Path $rec.$pathField -Leaf
+                if (-not (Test-Path (Join-Path $ResumeDir $leaf))) { throw "Preserved setup capture '$leaf' for '$tool' is missing." }
+                $parent = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Split-Path $rec.$pathField -Parent))
+                if ($parent -ne $ResumeDir) { throw "Preserved setup capture path '$($rec.$pathField)' does not live beside the preserved summary." }
             }
         }
     }
@@ -252,7 +290,12 @@ function Initialize-ResumeState {
                 }
                 continue
             }
-            if ($calls.Count -eq 0) { throw "Preserved record '$($q.id)/$tool' has no calls but stopReason '$($rec.stopReason)'." }
+            if ($calls.Count -eq 0) {
+                if ($rec.stopReason -eq 'total-cap' -and $rec.totalBytes -eq 0 -and $rec.totalUnits -eq 0 -and $preserved.totalQueryCalls -eq $MaxTotalCalls) {
+                    continue
+                }
+                throw "Preserved record '$($q.id)/$tool' has no calls but stopReason '$($rec.stopReason)'."
+            }
             if (($calls.Count - 1) -gt $MaxFollowups) { throw "Preserved record '$($q.id)/$tool' exceeds the follow-up cap." }
             $expectedBytes = 0
             $expectedUnits = 0
@@ -279,6 +322,22 @@ function Initialize-ResumeState {
                 }
                 $text = [System.IO.File]::ReadAllText((Join-Path $ResumeDir (Split-Path $call.stdoutPath -Leaf)), [System.Text.Encoding]::UTF8)
                 $stdoutCache["$($q.id)|$tool|$i"] = $text
+                $actualBytes = (Get-Item (Join-Path $ResumeDir (Split-Path $call.stdoutPath -Leaf))).Length
+                $actualUnits = $text.Length
+                if ($actualBytes -ne $call.stdoutBytes -or $actualUnits -ne $call.stdoutUtf16Units) { throw "Preserved capture metrics mismatch in '$($q.id)/$tool' at index $i." }
+                if ($i -lt ($calls.Count - 1)) {
+                    if ($call.exitCode -ne 0 -or -not $call.collectionComplete -or $call.timedOut) { throw "Preserved non-final call in '$($q.id)/$tool' at index $i did not succeed." }
+                }
+                else {
+                    $failedProcess = ($call.exitCode -ne 0 -or $call.timedOut -or -not $call.collectionComplete)
+                    if ($failedProcess) {
+                        $expectedStop = if ($call.timedOut) { 'timeout' } elseif (-not $call.collectionComplete) { 'collection-incomplete' } else { 'error' }
+                        if ($rec.stopReason -ne $expectedStop) { throw "Preserved final call in '$($q.id)/$tool' failed but stopReason is '$($rec.stopReason)', not '$expectedStop'." }
+                    }
+                    elseif ($rec.stopReason -notin 'evidence-review-required','no-followup-evidence','sufficiency','cap','unsupported','total-cap') {
+                        throw "Preserved final call in '$($q.id)/$tool' succeeded but stopReason is '$($rec.stopReason)'."
+                    }
+                }
                 $isLast = ($i -eq ($calls.Count - 1))
                 # Totals are added only for calls that pass every loop check.
                 # A terminating timeout/collection-incomplete/error call never
@@ -359,12 +418,23 @@ function Initialize-ResumeState {
     if ($preserved.PSObject.Properties['resume'] -and $preserved.resume.PSObject.Properties['originalSummarySha256']) {
         $originalSha2 = $preserved.resume.originalSummarySha256
     }
+    $rebasedSetup = [ordered]@{ codegraph = @(); sharpdeps = @() }
+    foreach ($tool in 'codegraph','sharpdeps') {
+        foreach ($rec in @($preserved.setup.$tool)) {
+            $rc = [ordered]@{}
+            foreach ($prop in $rec.PSObject.Properties) { $rc[$prop.Name] = $prop.Value }
+            foreach ($pathField in 'stdoutPath','stderrPath') {
+                if ($rc[$pathField]) { $rc[$pathField] = Join-Path $OutputDir (Split-Path $rc[$pathField] -Leaf) }
+            }
+            $rebasedSetup[$tool] += $rc
+        }
+    }
     $summaryBase = [ordered]@{
         schemaVersion = 1
         startedAtUtc = [DateTime]::UtcNow.ToString('o')
         corpus = $preserved.corpus
         environment = $preserved.environment
-        setup = $preserved.setup
+        setup = $rebasedSetup
         questions = @()
         totalQueryCalls = $preserved.totalQueryCalls
         resume = [ordered]@{
@@ -374,6 +444,7 @@ function Initialize-ResumeState {
             planFileName = Split-Path $PlanPath -Leaf
             planSha256 = $planSha
             budgets = [ordered]@{ maxTotalCalls = $MaxTotalCalls; maxFollowups = $MaxFollowups; queryTimeoutSeconds = $QueryTimeoutSeconds; setupTimeoutSeconds = $SetupTimeoutSeconds }
+            preservedBudgetsVerified = $preservedBudgetsVerified
             resumedAtUtc = [DateTime]::UtcNow.ToString('o')
         }
     }
@@ -490,6 +561,7 @@ $summary = [ordered]@{
     setup         = [ordered]@{ codegraph = @(); sharpdeps = @() }
     questions     = @()
     totalQueryCalls = 0
+    budgets       = [ordered]@{ maxTotalCalls = $MaxTotalCalls; maxFollowups = $MaxFollowups; queryTimeoutSeconds = $QueryTimeoutSeconds; setupTimeoutSeconds = $SetupTimeoutSeconds }
 }
 
 $setupFailed = @{ codegraph = $false; sharpdeps = $false }
@@ -590,6 +662,22 @@ function Invoke-ToolQuestion {
         $callIndex = 0
     }
     $guidance = Get-QuestionGuidance $Question $Tool
+    if ($SeedRecord -and $guidance.markers.Count -gt 0) {
+        # A seeded record whose plan markers are already satisfied by the
+        # preserved evidence needs no further call; without this check
+        # the loop would execute one follow-up before noticing.
+        $seedSufficient = $true
+        foreach ($marker in $guidance.markers) {
+            if (-not $accumulated.Contains($marker)) {
+                $seedSufficient = $false
+                break
+            }
+        }
+        if ($seedSufficient) {
+            $record.stopReason = 'sufficiency'
+            return $record
+        }
+    }
     while ($true) {
         if ($summary.totalQueryCalls -ge $MaxTotalCalls) {
             $record.stopReason = 'total-cap'
