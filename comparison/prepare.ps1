@@ -247,17 +247,23 @@ function Prepare-CodeGraph {
     $npmCmd = (Get-Command 'npm').Source
     $nodeExe = (Get-Command 'node').Source
     # The npm CLI script lives in different places per distribution:
-    # node_modules/npm next to the shim (Windows installer), or
-    # lib/node_modules/npm next to it (POSIX installers, nvm, setup-node).
-    # Probe the candidates derived from both the npm shim and node itself,
-    # and accept only one that actually runs.
+    # node_modules/npm under the prefix (Windows installer layout, where
+    # the shim sits in the prefix root), or lib/node_modules/npm under
+    # the prefix (POSIX layouts: official tarballs, nvm, setup-node),
+    # where the shim sits in the prefix's bin directory. Probe the
+    # candidates derived from both the npm shim and node itself, and
+    # accept only one that actually runs.
     $npmDir = Split-Path $npmCmd -Parent
     $nodeDir = Split-Path $nodeExe -Parent
+    $npmPrefix = Split-Path $npmDir -Parent
+    $nodePrefix = Split-Path $nodeDir -Parent
     $npmCandidates = @(
         (Join-Path $npmDir 'node_modules/npm/bin/npm-cli.js'),
         (Join-Path $npmDir 'lib/node_modules/npm/bin/npm-cli.js'),
+        (Join-Path $npmPrefix 'lib/node_modules/npm/bin/npm-cli.js'),
         (Join-Path $nodeDir 'node_modules/npm/bin/npm-cli.js'),
-        (Join-Path $nodeDir 'lib/node_modules/npm/bin/npm-cli.js')
+        (Join-Path $nodeDir 'lib/node_modules/npm/bin/npm-cli.js'),
+        (Join-Path $nodePrefix 'lib/node_modules/npm/bin/npm-cli.js')
     ) | Select-Object -Unique
     $npmCli = $null
     foreach ($candidate in $npmCandidates) {
