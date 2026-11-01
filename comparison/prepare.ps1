@@ -13,8 +13,10 @@
     this repository checkout, recording the source commit it was built from.
 
     Every native command runs through a logger that preserves its exit code,
-    stdout and stderr under <Root>/o/logs. The first failing step stops the run;
-    its cause stays in the log and in <Root>/o/prepare-manifest.json.
+    stdout and stderr under a per-run directory
+    <Root>/o/prepare-<timestamp>/logs. Re-runs never overwrite a previous
+    run's evidence. The first failing step stops the run; its cause stays
+    in the log and in that run's prepare-manifest.json.
 #>
 [CmdletBinding()]
 param(
@@ -47,10 +49,20 @@ $inputsDir = Join-Path $Root 'i'
 $toolsDir = Join-Path $Root 't'
 $cacheDir = Join-Path $Root 'c'
 $outputDir = Join-Path $Root 'o'
-$logDir = Join-Path $outputDir 'logs'
-foreach ($dir in $inputsDir, $toolsDir, $cacheDir, $outputDir, $logDir) {
+foreach ($dir in $inputsDir, $toolsDir, $cacheDir, $outputDir) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
+# Each run writes to its own directory: re-running prepare never overwrites
+# a previous run's logs or manifest.
+$runStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$runDir = Join-Path $outputDir "prepare-$runStamp"
+$suffix = 1
+while (Test-Path $runDir) {
+    $suffix++
+    $runDir = Join-Path $outputDir "prepare-$runStamp-$suffix"
+}
+$logDir = Join-Path $runDir 'logs'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 $pins = Get-Content (Join-Path $PSScriptRoot 'pins.json') -Raw | ConvertFrom-Json
 
@@ -59,6 +71,7 @@ $manifest = [ordered]@{
     startedAtUtc  = [DateTime]::UtcNow.ToString('o')
     root          = $Root
     repoRoot      = $RepoRoot
+    runDir        = $runDir
     stage         = $Stage
     corpus        = $Corpus
     steps         = @()
@@ -68,7 +81,37 @@ $manifest = [ordered]@{
 function Save-Manifest {
     $manifest.finishedAtUtc = [DateTime]::UtcNow.ToString('o')
     $manifest | ConvertTo-Json -Depth 8 |
-        Set-Content -Path (Join-Path $outputDir 'prepare-manifest.json') -Encoding utf8
+        Set-Content -Path (Join-Path $runDir 'prepare-manifest.json') -Encoding utf8
+}
+
+function Assert-CopyContent {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$ExpectedCommit
+    )
+    # The copy must be exactly the pinned commit: HEAD equality alone would
+    # miss tracked files edited in place, so the working tree is compared
+    # against HEAD as well. The only tolerated untracked entries are the
+    # two tools' own output directories.
+    $head = (git -C $Path rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -ne $ExpectedCommit) {
+        throw "Copy $Path is at '$head', expected '$ExpectedCommit'. Refusing to reuse or overwrite it."
+    }
+    $porcelain = @(git -C $Path status --porcelain)
+    if ($LASTEXITCODE -ne 0) {
+        throw "git status failed in $Path."
+    }
+    foreach ($line in $porcelain) {
+        if ($line.StartsWith('??')) {
+            $rel = $line.Substring(3).Trim().Trim('"')
+            if (-not ($rel -match '^\.codegraph(/|$)' -or $rel -match '^\.sharpdeps(/|$)')) {
+                throw "Unexpected untracked content in $Path : $rel. Refusing to reuse or overwrite it."
+            }
+        }
+        else {
+            throw "Tracked content in $Path differs from the pinned commit: $line. Refusing to reuse or overwrite it."
+        }
+    }
 }
 
 function Invoke-Logged {
@@ -136,10 +179,7 @@ function Prepare-Corpus {
     $id = $Spec.id
     $srcDir = Join-Path $inputsDir "$id-src"
     if (Test-Path $srcDir) {
-        $head = Get-GitHead $srcDir
-        if ($head -ne $Spec.commit) {
-            throw "Existing source copy $srcDir is at $head, expected $($Spec.commit). Not overwriting."
-        }
+        Assert-CopyContent $srcDir $Spec.commit
         $manifest.steps += [ordered]@{ name = "inputs-$id-fetch"; exitCode = 0; reused = $true }
     }
     else {
@@ -156,27 +196,18 @@ function Prepare-Corpus {
             Invoke-Logged -Name "inputs-$id-fetch-full" -FilePath 'git' -Arguments @('-C', $srcDir, 'fetch', 'origin') | Out-Null
         }
         Invoke-Logged -Name "inputs-$id-checkout" -FilePath 'git' -Arguments @('-C', $srcDir, '-c', 'advice.detachedHead=false', 'checkout', '--detach', $Spec.commit) | Out-Null
-        $head = Get-GitHead $srcDir
-        if ($head -ne $Spec.commit) {
-            throw "Source copy $srcDir resolved to $head, expected $($Spec.commit)."
-        }
+        Assert-CopyContent $srcDir $Spec.commit
     }
     foreach ($tool in 'codegraph', 'sharpdeps') {
         $copyDir = Join-Path $inputsDir "$id-$tool"
         if (Test-Path $copyDir) {
-            $copyHead = Get-GitHead $copyDir
-            if ($copyHead -ne $Spec.commit) {
-                throw "Existing copy $copyDir is at $copyHead, expected $($Spec.commit). Not overwriting."
-            }
+            Assert-CopyContent $copyDir $Spec.commit
         }
         else {
             Invoke-Logged -Name "inputs-$id-$tool-clone" -FilePath 'git' -Arguments @('clone', '--quiet', $srcDir, $copyDir) | Out-Null
             Invoke-Logged -Name "inputs-$id-$tool-origin" -FilePath 'git' -Arguments @('-C', $copyDir, 'remote', 'set-url', 'origin', $Spec.repository) | Out-Null
             Invoke-Logged -Name "inputs-$id-$tool-checkout" -FilePath 'git' -Arguments @('-C', $copyDir, '-c', 'advice.detachedHead=false', 'checkout', '--detach', $Spec.commit) | Out-Null
-            $copyHead = Get-GitHead $copyDir
-            if ($copyHead -ne $Spec.commit) {
-                throw "Copy $copyDir resolved to $copyHead, expected $($Spec.commit)."
-            }
+            Assert-CopyContent $copyDir $Spec.commit
         }
         if ($tool -eq 'sharpdeps') {
             $tracked = @(git -C $copyDir ls-files -- '*.cs')
@@ -215,13 +246,32 @@ function Prepare-CodeGraph {
     # Windows, so npm is always driven through node and its own CLI script.
     $npmCmd = (Get-Command 'npm').Source
     $nodeExe = (Get-Command 'node').Source
+    # The npm CLI script lives in different places per distribution:
+    # node_modules/npm next to the shim (Windows installer), or
+    # lib/node_modules/npm next to it (POSIX installers, nvm, setup-node).
+    # Probe the candidates derived from both the npm shim and node itself,
+    # and accept only one that actually runs.
     $npmDir = Split-Path $npmCmd -Parent
-    $npmCli = @(
+    $nodeDir = Split-Path $nodeExe -Parent
+    $npmCandidates = @(
         (Join-Path $npmDir 'node_modules/npm/bin/npm-cli.js'),
-        (Join-Path $npmDir 'lib/node_modules/npm/bin/npm-cli.js')
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        (Join-Path $npmDir 'lib/node_modules/npm/bin/npm-cli.js'),
+        (Join-Path $nodeDir 'node_modules/npm/bin/npm-cli.js'),
+        (Join-Path $nodeDir 'lib/node_modules/npm/bin/npm-cli.js')
+    ) | Select-Object -Unique
+    $npmCli = $null
+    foreach ($candidate in $npmCandidates) {
+        if (-not (Test-Path $candidate)) {
+            continue
+        }
+        & $nodeExe $candidate --version | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $npmCli = $candidate
+            break
+        }
+    }
     if (-not $npmCli) {
-        throw "npm CLI script not found next to the npm shim: $npmDir"
+        throw "npm CLI script could not be resolved or verified next to npm ($npmCmd) or node ($nodeExe)."
     }
 
     $mainIntegrity = (& $nodeExe $npmCli view "$($cg.package)@$($cg.version)" dist.integrity "--registry=$($cg.registry)").Trim()

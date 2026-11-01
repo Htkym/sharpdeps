@@ -41,11 +41,18 @@ param(
     [int]$QueryTimeoutSeconds = 300,
     [int]$SetupTimeoutSeconds = 1800,
     [string[]]$CodeGraphInitArguments = @('init'),
-    [switch]$SkipSetup
+    [switch]$SkipSetup,
+    [switch]$ListOnly
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Invoke-Query.ps1')
+
+# On any terminating error, clean up processes this run started.
+trap {
+    Stop-ComparisonProcesses
+    break
+}
 
 if (-not $Root) {
     if ($env:SCG_ROOT) {
@@ -84,17 +91,67 @@ if (-not $QuestionsPath) {
     $QuestionsPath = Join-Path $PSScriptRoot 'questions.json'
 }
 $questionsDoc = Get-Content $QuestionsPath -Raw | ConvertFrom-Json
-$corpusQuestions = $questionsDoc.corpora | Where-Object { $_.id -eq $spec.id }
-if (-not $corpusQuestions) {
-    # Fixture specs carry their own corpus id inside the questions file.
-    $corpusQuestions = $questionsDoc.corpora | Select-Object -First 1
+
+function Resolve-CorpusQuestions {
+    param(
+        [Parameter(Mandatory)] $Spec,
+        [Parameter(Mandatory)] $QuestionsDoc
+    )
+    # Strict pairing: a questions corpus belongs to a corpus spec only when
+    # repository and commit both match (and the ids match when both sides
+    # carry one). There is deliberately no fallback: picking another
+    # corpus's questions would silently corrupt the comparison.
+    $found = @()
+    foreach ($entry in $QuestionsDoc.corpora) {
+        if ($entry.repository -ne $Spec.repository) {
+            continue
+        }
+        if ($entry.commit -ne $Spec.commit) {
+            continue
+        }
+        if ($Spec.PSObject.Properties['id'] -and $entry.PSObject.Properties['id'] -and $entry.id -ne $Spec.id) {
+            continue
+        }
+        $found += $entry
+    }
+    if ($found.Count -ne 1) {
+        throw "Expected exactly one questions corpus for repository '$($Spec.repository)' at commit '$($Spec.commit)'; found $($found.Count). Refusing to substitute another corpus's questions."
+    }
+    return $found[0]
 }
+$corpusQuestions = Resolve-CorpusQuestions $spec $questionsDoc
 $plan = @{}
 if ($PlanPath) {
     $planDoc = Get-Content $PlanPath -Raw | ConvertFrom-Json
     foreach ($prop in $planDoc.PSObject.Properties) {
         $plan[$prop.Name] = $prop.Value
     }
+}
+
+if (-not $OutputDir) {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $OutputDir = Join-Path $Root "o/run-$($spec.id)-$stamp"
+}
+New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+
+if ($ListOnly) {
+    $listSummary = [ordered]@{
+        schemaVersion = 1
+        listOnly      = $true
+        corpus        = [ordered]@{
+            id              = $spec.id
+            repository      = $spec.repository
+            commit          = $spec.commit
+            sharpdepsTarget = $spec.sharpdepsTarget
+            configuration   = $spec.configuration
+        }
+        questions     = @($corpusQuestions.questions | ForEach-Object { $_.id })
+        recordedAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    $listPath = Join-Path $OutputDir 'run-summary.json'
+    $listSummary | ConvertTo-Json -Depth 6 | Set-Content -Path $listPath -Encoding utf8
+    Write-Output $listPath
+    return
 }
 
 $toolsDir = Join-Path $Root 't'
@@ -128,12 +185,6 @@ foreach ($prop in $pins.codegraph.processEnvironment.PSObject.Properties) {
     $cgEnv[$prop.Name] = $prop.Value
 }
 
-if (-not $OutputDir) {
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $OutputDir = Join-Path $Root "o/run-$($spec.id)-$stamp"
-}
-New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-
 $summary = [ordered]@{
     schemaVersion = 1
     startedAtUtc  = [DateTime]::UtcNow.ToString('o')
@@ -165,7 +216,7 @@ if (-not $SkipSetup) {
         -WorkingDirectory $Root -Environment $cgEnv `
         -TimeoutSeconds $SetupTimeoutSeconds -OutBase (Join-Path $OutputDir 'setup-codegraph-init')
     $summary.setup.codegraph += $cgInit
-    if ($cgInit.timedOut -or $cgInit.exitCode -ne 0) {
+    if ($cgInit.timedOut -or $cgInit.exitCode -ne 0 -or -not $cgInit.collectionComplete) {
         $setupFailed.codegraph = $true
     }
     $sdEnv = @{ DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false' }
@@ -175,7 +226,7 @@ if (-not $SkipSetup) {
         -WorkingDirectory $spec.copies.sharpdeps -Environment $sdEnv `
         -TimeoutSeconds $SetupTimeoutSeconds -OutBase (Join-Path $OutputDir 'setup-sharpdeps-restore')
     $summary.setup.sharpdeps += $restore
-    if ($restore.timedOut -or $restore.exitCode -ne 0) {
+    if ($restore.timedOut -or $restore.exitCode -ne 0 -or -not $restore.collectionComplete) {
         $setupFailed.sharpdeps = $true
     }
     else {
@@ -186,7 +237,7 @@ if (-not $SkipSetup) {
             -WorkingDirectory $spec.copies.sharpdeps `
             -TimeoutSeconds $SetupTimeoutSeconds -OutBase (Join-Path $OutputDir 'setup-sharpdeps-index')
         $summary.setup.sharpdeps += $index
-        if ($index.timedOut -or $index.exitCode -ne 0) {
+        if ($index.timedOut -or $index.exitCode -ne 0 -or -not $index.collectionComplete) {
             $setupFailed.sharpdeps = $true
         }
         else {
@@ -305,26 +356,38 @@ function Invoke-ToolQuestion {
             text       = $text
             exitCode   = $result.exitCode
             timedOut   = $result.timedOut
+            collectionComplete = $result.collectionComplete
             durationMs = $result.durationMs
             stdoutBytes = $result.stdoutBytes
             stdoutUtf16Units = $result.stdoutUtf16Units
             stdoutPath = $result.stdoutPath
             stderrPath = $result.stderrPath
         }
-        $record.totalBytes += $result.stdoutBytes
-        $record.totalUnits += $result.stdoutUtf16Units
+        $callText = ''
         if (Test-Path $result.stdoutPath) {
-            $accumulated += [System.IO.File]::ReadAllText($result.stdoutPath, [System.Text.Encoding]::UTF8)
+            $callText = [System.IO.File]::ReadAllText($result.stdoutPath, [System.Text.Encoding]::UTF8)
         }
         $callIndex++
         if ($result.timedOut) {
             $record.stopReason = 'timeout'
             break
         }
+        if (-not $result.collectionComplete) {
+            # The captured output may be partial (a descendant held the
+            # pipes past the grace period). It is kept for diagnosis but
+            # never counts as a valid result or as sufficiency evidence.
+            $record.stopReason = 'collection-incomplete'
+            break
+        }
         if ($result.exitCode -ne 0) {
             $record.stopReason = 'error'
             break
         }
+        # Only a complete, successful collection counts toward the totals
+        # and may serve as evidence for sufficiency or follow-up gating.
+        $record.totalBytes += $result.stdoutBytes
+        $record.totalUnits += $result.stdoutUtf16Units
+        $accumulated += $callText
         $stderrText = ''
         if (Test-Path $result.stderrPath) {
             $stderrText = [System.IO.File]::ReadAllText($result.stderrPath, [System.Text.Encoding]::UTF8)
@@ -368,4 +431,5 @@ foreach ($question in $corpusQuestions.questions) {
 $summary.finishedAtUtc = [DateTime]::UtcNow.ToString('o')
 $summaryPath = Join-Path $OutputDir 'run-summary.json'
 $summary | ConvertTo-Json -Depth 10 | Set-Content -Path $summaryPath -Encoding utf8
+Stop-ComparisonProcesses
 Write-Output $summaryPath

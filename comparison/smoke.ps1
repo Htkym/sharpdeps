@@ -11,10 +11,9 @@
     conditions (sufficiency, follow-up cap) without running any fixed
     comparison question or indexing a real corpus.
 
-    Results land in <Root>/o/smoke-<timestamp>/smoke-summary.json. A tool
-    whose setup cannot run (for example a CodeGraph init mode that is not
-    unattended-capable) is reported as a concrete finding in the summary;
-    the smoke fails only when neither tool completes the path.
+    Results land in <Root>/o/smoke-<timestamp>/smoke-summary.json. The smoke
+    exits successfully only when every required check passes; on failure
+    the summary is still written and the smoke exits with an error.
 #>
 [CmdletBinding()]
 param(
@@ -23,6 +22,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Invoke-Query.ps1')
 
 if (-not $Root) {
     if ($env:SCG_ROOT) {
@@ -103,7 +103,9 @@ $fixtureQuestions = [ordered]@{
     scope   = 'smoke fixture only; not a comparison corpus'
     corpora = @(
         [ordered]@{
-            id        = 'fixture'
+            id         = 'fixture'
+            repository = 'local-fixture'
+            commit     = 'none'
             questions = @(
                 [ordered]@{
                     id = 'fq-overloads'
@@ -153,8 +155,13 @@ $spec | ConvertTo-Json -Depth 5 | Set-Content -Path $specPath -Encoding utf8
 
 $runOutputDir = Join-Path $smokeDir 'run'
 $runScript = Join-Path $PSScriptRoot 'run.ps1'
-$summaryPath = & $runScript -Root $Root -CorpusSpecPath $specPath -QuestionsPath $questionsPath `
-    -OutputDir $runOutputDir -CodeGraphInitArguments $CodeGraphInitArguments | Select-Object -Last 1
+try {
+    $summaryPath = & $runScript -Root $Root -CorpusSpecPath $specPath -QuestionsPath $questionsPath `
+        -OutputDir $runOutputDir -CodeGraphInitArguments $CodeGraphInitArguments | Select-Object -Last 1
+}
+finally {
+    Stop-ComparisonProcesses
+}
 $runSummary = Get-Content $summaryPath -Raw | ConvertFrom-Json
 
 $checks = @()
@@ -166,7 +173,7 @@ function Add-Check {
 Add-Check 'run-summary-readable' $true $summaryPath
 foreach ($tool in 'sharpdeps', 'codegraph') {
     $setup = @($runSummary.setup.$tool)
-    $setupOk = $setup.Count -gt 0 -and -not ($setup | Where-Object { $_.timedOut -or ($null -ne $_.exitCode -and $_.exitCode -ne 0) })
+    $setupOk = $setup.Count -gt 0 -and -not ($setup | Where-Object { $_.timedOut -or -not $_.collectionComplete -or $_.exitCode -ne 0 })
     $setupDetail = ($setup | ForEach-Object { "exit=$($_.exitCode) timedOut=$($_.timedOut)" }) -join '; '
     Add-Check "setup-$tool" $setupOk $setupDetail
     $allCalls = @()
@@ -181,18 +188,19 @@ $fqCap = $runSummary.questions | Where-Object { $_.id -eq 'fq-cap' }
 Add-Check 'stop-sufficiency-sharpdeps' ($fqOverloads.tools.sharpdeps.stopReason -eq 'sufficiency') "actual=$($fqOverloads.tools.sharpdeps.stopReason)"
 Add-Check 'stop-cap-sharpdeps' ($fqCap.tools.sharpdeps.stopReason -eq 'cap' -and @($fqCap.tools.sharpdeps.calls).Count -eq 3) "actual=$($fqCap.tools.sharpdeps.stopReason) calls=$(@($fqCap.tools.sharpdeps.calls).Count)"
 
-$anyToolPathOk = ($checks | Where-Object { $_.name -eq 'setup-sharpdeps' }).ok -or ($checks | Where-Object { $_.name -eq 'setup-codegraph' }).ok
+$failedChecks = @($checks | Where-Object { -not $_.ok })
 $smokeSummary = [ordered]@{
     schemaVersion = 1
     smokeDir      = $smokeDir
     runSummary    = $summaryPath
     checks        = $checks
-    pathExercised = $anyToolPathOk
+    success       = ($failedChecks.Count -eq 0)
     finishedAtUtc = [DateTime]::UtcNow.ToString('o')
 }
 $smokeSummaryPath = Join-Path $smokeDir 'smoke-summary.json'
 $smokeSummary | ConvertTo-Json -Depth 6 | Set-Content -Path $smokeSummaryPath -Encoding utf8
 Write-Output $smokeSummaryPath
-if (-not $anyToolPathOk) {
-    throw 'Smoke failed: neither tool completed setup. See smoke-summary.json.'
+if ($failedChecks.Count -gt 0) {
+    $names = ($failedChecks | ForEach-Object { $_.name }) -join ', '
+    throw "Smoke failed: required check(s) failed: $names. See $smokeSummaryPath"
 }

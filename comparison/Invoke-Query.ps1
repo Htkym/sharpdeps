@@ -9,7 +9,34 @@
     length) and decoded UTF-16 code unit count (the .NET string length of the
     UTF-8 decoding, line endings included). A JSON result file is written next
     to the captures and the same data is returned as an object.
+
+    A result is a valid collection only when the process exited on its own
+    and both output streams were fully drained (collectionComplete). A
+    timeout or an expired stream grace period (a descendant still holding
+    the pipes) makes the collection incomplete: the captures stay on disk
+    for diagnosis but must not be treated as a valid result.
+
+    Every started process is registered in $script:ComparisonProcesses and
+    is killed if it is still running when the call returns or throws.
+    Stop-ComparisonProcesses cleans up anything left registered.
 #>
+
+$script:ComparisonProcesses = @()
+
+function Stop-ComparisonProcesses {
+    foreach ($entry in $script:ComparisonProcesses) {
+        try {
+            if (-not $entry.HasExited) {
+                $entry.Kill($true)
+                $entry.WaitForExit(5000) | Out-Null
+            }
+        }
+        catch {
+            # Best effort cleanup; the original outcome stands.
+        }
+    }
+    $script:ComparisonProcesses = @()
+}
 
 function Invoke-ComparisonQuery {
     [CmdletBinding()]
@@ -46,32 +73,47 @@ function Invoke-ComparisonQuery {
     $process.StartInfo = $psi
     $timedOut = $false
     $exitCode = $null
+    $streamGraceExpired = $false
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     [void]$process.Start()
-    # Children get EOF on stdin immediately; nothing here may prompt.
-    $process.StandardInput.Close()
-    $outStream = [System.IO.File]::Create($stdoutPath)
-    $errStream = [System.IO.File]::Create($stderrPath)
-    $outTask = $process.StandardOutput.BaseStream.CopyToAsync($outStream)
-    $errTask = $process.StandardError.BaseStream.CopyToAsync($errStream)
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        $timedOut = $true
-        $process.Kill($true)
-        $process.WaitForExit()
+    $script:ComparisonProcesses += $process
+    try {
+        # Children get EOF on stdin immediately; nothing here may prompt.
+        $process.StandardInput.Close()
+        $outStream = [System.IO.File]::Create($stdoutPath)
+        $errStream = [System.IO.File]::Create($stderrPath)
+        $outTask = $process.StandardOutput.BaseStream.CopyToAsync($outStream)
+        $errTask = $process.StandardError.BaseStream.CopyToAsync($errStream)
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $timedOut = $true
+            $process.Kill($true)
+            $process.WaitForExit()
+        }
+        if (-not $timedOut) {
+            $exitCode = $process.ExitCode
+        }
+        # A CLI may leave a coordinator daemon behind that inherits the pipe
+        # handles; the CLI's own output is already flushed at exit, so grant
+        # the copies a bounded grace period instead of blocking on the daemon.
+        # If the grace expires the collection is incomplete, not valid.
+        if (-not [System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), 10000)) {
+            $streamGraceExpired = $true
+        }
+        $outStream.Dispose()
+        $errStream.Dispose()
     }
-    if (-not $timedOut) {
-        $exitCode = $process.ExitCode
+    finally {
+        $sw.Stop()
+        if (-not $process.HasExited) {
+            try {
+                $process.Kill($true)
+                $process.WaitForExit(5000) | Out-Null
+            }
+            catch {
+                # Best effort cleanup; the original outcome stands.
+            }
+        }
     }
-    # A CLI may leave a coordinator daemon behind that inherits the pipe
-    # handles; the CLI's own output is already flushed at exit, so grant the
-    # copies a bounded grace period instead of blocking on the daemon.
-    $streamGraceExpired = $false
-    if (-not [System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), 10000)) {
-        $streamGraceExpired = $true
-    }
-    $outStream.Dispose()
-    $errStream.Dispose()
-    $sw.Stop()
     $stdoutBytes = 0
     $stdoutUnits = 0
     if (Test-Path $stdoutPath) {
@@ -87,6 +129,7 @@ function Invoke-ComparisonQuery {
         exitCode         = $exitCode
         timedOut         = $timedOut
         streamGraceExpired = $streamGraceExpired
+        collectionComplete = (-not $timedOut -and -not $streamGraceExpired)
         durationMs       = [int]$sw.ElapsedMilliseconds
         stdoutBytes      = $stdoutBytes
         stdoutUtf16Units = $stdoutUnits
