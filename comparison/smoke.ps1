@@ -180,8 +180,8 @@ foreach ($tool in 'sharpdeps', 'codegraph') {
     foreach ($q in $runSummary.questions) {
         $allCalls += @($q.tools.$tool.calls)
     }
-    $counted = @($allCalls | Where-Object { $_.stdoutBytes -gt 0 })
-    Add-Check "query-counting-$tool" ($counted.Count -gt 0) "calls=$($allCalls.Count) countedWithBytes=$($counted.Count)"
+    $counting = Test-CountedCalls $allCalls
+    Add-Check "query-counting-$tool" $counting.ok $counting.detail
 }
 $fqOverloads = $runSummary.questions | Where-Object { $_.id -eq 'fq-overloads' }
 $fqCap = $runSummary.questions | Where-Object { $_.id -eq 'fq-cap' }
