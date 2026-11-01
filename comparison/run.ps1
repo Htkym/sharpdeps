@@ -422,7 +422,7 @@ function Invoke-ToolQuestion {
         if (Test-Path $result.stderrPath) {
             $stderrText = [System.IO.File]::ReadAllText($result.stderrPath, [System.Text.Encoding]::UTF8)
         }
-        if (Test-ExplicitUnsupported $accumulated -or Test-ExplicitUnsupported $stderrText) {
+        if (Test-ExplicitUnsupported $accumulated $stderrText) {
             $record.stopReason = 'unsupported'
             break
         }

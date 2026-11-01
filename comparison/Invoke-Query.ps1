@@ -190,22 +190,63 @@ function Test-CountedCalls {
     }
 }
 
-function Test-ExplicitUnsupported {
-    param([AllowEmptyString()] [string]$Text)
-    # Only an explicit tool diagnostic counts as an unsupported outcome:
-    # a JSON status or code field naming an unsupported result, or one of
-    # the tools' dashed diagnostic codes (for example
-    # "unsupported-symbol-mapping"). The bare word inside returned source
-    # (a comment, an identifier, a string literal) is evidence, not a
-    # diagnostic, and never classifies the outcome.
-    if (-not $Text) {
+function Test-DiagnosticCodeToken {
+    param([AllowEmptyString()] [string]$Token)
+    # A single extracted code token (never free text) names an unsupported
+    # outcome when it carries 'unsupported' as part of a code-shaped token:
+    # a dashed or dotted code (unsupported-symbol-mapping,
+    # markdown.unsupported-symbol-mapping, semantic.languageVersion...),
+    # an all-caps code (UNSUPPORTED_FORMAT), or a camelCase word boundary
+    # (...Unsupported). A plain prose word is not a code.
+    if (-not $Token) {
         return $false
     }
-    if ($Text -match '"(?:status|code)"\s*:\s*"unsupported') {
-        return $true
+    $token = $Token.Trim().TrimEnd(':').TrimEnd('=')
+    if ($token -notmatch 'unsupported') {
+        return $false
     }
-    if ($Text -match '\bunsupported-[a-z]') {
-        return $true
+    return ($token -match '[-._]' -or $token -match '^[A-Z0-9_]+$' -or $token -cmatch 'Unsupported')
+}
+
+function Test-ExplicitUnsupported {
+    param(
+        [AllowEmptyString()] [string]$StdoutText,
+        [AllowEmptyString()] [string]$StderrText
+    )
+    # Only the tool's own diagnostic boundary can classify an outcome as
+    # unsupported; the returned source body is evidence and is never
+    # scanned. The boundary is exactly:
+    #   - a JSON "status" or "code" field whose value names an unsupported
+    #     result (either channel), or
+    #   - a "Diagnostic <code>=..." line the tool renders in its header
+    #     block (either channel), or
+    #   - a leading diagnostic code token on a stderr line (stderr is the
+    #     tool's diagnostic channel, never returned source).
+    # Anything else, including the word 'unsupported' inside returned
+    # source, identifiers, string literals, comments, or stdout prose
+    # lines, does not classify the outcome; an anomaly that matches none
+    # of these stays an ordinary error.
+    foreach ($text in @($StdoutText, $StderrText)) {
+        if ($text -and $text -match '"(?:status|code)"\s*:\s*"[^"]*unsupported') {
+            return $true
+        }
+    }
+    foreach ($text in @($StdoutText, $StderrText)) {
+        if (-not $text) {
+            continue
+        }
+        foreach ($line in ($text -split "`r?`n")) {
+            if ($line -match '^\s*Diagnostic\s+(\S+)' -and (Test-DiagnosticCodeToken $Matches[1])) {
+                return $true
+            }
+        }
+    }
+    if ($StderrText) {
+        foreach ($line in ($StderrText -split "`r?`n")) {
+            if ($line -match '^\s*(\S+)' -and (Test-DiagnosticCodeToken $Matches[1])) {
+                return $true
+            }
+        }
     }
     return $false
 }
