@@ -208,41 +208,98 @@ function Test-DiagnosticCodeToken {
     return ($token -match '[-._]' -or $token -match '^[A-Z0-9_]+$' -or $token -cmatch 'Unsupported')
 }
 
+function Get-JsonDiagnosticValues {
+    param($Document)
+    # The diagnostic fields of a parsed tool response envelope: top-level
+    # "status" / "code", "error.code", and each "errors[].code". Nothing
+    # else in the document is a diagnostic: payloads, messages, and any
+    # nested content are returned data, never inspected here.
+    $values = @()
+    if ($null -eq $Document -or $Document -is [string]) {
+        return $values
+    }
+    foreach ($name in 'status', 'code') {
+        $value = $Document.$name
+        if ($value -is [string]) {
+            $values += $value
+        }
+    }
+    $errorObject = $Document.error
+    if ($null -ne $errorObject -and $errorObject -isnot [string] -and $errorObject.code -is [string]) {
+        $values += $errorObject.code
+    }
+    if ($Document.errors) {
+        foreach ($entry in @($Document.errors)) {
+            if ($null -ne $entry -and $entry -isnot [string] -and $entry.code -is [string]) {
+                $values += $entry.code
+            }
+        }
+    }
+    return $values
+}
+
 function Test-ExplicitUnsupported {
     param(
         [AllowEmptyString()] [string]$StdoutText,
         [AllowEmptyString()] [string]$StderrText
     )
     # Only the tool's own diagnostic boundary can classify an outcome as
-    # unsupported; the returned source body is evidence and is never
-    # scanned. The boundary is exactly:
-    #   - a JSON "status" or "code" field whose value names an unsupported
-    #     result (either channel), or
-    #   - a "Diagnostic <code>=..." line the tool renders in its header
-    #     block (either channel), or
-    #   - a leading diagnostic code token on a stderr line (stderr is the
-    #     tool's diagnostic channel, never returned source).
-    # Anything else, including the word 'unsupported' inside returned
-    # source, identifiers, string literals, comments, or stdout prose
-    # lines, does not classify the outcome; an anomaly that matches none
-    # of these stays an ordinary error.
-    foreach ($text in @($StdoutText, $StderrText)) {
-        if ($text -and $text -match '"(?:status|code)"\s*:\s*"[^"]*unsupported') {
-            return $true
-        }
-    }
+    # unsupported; returned content is evidence and is never scanned.
+    # The boundary is exactly:
+    #   - a channel whose whole text is a complete JSON document: the
+    #     document is parsed and only its diagnostic fields count (see
+    #     Get-JsonDiagnosticValues). Text that is not a complete JSON
+    #     document gets no JSON treatment at all, so JSON-looking text
+    #     inside returned source, comments, or string literals (including
+    #     C# raw strings) can never classify the outcome.
+    #   - agent-format text: "Diagnostic <code>=..." lines inside the
+    #     header/diagnostic region, meaning before the first returned-
+    #     source section ("Source F<n>:...") of each tool output. Source
+    #     sections are never scanned.
+    #   - stderr lines carrying a leading diagnostic code token, or a
+    #     "Diagnostic <code>=..." line (stderr is the tool's diagnostic
+    #     channel and never holds returned source).
+    # Anything else, including the word 'unsupported' anywhere in
+    # returned source, does not classify the outcome; an anomaly that
+    # matches none of these stays an ordinary error.
     foreach ($text in @($StdoutText, $StderrText)) {
         if (-not $text) {
             continue
         }
-        foreach ($line in ($text -split "`r?`n")) {
-            if ($line -match '^\s*Diagnostic\s+(\S+)' -and (Test-DiagnosticCodeToken $Matches[1])) {
+        $document = $null
+        try {
+            $document = $text.Trim() | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $document = $null
+        }
+        if ($null -ne $document) {
+            foreach ($value in (Get-JsonDiagnosticValues $document)) {
+                if ($value -match 'unsupported') {
+                    return $true
+                }
+            }
+        }
+    }
+    if ($StdoutText) {
+        $inHeader = $true
+        foreach ($line in ($StdoutText -split "`r?`n")) {
+            if ($line -match '^SharpDeps explore ') {
+                $inHeader = $true
+            }
+            elseif ($line -match '^Source\s+F\d+:') {
+                $inHeader = $false
+            }
+            if ($inHeader -and $line -match '^\s*Diagnostic\s+(\S+)' -and (Test-DiagnosticCodeToken $Matches[1])) {
                 return $true
             }
         }
     }
     if ($StderrText) {
         foreach ($line in ($StderrText -split "`r?`n")) {
+            if ($line -match '^\s*Diagnostic\s+(\S+)' -and (Test-DiagnosticCodeToken $Matches[1])) {
+                return $true
+            }
             if ($line -match '^\s*(\S+)' -and (Test-DiagnosticCodeToken $Matches[1])) {
                 return $true
             }
