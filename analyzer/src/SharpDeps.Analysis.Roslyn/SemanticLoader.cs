@@ -477,7 +477,8 @@ public static class SemanticLoader
                 hash,
                 byteLength,
                 truncated ? null : content,
-                truncated);
+                truncated,
+                GeneratorIdentityOf(document, hintName));
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -494,8 +495,26 @@ public static class SemanticLoader
                 "unavailable",
                 0,
                 null,
-                false);
+                false,
+                GeneratorIdentityOf(document, hintName));
         }
+    }
+
+    /// <summary>
+    /// The identity of the generator that produced a document, read from the
+    /// workspace's generated file path: .../&lt;generator assembly&gt;/&lt;generator
+    /// type&gt;/&lt;hint&gt;. A path in any other shape stays unidentified rather
+    /// than guessed, so identity never depends on the absolute path itself.
+    /// </summary>
+    private static string GeneratorIdentityOf(Document document, string hintName)
+    {
+        var path = document.FilePath?.Replace('\\', '/');
+        if (path is null) return string.Empty;
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 3
+            && string.Equals(segments[^1], hintName, StringComparison.OrdinalIgnoreCase)
+            ? segments[^3] + "/" + segments[^2]
+            : string.Empty;
     }
 
     /// <summary>

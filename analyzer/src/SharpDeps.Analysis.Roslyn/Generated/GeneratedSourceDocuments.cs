@@ -8,6 +8,12 @@ namespace SharpDeps.Analysis.Roslyn;
 /// <summary>One generated document as the workspace reported it.</summary>
 /// <param name="Text">The document content, or null when it exceeded the retention budget.</param>
 /// <param name="TextTruncated">True when the content was obtained but not retained.</param>
+/// <param name="GeneratorIdentity">
+/// The producing generator as "assembly/type" read from the workspace's generated
+/// file path, or empty when the path does not carry that shape. Identity is never
+/// guessed: an empty value keeps the document distinct by project, variant and hint,
+/// and a conflicting body under one identity is an error, not a merge.
+/// </param>
 public sealed record GeneratedSourceDocumentInfo(
     string VariantKey,
     string ProjectName,
@@ -16,4 +22,5 @@ public sealed record GeneratedSourceDocumentInfo(
     string ContentHash,
     long ByteLength,
     string? Text,
-    bool TextTruncated);
+    bool TextTruncated,
+    string GeneratorIdentity);

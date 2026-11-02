@@ -67,6 +67,32 @@ public static class IndexSnapshotValidator
             }
             Require(filesByPath.TryAdd(file.RelativePath, file), "File paths must be unique, including case aliases.");
         }
+        foreach (var file in files.Values.Where(f => f.Kind == IndexFileKinds.GeneratedSource && !f.Deleted))
+        {
+            token.ThrowIfCancellationRequested();
+            Require(file.Utf16Length is not null, "A generated input must record its UTF-16 length.");
+        }
+        var generatedBodies = Unique(snapshot.StoredGeneratedBodies, b => b.SourceId, "Generated body", token);
+        foreach (var body in generatedBodies.Values)
+        {
+            token.ThrowIfCancellationRequested();
+            Require(files.TryGetValue(body.SourceId, out var file) && file.Kind == IndexFileKinds.GeneratedSource
+                && !file.Deleted, "A stored generated body must belong to a live generated input.");
+            Require(body.Body is not null, "A stored generated body cannot be null.");
+            var bytes = StrictUtf8.GetBytes(body.Body);
+            // Content integrity of a stored body gets its own code so Verify can classify
+            // the affected generated input instead of failing through the generic path.
+            if (bytes.LongLength != file.ByteLength || body.Body.Length != file.Utf16Length!.Value)
+                throw new IndexStoreException("INDEX_GENERATED_BODY_INVALID", "A stored generated body must match its input byte and UTF-16 lengths.");
+            if (Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant() != file.ContentHash)
+                throw new IndexStoreException("INDEX_GENERATED_BODY_INVALID", "A stored generated body must match its input content hash.");
+        }
+        foreach (var file in files.Values.Where(f => f.Kind == IndexFileKinds.GeneratedSource && !f.Deleted))
+        {
+            token.ThrowIfCancellationRequested();
+            Require(generatedBodies.ContainsKey(file.SourceId),
+                "A live generated input must carry its stored body; a hash alone is not a complete index.");
+        }
         Require(nodes.TryGetValue(graph.WorkspaceId, out var root) && root.Kind == HarnessNodeKind.Workspace
             && root.ParentId is null && graph.Nodes.Count(n => n.Kind == HarnessNodeKind.Workspace) == 1,
             "The graph needs exactly its declared workspace root.");

@@ -79,9 +79,11 @@ try
     foreach (var generated in load.GeneratedDocuments)
     {
         var document = documents.RegisterGenerated(
-            generated.FilePath,
+            generated.VariantKey,
             generated.ProjectName,
+            generated.GeneratorIdentity,
             generated.HintName,
+            generated.FilePath,
             generated.ContentHash,
             generated.ByteLength);
         if (generated.Text is null)

@@ -14,7 +14,9 @@ public sealed class SourceDocumentRegistry
     private readonly string _rootDirectory;
     private readonly Dictionary<string, SourceDocument> _byPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _generatedPaths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<SourceDocument> _unkeyedGenerated = [];
+    private readonly Dictionary<string, SourceDocument> _generatedByIdentity = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SourceDocument> _generatedByTree = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<SourceDocument> _generated = [];
 
     public SourceDocumentRegistry(string rootId, string rootDirectory)
     {
@@ -23,7 +25,7 @@ public sealed class SourceDocumentRegistry
     }
 
     public IReadOnlyList<SourceDocument> Documents => _byPath.Values
-        .Concat(_unkeyedGenerated)
+        .Concat(_generated)
         .OrderBy(document => document.RelativePath, StringComparer.Ordinal)
         .ToArray();
 
@@ -74,28 +76,41 @@ public sealed class SourceDocumentRegistry
     }
 
     /// <summary>
-    /// Registers a source-generated document. The relative path is virtual:
+    /// Registers a source-generated document under a stable identity: project variant,
+    /// generator identity and hint name. The relative path is virtual:
     /// the workspace's obj path never reaches the report, and the generated content is
     /// read from the analysis result, not from the user's repository.
     /// </summary>
     /// <param name="fullPath">
-    /// The workspace path of the generated document. Evidence from the compilation is
-    /// matched by this path; null means the document is only listed in the manifest.
+    /// The workspace path of the generated document, used only to match compilation
+    /// trees of the same variant to this document; null means the document is only
+    /// listed in the manifest. It never decides identity, so the same hint emitted
+    /// for several variants or by several generators stays a separate document, and
+    /// two different bodies under one identity fail loudly instead of merging.
     /// </param>
     public SourceDocument RegisterGenerated(
-        string? fullPath,
+        string variantKey,
         string projectName,
+        string generatorIdentity,
         string hintName,
+        string? fullPath,
         string contentHash,
         long byteLength)
     {
-        var normalized = string.IsNullOrEmpty(fullPath) ? null : Path.GetFullPath(fullPath);
-        if (normalized is not null && _byPath.TryGetValue(normalized, out var existing))
+        ArgumentNullException.ThrowIfNull(variantKey);
+        ArgumentNullException.ThrowIfNull(projectName);
+        ArgumentNullException.ThrowIfNull(generatorIdentity);
+        ArgumentNullException.ThrowIfNull(hintName);
+        var identityKey = string.Join('\u001f', variantKey, projectName, generatorIdentity, hintName);
+        if (_generatedByIdentity.TryGetValue(identityKey, out var existing))
         {
+            if (existing.ContentHash != contentHash || existing.ByteLength != byteLength)
+                throw new InvalidOperationException(
+                    $"The generated document '{hintName}' in '{projectName}' was reported with two different bodies under one identity; refusing to merge them.");
             return existing;
         }
 
-        var relativePath = UniqueGeneratedPath(projectName, hintName);
+        var relativePath = UniqueGeneratedPath(projectName, variantKey, generatorIdentity, hintName, identityKey);
         var document = new SourceDocument(
             Identity.DocumentId(_rootId, relativePath, "generatedSource"),
             relativePath,
@@ -103,39 +118,97 @@ public sealed class SourceDocumentRegistry
             contentHash,
             byteLength,
             null);
-
-        if (normalized is not null)
+        _generatedByIdentity.Add(identityKey, document);
+        _generated.Add(document);
+        if (!string.IsNullOrEmpty(fullPath))
         {
-            _byPath[normalized] = document;
-        }
-        else
-        {
-            _unkeyedGenerated.Add(document);
+            _generatedByTree[TreeKey(variantKey, fullPath)] = document;
         }
 
         return document;
     }
 
     /// <summary>
-    /// A virtual path under <c>generated/</c>. Hint names can repeat across projects or
-    /// generators, so a collision gets a suffix instead of silently merging documents.
+    /// Resolves the document a compilation tree belongs to: the pre-registered
+    /// generated document of this variant when the tree is one of its generated
+    /// trees, otherwise the physical file. Null when the tree has no path.
     /// </summary>
-    private string UniqueGeneratedPath(string projectName, string hintName)
+    public SourceDocument? ResolveTreeDocument(string variantKey, Microsoft.CodeAnalysis.SyntaxTree tree)
     {
-        var project = SanitizeSegment(projectName);
-        var hint = SanitizeHint(hintName);
-        var basePath = $"generated/{project}/{hint}";
-        var candidate = basePath;
-        var counter = 1;
-        while (!_generatedPaths.Add(candidate))
+        if (string.IsNullOrEmpty(tree.FilePath))
         {
-            counter++;
-            var extension = Path.GetExtension(basePath);
-            var stem = extension.Length > 0 ? basePath[..^extension.Length] : basePath;
-            candidate = $"{stem}-{counter}{extension}";
+            return null;
         }
 
-        return candidate;
+        return _generatedByTree.TryGetValue(TreeKey(variantKey, tree.FilePath), out var generated)
+            ? generated
+            : Register(tree.FilePath);
+    }
+
+    /// <summary>True when the tree is a pre-registered generated tree of this variant.</summary>
+    public bool IsGeneratedTree(string variantKey, Microsoft.CodeAnalysis.SyntaxTree tree)
+        => !string.IsNullOrEmpty(tree.FilePath)
+            && _generatedByTree.ContainsKey(TreeKey(variantKey, tree.FilePath));
+
+    private static string TreeKey(string variantKey, string fullPath)
+        => variantKey + "\u001f" + Path.GetFullPath(fullPath);
+
+    /// <summary>
+    /// A virtual path under <c>generated/</c> built from the identity itself:
+    /// project, variant, generator and hint. Distinct identities that sanitize to
+    /// the same path are separated by a discriminator hashed from the identity,
+    /// never by registration order or the workspace's absolute path.
+    /// </summary>
+    private string UniqueGeneratedPath(
+        string projectName,
+        string variantKey,
+        string generatorIdentity,
+        string hintName,
+        string identityKey)
+    {
+        var segments = new List<string>
+        {
+            "generated",
+            SanitizeSegment(projectName),
+            SanitizeVariant(variantKey),
+        };
+        if (generatorIdentity.Length > 0)
+        {
+            segments.AddRange(generatorIdentity.Split('/').Select(SanitizeSegment));
+        }
+        else
+        {
+            segments.Add("unknown-generator");
+        }
+
+        var basePath = string.Join('/', segments) + "/" + SanitizeHint(hintName);
+        if (_generatedPaths.Add(basePath))
+        {
+            return basePath;
+        }
+
+        var extension = Path.GetExtension(basePath);
+        var stem = extension.Length > 0 ? basePath[..^extension.Length] : basePath;
+        var discriminator = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identityKey)))[..8].ToLowerInvariant();
+        var candidate = $"{stem}-{discriminator}{extension}";
+        if (_generatedPaths.Add(candidate))
+        {
+            return candidate;
+        }
+
+        throw new InvalidOperationException(
+            $"Generated document path '{basePath}' collides for distinct identities.");
+    }
+
+    /// <summary>The variant part of a variant key ("path|tfm|configuration|platform"), path-safe.</summary>
+    private static string SanitizeVariant(string variantKey)
+    {
+        var parts = variantKey.Split('|');
+        var suffix = parts.Length > 1 ? string.Join('_', parts[1..]) : variantKey;
+        var cleaned = new string(suffix.Select(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_' ? character : '_').ToArray()).Trim('_');
+        return cleaned.Length == 0 ? "variant" : cleaned;
     }
 
     private static string SanitizeSegment(string value)
