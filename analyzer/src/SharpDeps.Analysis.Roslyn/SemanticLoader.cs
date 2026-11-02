@@ -477,7 +477,8 @@ public static class SemanticLoader
                 hash,
                 byteLength,
                 truncated ? null : content,
-                truncated);
+                truncated,
+                GeneratorIdentityOf(document.FilePath, hintName));
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -494,8 +495,40 @@ public static class SemanticLoader
                 "unavailable",
                 0,
                 null,
-                false);
+                false,
+                GeneratorIdentityOf(document.FilePath, hintName));
         }
+    }
+
+    /// <summary>
+    /// The identity of the generator that produced a document, read from the
+    /// workspace's generated file path: .../&lt;generator assembly&gt;/&lt;generator
+    /// type&gt;/&lt;hint&gt;. The hint may itself contain '/', so the whole hint tail
+    /// of the path is matched, not only its last segment. A path in any other shape
+    /// stays unidentified (empty) rather than guessed; the document registry refuses
+    /// such a document instead of merging it with another one.
+    /// </summary>
+    internal static string GeneratorIdentityOf(string? filePath, string hintName)
+    {
+        var path = filePath?.Replace('\\', '/');
+        if (path is null) return string.Empty;
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var hintSegments = hintName.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (hintSegments.Length == 0 || segments.Length < hintSegments.Length + 2)
+        {
+            return string.Empty;
+        }
+
+        var offset = segments.Length - hintSegments.Length;
+        for (var index = 0; index < hintSegments.Length; index++)
+        {
+            if (!string.Equals(segments[offset + index], hintSegments[index], StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+        }
+
+        return segments[offset - 2] + "/" + segments[offset - 1];
     }
 
     /// <summary>

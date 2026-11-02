@@ -180,7 +180,8 @@ public sealed class DeclarationDependencyCollector
             return;
         var tree = declaration.SyntaxTree;
         if (string.IsNullOrEmpty(tree.FilePath) || writtenSpan.IsEmpty) return;
-        var document = _documents.Register(tree.FilePath);
+        var document = _documents.ResolveTreeDocument(input.VariantId, tree)
+            ?? throw new InvalidOperationException("An evidence tree with a file path must resolve to a document.");
         var span = tree.GetLineSpan(writtenSpan);
         var physicalSpan = new PhysicalSpan(writtenSpan.Start, writtenSpan.Length,
             span.StartLinePosition.Line, span.StartLinePosition.Character,
@@ -721,7 +722,8 @@ public sealed class DeclarationDependencyCollector
             return;
         }
 
-        var document = _documents.Register(tree.FilePath);
+        var document = _documents.ResolveTreeDocument(input.VariantId, tree)
+            ?? throw new InvalidOperationException("An evidence tree with a file path must resolve to a document.");
         var span = tree.GetLineSpan(syntax.Span);
         var physicalSpan = new PhysicalSpan(
             syntax.Span.Start,

@@ -105,6 +105,7 @@ public static class CliIndexer
         var excludedTarget = new[] { target }.Concat(selectedPaths).Any(path => Path.GetRelativePath(root, path)
             .Replace('\\', '/').Split('/').Any(part => ExcludedDirectories.Contains(part)));
         if (!excludedTarget && options.AllowSemanticReuse && previous is not null
+            && !previous.Files.Any(f => f.Kind == IndexFileKinds.GeneratedSource)
             && savedProof?.Projects?.Version == CliProjectReuse.Version && currentInputHash is not null
             && CliReuseProof.Matches(savedProof, currentFingerprint, optionsHash, currentInputHash))
         {
@@ -151,9 +152,30 @@ public static class CliIndexer
                 throw new CliIndexException("CLI_SEMANTIC_LOAD_INCOMPLETE");
             if (selectedPaths.Any(path => !variants.Any(v => PathComparer.Equals(path, Path.GetFullPath(v.ProjectPath)))))
                 throw new CliIndexException("CLI_SELECTED_VARIANT_NOT_AVAILABLE");
-            if (variants.Any(v => v.GeneratedDocumentCount != 0 || v.GeneratedDocumentError is not null))
+            // A variant whose generated documents could not even be enumerated cannot
+            // be indexed honestly: fail with the reason and keep the previous snapshot.
+            if (variants.Any(v => v.GeneratedDocumentError is not null))
                 throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
-                    "Virtual generated input cannot be verified against the live-file storage contract.");
+                    "The generated documents of a selected variant could not be enumerated.");
+            var generatedByVariant = loaded.GeneratedDocuments
+                .GroupBy(document => document.VariantKey, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+            var hasGenerated = false;
+            foreach (var variant in variants)
+            {
+                var variantDocuments = generatedByVariant.GetValueOrDefault(variant.VariantKey) ?? [];
+                if (variantDocuments.Length != variant.GeneratedDocumentCount)
+                    throw new CliIndexException("CLI_GENERATED_CONTENT_UNAVAILABLE",
+                        $"The generated documents of '{variant.ProjectName}' could not all be retained.");
+                hasGenerated |= variantDocuments.Length != 0;
+                // Generated bodies are stored only with their full text. A hash-only
+                // entry must never look like a complete index, so content that is
+                // unavailable or over the retention budget fails the build instead.
+                foreach (var document in variantDocuments)
+                    if (document.Text is null)
+                        throw new CliIndexException("CLI_GENERATED_CONTENT_UNAVAILABLE",
+                            $"The generated document '{document.HintName}' in '{document.ProjectName}' has no retained body; the index is not created.");
+            }
             var projectByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var projects = new List<HarnessProjectVariant>();
             foreach (var variant in variants)
@@ -189,6 +211,24 @@ public static class CliIndexer
                         "A workspace PE reference inside an excluded output or private subtree cannot be verified before evaluation.");
             }
             var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(root), root);
+            // Generated documents are registered before any tree is visited, so the
+            // symbol index and the evidence collectors resolve generated trees to the
+            // same stable documents. Registration refuses ambiguous identities.
+            var generatedInfoByDocumentId = new Dictionary<string, GeneratedSourceDocumentInfo>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var variant in variants)
+                    foreach (var info in generatedByVariant.GetValueOrDefault(variant.VariantKey) ?? [])
+                    {
+                        var document = documents.RegisterGenerated(info.VariantKey, info.ProjectName,
+                            info.GeneratorIdentity, info.HintName, info.FilePath, info.ContentHash, info.ByteLength);
+                        generatedInfoByDocumentId[document.Id] = info;
+                    }
+            }
+            catch (InvalidOperationException error)
+            {
+                throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED", error.Message, inner: error);
+            }
             var sourceOffsets = new Dictionary<string, int>(StringComparer.Ordinal);
             var projectSources = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
             foreach (var input in inputs)
@@ -197,6 +237,36 @@ public static class CliIndexer
                 foreach (var tree in input.Compilation.SyntaxTrees)
                 {
                     token.ThrowIfCancellationRequested();
+                    if (documents.IsGeneratedTree(input.VariantId, tree))
+                    {
+                        // The retained body is the exact generator output the loader
+                        // captured; the manifest entry stores it for the snapshot, and
+                        // no filesystem path is ever derived from the virtual path.
+                        var generated = documents.ResolveTreeDocument(input.VariantId, tree)!;
+                        var info = generatedInfoByDocumentId[generated.Id];
+                        if (tree.GetText(token).ToString() != info.Text)
+                            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING",
+                                "Generated compilation text differs from the retained body.");
+                        sourceOffsets[generated.Id] = 0;
+                        if (manifest.TryGetValue(generated.RelativePath, out var prior))
+                        {
+                            if (prior.File.SourceId != generated.Id)
+                                throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
+                                    "A generated virtual path collides with another input.");
+                        }
+                        else
+                        {
+                            manifest.Add(generated.RelativePath, new InputText(generated.RelativePath,
+                                new(generated.Id, generated.RelativePath, IndexFileKinds.GeneratedSource,
+                                    info.ContentHash, info.ByteLength, info.Text!.Length),
+                                info.Text!, false));
+                            inputBytes = checked(inputBytes + info.ByteLength);
+                            if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
+                                throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                        }
+                        ownedSources.Add(generated.Id);
+                        continue;
+                    }
                     if (string.IsNullOrWhiteSpace(tree.FilePath))
                         throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED");
                     var sourcePath = InsideRoot(root, tree.FilePath);
@@ -230,6 +300,7 @@ public static class CliIndexer
                 : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token,
                     includeMarkdown: true, ownedSourcePaths: ownedPaths);
             var projectPlan = options.AllowSemanticReuse && previous is not null && savedProof is not null
+                && !hasGenerated && previous.Files.All(f => f.Kind != IndexFileKinds.GeneratedSource)
                 && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
                 && projectSelections is not null
                 ? CliProjectReuse.Select(previous, savedProof.Projects, structureHash, projectSelections, capturedFiles, token) : null;
@@ -308,7 +379,9 @@ public static class CliIndexer
                 reference is Microsoft.CodeAnalysis.CompilationReference
                 || reference is Microsoft.CodeAnalysis.PortableExecutableReference { FilePath: { } path }
                     && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot)));
-            if (closedReferences && fullFingerprint is not null && afterFingerprint is not null
+            // No reuse proof is issued for a run with generated inputs: their currency
+            // cannot be proven from fingerprints, so later queries stay unverified.
+            if (!hasGenerated && closedReferences && fullFingerprint is not null && afterFingerprint is not null
                 && fullFingerprint == afterFingerprint
                 && initialInputs == stableInputsAfter && inputHash is not null)
                 reuseProof = new(CliReuseProof.OwnerVersion, optionsHash, inputHash, afterFingerprint.EnvironmentHash,
@@ -386,15 +459,22 @@ public static class CliIndexer
         graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
             .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
         var search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
-        foreach (var input in manifest.Values) await Verify(input, root, token);
+        foreach (var input in manifest.Values)
+        {
+            if (input.File.Kind == IndexFileKinds.GeneratedSource) VerifyGenerated(input);
+            else await Verify(input, root, token);
+        }
         if (reuseProof is not null)
         {
             var relativeTarget = Path.GetRelativePath(root, target).Replace('\\', '/');
             var input = manifest[relativeTarget];
             manifest[relativeTarget] = input with { File = input.File with { Reuse = reuseProof } };
         }
+        var generatedBodies = manifest.Values.Where(i => i.File.Kind == IndexFileKinds.GeneratedSource)
+            .Select(i => new IndexGeneratedBody(i.File.SourceId, i.Text))
+            .OrderBy(b => b.SourceId, StringComparer.Ordinal).ToArray();
         var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
-            identities.ToArray(), [], search);
+            identities.ToArray(), [], search, generatedBodies);
         IndexSnapshotValidator.Validate(snapshot);
         var finalInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
         if (initialInputs != finalInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
@@ -667,6 +747,16 @@ public static class CliIndexer
     {
         var current = await ReadInput(InsideRoot(root, input.AbsolutePath), token);
         if (current.Hash != input.File.ContentHash || current.Bytes != input.File.ByteLength || current.Text != input.Text)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+    }
+
+    private static void VerifyGenerated(InputText input)
+    {
+        // A generated body is verified against the retained text itself; its virtual
+        // path must never be resolved against the filesystem.
+        var bytes = StrictUtf8.GetBytes(input.Text);
+        if (Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() != input.File.ContentHash
+            || bytes.LongLength != input.File.ByteLength || input.Text.Length != input.File.Utf16Length)
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
     }
 

@@ -28,6 +28,30 @@
     markers and follow-up candidates come from the question entry itself or
     from an operator plan file (-PlanPath) whose entries must still satisfy
     the returned-evidence rule above.
+
+    Resume mode (-ResumeFrom <preserved run directory>, requires -PlanPath)
+    continues a saved run without re-running setup or initial queries. The
+    preserved summary and its captures are only read, never modified; all
+    new output goes to a fresh -OutputDir (which must be empty or
+    non-existent and different from the preserved directory). Call counts,
+    follow-up counts, the total cap and stop states are restored from the
+    preserved summary, and only records whose stopReason is
+    'evidence-review-required' or 'no-followup-evidence' and which the plan
+    names with a candidate for that tool are continued. Terminal states
+    (setup-failed, error, timeout, collection-incomplete, unsupported,
+    sufficiency, cap, total-cap) are never resumed.
+    Corpus pins, copies, questions, initial texts, tool builds and budgets
+    are validated against the preserved run; missing captures (query and
+    setup), count or total mismatches, capture metrics recomputed from the
+    files, and call/stopReason inconsistencies reject the resume. Setup
+    capture paths are rebased to the new directory like query captures.
+    A re-resume from a resume output never re-executes an
+    already-executed call: used follow-up selectors are seeded from the
+    preserved records. A seeded record whose plan markers are already
+    satisfied by the preserved evidence stops as 'sufficiency' without a
+    further call. Fresh summaries record their budgets so a later resume
+    compares them exactly; a legacy summary without budgets metadata may
+    only resume with the protocol defaults, recorded as unverified.
 #>
 [CmdletBinding()]
 param(
@@ -37,6 +61,7 @@ param(
     [string]$CorpusSpecPath = '',
     [string]$QuestionsPath = '',
     [string]$PlanPath = '',
+    [string]$ResumeFrom = '',
     [string]$OutputDir = '',
     [int]$MaxTotalCalls = 36,
     [int]$MaxFollowups = 2,
@@ -135,9 +160,309 @@ if ($PlanPath) {
     }
 }
 
+if ($ResumeFrom -and $SkipSetup) {
+    throw "Cannot combine -ResumeFrom with -SkipSetup; resume never runs setup."
+}
+if ($ResumeFrom -and $ListOnly) {
+    throw "Cannot combine -ResumeFrom with -ListOnly."
+}
+if ($ResumeFrom -and -not $PlanPath) {
+    throw "Resume requires -PlanPath."
+}
+if ($ResumeFrom) {
+    $ResumeFrom = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ResumeFrom)
+    if (-not (Test-Path (Join-Path $ResumeFrom 'run-summary.json'))) {
+        throw "No run-summary.json under resume directory '$ResumeFrom'."
+    }
+}
+
+function Get-ResumeFileHash {
+    param([Parameter(Mandatory)] [string]$Path)
+    return (Get-FileHash -Path $Path -Algorithm SHA256).Hash
+}
+
+function Initialize-ResumeState {
+    param(
+        [Parameter(Mandatory)] [string]$ResumeDir,
+        [Parameter(Mandatory)] $Spec,
+        [Parameter(Mandatory)] $CorpusQuestions,
+        [Parameter(Mandatory)] $Plan,
+        [Parameter(Mandatory)] $Pins,
+        [Parameter(Mandatory)] $BuildInfo,
+        [Parameter(Mandatory)] [string]$OutputDir,
+        [Parameter(Mandatory)] [int]$MaxTotalCalls,
+        [Parameter(Mandatory)] [int]$MaxFollowups,
+        [Parameter(Mandatory)] [int]$QueryTimeoutSeconds,
+        [Parameter(Mandatory)] [int]$SetupTimeoutSeconds,
+        [Parameter(Mandatory)] [string]$PlanPath
+    )
+    $summaryPath = Join-Path $ResumeDir 'run-summary.json'
+    $originalSha = Get-ResumeFileHash $summaryPath
+    $preserved = Get-Content $summaryPath -Raw | ConvertFrom-Json
+    if ($preserved.schemaVersion -ne 1) {
+        throw "Unsupported preserved summary schemaVersion '$($preserved.schemaVersion)'; expected 1."
+    }
+    foreach ($field in 'corpus','environment','setup','questions','totalQueryCalls') {
+        if (-not $preserved.PSObject.Properties[$field]) {
+            throw "Preserved summary is missing '$field'."
+        }
+    }
+    foreach ($field in 'id','repository','commit','sharpdepsTarget','configuration') {
+        if ($preserved.corpus.$field -ne $Spec.$field) {
+            throw "Preserved corpus $field '$($preserved.corpus.$field)' does not match current spec '$($Spec.$field)'."
+        }
+    }
+    if ($preserved.corpus.PSObject.Properties['copies']) {
+        foreach ($copyProp in $Spec.copies.PSObject.Properties) {
+            if ($preserved.corpus.copies.PSObject.Properties[$copyProp.Name] -and $preserved.corpus.copies.($copyProp.Name) -ne $copyProp.Value) {
+                throw "Preserved corpus copy '$($copyProp.Name)' '$($preserved.corpus.copies.($copyProp.Name))' does not match current spec '$($copyProp.Value)'."
+            }
+        }
+    }
+    if ($preserved.environment.codegraphVersion -ne $Pins.codegraph.version) {
+        throw "Preserved CodeGraph version '$($preserved.environment.codegraphVersion)' does not match current '$($Pins.codegraph.version)'."
+    }
+    if ($preserved.environment.sharpdepsSourceCommit -ne $BuildInfo.sourceCommit) {
+        throw "Preserved SharpDeps build '$($preserved.environment.sharpdepsSourceCommit)' does not match current '$($BuildInfo.sourceCommit)'."
+    }
+    if ($preserved.environment.sharpdepsSdk -ne $BuildInfo.sdkVersion) {
+        throw "Preserved SharpDeps SDK '$($preserved.environment.sharpdepsSdk)' does not match current '$($BuildInfo.sdkVersion)'."
+    }
+    $preservedBudgets = $null
+    if ($preserved.PSObject.Properties['resume'] -and $preserved.resume.PSObject.Properties['budgets']) {
+        $preservedBudgets = $preserved.resume.budgets
+    }
+    elseif ($preserved.PSObject.Properties['budgets']) {
+        $preservedBudgets = $preserved.budgets
+    }
+    if ($preservedBudgets) {
+        if ($preservedBudgets.maxTotalCalls -ne $MaxTotalCalls -or $preservedBudgets.maxFollowups -ne $MaxFollowups -or $preservedBudgets.queryTimeoutSeconds -ne $QueryTimeoutSeconds -or $preservedBudgets.setupTimeoutSeconds -ne $SetupTimeoutSeconds) {
+            throw "Resume budgets do not match the preserved run's budgets."
+        }
+        $preservedBudgetsVerified = $true
+    }
+    elseif ($MaxTotalCalls -ne 36 -or $MaxFollowups -ne 2 -or $QueryTimeoutSeconds -ne 300 -or $SetupTimeoutSeconds -ne 1800) {
+        throw "Resuming a summary without budgets metadata requires the protocol budgets (36 total calls, 2 follow-ups, 300s query, 1800s setup)."
+    }
+    else {
+        # Legacy summaries predate persisted budgets; the defaults
+        # requirement above is the explicit policy, recorded as
+        # unverified in the new summary rather than silently assumed.
+        $preservedBudgetsVerified = $false
+    }
+    $currentIds = @($CorpusQuestions.questions | ForEach-Object { $_.id })
+    $preservedIds = @($preserved.questions | ForEach-Object { $_.id })
+    if (($currentIds -join ',') -ne ($preservedIds -join ',')) {
+        throw "Preserved question ids '$($preservedIds -join ',')' do not match current '$($currentIds -join ',')'."
+    }
+    $questionById = @{}
+    foreach ($q in $CorpusQuestions.questions) { $questionById[$q.id] = $q }
+    $setupFailed = @{ codegraph = $false; sharpdeps = $false }
+    foreach ($tool in 'codegraph','sharpdeps') {
+        foreach ($rec in $preserved.setup.$tool) {
+            if ($rec.timedOut -or $rec.exitCode -ne 0 -or -not $rec.collectionComplete) {
+                $setupFailed[$tool] = $true
+            }
+        }
+    }
+    foreach ($tool in 'codegraph','sharpdeps') {
+        foreach ($rec in $preserved.setup.$tool) {
+            foreach ($pathField in 'stdoutPath','stderrPath') {
+                if (-not $rec.PSObject.Properties[$pathField] -or -not $rec.$pathField) { continue }
+                $leaf = Split-Path $rec.$pathField -Leaf
+                if (-not (Test-Path (Join-Path $ResumeDir $leaf))) { throw "Preserved setup capture '$leaf' for '$tool' is missing." }
+                $parent = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Split-Path $rec.$pathField -Parent))
+                if ($parent -ne $ResumeDir) { throw "Preserved setup capture path '$($rec.$pathField)' does not live beside the preserved summary." }
+            }
+        }
+    }
+    $stdoutCache = @{}
+    $totalCalls = 0
+    foreach ($q in $preserved.questions) {
+        foreach ($tool in 'sharpdeps','codegraph') {
+            $rec = $q.tools.$tool
+            if (-not $rec) { throw "Preserved summary is missing record for '$($q.id)/$tool'." }
+            $calls = @($rec.calls)
+            $totalCalls += $calls.Count
+            if ($rec.stopReason -eq 'setup-failed') {
+                if ($calls.Count -ne 0 -or $rec.totalBytes -ne 0 -or $rec.totalUnits -ne 0) {
+                    throw "Preserved setup-failed record '$($q.id)/$tool' carries calls or totals."
+                }
+                continue
+            }
+            if ($calls.Count -eq 0) {
+                if ($rec.stopReason -eq 'total-cap' -and $rec.totalBytes -eq 0 -and $rec.totalUnits -eq 0 -and $preserved.totalQueryCalls -eq $MaxTotalCalls) {
+                    continue
+                }
+                throw "Preserved record '$($q.id)/$tool' has no calls but stopReason '$($rec.stopReason)'."
+            }
+            if (($calls.Count - 1) -gt $MaxFollowups) { throw "Preserved record '$($q.id)/$tool' exceeds the follow-up cap." }
+            $expectedBytes = 0
+            $expectedUnits = 0
+            $priorEvidence = ''
+            for ($i = 0; $i -lt $calls.Count; $i++) {
+                $call = $calls[$i]
+                if ($call.index -ne $i) { throw "Preserved call index mismatch in '$($q.id)/$tool'." }
+                $expectedKind = if ($i -eq 0) { 'initial' } else { 'followup' }
+                if ($call.kind -ne $expectedKind) { throw "Preserved call kind mismatch in '$($q.id)/$tool' at index $i." }
+                if ($i -eq 0) {
+                    $initialText = if ($tool -eq 'sharpdeps') { $questionById[$q.id].initialNativeArguments.sharpdepsTerm } else { $questionById[$q.id].initialNativeArguments.codegraphExplore }
+                    if ($call.text -ne $initialText) { throw "Preserved initial text in '$($q.id)/$tool' does not match the current questions file." }
+                }
+                else {
+                    if (-not $priorEvidence.Contains($call.text)) { throw "Preserved follow-up text in '$($q.id)/$tool' at index $i does not appear in prior evidence." }
+                }
+                foreach ($pathField in 'stdoutPath','stderrPath') {
+                    $stored = $call.$pathField
+                    if (-not $stored) { throw "Preserved call in '$($q.id)/$tool' is missing $pathField." }
+                    $leaf = Split-Path $stored -Leaf
+                    if (-not (Test-Path (Join-Path $ResumeDir $leaf))) { throw "Preserved capture '$leaf' for '$($q.id)/$tool' is missing." }
+                    $parent = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Split-Path $stored -Parent))
+                    if ($parent -ne $ResumeDir) { throw "Preserved capture path '$stored' does not live beside the preserved summary." }
+                }
+                $text = [System.IO.File]::ReadAllText((Join-Path $ResumeDir (Split-Path $call.stdoutPath -Leaf)), [System.Text.Encoding]::UTF8)
+                $stdoutCache["$($q.id)|$tool|$i"] = $text
+                $actualBytes = (Get-Item (Join-Path $ResumeDir (Split-Path $call.stdoutPath -Leaf))).Length
+                $actualUnits = $text.Length
+                if ($actualBytes -ne $call.stdoutBytes -or $actualUnits -ne $call.stdoutUtf16Units) { throw "Preserved capture metrics mismatch in '$($q.id)/$tool' at index $i." }
+                if ($i -lt ($calls.Count - 1)) {
+                    if ($call.exitCode -ne 0 -or -not $call.collectionComplete -or $call.timedOut) { throw "Preserved non-final call in '$($q.id)/$tool' at index $i did not succeed." }
+                }
+                else {
+                    $failedProcess = ($call.exitCode -ne 0 -or $call.timedOut -or -not $call.collectionComplete)
+                    if ($failedProcess) {
+                        $expectedStop = if ($call.timedOut) { 'timeout' } elseif (-not $call.collectionComplete) { 'collection-incomplete' } else { 'error' }
+                        if ($rec.stopReason -ne $expectedStop) { throw "Preserved final call in '$($q.id)/$tool' failed but stopReason is '$($rec.stopReason)', not '$expectedStop'." }
+                    }
+                    elseif ($rec.stopReason -notin 'evidence-review-required','no-followup-evidence','sufficiency','cap','unsupported','total-cap') {
+                        throw "Preserved final call in '$($q.id)/$tool' succeeded but stopReason is '$($rec.stopReason)'."
+                    }
+                }
+                $isLast = ($i -eq ($calls.Count - 1))
+                # Totals are added only for calls that pass every loop check.
+                # A terminating timeout/collection-incomplete/error call never
+                # contributed; an unsupported call did (its totals are added
+                # before the unsupported check), as did every passing call.
+                $terminatedWithoutTotals = $isLast -and ($rec.stopReason -in 'timeout','collection-incomplete','error')
+                if (-not $terminatedWithoutTotals) {
+                    if ($call.exitCode -eq 0 -and $call.collectionComplete -and -not $call.timedOut) {
+                        $expectedBytes += $call.stdoutBytes
+                        $expectedUnits += $call.stdoutUtf16Units
+                        $priorEvidence += $text
+                    }
+                }
+            }
+            if ($rec.totalBytes -ne $expectedBytes -or $rec.totalUnits -ne $expectedUnits) {
+                throw "Preserved totals mismatch in '$($q.id)/$tool'."
+            }
+        }
+    }
+    if ($totalCalls -ne $preserved.totalQueryCalls) { throw "Preserved totalQueryCalls '$($preserved.totalQueryCalls)' does not match the sum of calls '$totalCalls'." }
+    if ($preserved.totalQueryCalls -gt $MaxTotalCalls) { throw "Preserved totalQueryCalls exceeds the total cap." }
+    $continued = @{}
+    foreach ($qid in @($Plan.Keys)) {
+        $entry = $Plan[$qid]
+        $pq = @($preserved.questions | Where-Object { $_.id -eq $qid })
+        if ($pq.Count -ne 1) { throw "Plan question '$qid' is not in the preserved summary." }
+        if (-not $entry.PSObject.Properties['followupCandidates'] -or -not $entry.followupCandidates) { continue }
+        foreach ($cand in $entry.followupCandidates) {
+            $tool = $cand.tool
+            if ($tool -notin 'sharpdeps','codegraph') { throw "Plan candidate tool '$tool' is not a comparison tool." }
+            $rec = $pq[0].tools.$tool
+            if (-not $rec) { throw "Preserved summary is missing record for '$qid/$tool'." }
+            if ($setupFailed[$tool]) { throw "Cannot resume '$qid/$tool': its setup failed in the preserved run." }
+            if ($rec.stopReason -notin 'evidence-review-required','no-followup-evidence') { throw "Cannot resume '$qid/$tool': stopReason is '$($rec.stopReason)', not a resumable state ('evidence-review-required' or 'no-followup-evidence')." }
+            $continued["$qid|$tool"] = $true
+        }
+    }
+    $copied = @()
+    foreach ($file in Get-ChildItem $ResumeDir -File | Where-Object { $_.Name -match '\.(stdout\.txt|stderr\.txt|result\.json)$' }) {
+        Copy-Item $file.FullName (Join-Path $OutputDir $file.Name) -Force
+        $copied += $file.Name
+    }
+    foreach ($name in $copied) {
+        $a = (Get-FileHash (Join-Path $ResumeDir $name) -Algorithm SHA256).Hash
+        $b = (Get-FileHash (Join-Path $OutputDir $name) -Algorithm SHA256).Hash
+        if ($a -ne $b) { throw "Copied capture '$name' does not match the preserved file." }
+    }
+    if ((Get-ResumeFileHash $summaryPath) -ne $originalSha) {
+        throw "Preserved summary changed during resume preparation; refusing to continue."
+    }
+    $carried = @{}
+    $seeds = @{}
+    foreach ($q in $preserved.questions) {
+        foreach ($tool in 'sharpdeps','codegraph') {
+            $key = "$($q.id)|$tool"
+            $rec = $q.tools.$tool
+            $copy = [ordered]@{ calls = @(); stopReason = $rec.stopReason; totalBytes = $rec.totalBytes; totalUnits = $rec.totalUnits }
+            foreach ($call in @($rec.calls)) {
+                $cc = [ordered]@{}
+                foreach ($prop in $call.PSObject.Properties) { $cc[$prop.Name] = $prop.Value }
+                $cc.stdoutPath = Join-Path $OutputDir (Split-Path $call.stdoutPath -Leaf)
+                $cc.stderrPath = Join-Path $OutputDir (Split-Path $call.stderrPath -Leaf)
+                $copy.calls += $cc
+            }
+            $carried[$key] = $copy
+            if ($continued.ContainsKey($key)) {
+                $evidence = ''
+                for ($i = 0; $i -lt @($rec.calls).Count; $i++) { $evidence += $stdoutCache["$key|$i"] }
+                $used = @(@($rec.calls) | Where-Object { $_.kind -eq 'followup' } | ForEach-Object { $_.text })
+                $seedCalls = @() + $copy.calls
+                $seed = [ordered]@{ calls = $seedCalls; stopReason = $null; totalBytes = $rec.totalBytes; totalUnits = $rec.totalUnits }
+                $seeds[$key] = @{ Record = $seed; Evidence = $evidence; UsedCandidates = $used; FollowupsUsed = $used.Count; CallIndex = @($rec.calls).Count }
+            }
+        }
+    }
+    $planSha = (Get-FileHash $PlanPath -Algorithm SHA256).Hash
+    $originalSha2 = $originalSha
+    if ($preserved.PSObject.Properties['resume'] -and $preserved.resume.PSObject.Properties['originalSummarySha256']) {
+        $originalSha2 = $preserved.resume.originalSummarySha256
+    }
+    $rebasedSetup = [ordered]@{ codegraph = @(); sharpdeps = @() }
+    foreach ($tool in 'codegraph','sharpdeps') {
+        foreach ($rec in @($preserved.setup.$tool)) {
+            $rc = [ordered]@{}
+            foreach ($prop in $rec.PSObject.Properties) { $rc[$prop.Name] = $prop.Value }
+            foreach ($pathField in 'stdoutPath','stderrPath') {
+                if ($rc[$pathField]) { $rc[$pathField] = Join-Path $OutputDir (Split-Path $rc[$pathField] -Leaf) }
+            }
+            $rebasedSetup[$tool] += $rc
+        }
+    }
+    $summaryBase = [ordered]@{
+        schemaVersion = 1
+        startedAtUtc = [DateTime]::UtcNow.ToString('o')
+        corpus = $preserved.corpus
+        environment = $preserved.environment
+        setup = $rebasedSetup
+        questions = @()
+        totalQueryCalls = $preserved.totalQueryCalls
+        resume = [ordered]@{
+            resumedFromDirectory = $ResumeDir
+            resumedFromSummarySha256 = $originalSha
+            originalSummarySha256 = $originalSha2
+            planFileName = Split-Path $PlanPath -Leaf
+            planSha256 = $planSha
+            budgets = [ordered]@{ maxTotalCalls = $MaxTotalCalls; maxFollowups = $MaxFollowups; queryTimeoutSeconds = $QueryTimeoutSeconds; setupTimeoutSeconds = $SetupTimeoutSeconds }
+            preservedBudgetsVerified = $preservedBudgetsVerified
+            resumedAtUtc = [DateTime]::UtcNow.ToString('o')
+        }
+    }
+    return @{ Summary = $summaryBase; SetupFailed = $setupFailed; Continued = $continued; Seeds = $seeds; Carried = $carried }
+}
+
 if (-not $OutputDir) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $OutputDir = Join-Path $Root "o/run-$($spec.id)-$stamp"
+}
+$OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
+if ($ResumeFrom) {
+    if ($OutputDir -eq $ResumeFrom) {
+        throw "ResumeFrom and OutputDir must differ; original outputs are never modified."
+    }
+    if ((Test-Path $OutputDir) -and ((Get-ChildItem $OutputDir -Force | Measure-Object).Count -gt 0)) {
+        throw "Resume OutputDir must be empty or non-existent; refusing to mix outputs."
+    }
 }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
@@ -208,6 +533,13 @@ foreach ($prop in $pins.codegraph.processEnvironment.PSObject.Properties) {
     $cgEnv[$prop.Name] = $prop.Value
 }
 
+$resumeState = $null
+if ($ResumeFrom) {
+    $resumeState = Initialize-ResumeState -ResumeDir $ResumeFrom -Spec $spec -CorpusQuestions $corpusQuestions -Plan $plan -Pins $pins -BuildInfo $buildInfo -OutputDir $OutputDir -MaxTotalCalls $MaxTotalCalls -MaxFollowups $MaxFollowups -QueryTimeoutSeconds $QueryTimeoutSeconds -SetupTimeoutSeconds $SetupTimeoutSeconds -PlanPath $PlanPath
+    $summary = $resumeState.Summary
+    $setupFailed = $resumeState.SetupFailed
+}
+else {
 $summary = [ordered]@{
     schemaVersion = 1
     startedAtUtc  = [DateTime]::UtcNow.ToString('o')
@@ -229,11 +561,13 @@ $summary = [ordered]@{
     setup         = [ordered]@{ codegraph = @(); sharpdeps = @() }
     questions     = @()
     totalQueryCalls = 0
+    budgets       = [ordered]@{ maxTotalCalls = $MaxTotalCalls; maxFollowups = $MaxFollowups; queryTimeoutSeconds = $QueryTimeoutSeconds; setupTimeoutSeconds = $SetupTimeoutSeconds }
 }
 
 $setupFailed = @{ codegraph = $false; sharpdeps = $false }
+}
 
-if (-not $SkipSetup) {
+if (-not $SkipSetup -and -not $ResumeFrom) {
     $cgInit = Invoke-ComparisonQuery -Tool 'codegraph' -FilePath $cgFile `
         -Arguments ($cgPrefixArgs + $CodeGraphInitArguments + @($spec.copies.codegraph)) `
         -WorkingDirectory $Root -Environment $cgEnv `
@@ -302,18 +636,48 @@ function Get-QuestionGuidance {
 function Invoke-ToolQuestion {
     param(
         [Parameter(Mandatory)] $Question,
-        [Parameter(Mandatory)] [string]$Tool
+        [Parameter(Mandatory)] [string]$Tool,
+        $SeedRecord = $null,
+        [string]$SeedEvidence = '',
+        [string[]]$SeedUsedCandidates = @(),
+        [int]$SeedFollowupsUsed = 0,
+        [int]$SeedCallIndex = 0
     )
-    $record = [ordered]@{ calls = @(); stopReason = $null; totalBytes = 0; totalUnits = 0 }
-    if ($setupFailed[$Tool]) {
-        $record.stopReason = 'setup-failed'
-        return $record
+    if ($SeedRecord) {
+        $record = $SeedRecord
+        $accumulated = $SeedEvidence
+        $usedCandidates = @($SeedUsedCandidates)
+        $followupsUsed = $SeedFollowupsUsed
+        $callIndex = $SeedCallIndex
+    }
+    else {
+        $record = [ordered]@{ calls = @(); stopReason = $null; totalBytes = 0; totalUnits = 0 }
+        if ($setupFailed[$Tool]) {
+            $record.stopReason = 'setup-failed'
+            return $record
+        }
+        $accumulated = ''
+        $usedCandidates = @()
+        $followupsUsed = 0
+        $callIndex = 0
     }
     $guidance = Get-QuestionGuidance $Question $Tool
-    $accumulated = ''
-    $usedCandidates = @()
-    $followupsUsed = 0
-    $callIndex = 0
+    if ($SeedRecord -and $guidance.markers.Count -gt 0) {
+        # A seeded record whose plan markers are already satisfied by the
+        # preserved evidence needs no further call; without this check
+        # the loop would execute one follow-up before noticing.
+        $seedSufficient = $true
+        foreach ($marker in $guidance.markers) {
+            if (-not $accumulated.Contains($marker)) {
+                $seedSufficient = $false
+                break
+            }
+        }
+        if ($seedSufficient) {
+            $record.stopReason = 'sufficiency'
+            return $record
+        }
+    }
     while ($true) {
         if ($summary.totalQueryCalls -ge $MaxTotalCalls) {
             $record.stopReason = 'total-cap'
@@ -332,6 +696,15 @@ function Invoke-ToolQuestion {
         }
         else {
             $kind = 'followup'
+            # A seeded follow-up count already at the cap must stop before
+            # any further call; without this, a re-resume could execute one
+            # call past the cap (the end-of-loop check only fires after a
+            # call). In a fresh run this branch is unreachable: the
+            # end-of-loop cap check breaks before the next iteration.
+            if ($followupsUsed -ge $MaxFollowups) {
+                $record.stopReason = 'cap'
+                break
+            }
             $next = $null
             foreach ($candidate in $guidance.candidates) {
                 if ($usedCandidates -contains $candidate.text) {
@@ -453,7 +826,19 @@ function Invoke-ToolQuestion {
 foreach ($question in $corpusQuestions.questions) {
     $qRecord = [ordered]@{ id = $question.id; tools = [ordered]@{} }
     foreach ($tool in 'sharpdeps', 'codegraph') {
-        $qRecord.tools[$tool] = Invoke-ToolQuestion $question $tool
+        if ($ResumeFrom) {
+            $key = "$($question.id)|$tool"
+            if ($resumeState.Continued.ContainsKey($key)) {
+                $seed = $resumeState.Seeds[$key]
+                $qRecord.tools[$tool] = Invoke-ToolQuestion -Question $question -Tool $tool -SeedRecord $seed.Record -SeedEvidence $seed.Evidence -SeedUsedCandidates $seed.UsedCandidates -SeedFollowupsUsed $seed.FollowupsUsed -SeedCallIndex $seed.CallIndex
+            }
+            else {
+                $qRecord.tools[$tool] = $resumeState.Carried[$key]
+            }
+        }
+        else {
+            $qRecord.tools[$tool] = Invoke-ToolQuestion $question $tool
+        }
     }
     $summary.questions += $qRecord
 }

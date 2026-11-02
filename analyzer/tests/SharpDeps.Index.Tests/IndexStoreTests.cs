@@ -402,7 +402,7 @@ public sealed class IndexStoreTests
             Assert.Equal(1, pinnedReader.Snapshot().Graph.Generation);
         }
         // The pinned reader prevented close-time checkpoint. Its readonly close preserves the WAL.
-        Assert.Equal(1, BinaryPrimitives.ReadInt32BigEndian(File.ReadAllBytes(fixture.IndexPath).AsSpan(60, 4)));
+        Assert.Equal(IndexDatabase.CurrentSchemaVersion, BinaryPrimitives.ReadInt32BigEndian(File.ReadAllBytes(fixture.IndexPath).AsSpan(60, 4)));
         File.Delete(fixture.IndexPath + "-shm");
         var database = File.ReadAllBytes(fixture.IndexPath);
         var wal = File.ReadAllBytes(fixture.IndexPath + "-wal");
@@ -570,6 +570,75 @@ public sealed class IndexStoreTests
                 await process.WaitForExitAsync(cleanupTimeout.Token);
             }
         }
+    }
+
+    [Fact]
+    public void GeneratedBodyRoundTripsAndNewIndexesUseSchema2()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = WithGeneratedBody(fixture.Snapshot(1, "Before"), "public class Generated { } // café 😀\n");
+        using (var writer = fixture.Writer())
+        {
+            Assert.Equal(2, writer.SchemaVersion);
+            writer.Commit(IndexStage.Create(snapshot));
+        }
+        using var reader = fixture.Reader();
+        var saved = reader.Snapshot();
+        Assert.Equal(Assert.Single(snapshot.StoredGeneratedBodies), Assert.Single(saved.StoredGeneratedBodies));
+        Assert.Equal(Assert.Single(snapshot.Files, file => file.Kind == IndexFileKinds.GeneratedSource),
+            Assert.Single(saved.Files, file => file.Kind == IndexFileKinds.GeneratedSource));
+    }
+
+    [Fact]
+    public void Schema1IndexRejectsGeneratedBodiesAndKeepsTheOldSnapshot()
+    {
+        using var fixture = new StoreFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
+            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), 1);
+        }
+        using var writer = fixture.Writer();
+        Assert.Equal(1, writer.SchemaVersion);
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        var pending = WithGeneratedBody(fixture.Snapshot(2, "After"), "public class Generated { }\n");
+        AssertCode("INDEX_SCHEMA_MIGRATION_REQUIRED", () => writer.Commit(IndexStage.Create(pending)));
+
+        using var reader = fixture.Reader();
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+        Assert.Empty(reader.Snapshot().StoredGeneratedBodies);
+        Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
+        Assert.Empty(reader.Search("After"));
+    }
+
+    [Fact]
+    public void FailedCommitPreservesTheCommittedGeneratedBody()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        var original = WithGeneratedBody(fixture.Snapshot(1, "Before"), "public class Original { }\n");
+        writer.Commit(IndexStage.Create(original));
+        var pending = WithGeneratedBody(fixture.Snapshot(2, "After"), "public class Replacement { }\n");
+        writer.BeforePublish = () => throw new InvalidOperationException("Injected publication failure.");
+        var error = Assert.Throws<InvalidOperationException>(() => writer.Commit(IndexStage.Create(pending)));
+        Assert.Equal("Injected publication failure.", error.Message);
+
+        using var reader = fixture.Reader();
+        var saved = reader.Snapshot();
+        Assert.Equal(1, saved.Graph.Generation);
+        Assert.Equal(Assert.Single(original.StoredGeneratedBodies), Assert.Single(saved.StoredGeneratedBodies));
+        Assert.Equal(Assert.Single(original.Files, file => file.Kind == IndexFileKinds.GeneratedSource),
+            Assert.Single(saved.Files, file => file.Kind == IndexFileKinds.GeneratedSource));
+    }
+
+    private static IndexSnapshot WithGeneratedBody(IndexSnapshot snapshot, string text)
+    {
+        const string path = "generated/App/net10.0_Debug/Generator/Generated.g.cs";
+        var bytes = StoreFixture.Utf8.GetBytes(text);
+        var file = new IndexFile(path, path, IndexFileKinds.GeneratedSource,
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.Length, text.Length);
+        return snapshot with { Files = [.. snapshot.Files, file], GeneratedBodies = [new(path, text)] };
     }
 
     private static IndexSnapshot HttpGetSnapshot(StoreFixture fixture)

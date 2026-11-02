@@ -180,6 +180,7 @@ public sealed class ExplorationService
         private int omissionDisplayLimit = 8;
         private string? cachedSourceId;
         private string? cachedSourceText;
+        private readonly Dictionary<string, string> generatedBodies;
         private bool cancelled;
         private QueryFreshness freshness = new("unverified", null, [], ["complete inventory/configuration not checked"]);
         private ExploreOwnerObservation? ownerObservation;
@@ -191,6 +192,7 @@ public sealed class ExplorationService
         {
             this.owner = owner; this.index = index; this.workspace = workspace; this.trusted = trusted;
             this.request = request; originalToken = token; this.timer = timer; this.clock = clock;
+            generatedBodies = owner.saved.StoredGeneratedBodies.ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
             project = request.ProjectId; variant = request.VariantId;
         }
 
@@ -1051,13 +1053,24 @@ public sealed class ExplorationService
             catch (QuerySourceException error) { Failed(error.Code, candidate, failedFiles); }
         }
 
+        /// <summary>
+        /// The bytes behind one input: the verified file on disk for physical inputs,
+        /// the verified stored body for generated inputs. A virtual generated path is
+        /// never resolved against the filesystem.
+        /// </summary>
+        private byte[] ReadSource(IndexFile file)
+            => QueryWorkspace.IsGenerated(file)
+                ? workspace!.ReadStored(file, generatedBodies.TryGetValue(file.SourceId, out var body)
+                    ? body : throw new QuerySourceException("SOURCE_CHANGED_SINCE_SNAPSHOT", file.RelativePath), timer.Token)
+                : workspace!.Read(file, timer.Token);
+
         private ExploreUnit ReadUnit(IndexFile file, HarnessLocation location, HarnessRawSpan span,
             IReadOnlyList<string> symbols, string role)
         {
             if (cachedSourceId != file.SourceId)
             {
                 cachedSourceText = null; cachedSourceId = null;
-                cachedSourceText = new UTF8Encoding(false, true).GetString(workspace!.Read(file, timer.Token));
+                cachedSourceText = new UTF8Encoding(false, true).GetString(ReadSource(file));
                 cachedSourceId = file.SourceId;
             }
             var text = cachedSourceText!;

@@ -11,13 +11,16 @@ public sealed class IndexWriter : IDisposable
 {
     private readonly FileStream lease;
     private readonly SqliteConnection connection;
+    private readonly int schemaVersion;
     private readonly object gate = new();
     private bool disposed;
-    private IndexWriter(string root, string path, Guid workspace, FileStream lease, SqliteConnection connection)
-    { CanonicalRoot=root;IndexPath=path;WorkspaceUuid=workspace;this.lease=lease;this.connection=connection; }
+    private IndexWriter(string root, string path, Guid workspace, FileStream lease, SqliteConnection connection, int schemaVersion)
+    { CanonicalRoot=root;IndexPath=path;WorkspaceUuid=workspace;this.lease=lease;this.connection=connection;this.schemaVersion=schemaVersion; }
     public string CanonicalRoot { get; }
     public string IndexPath { get; }
     public Guid WorkspaceUuid { get; }
+    /// <summary>The schema of the opened index: 1 for an existing index, the current schema for a new one.</summary>
+    public int SchemaVersion => schemaVersion;
     internal Action? BeforePublish { get; set; }
 
     public static IndexWriter Open(string canonicalRoot, string indexPath, Guid workspaceUuid, bool isTrusted)
@@ -37,29 +40,29 @@ public sealed class IndexWriter : IDisposable
         try
         {
             using var process=Process.GetCurrentProcess();
-            var owner=new IndexWriterOwner(Environment.ProcessId,process.StartTime.ToUniversalTime().ToString("o"),root,path,IndexDatabase.SchemaVersion);
-            lease.SetLength(0); JsonSerializer.Serialize(lease,owner,IndexStage.Json);lease.Flush(true);
             var existing=File.Exists(path);
+            var schemaVersion=existing ? IndexDatabase.InspectHeader(path) : IndexDatabase.CurrentSchemaVersion;
+            var owner=new IndexWriterOwner(Environment.ProcessId,process.StartTime.ToUniversalTime().ToString("o"),root,path,schemaVersion);
+            lease.SetLength(0); JsonSerializer.Serialize(lease,owner,IndexStage.Json);lease.Flush(true);
             if (existing)
             {
-                IndexDatabase.InspectHeader(path);
                 // Without SHM, opening a WAL database could recover an unsupported schema before validation.
                 if (!File.Exists(path+"-wal") || !File.Exists(path+"-shm"))
                     throw new IndexStoreException("INDEX_RECOVERY_REQUIRED", "Keep the existing WAL index intact and rebuild into a separate index.");
                 // A newer schema can be in WAL even before its header is checkpointed.
                 using var probe=IndexDatabase.Open(path,readOnly:true);
-                IndexDatabase.CheckMetadata(probe,null,workspace);
+                schemaVersion=IndexDatabase.CheckMetadata(probe,null,workspace);
             }
             connection=IndexDatabase.Open(path,readOnly:false);
-            if (existing) IndexDatabase.CheckMetadata(connection,null,workspace);
+            if (existing) schemaVersion=IndexDatabase.CheckMetadata(connection,null,workspace);
             if (!string.Equals((string?)IndexDatabase.Scalar(connection,null,"PRAGMA journal_mode=WAL;"),"wal",StringComparison.OrdinalIgnoreCase))
                 throw new IndexStoreException("INDEX_WAL_UNAVAILABLE", "This index requires WAL mode on a local filesystem.");
             IndexDatabase.Execute(connection,null,"PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000;");
-            if (!existing) IndexDatabase.Create(connection,workspace);
+            if (!existing) IndexDatabase.Create(connection,workspace,schemaVersion);
             if (!OperatingSystem.IsWindows())
                 foreach (var file in new[]{path,path+"-wal",path+"-shm",path+".writer.lock"})
                     if (File.Exists(file)) File.SetUnixFileMode(file,UnixFileMode.UserRead|UnixFileMode.UserWrite);
-            return new IndexWriter(root,path,workspaceUuid,lease,connection);
+            return new IndexWriter(root,path,workspaceUuid,lease,connection,schemaVersion);
         }
         catch { connection?.Dispose();lease.Dispose();throw; }
     }
@@ -73,9 +76,12 @@ public sealed class IndexWriter : IDisposable
             ObjectDisposedException.ThrowIf(disposed,this);
             var snapshot=stage.Materialize(); var graph=snapshot.Graph; var generation=graph.Generation;
             IndexSnapshotValidator.Validate(snapshot);
+            var generatedBodies=snapshot.StoredGeneratedBodies.ToDictionary(body=>body.SourceId,body=>body.Body,StringComparer.Ordinal);
+            if (snapshot.StoredGeneratedBodies.Count != 0 && schemaVersion < IndexDatabase.CurrentSchemaVersion)
+                throw new IndexStoreException("INDEX_SCHEMA_MIGRATION_REQUIRED", "This schema 1 index cannot store generated document bodies; retain it and rebuild into a separate index.");
             if (graph.WorkspaceId!=HarnessIdentity.WorkspaceId(WorkspaceUuid))
                 throw new IndexStoreException("INDEX_WORKSPACE_MISMATCH", "Staging belongs to a different workspace.");
-            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken);
+            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,generatedBodies);
             using var transaction=connection.BeginTransaction();
             var active=IndexDatabase.Scalar(connection,transaction,"SELECT active_generation FROM metadata WHERE singleton=1");
             if (active is long prior && generation<=prior)
@@ -84,6 +90,7 @@ public sealed class IndexWriter : IDisposable
                 ("$snapshot",graph.SnapshotId),("$manifest",stage.ManifestHash),("$coverage",graph.Coverage.ToString()),
                 ("$utc",DateTimeOffset.UtcNow.ToString("o")),("$json",JsonSerializer.Serialize(graph,HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));
             foreach (var file in snapshot.Files) Execute("INSERT INTO files VALUES($g,$id,$path,$deleted,$json)",("$id",file.SourceId),("$path",file.RelativePath),("$deleted",file.Deleted?1:0),("$json",Serialize(file)));
+            foreach (var body in snapshot.StoredGeneratedBodies) Execute("INSERT INTO generated_bodies VALUES($g,$id,$body)",("$id",body.SourceId),("$body",body.Body));
             foreach (var node in graph.Nodes) Execute("INSERT INTO nodes VALUES($g,$id,$kind,$parent,$json)",("$id",node.Id),("$kind",node.Kind.ToString()),("$parent",node.ParentId),("$json",Serialize(node)));
             foreach (var variant in graph.Variants) Execute("INSERT INTO variants VALUES($g,$id,$project,$json)",("$id",variant.Id),("$project",variant.ProjectId),("$json",Serialize(variant)));
             foreach (var occurrence in graph.SymbolOccurrences) Execute("INSERT INTO occurrences VALUES($g,$id,$logical,$variant,$json)",("$id",occurrence.Id),("$logical",occurrence.LogicalSymbolId),("$variant",occurrence.VariantId),("$json",Serialize(occurrence)));
@@ -106,13 +113,13 @@ public sealed class IndexWriter : IDisposable
             }
             // Test fault injection uses the real boundary after all rows and FTS, before manifest/active publication.
             BeforePublish?.Invoke();
-            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken);
+            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,generatedBodies);
             // The extraction owner can also verify negative inventory and non-root dependencies.
             // Failures roll back rows/FTS before the active generation changes.
             if (verifySelection is not null)
             {
                 verifySelection();
-                IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken);
+                IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,generatedBodies);
             }
             Execute("UPDATE metadata SET active_generation=$g,canonical_root=$root,writer_version='sharpdeps-index/1' WHERE singleton=1",("$root",CanonicalRoot));
             cancellationToken.ThrowIfCancellationRequested();
