@@ -72,3 +72,23 @@ public sealed record ProbeCoverage(
     int Failed,
     int Skipped,
     int Unresolved);
+
+/// <summary>
+/// Records a failure in a probe report that was already produced by the loader.
+/// The loaded diagnostics and limitations are kept: a failed analysis still has to
+/// explain what was read before it failed.
+/// </summary>
+public static class SemanticProbeReportFailure
+{
+    public static SemanticProbeReport WithFailure(this SemanticProbeReport report, string code, string message)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentException.ThrowIfNullOrWhiteSpace(code);
+        ArgumentNullException.ThrowIfNull(message);
+        return report with
+        {
+            Diagnostics = [.. report.Diagnostics, new ProbeDiagnostic(code, message)],
+            Limitations = [.. report.Limitations, new ProbeLimitation(code, message, null)]
+        };
+    }
+}

@@ -4,6 +4,35 @@ using SharpDeps.Analysis.Contracts;
 using SharpDeps.Analysis.Core.Identity;
 
 /// <summary>
+/// A generated document cannot be registered under one stable identity. The code
+/// distinguishes an unidentified generator from an ambiguous identity (and from the
+/// remaining registration conflicts) so a caller can report the cause, not just a
+/// bare failure. It stays an <see cref="InvalidOperationException"/> so existing
+/// callers keep treating it as an unsupported generated input.
+/// </summary>
+public sealed class GeneratedDocumentRegistrationException : InvalidOperationException
+{
+    /// <summary>The generator identity was empty, so the document cannot be keyed.</summary>
+    public const string GeneratorUnidentified = "semantic.generatedDocumentGeneratorUnidentified";
+
+    /// <summary>One workspace tree was claimed by two different generated identities.</summary>
+    public const string IdentityAmbiguous = "semantic.generatedDocumentIdentityAmbiguous";
+
+    /// <summary>One identity was reported with two different bodies.</summary>
+    public const string BodyConflict = "semantic.generatedDocumentBodyConflict";
+
+    /// <summary>Two distinct identities produced the same virtual path.</summary>
+    public const string PathCollision = "semantic.generatedDocumentPathCollision";
+
+    public GeneratedDocumentRegistrationException(string code, string message)
+        : base(message)
+        => Code = code;
+
+    /// <summary>The diagnostic code naming the cause.</summary>
+    public string Code { get; }
+}
+
+/// <summary>
 /// Registers the source documents a symbol index refers to. Document ids match the
 /// Quick analyzer's rule (workspace root + relative path + origin), so a file has one
 /// id whichever analyzer produced it.
@@ -104,7 +133,8 @@ public sealed class SourceDocumentRegistry
         ArgumentNullException.ThrowIfNull(generatorIdentity);
         ArgumentNullException.ThrowIfNull(hintName);
         if (string.IsNullOrWhiteSpace(generatorIdentity))
-            throw new InvalidOperationException(
+            throw new GeneratedDocumentRegistrationException(
+                GeneratedDocumentRegistrationException.GeneratorUnidentified,
                 $"The generator of the generated document '{hintName}' in '{projectName}' could not be identified"
                 + (fullPath is null ? string.Empty : $" from its generated file path '{fullPath}'")
                 + "; refusing to index it.");
@@ -112,7 +142,8 @@ public sealed class SourceDocumentRegistry
         if (_generatedByIdentity.TryGetValue(identityKey, out var existing))
         {
             if (existing.ContentHash != contentHash || existing.ByteLength != byteLength)
-                throw new InvalidOperationException(
+                throw new GeneratedDocumentRegistrationException(
+                    GeneratedDocumentRegistrationException.BodyConflict,
                     $"The generated document '{hintName}' in '{projectName}' was reported with two different bodies under one identity; refusing to merge them.");
             return existing;
         }
@@ -121,7 +152,8 @@ public sealed class SourceDocumentRegistry
         // claiming the same tree is ambiguous, so it fails instead of overwriting.
         var treeKey = string.IsNullOrEmpty(fullPath) ? null : TreeKey(variantKey, fullPath);
         if (treeKey is not null && _generatedByTree.TryGetValue(treeKey, out var priorTree))
-            throw new InvalidOperationException(
+            throw new GeneratedDocumentRegistrationException(
+                GeneratedDocumentRegistrationException.IdentityAmbiguous,
                 $"The generated tree '{fullPath}' was reported for two different generated identities "
                 + $"('{priorTree.RelativePath}' and '{projectName}/{generatorIdentity}/{hintName}'); refusing to merge them.");
 
@@ -198,7 +230,8 @@ public sealed class SourceDocumentRegistry
         var path = $"{stem}-{discriminator}{extension}";
         if (!_generatedPaths.Add(path))
         {
-            throw new InvalidOperationException(
+            throw new GeneratedDocumentRegistrationException(
+                GeneratedDocumentRegistrationException.PathCollision,
                 $"Generated document path '{path}' collides for distinct identities.");
         }
 

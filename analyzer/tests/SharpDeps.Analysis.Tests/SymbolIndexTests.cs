@@ -328,8 +328,9 @@ public sealed class SymbolIndexTests : IDisposable
 
         Assert.Same(first, registry.RegisterGenerated("variant", "Sample", "Some.Generator/Generator", "Generated.g.cs",
             path, new string('a', 64), 10));
-        Assert.Throws<InvalidOperationException>(() => registry.RegisterGenerated("variant", "Sample",
+        var conflict = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample",
             "Some.Generator/Generator", "Generated.g.cs", path, new string('b', 64), 10));
+        Assert.Equal(GeneratedDocumentRegistrationException.BodyConflict, conflict.Code);
         Assert.Same(first, Assert.Single(registry.Documents));
     }
 
@@ -388,10 +389,12 @@ public sealed class SymbolIndexTests : IDisposable
         var root = CreateTemporaryDirectory();
         var registry = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
 
-        Assert.Throws<InvalidOperationException>(() => registry.RegisterGenerated("variant", "Sample", "",
+        var withPath = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample", "",
             "Generated.g.cs", Path.Combine(root, "obj", "Generated.g.cs"), new string('a', 64), 10));
-        Assert.Throws<InvalidOperationException>(() => registry.RegisterGenerated("variant", "Sample", " ",
+        var withoutPath = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample", " ",
             "Generated.g.cs", null, new string('a', 64), 10));
+        Assert.Equal(GeneratedDocumentRegistrationException.GeneratorUnidentified, withPath.Code);
+        Assert.Equal(GeneratedDocumentRegistrationException.GeneratorUnidentified, withoutPath.Code);
         Assert.Empty(registry.Documents);
     }
 
@@ -405,8 +408,9 @@ public sealed class SymbolIndexTests : IDisposable
             path, new string('a', 64), 10);
 
         Assert.Same(first, registry.ResolveTreeDocument("variant", CSharpSyntaxTree.ParseText(string.Empty, path: path)));
-        Assert.Throws<InvalidOperationException>(() => registry.RegisterGenerated("variant", "Sample",
+        var ambiguous = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample",
             "Second.Assembly/Generator", "Generated.g.cs", path, new string('b', 64), 10));
+        Assert.Equal(GeneratedDocumentRegistrationException.IdentityAmbiguous, ambiguous.Code);
         Assert.Same(first, Assert.Single(registry.Documents));
     }
 
