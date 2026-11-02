@@ -36,10 +36,13 @@ public sealed class PackageSourceTests
         Assert.Contains("PackageType", Assert.Single(first.Snapshot.StoredPackageBodies).Body, StringComparison.Ordinal);
         Assert.All(first.Snapshot.Files, f => Assert.Null(f.Reuse));
         var type = Assert.Single(first.Snapshot.Graph.Nodes, n => n.Name == "PackageType");
-        Assert.Contains(first.Snapshot.Graph.SymbolOccurrences, o => o.LogicalSymbolId == type.Id && o.Location?.SourceId == package.SourceId);
+        var occurrence = Assert.Single(first.Snapshot.Graph.SymbolOccurrences,
+            o => o.LogicalSymbolId == type.Id && o.Location?.SourceId == package.SourceId);
         writer.Commit(IndexStage.Create(first.Snapshot), deadline.Token, first.VerifySelection);
         var savedBody = Assert.Single(first.Snapshot.StoredPackageBodies).Body;
-        var span = type.Location!.RawSpan!.Value;
+        var location = Assert.IsType<HarnessLocation>(occurrence.Location);
+        var span = Assert.IsType<HarnessRawSpan>(location.RawSpan);
+        Assert.Equal(location, Assert.Single(occurrence.Declarations!));
         Assert.Equal(bom ? 1 : 0, span.Start);
         Assert.StartsWith("public class PackageType", savedBody.Substring(span.Start, span.Length));
         var workspaceReader = new QueryWorkspace(fixture.Root);
