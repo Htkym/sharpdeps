@@ -11,8 +11,9 @@ namespace SharpDeps.Analysis.Roslyn;
 /// <param name="GeneratorIdentity">
 /// The producing generator as "assembly/type" read from the workspace's generated
 /// file path, or empty when the path does not carry that shape. Identity is never
-/// guessed: an empty value keeps the document distinct by project, variant and hint,
-/// and a conflicting body under one identity is an error, not a merge.
+/// guessed: registration refuses an empty value instead of merging documents that
+/// share a hint and a body, and a conflicting body under one identity is an error,
+/// not a merge.
 /// </param>
 public sealed record GeneratedSourceDocumentInfo(
     string VariantKey,

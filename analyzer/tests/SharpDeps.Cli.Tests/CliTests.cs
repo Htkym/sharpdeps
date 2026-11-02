@@ -737,33 +737,9 @@ public sealed class CliTests
     [Trait("Category", "Integration")]
     public async Task GeneratedDomainVariantsSurviveIndexingAndTheStoreRoundTrip()
     {
-        var repository = Environment.GetEnvironmentVariable("SHARPDEPS_TEST_REPOSITORY_ROOT");
-        if (string.IsNullOrWhiteSpace(repository))
-        {
-            var directory = new DirectoryInfo(AppContext.BaseDirectory);
-            while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "tests", "fixtures")))
-                directory = directory.Parent;
-            repository = directory?.FullName ?? throw new InvalidOperationException("Repository root could not be located from the test output directory.");
-        }
-        var root = Path.Combine(repository, "tests", "fixtures", "semantic-baseline");
-        var target = Path.Combine(root, "SemanticBaseline.sln");
+        var (root, target) = SemanticBaselineFixture();
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        foreach (var command in new[] { "restore", "build" })
-        {
-            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-            { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true };
-            start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-            start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-            foreach (var argument in new[] { command, target, "--verbosity", "quiet" })
-                start.ArgumentList.Add(argument);
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("Fixture " + command + " did not start.");
-            var output = process.StandardOutput.ReadToEndAsync();
-            var errors = process.StandardError.ReadToEndAsync();
-            try { await process.WaitForExitAsync(deadline.Token); }
-            finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
-            Assert.True(process.ExitCode == 0, await output + await errors);
-        }
+        await RestoreAndBuildAsync(root, target, deadline.Token);
 
         var workspace = Guid.NewGuid();
         var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
@@ -793,6 +769,176 @@ public sealed class CliTests
                 saved.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal));
         }
         finally { if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true); }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task OverBudgetGeneratedDocumentFailsTheIndexAndKeepsThePreviousSnapshot()
+    {
+        var (fixtureRoot, _) = SemanticBaselineFixture();
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-overbudget-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // Work on a copy: the marker below changes what the generator emits, and
+            // no other test may observe that state.
+            CopyFixture(fixtureRoot, root);
+            var domainProject = Path.Combine(root, "src", "Domain", "Domain.csproj");
+            File.WriteAllText(domainProject, File.ReadAllText(domainProject).Replace("</Project>",
+                "  <ItemGroup>\n    <AdditionalFiles Include=\"*.overbudget\" />\n  </ItemGroup>\n</Project>",
+                StringComparison.Ordinal));
+            File.WriteAllText(Path.Combine(root, "src", "Generator", "GeneratedOrderFactory.cs"), OverBudgetGeneratorSource);
+
+            var target = Path.Combine(root, "SemanticBaseline.sln");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            await RestoreAndBuildAsync(root, target, deadline.Token);
+
+            var workspace = Guid.NewGuid();
+            var indexPath = Path.Combine(root, ".sharpdeps", "index.sqlite");
+            using var writer = IndexWriter.Open(root, indexPath, workspace, true);
+            var options = new CliIndexOptions(root, target, indexPath, workspace);
+            var first = await CliIndexer.BuildAsync(options, null, deadline.Token);
+            Assert.Equal(2, first.Files.Count(file => file.Kind == IndexFileKinds.GeneratedSource));
+            writer.Commit(IndexStage.Create(first), deadline.Token);
+
+            // The marker makes the generator emit a document over the retained-content
+            // budget, so the build must fail before publishing anything.
+            var marker = Path.Combine(root, "src", "Domain", "boundary.overbudget");
+            File.WriteAllText(marker, "on");
+            CliIndexException failure;
+            try
+            {
+                failure = await Assert.ThrowsAsync<CliIndexException>(
+                    () => CliIndexer.BuildAsync(options, first, deadline.Token));
+            }
+            finally
+            {
+                File.Delete(marker);
+            }
+
+            Assert.Equal("CLI_GENERATED_CONTENT_UNAVAILABLE", failure.Code);
+            Assert.Contains("OverBudget.g.cs", failure.Message, StringComparison.Ordinal);
+
+            using var reader = IndexReader.Open(indexPath, workspace);
+            var saved = reader.Snapshot();
+            Assert.Equal(1, saved.Graph.Generation);
+            Assert.Equal(2, saved.Files.Count(file => file.Kind == IndexFileKinds.GeneratedSource));
+            Assert.Equal(2, saved.StoredGeneratedBodies.Count);
+            Assert.DoesNotContain(saved.Files,
+                file => file.RelativePath.Contains("OverBudget", StringComparison.Ordinal));
+        }
+        finally
+        {
+            // The in-process build host keeps the copied analyzer assembly loaded
+            // until the test process exits, so cleanup is best effort.
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private const string OverBudgetGeneratorSource = """
+        using System;
+        using System.IO;
+        using System.Linq;
+        using System.Text;
+        using Microsoft.CodeAnalysis;
+        using Microsoft.CodeAnalysis.Text;
+
+        namespace SampleGeneration;
+
+        [Generator]
+        public sealed class GeneratedOrderFactory : IIncrementalGenerator
+        {
+            public void Initialize(IncrementalGeneratorInitializationContext context)
+            {
+                context.RegisterPostInitializationOutput(static production =>
+                {
+                    const string source =
+                        "namespace Generated;\n\n" +
+                        "public static class OrderFactory\n" +
+                        "{\n" +
+                        "    public static Domain.Order Create(string id) => new() { Id = id };\n" +
+                        "}\n";
+                    production.AddSource("OrderFactory.g.cs", SourceText.From(source, Encoding.UTF8));
+                });
+
+                var additional = context.AdditionalTextsProvider.Collect();
+                context.RegisterSourceOutput(additional, static (production, files) =>
+                {
+                    if (!files.Any(file => Path.GetFileName(file.Path)
+                            .Equals("boundary.overbudget", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return;
+                    }
+
+                    production.AddSource("OverBudget.g.cs", SourceText.From(
+                        "// " + new string('-', 1_100_000) + "\npublic static class OverBudget { }\n",
+                        Encoding.UTF8));
+                });
+            }
+        }
+        """;
+
+    private static (string Root, string Target) SemanticBaselineFixture()
+    {
+        var repository = Environment.GetEnvironmentVariable("SHARPDEPS_TEST_REPOSITORY_ROOT");
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "tests", "fixtures")))
+                directory = directory.Parent;
+            repository = directory?.FullName ?? throw new InvalidOperationException("Repository root could not be located from the test output directory.");
+        }
+
+        var root = Path.Combine(repository, "tests", "fixtures", "semantic-baseline");
+        return (root, Path.Combine(root, "SemanticBaseline.sln"));
+    }
+
+    private static void CopyFixture(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source))
+        {
+            var name = Path.GetFileName(directory);
+            if (name is "bin" or "obj" or ".sharpdeps") continue;
+            CopyFixture(directory, Path.Combine(destination, name));
+        }
+
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+        }
+    }
+
+    private static async Task RestoreAndBuildAsync(string root, string target, CancellationToken token)
+    {
+        foreach (var command in new[] { "restore", "build" })
+        {
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+            { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true };
+            start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+            start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+            foreach (var argument in new[] { command, target, "--verbosity", "quiet" })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Fixture " + command + " did not start.");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync(token); }
+            finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
+            Assert.True(process.ExitCode == 0, await output + await errors);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // A loaded analyzer assembly can keep a file open; the OS temp directory
+            // owns the remainder.
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> ready, CancellationToken token)

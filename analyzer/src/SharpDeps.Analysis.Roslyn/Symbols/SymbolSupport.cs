@@ -80,6 +80,8 @@ public sealed class SourceDocumentRegistry
     /// generator identity and hint name. The relative path is virtual:
     /// the workspace's obj path never reaches the report, and the generated content is
     /// read from the analysis result, not from the user's repository.
+    /// A document whose generator could not be identified is refused: an empty
+    /// identity would let two generators that share a hint and a body merge.
     /// </summary>
     /// <param name="fullPath">
     /// The workspace path of the generated document, used only to match compilation
@@ -101,6 +103,11 @@ public sealed class SourceDocumentRegistry
         ArgumentNullException.ThrowIfNull(projectName);
         ArgumentNullException.ThrowIfNull(generatorIdentity);
         ArgumentNullException.ThrowIfNull(hintName);
+        if (string.IsNullOrWhiteSpace(generatorIdentity))
+            throw new InvalidOperationException(
+                $"The generator of the generated document '{hintName}' in '{projectName}' could not be identified"
+                + (fullPath is null ? string.Empty : $" from its generated file path '{fullPath}'")
+                + "; refusing to index it.");
         var identityKey = string.Join('\u001f', variantKey, projectName, generatorIdentity, hintName);
         if (_generatedByIdentity.TryGetValue(identityKey, out var existing))
         {
@@ -109,6 +116,14 @@ public sealed class SourceDocumentRegistry
                     $"The generated document '{hintName}' in '{projectName}' was reported with two different bodies under one identity; refusing to merge them.");
             return existing;
         }
+
+        // One workspace tree belongs to one generated identity. A second identity
+        // claiming the same tree is ambiguous, so it fails instead of overwriting.
+        var treeKey = string.IsNullOrEmpty(fullPath) ? null : TreeKey(variantKey, fullPath);
+        if (treeKey is not null && _generatedByTree.TryGetValue(treeKey, out var priorTree))
+            throw new InvalidOperationException(
+                $"The generated tree '{fullPath}' was reported for two different generated identities "
+                + $"('{priorTree.RelativePath}' and '{projectName}/{generatorIdentity}/{hintName}'); refusing to merge them.");
 
         var relativePath = UniqueGeneratedPath(projectName, variantKey, generatorIdentity, hintName, identityKey);
         var document = new SourceDocument(
@@ -120,9 +135,9 @@ public sealed class SourceDocumentRegistry
             null);
         _generatedByIdentity.Add(identityKey, document);
         _generated.Add(document);
-        if (!string.IsNullOrEmpty(fullPath))
+        if (treeKey is not null)
         {
-            _generatedByTree[TreeKey(variantKey, fullPath)] = document;
+            _generatedByTree[treeKey] = document;
         }
 
         return document;
@@ -155,9 +170,10 @@ public sealed class SourceDocumentRegistry
 
     /// <summary>
     /// A virtual path under <c>generated/</c> built from the identity itself:
-    /// project, variant, generator and hint. Distinct identities that sanitize to
-    /// the same path are separated by a discriminator hashed from the identity,
-    /// never by registration order or the workspace's absolute path.
+    /// project, variant, generator and hint, plus a discriminator hashed from the
+    /// identity. The discriminator is unconditional, so the path (and the id derived
+    /// from it) is a pure function of the identity: it never depends on registration
+    /// order or on which other documents were registered.
     /// </summary>
     private string UniqueGeneratedPath(
         string projectName,
@@ -172,33 +188,21 @@ public sealed class SourceDocumentRegistry
             SanitizeSegment(projectName),
             SanitizeVariant(variantKey),
         };
-        if (generatorIdentity.Length > 0)
-        {
-            segments.AddRange(generatorIdentity.Split('/').Select(SanitizeSegment));
-        }
-        else
-        {
-            segments.Add("unknown-generator");
-        }
+        segments.AddRange(generatorIdentity.Split('/').Select(SanitizeSegment));
 
         var basePath = string.Join('/', segments) + "/" + SanitizeHint(hintName);
-        if (_generatedPaths.Add(basePath))
-        {
-            return basePath;
-        }
-
         var extension = Path.GetExtension(basePath);
         var stem = extension.Length > 0 ? basePath[..^extension.Length] : basePath;
         var discriminator = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(identityKey)))[..8].ToLowerInvariant();
-        var candidate = $"{stem}-{discriminator}{extension}";
-        if (_generatedPaths.Add(candidate))
+        var path = $"{stem}-{discriminator}{extension}";
+        if (!_generatedPaths.Add(path))
         {
-            return candidate;
+            throw new InvalidOperationException(
+                $"Generated document path '{path}' collides for distinct identities.");
         }
 
-        throw new InvalidOperationException(
-            $"Generated document path '{basePath}' collides for distinct identities.");
+        return path;
     }
 
     /// <summary>The variant part of a variant key ("path|tfm|configuration|platform"), path-safe.</summary>
