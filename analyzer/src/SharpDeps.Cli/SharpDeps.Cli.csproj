@@ -13,7 +13,7 @@
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" Publish="true" />
     <PackageReference Include="NuGet.Packaging" />
     <PackageReference Include="System.Security.Cryptography.Pkcs" />
     <None Include="..\..\..\resources\icon.png" Pack="true" PackagePath="/" />
