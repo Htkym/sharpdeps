@@ -1,6 +1,7 @@
 namespace SharpDeps.Cli.Tests;
 
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -730,6 +731,68 @@ public sealed class CliTests
         Assert.Equal(original.Graph.Generation, final.Snapshot().Graph.Generation);
         Assert.Equal(original.Graph.Nodes.Select(node => node.Id), final.Snapshot().Graph.Nodes.Select(node => node.Id));
         Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), final.Search("Service").Select(hit => hit.NodeId));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task GeneratedDomainVariantsSurviveIndexingAndTheStoreRoundTrip()
+    {
+        var repository = Environment.GetEnvironmentVariable("SHARPDEPS_TEST_REPOSITORY_ROOT");
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "tests", "fixtures")))
+                directory = directory.Parent;
+            repository = directory?.FullName ?? throw new InvalidOperationException("Repository root could not be located from the test output directory.");
+        }
+        var root = Path.Combine(repository, "tests", "fixtures", "semantic-baseline");
+        var target = Path.Combine(root, "SemanticBaseline.sln");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        foreach (var command in new[] { "restore", "build" })
+        {
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+            { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true };
+            start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+            start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+            foreach (var argument in new[] { command, target, "--verbosity", "quiet" })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Fixture " + command + " did not start.");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync(deadline.Token); }
+            finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
+            Assert.True(process.ExitCode == 0, await output + await errors);
+        }
+
+        var workspace = Guid.NewGuid();
+        var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
+        var indexPath = Path.Combine(outputDirectory, "index.sqlite");
+        try
+        {
+            using var writer = IndexWriter.Open(root, indexPath, workspace, true);
+            var snapshot = await CliIndexer.BuildAsync(new(root, target, indexPath, workspace), null, deadline.Token);
+            var generated = snapshot.Files.Where(file => file.Kind == IndexFileKinds.GeneratedSource).ToArray();
+            Assert.Equal(2, generated.Length);
+            Assert.Equal(2, generated.Select(file => file.RelativePath).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(2, snapshot.StoredGeneratedBodies.Count);
+            Assert.All(generated, file =>
+            {
+                Assert.StartsWith("generated/Domain", file.RelativePath);
+                Assert.False(Path.IsPathRooted(file.RelativePath));
+                var body = Assert.Single(snapshot.StoredGeneratedBodies, body => body.SourceId == file.SourceId);
+                Assert.Contains("class OrderFactory", body.Body, StringComparison.Ordinal);
+            });
+
+            writer.Commit(IndexStage.Create(snapshot), deadline.Token);
+            using var reader = IndexReader.Open(indexPath, workspace);
+            var saved = reader.Snapshot();
+            Assert.Equal(generated.OrderBy(file => file.SourceId, StringComparer.Ordinal),
+                saved.Files.Where(file => file.Kind == IndexFileKinds.GeneratedSource).OrderBy(file => file.SourceId, StringComparer.Ordinal));
+            Assert.Equal(snapshot.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal),
+                saved.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal));
+        }
+        finally { if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true); }
     }
 
     private static async Task WaitUntilAsync(Func<bool> ready, CancellationToken token)
