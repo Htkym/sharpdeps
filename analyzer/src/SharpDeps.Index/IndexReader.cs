@@ -74,8 +74,9 @@ public sealed class IndexReader : IDisposable
             using(var command=IndexDatabase.Command(connection,transaction,"SELECT node_id,name,signature,heading,body,path FROM search_text WHERE generation=$g ORDER BY node_id",("$g",header.Generation)))
             using(var rows=command.ExecuteReader())
                 while(ReadRow(rows,token))search.Add(new IndexSearchText(rows.GetString(0),rows.GetString(1),rows.GetString(2),rows.GetString(3),rows.GetString(4),rows.GetString(5)));
-            var bodies = schemaVersion >= IndexDatabase.CurrentSchemaVersion ? ReadGeneratedBodies(token) : [];
-            var snapshot=new IndexSnapshot(graph,Read<IndexFile>("files",token),Read<IndexDocumentIdentity>("document_identities",token),Read<IndexAlias>("aliases",token),search.AsReadOnly(),bodies);
+            var bodies = schemaVersion >= 2 ? ReadGeneratedBodies(token) : [];
+            var packages = schemaVersion >= 3 ? ReadPackageBodies(token) : [];
+            var snapshot=new IndexSnapshot(graph,Read<IndexFile>("files",token),Read<IndexDocumentIdentity>("document_identities",token),Read<IndexAlias>("aliases",token),search.AsReadOnly(),bodies,packages);
             IndexSnapshotValidator.Validate(snapshot,token);
             token.ThrowIfCancellationRequested();
             var manifestHash=IndexStage.ComputeManifestHash(snapshot.Files);
@@ -94,6 +95,15 @@ public sealed class IndexReader : IDisposable
         using var command=IndexDatabase.Command(connection,transaction,"SELECT source_id,body FROM generated_bodies WHERE generation=$g ORDER BY source_id",("$g",header.Generation));
         using var rows=command.ExecuteReader();
         while(ReadRow(rows,token)) result.Add(new IndexGeneratedBody(rows.GetString(0),rows.GetString(1)));
+        return result.AsReadOnly();
+    }
+    private IReadOnlyList<IndexPackageBody> ReadPackageBodies(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var result=new List<IndexPackageBody>();
+        using var command=IndexDatabase.Command(connection,transaction,"SELECT source_id,body FROM package_bodies WHERE generation=$g ORDER BY source_id",("$g",header.Generation));
+        using var rows=command.ExecuteReader();
+        while(ReadRow(rows,token)) result.Add(new IndexPackageBody(rows.GetString(0),rows.GetString(1)));
         return result.AsReadOnly();
     }
     private IReadOnlyList<T> Read<T>(string table,CancellationToken token)

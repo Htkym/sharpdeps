@@ -26,14 +26,16 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
     public byte[] Read(IndexFile input, CancellationToken token = default)
         => ReadInput(input, token, requireText: true);
 
-    /// <summary>True for inputs whose text is a stored generated body rather than a file on disk.</summary>
+    /// <summary>True for source-generator inputs, distinct from package-derived sources.</summary>
     public static bool IsGenerated(IndexFile input) => input.Kind == IndexFileKinds.GeneratedSource;
+    public static bool IsPackage(IndexFile input) => input.Kind == IndexFileKinds.PackageSource;
+    public static bool IsStored(IndexFile input) => IsGenerated(input) || IsPackage(input);
 
     /// <summary>
-    /// Returns the exact stored-body bytes of a generated input after verifying them
+    /// Returns the exact stored-body bytes of a generated/package input after verifying them
     /// against the input's recorded hash and lengths, without touching the filesystem.
     /// The body is index-time text: this proves the snapshot is intact, never that a
-    /// generator would still emit the same text now.
+    /// generator or package would still provide the same text now.
     /// </summary>
     public byte[] ReadStored(IndexFile input, string body, CancellationToken token = default)
     {
@@ -60,6 +62,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
         ArgumentNullException.ThrowIfNull(input);
         token.ThrowIfCancellationRequested();
         ValidateInput(input);
+        if (IsStored(input)) throw new QuerySourceException("STORED_BODY_REQUIRED", input.RelativePath);
         var path = Resolve(input.RelativePath);
         try
         {
@@ -103,14 +106,14 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
     }
 
     /// <summary>Verifies saved inputs, tombstones, the complete live input set, and owner-supplied configuration proof.
-    /// Generated inputs are separated from the physical checks: their stored bodies are
+    /// Generated/package inputs are separated from the physical checks: their stored bodies are
     /// verified for integrity, but they always remain unverified because an index-time
     /// body cannot prove what a generator would emit now.</summary>
     public QueryFreshness Verify(IndexSnapshot snapshot, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         try { IndexSnapshotValidator.Validate(snapshot, token); }
-        catch (IndexStoreException error) when (error.Code == "INDEX_GENERATED_BODY_INVALID")
+        catch (IndexStoreException error) when (error.Code is "INDEX_GENERATED_BODY_INVALID" or "INDEX_PACKAGE_BODY_INVALID")
         {
             // A tampered stored body is a per-input content finding: the loop below
             // classifies it as GENERATED_BODY_INVALID, like changed physical content
@@ -127,14 +130,18 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
         foreach (var input in snapshot.Files)
         {
             token.ThrowIfCancellationRequested();
-            if (IsGenerated(input))
+            if (IsStored(input))
             {
-                // A generated input has no file to re-read and no live inventory entry:
+                // A stored input has no live file to re-read and no inventory entry:
                 // it is never dirty, and it is never verified-current either.
-                var body = snapshot.StoredGeneratedBodies.FirstOrDefault(candidate => candidate.SourceId == input.SourceId);
-                unverified.Add(body is not null && StoredBodyMatches(input, body.Body)
-                    ? "GENERATED_INPUT_UNVERIFIED:" + input.RelativePath
-                    : "GENERATED_BODY_INVALID:" + input.RelativePath);
+                if (input.Deleted) continue;
+                var body = IsPackage(input)
+                    ? snapshot.StoredPackageBodies.FirstOrDefault(candidate => candidate.SourceId == input.SourceId)?.Body
+                    : snapshot.StoredGeneratedBodies.FirstOrDefault(candidate => candidate.SourceId == input.SourceId)?.Body;
+                var prefix = IsPackage(input) ? "PACKAGE" : "GENERATED";
+                unverified.Add(body is not null && StoredBodyMatches(input, body)
+                    ? prefix + "_INPUT_UNVERIFIED:" + input.RelativePath
+                    : prefix + "_BODY_INVALID:" + input.RelativePath);
                 continue;
             }
             try
@@ -175,7 +182,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
                         if (!aliases.Add(relative)) throw new QuerySourceException("ROOT_ACCESS_DENIED", relative);
                         paths.Add(relative);
                     }
-                    var expected = snapshot.Files.Where(file => !file.Deleted && !IsGenerated(file))
+                    var expected = snapshot.Files.Where(file => !file.Deleted && !IsStored(file))
                         .Select(file => file.RelativePath).ToHashSet(StringComparer.Ordinal);
                     dirty.UnionWith(expected.Except(paths));
                     dirty.UnionWith(paths.Except(expected));

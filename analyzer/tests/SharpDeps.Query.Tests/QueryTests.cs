@@ -722,12 +722,14 @@ public sealed class QueryTests
         Assert.Throws<ArgumentException>(() => query.Execute(request with { Scope = request.Scope! with { ProjectId = fixture.OtherProjectId } }));
     }
 
-    [Fact]
-    public void VerifyKeepsGeneratedInputsUnverified()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifyKeepsStoredInputsUnverified(bool package)
     {
         using var fixture = new StoreFixture();
-        var snapshot = GeneratedSnapshot(fixture);
-        var generated = Assert.Single(snapshot.Files, QueryWorkspace.IsGenerated);
+        var snapshot = StoredSnapshot(fixture, package);
+        var generated = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
         var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
 
         var freshness = workspace.Verify(snapshot);
@@ -735,18 +737,21 @@ public sealed class QueryTests
         Assert.Equal("unverified", freshness.State);
         Assert.Empty(freshness.DirtyPaths);
         Assert.Contains(freshness.Unverified, entry => entry.StartsWith(
-            "GENERATED_INPUT_UNVERIFIED:" + generated.RelativePath, StringComparison.Ordinal));
+            (package ? "PACKAGE" : "GENERATED") + "_INPUT_UNVERIFIED:" + generated.RelativePath, StringComparison.Ordinal));
         Assert.DoesNotContain(freshness.Unverified, entry => entry.StartsWith("GENERATED_BODY_INVALID:", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void VerifyFlagsATamperedGeneratedBody()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifyFlagsATamperedStoredBody(bool package)
     {
         using var fixture = new StoreFixture();
-        var snapshot = GeneratedSnapshot(fixture);
-        var generated = Assert.Single(snapshot.Files, QueryWorkspace.IsGenerated);
-        var body = Assert.Single(snapshot.StoredGeneratedBodies);
-        snapshot = snapshot with { GeneratedBodies = [body with { Body = body.Body.Replace("GeneratedType", "CorruptedType", StringComparison.Ordinal) }] };
+        var snapshot = StoredSnapshot(fixture, package);
+        var generated = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        snapshot = package
+            ? snapshot with { PackageBodies = [snapshot.StoredPackageBodies[0] with { Body = "corrupted" }] }
+            : snapshot with { GeneratedBodies = [snapshot.StoredGeneratedBodies[0] with { Body = "corrupted" }] };
         var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
 
         var freshness = workspace.Verify(snapshot);
@@ -754,17 +759,19 @@ public sealed class QueryTests
         Assert.Equal("unverified", freshness.State);
         Assert.Empty(freshness.DirtyPaths);
         Assert.Contains(freshness.Unverified, entry => entry.StartsWith(
-            "GENERATED_BODY_INVALID:" + generated.RelativePath, StringComparison.Ordinal));
+            (package ? "PACKAGE" : "GENERATED") + "_BODY_INVALID:" + generated.RelativePath, StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void GeneratedSnippetsComeFromTheStoredBody()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SnippetsComeFromTheStoredBody(bool package)
     {
         using var fixture = new StoreFixture();
-        var snapshot = GeneratedSnapshot(fixture);
+        var snapshot = StoredSnapshot(fixture, package);
         IndexSnapshotValidator.Validate(snapshot);
         var type = Assert.Single(snapshot.Graph.Nodes, node => node.Kind == HarnessNodeKind.Type);
-        var file = Assert.Single(snapshot.Files, QueryWorkspace.IsGenerated);
+        var file = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
         Assert.False(File.Exists(Path.Combine(fixture.Root, file.RelativePath)));
         var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
         var query = new QueryService(new FixedIndex(snapshot), workspace, isTrusted: true);
@@ -776,23 +783,24 @@ public sealed class QueryTests
         Assert.True(reply.Succeeded);
         var snippet = Assert.Single(All(reply), item => item.Snippet is not null).Snippet!;
         var span = type.Location!.RawSpan!.Value;
-        Assert.Equal(Assert.Single(snapshot.StoredGeneratedBodies).Body.Substring(span.Start, span.Length), snippet.Text);
+        var body = package ? snapshot.StoredPackageBodies[0].Body : snapshot.StoredGeneratedBodies[0].Body;
+        Assert.Equal(body.Substring(span.Start, span.Length), snippet.Text);
         Assert.Equal("public class GeneratedType { }", snippet.Text);
         Assert.Equal(file.SourceId, snippet.SourceId);
         Assert.Equal(file.ContentHash, snippet.ContentHash);
-        Assert.Contains("GENERATED_SOURCE_FROM_SNAPSHOT", reply.Envelope.TruncationReasons);
+        Assert.Contains((package ? "PACKAGE" : "GENERATED") + "_SOURCE_FROM_SNAPSHOT", reply.Envelope.TruncationReasons);
         Assert.Equal("unverified", reply.Envelope.Snapshot.Freshness);
         var fresh = query.Execute(request with { Freshness = QueryFreshnessPolicy.RequireFresh });
         Error(fresh, "FRESHNESS_REQUIREMENT_NOT_MET");
         Assert.Empty(All(fresh));
     }
 
-    private static IndexSnapshot GeneratedSnapshot(StoreFixture fixture)
+    private static IndexSnapshot StoredSnapshot(StoreFixture fixture, bool package)
     {
         const string path = "generated/App/net10.0_Debug/Generator/Generated.g.cs";
         const string text = "// retained café 😀\npublic class GeneratedType { }\n";
         var baseline = fixture.Snapshot(1, withoutEdges: true);
-        var file = new IndexFile(path, path, IndexFileKinds.GeneratedSource, StoreFixture.Hash(text),
+        var file = new IndexFile(path, path, package ? IndexFileKinds.PackageSource : IndexFileKinds.GeneratedSource, StoreFixture.Hash(text),
             StoreFixture.Utf8.GetByteCount(text), text.Length);
         var location = new HarnessLocation(path, "generated-v1", file.ContentHash,
             new(text.IndexOf("public", StringComparison.Ordinal), "public class GeneratedType { }".Length));
@@ -805,7 +813,8 @@ public sealed class QueryTests
                 new(type, HarnessNodeKind.Type, "GeneratedType", fixture.ProjectId, location)],
             SymbolOccurrences = [new(fixture.Occurrence(type), type, fixture.Variant, location, [location])],
             Edges = [], Markdown = null
-        }, [baseline.Files.Single(input => input.RelativePath == "src/App.cs"), file], [], [], [], [new(path, text)]);
+        }, [baseline.Files.Single(input => input.RelativePath == "src/App.cs"), file], [], [], [],
+            package ? [] : [new(path, text)], package ? [new(path, text)] : []);
     }
 
     private sealed class FixedIndex(IndexSnapshot snapshot) : IQueryIndex

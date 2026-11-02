@@ -573,13 +573,13 @@ public sealed class IndexStoreTests
     }
 
     [Fact]
-    public void GeneratedBodyRoundTripsAndNewIndexesUseSchema2()
+    public void GeneratedBodyRoundTripsAndNewIndexesUseSchema3()
     {
         using var fixture = new StoreFixture();
         var snapshot = WithGeneratedBody(fixture.Snapshot(1, "Before"), "public class Generated { } // café 😀\n");
         using (var writer = fixture.Writer())
         {
-            Assert.Equal(2, writer.SchemaVersion);
+            Assert.Equal(3, writer.SchemaVersion);
             writer.Commit(IndexStage.Create(snapshot));
         }
         using var reader = fixture.Reader();
@@ -589,37 +589,43 @@ public sealed class IndexStoreTests
             Assert.Single(saved.Files, file => file.Kind == IndexFileKinds.GeneratedSource));
     }
 
-    [Fact]
-    public void Schema1IndexRejectsGeneratedBodiesAndKeepsTheOldSnapshot()
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    public void OlderSchemaRejectsUnsupportedBodiesAndKeepsTheOldSnapshot(int schema, bool package)
     {
         using var fixture = new StoreFixture();
         Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
         using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
         {
             IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
-            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), 1);
+            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), schema);
         }
         using var writer = fixture.Writer();
-        Assert.Equal(1, writer.SchemaVersion);
+        Assert.Equal(schema, writer.SchemaVersion);
         writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
-        var pending = WithGeneratedBody(fixture.Snapshot(2, "After"), "public class Generated { }\n");
+        var pending = WithStoredBody(fixture.Snapshot(2, "After"), "public class Generated { }\n", package);
         AssertCode("INDEX_SCHEMA_MIGRATION_REQUIRED", () => writer.Commit(IndexStage.Create(pending)));
 
         using var reader = fixture.Reader();
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
         Assert.Empty(reader.Snapshot().StoredGeneratedBodies);
+        Assert.Empty(reader.Snapshot().StoredPackageBodies);
         Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
         Assert.Empty(reader.Search("After"));
     }
 
-    [Fact]
-    public void FailedCommitPreservesTheCommittedGeneratedBody()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FailedCommitPreservesTheCommittedStoredBody(bool package)
     {
         using var fixture = new StoreFixture();
         using var writer = fixture.Writer();
-        var original = WithGeneratedBody(fixture.Snapshot(1, "Before"), "public class Original { }\n");
+        var original = WithStoredBody(fixture.Snapshot(1, "Before"), "public class Original { }\n", package);
         writer.Commit(IndexStage.Create(original));
-        var pending = WithGeneratedBody(fixture.Snapshot(2, "After"), "public class Replacement { }\n");
+        var pending = WithStoredBody(fixture.Snapshot(2, "After"), "public class Replacement { }\n", package);
         writer.BeforePublish = () => throw new InvalidOperationException("Injected publication failure.");
         var error = Assert.Throws<InvalidOperationException>(() => writer.Commit(IndexStage.Create(pending)));
         Assert.Equal("Injected publication failure.", error.Message);
@@ -627,9 +633,36 @@ public sealed class IndexStoreTests
         using var reader = fixture.Reader();
         var saved = reader.Snapshot();
         Assert.Equal(1, saved.Graph.Generation);
-        Assert.Equal(Assert.Single(original.StoredGeneratedBodies), Assert.Single(saved.StoredGeneratedBodies));
-        Assert.Equal(Assert.Single(original.Files, file => file.Kind == IndexFileKinds.GeneratedSource),
-            Assert.Single(saved.Files, file => file.Kind == IndexFileKinds.GeneratedSource));
+        Assert.Equal(original.StoredGeneratedBodies, saved.StoredGeneratedBodies);
+        Assert.Equal(original.StoredPackageBodies, saved.StoredPackageBodies);
+        Assert.Equal(original.Files, saved.Files);
+    }
+
+    private static IndexSnapshot WithStoredBody(IndexSnapshot snapshot, string text, bool package)
+    {
+        var generated = WithGeneratedBody(snapshot, text);
+        return !package ? generated : generated with
+        {
+            Files = generated.Files.Select(f => f.Kind == IndexFileKinds.GeneratedSource
+                ? f with { Kind = IndexFileKinds.PackageSource } : f).ToArray(),
+            GeneratedBodies = [], PackageBodies = generated.StoredGeneratedBodies.Select(b => new IndexPackageBody(b.SourceId, b.Body)).ToArray()
+        };
+    }
+
+    [Fact]
+    public void Schema2GeneratedBodiesRemainReadableAndWritable()
+    {
+        using var fixture = new StoreFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
+            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), 2);
+        }
+        var original = WithGeneratedBody(fixture.Snapshot(1, "Before"), "public class Original { }\n");
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(original));
+        using var reader = fixture.Reader();
+        Assert.Equal(original.StoredGeneratedBodies, reader.Snapshot().StoredGeneratedBodies);
     }
 
     private static IndexSnapshot WithGeneratedBody(IndexSnapshot snapshot, string text)

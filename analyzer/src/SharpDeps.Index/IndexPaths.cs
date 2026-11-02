@@ -22,18 +22,18 @@ internal static class IndexPaths
         }
     }
     public static void VerifyInputs(string root, IReadOnlyList<IndexFile> files, CancellationToken token,
-        IReadOnlyDictionary<string, string>? generatedBodies = null)
+        IReadOnlyDictionary<string, string>? storedBodies = null)
     {
         var rootPrefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
         foreach (var input in files)
         {
             token.ThrowIfCancellationRequested();
-            if (input.Kind == IndexFileKinds.GeneratedSource)
+            if (input.Kind is IndexFileKinds.GeneratedSource or IndexFileKinds.PackageSource)
             {
-                // A generated input has a virtual path: only its retained body can be
+                // A retained input has a virtual path: only its stored body can be
                 // verified, and it must never be resolved against the filesystem.
                 if (input.Deleted) continue;
-                if (generatedBodies is not null && generatedBodies.TryGetValue(input.SourceId, out var body))
+                if (storedBodies is not null && storedBodies.TryGetValue(input.SourceId, out var body))
                 {
                     var bytes = new UTF8Encoding(false, true).GetBytes(body);
                     if (bytes.LongLength != input.ByteLength) Changed();

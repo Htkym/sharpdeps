@@ -80,6 +80,7 @@ public static class CliIndexer
         var snapshotId = Guid.NewGuid().ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);
         var manifest = new Dictionary<string, InputText>(StringComparer.OrdinalIgnoreCase);
+        var packageVerifiers = new List<Action>();
         long inputBytes = 0;
 
         // Capture selected documentation/configuration before evaluation. The configuration inventory is
@@ -105,7 +106,7 @@ public static class CliIndexer
         var excludedTarget = new[] { target }.Concat(selectedPaths).Any(path => Path.GetRelativePath(root, path)
             .Replace('\\', '/').Split('/').Any(part => ExcludedDirectories.Contains(part)));
         if (!excludedTarget && options.AllowSemanticReuse && previous is not null
-            && !previous.Files.Any(f => f.Kind == IndexFileKinds.GeneratedSource)
+            && !previous.Files.Any(QueryWorkspace.IsStored)
             && savedProof?.Projects?.Version == CliProjectReuse.Version && currentInputHash is not null
             && CliReuseProof.Matches(savedProof, currentFingerprint, optionsHash, currentInputHash))
         {
@@ -210,7 +211,7 @@ public static class CliIndexer
                     throw new CliIndexException("CLI_REFERENCE_INPUT_UNSUPPORTED",
                         "A workspace PE reference inside an excluded output or private subtree cannot be verified before evaluation.");
             }
-            var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(root), root);
+            var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(root), root, workspaceId);
             // Generated documents are registered before any tree is visited, so the
             // symbol index and the evidence collectors resolve generated trees to the
             // same stable documents. Registration refuses ambiguous identities.
@@ -229,6 +230,43 @@ public static class CliIndexer
             {
                 throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED", error.Message, inner: error);
             }
+            var packageInfoByDocumentId = new Dictionary<string, CliPackageSource.Binding>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var variant in variants)
+                {
+                    var project = projects.Single(p => p.Key == variant.VariantKey);
+                    var stableVariant = HarnessIdentity.VariantId(options.WorkspaceUuid, project.ProjectId,
+                        project.TargetFramework, project.Configuration, project.Platform, project.RuntimeIdentifier);
+                    foreach (var tree in loaded.Compilations[variant.VariantKey].SyntaxTrees)
+                    {
+                        if (documents.IsGeneratedTree(variant.VariantKey, tree) || string.IsNullOrWhiteSpace(tree.FilePath)) continue;
+                        var relative = Path.GetRelativePath(root, tree.FilePath);
+                        if (relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                            && !Path.IsPathRooted(relative)) continue;
+                        var text = tree.GetText(token).ToString();
+                        var path = tree.FilePath;
+                        var info = CliPackageSource.Bind(variant.ProjectPath, variant.TargetFramework!, path, text, token);
+                        var document = documents.RegisterPackage(variant.VariantKey, project.Name, stableVariant,
+                            info.PackageId, info.Version, info.RelativePath, path, info.ContentHash, info.ByteLength);
+                        packageInfoByDocumentId[document.Id] = info;
+                        // Rebind all evidence, including assets/lock/independent boundary, at staging and publication.
+                        packageVerifiers.Add(() =>
+                        {
+                            try
+                            {
+                                var current = CliPackageSource.Bind(variant.ProjectPath, variant.TargetFramework!, path, text, publicationToken);
+                                if (current != info) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+                            }
+                            catch (PackageDocumentRegistrationException error)
+                            { throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", error.Message); }
+                        });
+                    }
+                }
+            }
+            catch (PackageDocumentRegistrationException error)
+            { throw new CliIndexException(error.Code, error.Message); }
+            var hasPackage = packageInfoByDocumentId.Count != 0;
             var sourceOffsets = new Dictionary<string, int>(StringComparer.Ordinal);
             var projectSources = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
             foreach (var input in inputs)
@@ -267,6 +305,31 @@ public static class CliIndexer
                         ownedSources.Add(generated.Id);
                         continue;
                     }
+                    if (documents.IsPackageTree(input.VariantId, tree))
+                    {
+                        var package = documents.ResolveTreeDocument(input.VariantId, tree)!;
+                        var info = packageInfoByDocumentId[package.Id];
+                        if (tree.GetText(token).ToString() != info.Text)
+                            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", "Package compilation text differs from its retained body.");
+                        sourceOffsets[package.Id] = 0;
+                        if (manifest.TryGetValue(package.RelativePath, out var prior))
+                        {
+                            if (prior.File.SourceId != package.Id)
+                                throw new CliIndexException(PackageDocumentRegistrationException.PathCollision,
+                                    $"Package '{info.PackageId}/{info.Version}/{info.RelativePath}' at CliIndexer collides with another input.");
+                        }
+                        else
+                        {
+                            manifest.Add(package.RelativePath, new InputText(package.RelativePath,
+                                new(package.Id, package.RelativePath, IndexFileKinds.PackageSource,
+                                    info.ContentHash, info.ByteLength, info.Text.Length), info.Text, false));
+                            inputBytes = checked(inputBytes + info.ByteLength);
+                            if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
+                                throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                        }
+                        ownedSources.Add(package.Id);
+                        continue;
+                    }
                     if (string.IsNullOrWhiteSpace(tree.FilePath))
                         throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED");
                     var sourcePath = InsideRoot(root, tree.FilePath);
@@ -300,7 +363,7 @@ public static class CliIndexer
                 : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token,
                     includeMarkdown: true, ownedSourcePaths: ownedPaths);
             var projectPlan = options.AllowSemanticReuse && previous is not null && savedProof is not null
-                && !hasGenerated && previous.Files.All(f => f.Kind != IndexFileKinds.GeneratedSource)
+                && !hasGenerated && !hasPackage && !previous.Files.Any(QueryWorkspace.IsStored)
                 && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
                 && projectSelections is not null
                 ? CliProjectReuse.Select(previous, savedProof.Projects, structureHash, projectSelections, capturedFiles, token) : null;
@@ -379,9 +442,9 @@ public static class CliIndexer
                 reference is Microsoft.CodeAnalysis.CompilationReference
                 || reference is Microsoft.CodeAnalysis.PortableExecutableReference { FilePath: { } path }
                     && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot)));
-            // No reuse proof is issued for a run with generated inputs: their currency
+            // No reuse proof is issued for a run with generated/package inputs: their currency
             // cannot be proven from fingerprints, so later queries stay unverified.
-            if (!hasGenerated && closedReferences && fullFingerprint is not null && afterFingerprint is not null
+            if (!hasGenerated && !hasPackage && closedReferences && fullFingerprint is not null && afterFingerprint is not null
                 && fullFingerprint == afterFingerprint
                 && initialInputs == stableInputsAfter && inputHash is not null)
                 reuseProof = new(CliReuseProof.OwnerVersion, optionsHash, inputHash, afterFingerprint.EnvironmentHash,
@@ -461,7 +524,7 @@ public static class CliIndexer
         var search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
         foreach (var input in manifest.Values)
         {
-            if (input.File.Kind == IndexFileKinds.GeneratedSource) VerifyGenerated(input);
+            if (QueryWorkspace.IsStored(input.File)) VerifyStored(input);
             else await Verify(input, root, token);
         }
         if (reuseProof is not null)
@@ -473,8 +536,12 @@ public static class CliIndexer
         var generatedBodies = manifest.Values.Where(i => i.File.Kind == IndexFileKinds.GeneratedSource)
             .Select(i => new IndexGeneratedBody(i.File.SourceId, i.Text))
             .OrderBy(b => b.SourceId, StringComparer.Ordinal).ToArray();
+        var packageBodies = manifest.Values.Where(i => i.File.Kind == IndexFileKinds.PackageSource)
+            .Select(i => new IndexPackageBody(i.File.SourceId, i.Text))
+            .OrderBy(b => b.SourceId, StringComparer.Ordinal).ToArray();
+        foreach (var verifyPackage in packageVerifiers) verifyPackage();
         var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
-            identities.ToArray(), [], search, generatedBodies);
+            identities.ToArray(), [], search, generatedBodies, packageBodies);
         IndexSnapshotValidator.Validate(snapshot);
         var finalInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
         if (initialInputs != finalInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
@@ -482,7 +549,11 @@ public static class CliIndexer
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         token.ThrowIfCancellationRequested();
         var files = snapshot.Files;
-        return new(snapshot, () => VerifySelection(options, files, publicationInputs, publicationToken))
+        return new(snapshot, () =>
+        {
+            VerifySelection(options, files, publicationInputs, publicationToken);
+            foreach (var verifyPackage in packageVerifiers) verifyPackage();
+        })
         {
             // Only a production extraction with a closed dependency/SDK proof may attest freshness.
             // Retain file metadata/options, not the graph or compiler workspace.
@@ -750,9 +821,9 @@ public static class CliIndexer
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
     }
 
-    private static void VerifyGenerated(InputText input)
+    private static void VerifyStored(InputText input)
     {
-        // A generated body is verified against the retained text itself; its virtual
+        // A stored body is verified against the retained text itself; its virtual
         // path must never be resolved against the filesystem.
         var bytes = StrictUtf8.GetBytes(input.Text);
         if (Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() != input.File.ContentHash

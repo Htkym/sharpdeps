@@ -16,7 +16,7 @@ public sealed class QueryService
     private readonly Dictionary<string, HarnessNode> nodes;
     private readonly Dictionary<string, HarnessSymbolOccurrence> occurrences;
     private readonly Dictionary<string, IndexFile> files;
-    private readonly Dictionary<string, string> generatedBodies;
+    private readonly Dictionary<string, string> storedBodies;
     private readonly Dictionary<string, HarnessEdge[]> outgoing;
     private readonly Dictionary<string, HarnessEdge[]> incoming;
     private readonly QueryWorkspace? workspace;
@@ -32,7 +32,9 @@ public sealed class QueryService
         nodes = saved.Graph.Nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
         occurrences = saved.Graph.SymbolOccurrences.ToDictionary(o => o.Id, StringComparer.Ordinal);
         files = saved.Files.ToDictionary(f => f.SourceId, StringComparer.Ordinal);
-        generatedBodies = saved.StoredGeneratedBodies.ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
+        storedBodies = saved.StoredGeneratedBodies.Select(b => (b.SourceId, b.Body))
+            .Concat(saved.StoredPackageBodies.Select(b => (b.SourceId, b.Body)))
+            .ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
         outgoing = saved.Graph.Edges.GroupBy(e => e.SourceNodeId, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.OrderBy(e => e.Id, StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
         incoming = saved.Graph.Edges.GroupBy(e => e.TargetNodeId, StringComparer.Ordinal)
@@ -473,12 +475,12 @@ public sealed class QueryService
 
     /// <summary>
     /// The bytes behind one input: the verified file on disk for physical inputs, the
-    /// verified stored body for generated inputs. A virtual generated path is never
+    /// verified stored body for generated/package inputs. A virtual path is never
     /// resolved against the filesystem.
     /// </summary>
     private byte[] ReadSource(IndexFile file, CancellationToken token)
-        => QueryWorkspace.IsGenerated(file)
-            ? workspace!.ReadStored(file, generatedBodies.TryGetValue(file.SourceId, out var body)
+        => QueryWorkspace.IsStored(file)
+            ? workspace!.ReadStored(file, storedBodies.TryGetValue(file.SourceId, out var body)
                 ? body : throw new QuerySourceException("SOURCE_CHANGED_SINCE_SNAPSHOT", file.RelativePath), token)
             : workspace!.Read(file, token);
 
@@ -496,6 +498,7 @@ public sealed class QueryService
             {
                 var text = new UTF8Encoding(false, true).GetString(ReadSource(file, work.Token));
                 if (QueryWorkspace.IsGenerated(file)) work.Reasons.Add("GENERATED_SOURCE_FROM_SNAPSHOT");
+                if (QueryWorkspace.IsPackage(file)) work.Reasons.Add("PACKAGE_SOURCE_FROM_SNAPSHOT");
                 var sorted = group.Select(p => (p.index, Location: p.item.Evidence!, Span: p.item.Evidence!.RawSpan!.Value))
                     .OrderBy(p => p.Span.Start).ThenBy(p => p.Span.End).ToArray();
                 if (sorted.Any(p => p.Location.ContentHash != file.ContentHash || p.Span.End > text.Length))

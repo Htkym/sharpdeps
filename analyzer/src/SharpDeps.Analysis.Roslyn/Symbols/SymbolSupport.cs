@@ -37,24 +37,28 @@ public sealed class GeneratedDocumentRegistrationException : InvalidOperationExc
 /// Quick analyzer's rule (workspace root + relative path + origin), so a file has one
 /// id whichever analyzer produced it.
 /// </summary>
-public sealed class SourceDocumentRegistry
+public sealed partial class SourceDocumentRegistry
 {
     private readonly string _rootId;
     private readonly string _rootDirectory;
+    private readonly string _packageRootId;
     private readonly Dictionary<string, SourceDocument> _byPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _generatedPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SourceDocument> _generatedByIdentity = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SourceDocument> _generatedByTree = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SourceDocument> _generated = [];
 
-    public SourceDocumentRegistry(string rootId, string rootDirectory)
+    public SourceDocumentRegistry(string rootId, string rootDirectory, string? packageRootId = null)
     {
         _rootId = rootId;
         _rootDirectory = rootDirectory;
+        // CLI package IDs use the persisted workspace identity without changing historical source/SG IDs.
+        _packageRootId = packageRootId ?? rootId;
     }
 
     public IReadOnlyList<SourceDocument> Documents => _byPath.Values
         .Concat(_generated)
+        .Concat(_packageByIdentity.Values)
         .OrderBy(document => document.RelativePath, StringComparer.Ordinal)
         .ToArray();
 
@@ -187,9 +191,9 @@ public sealed class SourceDocumentRegistry
             return null;
         }
 
-        return _generatedByTree.TryGetValue(TreeKey(variantKey, tree.FilePath), out var generated)
-            ? generated
-            : Register(tree.FilePath);
+        var key = TreeKey(variantKey, tree.FilePath);
+        return _generatedByTree.TryGetValue(key, out var generated) ? generated
+            : _packageByTree.TryGetValue(key, out var package) ? package : Register(tree.FilePath);
     }
 
     /// <summary>True when the tree is a pre-registered generated tree of this variant.</summary>

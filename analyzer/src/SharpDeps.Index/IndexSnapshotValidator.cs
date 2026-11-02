@@ -93,6 +93,24 @@ public static class IndexSnapshotValidator
             Require(generatedBodies.ContainsKey(file.SourceId),
                 "A live generated input must carry its stored body; a hash alone is not a complete index.");
         }
+        var packageBodies = Unique(snapshot.StoredPackageBodies, b => b.SourceId, "Package body", token);
+        foreach (var body in packageBodies.Values)
+        {
+            token.ThrowIfCancellationRequested();
+            Require(files.TryGetValue(body.SourceId, out var file) && file.Kind == IndexFileKinds.PackageSource
+                && !file.Deleted, "A stored package body must belong to a live package input.");
+            Require(body.Body is not null, "A stored package body cannot be null.");
+            var bytes = StrictUtf8.GetBytes(body.Body);
+            if (bytes.LongLength != file.ByteLength || body.Body.Length != file.Utf16Length
+                || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant() != file.ContentHash)
+                throw new IndexStoreException("INDEX_PACKAGE_BODY_INVALID", "A stored package body must match its input hash and lengths.");
+        }
+        foreach (var file in files.Values.Where(f => f.Kind == IndexFileKinds.PackageSource && !f.Deleted))
+        {
+            token.ThrowIfCancellationRequested();
+            Require(file.Utf16Length is not null && packageBodies.ContainsKey(file.SourceId),
+                "A live package input must carry its length and stored body; a hash alone is not a complete index.");
+        }
         Require(nodes.TryGetValue(graph.WorkspaceId, out var root) && root.Kind == HarnessNodeKind.Workspace
             && root.ParentId is null && graph.Nodes.Count(n => n.Kind == HarnessNodeKind.Workspace) == 1,
             "The graph needs exactly its declared workspace root.");

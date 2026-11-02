@@ -1,0 +1,257 @@
+namespace SharpDeps.Cli.Tests;
+
+using System.IO.Compression;
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Xml.Linq;
+using Microsoft.CodeAnalysis.CSharp;
+using SharpDeps.Analysis.Contracts.Harness;
+using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Roslyn.Symbols;
+using SharpDeps.Index;
+using SharpDeps.Query;
+using Xunit;
+
+public sealed class PackageSourceTests
+{
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task IndexerRegistersPackageSourcesAndPublicationRechecksAssetsAndPackageEvidence()
+    {
+        using var fixture = new PackageFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        await fixture.RestoreProject(deadline.Token);
+        var workspace = Guid.NewGuid();
+        var index = Path.Combine(fixture.Root, ".sharpdeps", "index.sqlite");
+        var options = new CliIndexOptions(fixture.Root, fixture.ProjectPath, index, workspace, AllowSemanticReuse: true);
+        using var writer = IndexWriter.Open(fixture.Root, index, workspace, true);
+        var first = await CliIndexer.BuildForPublicationAsync(options, null, deadline.Token);
+        var package = Assert.Single(first.Snapshot.Files, QueryWorkspace.IsPackage);
+        Assert.Contains("PackageType", Assert.Single(first.Snapshot.StoredPackageBodies).Body, StringComparison.Ordinal);
+        Assert.All(first.Snapshot.Files, f => Assert.Null(f.Reuse));
+        var type = Assert.Single(first.Snapshot.Graph.Nodes, n => n.Name == "PackageType");
+        Assert.Contains(first.Snapshot.Graph.SymbolOccurrences, o => o.LogicalSymbolId == type.Id && o.Location?.SourceId == package.SourceId);
+        writer.Commit(IndexStage.Create(first.Snapshot), deadline.Token, first.VerifySelection);
+
+        var pending = await CliIndexer.BuildForPublicationAsync(options, first.Snapshot, deadline.Token);
+        var assetsPath = Path.Combine(fixture.Root, "obj", "project.assets.json");
+        var originalAssets = File.ReadAllText(assetsPath);
+        File.AppendAllText(assetsPath, "\n");
+        var changed = Assert.Throws<CliIndexException>(() => writer.Commit(IndexStage.Create(pending.Snapshot),
+            deadline.Token, pending.VerifySelection));
+        Assert.Equal("SOURCE_CHANGED_SINCE_STAGING", changed.Code);
+        File.WriteAllText(assetsPath, originalAssets);
+        File.WriteAllText(fixture.SourcePath, PackageFixture.Text + "// changed after staging");
+        changed = Assert.Throws<CliIndexException>(() => writer.Commit(IndexStage.Create(pending.Snapshot),
+            deadline.Token, pending.VerifySelection));
+        Assert.Equal("SOURCE_CHANGED_SINCE_STAGING", changed.Code);
+        await Assert.ThrowsAsync<CliIndexException>(() => CliIndexer.BuildAsync(options, first.Snapshot, deadline.Token));
+        using var reader = IndexReader.Open(index, workspace);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+        Assert.Equal(first.Snapshot.StoredPackageBodies, reader.Snapshot().StoredPackageBodies);
+    }
+
+    [Fact]
+    public void RestoreBoundTreeHasStableIdentityAndStoredBodyWithoutAdoptingOtherAssets()
+    {
+        using var fixture = new PackageFixture();
+        var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.PackageDirectory, ".nupkg.metadata")))!;
+        File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), new JsonObject
+        {
+            ["dependencies"] = new JsonObject
+            {
+                ["net10.0"] = new JsonObject { ["Test.Package"] = new JsonObject
+                    { ["resolved"] = "1.0.0", ["contentHash"] = metadata["contentHash"]!.DeepClone() } },
+                ["net8.0"] = new JsonObject { ["Test.Package"] = new JsonObject
+                    { ["resolved"] = "2.0.0", ["contentHash"] = "another-version" } }
+            }
+        }.ToJsonString());
+        var info = fixture.Bind();
+        var workspace = Guid.NewGuid();
+        var rootId = Identity.WorkspaceRootId(fixture.Root);
+        var project = HarnessIdentity.ProjectId(workspace, "App.csproj");
+        var variant = HarnessIdentity.VariantId(workspace, project, "net10.0", "Debug");
+        SourceDocumentRegistry Registry() => new(rootId, fixture.Root, HarnessIdentity.WorkspaceId(workspace));
+        SharpDeps.Analysis.Contracts.SourceDocument Register(SourceDocumentRegistry registry, string key, string stable)
+            => registry.RegisterPackage(key, "App", stable, info.PackageId, info.Version, info.RelativePath,
+                fixture.SourcePath, info.ContentHash, info.ByteLength);
+        var forward = Registry();
+        var first = Register(forward, "absolute-original|net10.0", variant);
+        var other = Register(forward, "other", "other-stable-variant");
+        var relocatedRoot = fixture.Root + "-relocated";
+        var reverse = new SourceDocumentRegistry(Identity.WorkspaceRootId(relocatedRoot), relocatedRoot,
+            HarnessIdentity.WorkspaceId(workspace));
+        Assert.Equal(other, Register(reverse, "other", "other-stable-variant"));
+        Assert.Equal(first, Register(reverse, "relocated-absolute|net10.0", variant));
+        Assert.Equal(first, forward.ResolveTreeDocument("absolute-original|net10.0", fixture.Tree));
+        Assert.Equal("packageSource", first.Origin);
+        Assert.Equal(2, forward.Documents.Count);
+
+        var id = HarnessIdentity.WorkspaceId(workspace);
+        var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
+            HarnessGraphContract.IdentityVersion, id, "package-positive", 1, HarnessCoverage.Partial,
+            [], [new(id, HarnessNodeKind.Workspace, "Workspace", null, null)], [], [], [], null);
+        var input = new IndexFile(first.Id, first.RelativePath, IndexFileKinds.PackageSource,
+            info.ContentHash, info.ByteLength, info.Text.Length);
+        var snapshot = new IndexSnapshot(graph, [input], [], [], [], PackageBodies: [new(first.Id, info.Text)]);
+        var index = Path.Combine(fixture.Root, ".sharpdeps", "index.sqlite");
+        using (var writer = IndexWriter.Open(fixture.Root, index, workspace, true))
+        {
+            Assert.Equal(3, writer.SchemaVersion);
+            writer.Commit(IndexStage.Create(snapshot));
+        }
+        // Neither verification nor stored reads may depend on the extracted package cache.
+        File.Delete(fixture.SourcePath);
+        using var reader = IndexReader.Open(index, workspace);
+        var saved = reader.Snapshot();
+        Assert.Equal(Assert.Single(snapshot.StoredPackageBodies), Assert.Single(saved.StoredPackageBodies));
+        var query = new QueryWorkspace(fixture.Root, _ => new([], true));
+        var freshness = query.Verify(saved);
+        Assert.Equal("unverified", freshness.State);
+        Assert.Empty(freshness.DirtyPaths);
+        Assert.Equal(["PACKAGE_INPUT_UNVERIFIED:" + first.RelativePath], freshness.Unverified);
+        Assert.Equal(info.Text, Encoding.UTF8.GetString(query.ReadStored(input, saved.StoredPackageBodies[0].Body)));
+    }
+
+    [Theory]
+    [InlineData("missing-entry")]
+    [InlineData("extracted-mismatch")]
+    [InlineData("tree-mismatch")]
+    [InlineData("escape")]
+    [InlineData("metadata-hash")]
+    [InlineData("lock-hash")]
+    [InlineData("unconfirmed-boundary")]
+    [InlineData("wrong-framework")]
+    [InlineData("linked-cache")]
+    [InlineData("linked-package")]
+    [InlineData("linked-file")]
+    public void IncompleteOrInconsistentEvidenceRejectsTheCompilationTree(string corruption)
+    {
+        using var fixture = new PackageFixture();
+        var text = PackageFixture.Text;
+        switch (corruption)
+        {
+            case "missing-entry": fixture.WriteArchive("not-the-source.cs", text); break;
+            case "extracted-mismatch": File.WriteAllText(fixture.SourcePath, text + "//changed"); break;
+            case "tree-mismatch": text += "//changed"; break;
+            case "escape": fixture.Assets["libraries"]!["test.package/1.0.0"]!["files"] = new JsonArray("../build/Source.cs"); fixture.SaveAssets(); break;
+            case "metadata-hash": File.WriteAllText(Path.Combine(fixture.PackageDirectory, ".nupkg.metadata"), "{\"contentHash\":\"bad\"}"); break;
+            case "lock-hash": File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), "{\"dependencies\":{\"net10.0\":{\"Test.Package\":{\"contentHash\":\"bad\"}}}}"); break;
+            case "unconfirmed-boundary": File.Delete(fixture.PropsPath); break;
+            case "wrong-framework": fixture.Assets["targets"] = new JsonObject { ["net8.0"] = new JsonObject() }; fixture.SaveAssets(); break;
+            case "linked-cache":
+                Directory.Move(fixture.Cache, fixture.Cache + "-target");
+                Directory.CreateSymbolicLink(fixture.Cache, fixture.Cache + "-target");
+                break;
+            case "linked-package":
+                Directory.Move(fixture.PackageDirectory, fixture.PackageDirectory + "-target");
+                Directory.CreateSymbolicLink(fixture.PackageDirectory, fixture.PackageDirectory + "-target");
+                break;
+            case "linked-file":
+                File.Move(fixture.SourcePath, fixture.SourcePath + ".target");
+                File.CreateSymbolicLink(fixture.SourcePath, fixture.SourcePath + ".target");
+                break;
+        }
+        var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind(text));
+        Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
+        Assert.Contains("CliPackageSource.Bind", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Cache, error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RegistrationRejectsConflictingBodiesAndClaimsWithoutLeakingCachePaths()
+    {
+        using var fixture = new PackageFixture();
+        var info = fixture.Bind();
+        var registry = new SourceDocumentRegistry("root", fixture.Root);
+        registry.RegisterPackage("variant", "App", "stable", info.PackageId, info.Version, info.RelativePath,
+            fixture.SourcePath, info.ContentHash, info.ByteLength);
+        var conflict = Assert.Throws<PackageDocumentRegistrationException>(() => registry.RegisterPackage(
+            "variant", "App", "stable", info.PackageId, info.Version, info.RelativePath,
+            fixture.SourcePath, new string('a', 64), info.ByteLength));
+        Assert.Equal(PackageDocumentRegistrationException.BodyConflict, conflict.Code);
+        var ambiguous = Assert.Throws<PackageDocumentRegistrationException>(() => registry.RegisterPackage(
+            "variant", "App", "stable", "another.package", info.Version, info.RelativePath,
+            fixture.SourcePath, info.ContentHash, info.ByteLength));
+        Assert.Equal(PackageDocumentRegistrationException.IdentityAmbiguous, ambiguous.Code);
+        Assert.DoesNotContain(fixture.Cache, ambiguous.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class PackageFixture : IDisposable
+    {
+        public const string Text = "public class PackageType { } // café 😀\n";
+        private readonly string directory = Path.Combine(Path.GetTempPath(), "sharpdeps-package-" + Guid.NewGuid().ToString("N"));
+        public string Root => Path.Combine(directory, "workspace");
+        public string Cache => Path.Combine(directory, "cache");
+        public string ProjectPath => Path.Combine(Root, "App.csproj");
+        public string PackageDirectory => Path.Combine(Cache, "test.package", "1.0.0");
+        public string SourcePath => Path.Combine(PackageDirectory, "build", "Source.cs");
+        public string PropsPath => Path.Combine(Root, "obj", "App.csproj.nuget.g.props");
+        public JsonObject Assets { get; }
+        public Microsoft.CodeAnalysis.SyntaxTree Tree => CSharpSyntaxTree.ParseText(Text, path: SourcePath);
+
+        public PackageFixture()
+        {
+            Directory.CreateDirectory(Path.Combine(Root, "obj"));
+            Directory.CreateDirectory(Path.GetDirectoryName(SourcePath)!);
+            File.WriteAllText(ProjectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(SourcePath, Text, new UTF8Encoding(false));
+            WriteArchive("build/Source.cs", Text);
+            new XDocument(new XElement("Project", new XElement("PropertyGroup", new XElement("NuGetPackageRoot", Cache))))
+                .Save(PropsPath);
+            Assets = new JsonObject
+            {
+                ["project"] = new JsonObject { ["restore"] = new JsonObject { ["projectPath"] = ProjectPath, ["packagesPath"] = Cache } },
+                ["targets"] = new JsonObject { ["net10.0"] = new JsonObject { ["test.package/1.0.0"] = new JsonObject { ["type"] = "package" } } },
+                ["libraries"] = new JsonObject { ["test.package/1.0.0"] = new JsonObject
+                {
+                    ["type"] = "package", ["path"] = "test.package/1.0.0",
+                    // Not a tree: missing, escaping and otherwise invalid extra entries must not be read or adopted.
+                    ["files"] = new JsonArray("build/Source.cs", "missing.cs", "../never-read.cs")
+                } }
+            };
+            SaveAssets();
+        }
+
+        public CliPackageSource.Binding Bind(string? text = null)
+            => CliPackageSource.Bind(ProjectPath, "net10.0", Tree.FilePath, text ?? Tree.GetText().ToString());
+
+        public void SaveAssets() => File.WriteAllText(Path.Combine(Root, "obj", "project.assets.json"), Assets.ToJsonString());
+
+        public async Task RestoreProject(CancellationToken token)
+        {
+            File.Delete(Path.Combine(Root, "obj", "project.assets.json"));
+            var project = XDocument.Load(ProjectPath);
+            project.Root!.Add(new XElement("ItemGroup", new XElement("Compile", new XAttribute("Include", SourcePath))));
+            project.Save(ProjectPath);
+            var start = new ProcessStartInfo("dotnet") { WorkingDirectory = Root, UseShellExecute = false,
+                RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add("restore"); start.ArgumentList.Add(ProjectPath);
+            start.Environment["NUGET_PACKAGES"] = Cache;
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync(token);
+            var error = process.StandardError.ReadToEndAsync(token);
+            await process.WaitForExitAsync(token);
+            Assert.True(process.ExitCode == 0, await output + await error);
+            var restored = JsonNode.Parse(File.ReadAllText(Path.Combine(Root, "obj", "project.assets.json")))!;
+            restored["libraries"]!["test.package/1.0.0"] = Assets["libraries"]!["test.package/1.0.0"]!.DeepClone();
+            restored["targets"]!["net10.0"]!["test.package/1.0.0"] = Assets["targets"]!["net10.0"]!["test.package/1.0.0"]!.DeepClone();
+            File.WriteAllText(Path.Combine(Root, "obj", "project.assets.json"), restored.ToJsonString());
+        }
+
+        public void WriteArchive(string entryPath, string text)
+        {
+            var path = Path.Combine(PackageDirectory, "test.package.1.0.0.nupkg");
+            using (var stream = new FileStream(path, FileMode.Create))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(zip.CreateEntry(entryPath).Open(), new UTF8Encoding(false))) writer.Write(text);
+            var hash = Convert.ToBase64String(SHA512.HashData(File.ReadAllBytes(path)));
+            File.WriteAllText(Path.Combine(PackageDirectory, ".nupkg.metadata"), JsonSerializer.Serialize(new { contentHash = hash }));
+        }
+
+        public void Dispose() => Directory.Delete(directory, recursive: true);
+    }
+}
