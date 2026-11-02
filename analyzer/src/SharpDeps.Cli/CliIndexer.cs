@@ -309,9 +309,9 @@ public static class CliIndexer
                     {
                         var package = documents.ResolveTreeDocument(input.VariantId, tree)!;
                         var info = packageInfoByDocumentId[package.Id];
-                        if (tree.GetText(token).ToString() != info.Text)
+                        if (tree.GetText(token).ToString() != info.Text[info.CompilationOffset..])
                             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", "Package compilation text differs from its retained body.");
-                        sourceOffsets[package.Id] = 0;
+                        sourceOffsets[package.Id] = info.CompilationOffset;
                         if (manifest.TryGetValue(package.RelativePath, out var prior))
                         {
                             if (prior.File.SourceId != package.Id)

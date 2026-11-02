@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using NuGet.Packaging;
 using SharpDeps.Analysis.Roslyn.Symbols;
 using SharpDeps.Index;
 
@@ -14,7 +15,7 @@ using SharpDeps.Index;
 internal static class CliPackageSource
 {
     internal sealed record Binding(string PackageId, string Version, string RelativePath, string Text,
-        string ContentHash, long ByteLength, string EvidenceHash);
+        string ContentHash, long ByteLength, string EvidenceHash, int CompilationOffset);
 
     internal static Binding Bind(string projectPath, string framework, string filePath, string compilationText,
         CancellationToken token = default)
@@ -54,7 +55,7 @@ internal static class CliPackageSource
             Require(confirmed);
             var targets = assets.RootElement.GetProperty("targets");
             Require(targets.TryGetProperty(framework, out var selected));
-            var matches = new List<(string Id, string Version, string Source)>();
+            var matches = new List<(string Id, string Version, string Source, string Hash)>();
             foreach (var library in assets.RootElement.GetProperty("libraries").EnumerateObject())
             {
                 token.ThrowIfCancellationRequested();
@@ -73,7 +74,8 @@ internal static class CliPackageSource
                     if (name != source) continue;
                     Require(SafeRelative(name));
                     Require(CliPaths.SamePath(CliPaths.InRoot(cache, libraryPath + "/" + name), candidate));
-                    matches.Add((identity[0].ToLowerInvariant(), version, name));
+                    matches.Add((identity[0].ToLowerInvariant(), version, name,
+                        library.Value.GetProperty("sha512").GetString()!));
                 }
             }
             Require(matches.Count > 0);
@@ -87,8 +89,10 @@ internal static class CliPackageSource
             CliPaths.RejectLinks(archivePath);
             using var archiveInput = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             token.ThrowIfCancellationRequested();
-            var archiveHash = SHA512.HashData(archiveInput);
+            using var packageReader = new PackageArchiveReader(archiveInput, leaveStreamOpen: true);
+            var archiveHash = Convert.FromBase64String(packageReader.GetContentHash(token));
             Append(Convert.ToBase64String(archiveHash));
+            Require(HashMatches(matches[0].Hash, archiveHash));
             Require(HashMatches(metadata.RootElement.GetProperty("contentHash").GetString(), archiveHash));
             var lockPath = Path.Combine(directory, "packages.lock.json");
             if (EvidenceExists(lockPath))
@@ -110,7 +114,7 @@ internal static class CliPackageSource
                         }
             }
             else Append("no-lock");
-            // Without a lock file, metadata plus actual archive bytes carry the evidence.
+            // Assets pin the restored content; metadata and an optional lock must agree.
             // This proves consistency with the user's restore, not authenticity from the publisher.
             var extracted = ReadEvidence(candidate, IndexSnapshotValidator.MaximumInputFileBytes);
             archiveInput.Position = 0;
@@ -122,11 +126,14 @@ internal static class CliPackageSource
             entry.ReadExactly(archiveBody);
             Require(entry.ReadByte() == -1 && archiveBody.AsSpan().SequenceEqual(extracted));
             var text = new UTF8Encoding(false, true).GetString(extracted);
-            Require(text == compilationText && !text.Contains('\0'));
+            var offset = text == compilationText ? 0
+                : extracted.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf })
+                    && text[1..] == compilationText ? 1 : -1;
+            Require(offset >= 0 && !text.Contains('\0'));
             CliPaths.RejectLinks(candidate); CliPaths.RejectLinks(archivePath);
             token.ThrowIfCancellationRequested();
             return new(id, version, source, text, Convert.ToHexString(SHA256.HashData(extracted)).ToLowerInvariant(),
-                extracted.LongLength, Convert.ToHexString(evidence.GetHashAndReset()).ToLowerInvariant());
+                extracted.LongLength, Convert.ToHexString(evidence.GetHashAndReset()).ToLowerInvariant(), offset);
 
             byte[] ReadEvidence(string path, long maximum = IndexSnapshotValidator.MaximumInputFileBytes)
             {

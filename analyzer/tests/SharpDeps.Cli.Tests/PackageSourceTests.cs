@@ -11,17 +11,20 @@ using Microsoft.CodeAnalysis.CSharp;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn.Symbols;
+using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
 
 public sealed class PackageSourceTests
 {
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("Category", "Integration")]
-    public async Task IndexerRegistersPackageSourcesAndPublicationRechecksAssetsAndPackageEvidence()
+    public async Task IndexerRegistersPackageSourcesAndPublicationRechecksAssetsAndPackageEvidence(bool bom)
     {
-        using var fixture = new PackageFixture();
+        using var fixture = new PackageFixture(bom);
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         await fixture.RestoreProject(deadline.Token);
         var workspace = Guid.NewGuid();
@@ -35,6 +38,12 @@ public sealed class PackageSourceTests
         var type = Assert.Single(first.Snapshot.Graph.Nodes, n => n.Name == "PackageType");
         Assert.Contains(first.Snapshot.Graph.SymbolOccurrences, o => o.LogicalSymbolId == type.Id && o.Location?.SourceId == package.SourceId);
         writer.Commit(IndexStage.Create(first.Snapshot), deadline.Token, first.VerifySelection);
+        var savedBody = Assert.Single(first.Snapshot.StoredPackageBodies).Body;
+        var span = type.Location!.RawSpan!.Value;
+        Assert.Equal(bom ? 1 : 0, span.Start);
+        Assert.StartsWith("public class PackageType", savedBody.Substring(span.Start, span.Length));
+        var workspaceReader = new QueryWorkspace(fixture.Root);
+        Assert.Equal(savedBody, Encoding.UTF8.GetString(workspaceReader.ReadStored(package, savedBody)));
 
         var pending = await CliIndexer.BuildForPublicationAsync(options, first.Snapshot, deadline.Token);
         var assetsPath = Path.Combine(fixture.Root, "obj", "project.assets.json");
@@ -52,6 +61,42 @@ public sealed class PackageSourceTests
         using var reader = IndexReader.Open(index, workspace);
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
         Assert.Equal(first.Snapshot.StoredPackageBodies, reader.Snapshot().StoredPackageBodies);
+    }
+
+    [Fact]
+    public void SignedRestorePackageUsesNuGetContentHashRatherThanRawArchiveHash()
+    {
+        using var fixture = new PackageFixture();
+        var saved = Path.Combine(AppContext.BaseDirectory, "signed-package-fixture");
+        var originalAssets = JsonNode.Parse(File.ReadAllText(Path.Combine(saved, "assets.json")))!;
+        var library = Assert.Single(originalAssets["libraries"]!.AsObject(),
+            p => p.Key.StartsWith("Microsoft.NET.Test.Sdk/", StringComparison.Ordinal));
+        var identity = library.Key.Split('/');
+        var id = identity[0].ToLowerInvariant();
+        var version = identity[1];
+        var packagePath = id + "/" + version;
+        var directory = Path.Combine(fixture.Cache, id, version);
+        Directory.CreateDirectory(directory);
+        var archive = Path.Combine(directory, id + "." + version + ".nupkg");
+        File.Copy(Assert.Single(Directory.GetFiles(saved, "*.nupkg")), archive);
+        File.Copy(Path.Combine(saved, "metadata.json"), Path.Combine(directory, ".nupkg.metadata"));
+        var expectedHash = library.Value!["sha512"]!.GetValue<string>();
+        Assert.NotEqual(expectedHash, Convert.ToBase64String(SHA512.HashData(File.ReadAllBytes(archive))));
+        using var zip = ZipFile.OpenRead(archive);
+        Assert.NotNull(zip.GetEntry(".signature.p7s"));
+        var entry = Assert.Single(zip.Entries, e => e.FullName.EndsWith("/Microsoft.NET.Test.Sdk.Program.cs", StringComparison.Ordinal));
+        var source = Path.Combine(directory, entry.FullName);
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        entry.ExtractToFile(source);
+        var compilationText = File.ReadAllText(source, Encoding.UTF8);
+        fixture.Assets["libraries"] = new JsonObject { [library.Key] = library.Value.DeepClone() };
+        fixture.Assets["targets"] = new JsonObject { ["net10.0"] = new JsonObject
+            { [library.Key] = new JsonObject { ["type"] = "package" } } };
+        fixture.SaveAssets();
+        var binding = CliPackageSource.Bind(fixture.ProjectPath, "net10.0", source, compilationText);
+        Assert.Equal(id, binding.PackageId);
+        Assert.Equal(compilationText, binding.Text[binding.CompilationOffset..]);
+        Assert.Equal(expectedHash, JsonNode.Parse(File.ReadAllText(Path.Combine(directory, ".nupkg.metadata")))!["contentHash"]!.GetValue<string>());
     }
 
     [Fact]
@@ -122,6 +167,9 @@ public sealed class PackageSourceTests
     [InlineData("tree-mismatch")]
     [InlineData("escape")]
     [InlineData("metadata-hash")]
+    [InlineData("assets-hash-missing")]
+    [InlineData("assets-hash-invalid")]
+    [InlineData("archive-and-metadata-changed")]
     [InlineData("lock-hash")]
     [InlineData("unconfirmed-boundary")]
     [InlineData("wrong-framework")]
@@ -134,7 +182,19 @@ public sealed class PackageSourceTests
         var text = PackageFixture.Text;
         switch (corruption)
         {
-            case "missing-entry": fixture.WriteArchive("not-the-source.cs", text); break;
+            case "assets-hash-missing": fixture.Assets["libraries"]!["test.package/1.0.0"]!.AsObject().Remove("sha512"); fixture.SaveAssets(); break;
+            case "assets-hash-invalid": fixture.Assets["libraries"]!["test.package/1.0.0"]!["sha512"] = "bad"; fixture.SaveAssets(); break;
+            case "archive-and-metadata-changed":
+                text += "// replaced package";
+                fixture.WriteArchive("build/Source.cs", text);
+                File.WriteAllText(fixture.SourcePath, text, new UTF8Encoding(false));
+                break;
+            case "missing-entry":
+                fixture.WriteArchive("not-the-source.cs", text);
+                fixture.Assets["libraries"]!["test.package/1.0.0"]!["sha512"] =
+                    JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.PackageDirectory, ".nupkg.metadata")))!["contentHash"]!.DeepClone();
+                fixture.SaveAssets();
+                break;
             case "extracted-mismatch": File.WriteAllText(fixture.SourcePath, text + "//changed"); break;
             case "tree-mismatch": text += "//changed"; break;
             case "escape": fixture.Assets["libraries"]!["test.package/1.0.0"]!["files"] = new JsonArray("../build/Source.cs"); fixture.SaveAssets(); break;
@@ -193,13 +253,14 @@ public sealed class PackageSourceTests
         public JsonObject Assets { get; }
         public Microsoft.CodeAnalysis.SyntaxTree Tree => CSharpSyntaxTree.ParseText(Text, path: SourcePath);
 
-        public PackageFixture()
+        public PackageFixture(bool bom = false)
         {
             Directory.CreateDirectory(Path.Combine(Root, "obj"));
             Directory.CreateDirectory(Path.GetDirectoryName(SourcePath)!);
             File.WriteAllText(ProjectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-            File.WriteAllText(SourcePath, Text, new UTF8Encoding(false));
-            WriteArchive("build/Source.cs", Text);
+            Assert.True(SemanticEnvironment.TryRegister(Root, out var reason), reason);
+            File.WriteAllText(SourcePath, Text, new UTF8Encoding(bom));
+            WriteArchive("build/Source.cs", Text, bom);
             new XDocument(new XElement("Project", new XElement("PropertyGroup", new XElement("NuGetPackageRoot", Cache))))
                 .Save(PropsPath);
             Assets = new JsonObject
@@ -209,6 +270,7 @@ public sealed class PackageSourceTests
                 ["libraries"] = new JsonObject { ["test.package/1.0.0"] = new JsonObject
                 {
                     ["type"] = "package", ["path"] = "test.package/1.0.0",
+                    ["sha512"] = JsonNode.Parse(File.ReadAllText(Path.Combine(PackageDirectory, ".nupkg.metadata")))!["contentHash"]!.DeepClone(),
                     // Not a tree: missing, escaping and otherwise invalid extra entries must not be read or adopted.
                     ["files"] = new JsonArray("build/Source.cs", "missing.cs", "../never-read.cs")
                 } }
@@ -242,12 +304,12 @@ public sealed class PackageSourceTests
             File.WriteAllText(Path.Combine(Root, "obj", "project.assets.json"), restored.ToJsonString());
         }
 
-        public void WriteArchive(string entryPath, string text)
+        public void WriteArchive(string entryPath, string text, bool bom = false)
         {
             var path = Path.Combine(PackageDirectory, "test.package.1.0.0.nupkg");
             using (var stream = new FileStream(path, FileMode.Create))
             using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
-            using (var writer = new StreamWriter(zip.CreateEntry(entryPath).Open(), new UTF8Encoding(false))) writer.Write(text);
+            using (var writer = new StreamWriter(zip.CreateEntry(entryPath).Open(), new UTF8Encoding(bom))) writer.Write(text);
             var hash = Convert.ToBase64String(SHA512.HashData(File.ReadAllBytes(path)));
             File.WriteAllText(Path.Combine(PackageDirectory, ".nupkg.metadata"), JsonSerializer.Serialize(new { contentHash = hash }));
         }
