@@ -276,7 +276,8 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                     Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
                 }
             }
-            await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service"}}}""");
+            // This checks RPC lifecycle, not cold-start latency; deadline behavior has separate tests.
+            await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service","maxMilliseconds":10000}}}""");
             using (var query = await Reply(3))
             {
                 var result = query.RootElement.GetProperty("result");
@@ -288,7 +289,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             }
             if (!allowMutations)
             {
-                await Send("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"explore","arguments":{"query":"","queryKind":"http-get-literal"}}}""");
+                await Send("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"explore","arguments":{"query":"","queryKind":"http-get-literal","maxMilliseconds":10000}}}""");
                 using var missing = await Reply(7);
                 var result = missing.RootElement.GetProperty("result");
                 Assert.True(result.GetProperty("isError").GetBoolean());
@@ -307,7 +308,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 File.AppendAllText(Path.Combine(fixture.Root, "App.cs"), " public sealed class Added { }");
                 await Send("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update","arguments":{"arguments":["--target","App.csproj"]}}}""");
                 using (var updated = await Reply(5)) AssertMutation(updated, "update");
-                await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit"}}}""");
+                await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit","maxMilliseconds":10000}}}""");
                 using var saved = await Reply(6);
                 var result = saved.RootElement.GetProperty("result");
                 Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
