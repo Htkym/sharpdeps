@@ -144,7 +144,9 @@ public static class NamespaceAnalyzer
                 foreach (var ns in fileNamespaces)
                 {
                     knownNamespaces.Add(ns);
-                    representativeFileByNamespace.TryAdd(ns, file);
+                    if (!representativeFileByNamespace.TryGetValue(ns, out var representative)
+                        || StringComparer.Ordinal.Compare(file, representative) < 0)
+                        representativeFileByNamespace[ns] = file;
                     if (!declarationCountByProject.TryGetValue(ns, out var perProject))
                     {
                         perProject = new Dictionary<string, int>(StringComparer.Ordinal);

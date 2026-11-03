@@ -12,8 +12,9 @@ using SharpDeps.Cli;
 using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
+using Xunit.Abstractions;
 
-public sealed class McpFlowTests
+public sealed class McpFlowTests(ITestOutputHelper output)
 {
     [Theory]
     [InlineData(false, null, null)]
@@ -279,7 +280,7 @@ public sealed class McpFlowTests
             using (var query = await Reply(3))
             {
                 var result = query.RootElement.GetProperty("result");
-                Assert.False(result.GetProperty("isError").GetBoolean());
+                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
                 Assert.False(result.TryGetProperty("structuredContent", out _));
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains(Fixture.Code.TrimEnd('\n'), source, StringComparison.Ordinal);
@@ -309,7 +310,7 @@ public sealed class McpFlowTests
                 await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit"}}}""");
                 using var saved = await Reply(6);
                 var result = saved.RootElement.GetProperty("result");
-                Assert.False(result.GetProperty("isError").GetBoolean());
+                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
                 Assert.False(result.TryGetProperty("structuredContent", out _));
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains("public sealed class Added { }", source, StringComparison.Ordinal);
@@ -326,6 +327,16 @@ public sealed class McpFlowTests
         {
             // This test created this exact Process handle; a timed-out fixture must not leave its host running.
             if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
+            try
+            {
+                var diagnostic = await stderr.WaitAsync(TimeSpan.FromSeconds(10));
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    output.WriteLine("MCP fixture stderr: {0}", diagnostic);
+            }
+            catch (TimeoutException)
+            {
+                output.WriteLine("MCP fixture stderr did not close within 10 seconds after host exit.");
+            }
         }
         async Task Send(string line) { await process.StandardInput.WriteLineAsync(line); await process.StandardInput.FlushAsync(); }
         async Task<JsonDocument> Reply(int id)
