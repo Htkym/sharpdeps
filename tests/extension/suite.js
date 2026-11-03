@@ -343,10 +343,15 @@ async function run() {
       .getByRole('button', { name: /^Outgoing:/ })
       .first()
       .press('Enter');
-    await frame.getByRole('button', { name: 'Open in editor', exact: true }).first().press('Enter');
-    await expect
-      .poll(() => vscode.window.activeTextEditor?.document.uri.fsPath)
-      .toBe(source.fsPath);
+    await withSourceOpenDiagnostics(frame, vscode, repo, async () => {
+      await frame
+        .getByRole('button', { name: 'Open in editor', exact: true })
+        .first()
+        .press('Enter');
+      await expect
+        .poll(() => vscode.window.activeTextEditor?.document.uri.fsPath)
+        .toBe(source.fsPath);
+    });
     record('cursor → dependencies → evidence → physical source using keyboard', true);
     await vscode.commands.executeCommand('sharpdeps.showTypeDependents');
     frame = await mapFrame();
@@ -428,4 +433,91 @@ function diagnosticsFor(extension, vscode) {
     `dotnet=${dotnet.status === 0 ? dotnet.stdout.trim() : `unavailable (${dotnet.error?.code ?? dotnet.status})`}`,
     `mode=${mode}`
   ].join(', ');
+}
+
+async function withSourceOpenDiagnostics(frame, vscode, repo, action) {
+  const page = frame.page();
+  const errors = [];
+  const remember = (kind, text) => {
+    if (errors.length < 20) errors.push({ kind, text: String(text).slice(0, 2048) });
+  };
+  const onConsole = (message) => {
+    if (message.type() === 'error') remember('console', message.text());
+  };
+  const onPageError = (error) => remember('pageerror', error.message);
+  const editorState = () => {
+    const uri = vscode.window.activeTextEditor?.document.uri;
+    if (!uri) return { present: false };
+    const relative = uri.scheme === 'file' ? path.relative(repo, uri.fsPath) : undefined;
+    return {
+      present: true,
+      scheme: uri.scheme,
+      fixturePath:
+        relative &&
+        !path.isAbsolute(relative) &&
+        relative.startsWith(`tests${path.sep}fixtures${path.sep}`)
+          ? relative.replaceAll(path.sep, '/')
+          : undefined
+    };
+  };
+  const before = { editor: editorState(), frameDetached: frame.isDetached() };
+  page.on('console', onConsole);
+  page.on('pageerror', onPageError);
+  try {
+    await action();
+  } catch (error) {
+    const diagnostic = {
+      before,
+      after: {
+        editor: editorState(),
+        frameDetached: frame.isDetached(),
+        pageClosed: page.isClosed()
+      },
+      errors,
+      failure: String(error?.stack ?? error)
+    };
+    let timer;
+    try {
+      diagnostic.focus = await Promise.race([
+        frame.evaluate(() => ({
+          hasFocus: document.hasFocus(),
+          activeTag: document.activeElement?.tagName,
+          activeSourceId: document.activeElement?.getAttribute('data-source-id'),
+          visibility: document.visibilityState
+        })),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('focus diagnostic timed out')), 2000);
+        })
+      ]);
+    } catch (captureError) {
+      diagnostic.focusError = String(captureError.message);
+    } finally {
+      clearTimeout(timer);
+    }
+    const report = process.env.SHARPDEPTS_E2E_REPORT;
+    if (report) {
+      try {
+        const imageDir = path.join(path.dirname(report), '..', 'browser-results');
+        fs.mkdirSync(imageDir, { recursive: true });
+        const imageName = path.basename(report, '.json') + '-source-open-failure.png';
+        await page.screenshot({ path: path.join(imageDir, imageName), timeout: 2000 });
+        diagnostic.screenshot = imageName;
+      } catch (captureError) {
+        diagnostic.screenshotError = String(captureError.message);
+      }
+      try {
+        fs.mkdirSync(path.dirname(report), { recursive: true });
+        fs.writeFileSync(
+          report.replace(/\.json$/, '-source-open-failure.json'),
+          JSON.stringify(diagnostic, null, 2) + '\n'
+        );
+      } catch (captureError) {
+        console.log('SOURCE OPEN DIAGNOSTIC WRITE FAILED', String(captureError.message));
+      }
+    }
+    throw error;
+  } finally {
+    page.off('console', onConsole);
+    page.off('pageerror', onPageError);
+  }
 }
