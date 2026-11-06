@@ -93,6 +93,10 @@ public sealed class IndexWriter : IDisposable
             var active=IndexDatabase.Scalar(connection,transaction,"SELECT active_generation FROM metadata WHERE singleton=1");
             if (active is long prior && generation<=prior)
                 throw new IndexStoreException("INDEX_GENERATION_CONFLICT", "A new commit must advance the active generation.");
+            cancellationToken.ThrowIfCancellationRequested();
+            // Deferred parent checks must not scan every prior node when children precede parents.
+            // Create this in the publication transaction so existing schemas benefit and failures roll back.
+            IndexDatabase.Execute(connection,transaction,"CREATE INDEX IF NOT EXISTS nodes_parent ON nodes(generation,parent_id);");
             Execute("INSERT INTO generations VALUES($g,$snapshot,$manifest,$coverage,'committed',$utc,$json)",
                 ("$snapshot",graph.SnapshotId),("$manifest",stage.ManifestHash),("$coverage",graph.Coverage.ToString()),
                 ("$utc",DateTimeOffset.UtcNow.ToString("o")),("$json",JsonSerializer.Serialize(graph,HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));

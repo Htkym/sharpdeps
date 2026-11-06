@@ -628,6 +628,49 @@ public sealed class IndexStoreTests
     }
 
     [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ExistingSchemaAddsParentLookupOnlyWithSuccessfulPublicationAndPreservesNodeOrder(int schema)
+    {
+        using var fixture = new StoreFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
+            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), schema);
+        }
+        using var writer = fixture.Writer();
+        var snapshot = fixture.Snapshot(1, "Before");
+        // Production IDs can place children before their parents; storage must retain that order.
+        snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = snapshot.Graph.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).ToArray()
+        } };
+        var stage = IndexStage.Create(snapshot);
+        writer.BeforePublish = () => throw new InvalidOperationException("Injected publication failure.");
+        Assert.Throws<InvalidOperationException>(() => writer.Commit(stage));
+        AssertStorage(0, 0);
+
+        writer.BeforePublish = null;
+        writer.Commit(stage);
+        AssertStorage(1, 1);
+        using var reader = fixture.Reader();
+        Assert.Equal(snapshot.Graph.Nodes, reader.Snapshot().Graph.Nodes);
+        Assert.Equal(stage.ManifestHash, reader.ManifestHash);
+        Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
+
+        void AssertStorage(long generations, long parentIndexes)
+        {
+            using var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: true);
+            Assert.Equal(generations, (long)IndexDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM generations")!);
+            Assert.Equal(parentIndexes, (long)IndexDatabase.Scalar(connection, null,
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='nodes_parent'")!);
+            Assert.Equal(schema, Convert.ToInt32(IndexDatabase.Scalar(connection, null, "PRAGMA user_version")));
+        }
+    }
+
+    [Theory]
     [InlineData(1, false)]
     [InlineData(1, true)]
     [InlineData(2, true)]
