@@ -127,6 +127,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
     internal async Task<CoordinatorReply> UpdateAsync(CoordinatorUpdate update, string requestId, CancellationToken clientToken,
         Action<CancellationToken>? verifyWatchInputs = null)
     {
+        if (update.Options.TimeoutSeconds == 0) throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
         var waiter = new Waiter(requestId, clientToken);
         lock (gate)
         {

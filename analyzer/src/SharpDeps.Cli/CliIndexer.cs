@@ -54,7 +54,7 @@ public static class CliIndexer
     {
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
-        if (options.TimeoutSeconds is < 1 or > 3600
+        if (options.TimeoutSeconds is < 0 or > 3600
             || string.IsNullOrWhiteSpace(options.Configuration))
             throw new CliIndexException("CLI_INVALID_INDEX_OPTIONS");
         var workspaceId = HarnessIdentity.WorkspaceId(options.WorkspaceUuid);
@@ -75,7 +75,7 @@ public static class CliIndexer
             throw new CliIndexException("CLI_PROJECT_NOT_FOUND");
         var publicationToken = token;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
+        if (options.TimeoutSeconds != 0) timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
         token = timeout.Token;
         var snapshotId = Guid.NewGuid().ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);

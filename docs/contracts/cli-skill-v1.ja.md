@@ -39,7 +39,9 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 | `doctor` | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す |
 | `help` | commandと引数の案内 |
 
-解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定180、最大300。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
+解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定180、最大300で、通常は共有ownerへの応答待ち期限である。短命ownerは期限後も受理済み処理の終了を待つため、process全体の上限ではない。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
+
+`index`／`update`の`--timeout-seconds 0`は期限のない専有実行を明示する。既存ownerへの接続や共有ownerの起動は行わず、OS writer leaseを取得できなければ`INDEX_BUSY`で終了する。SDK・入力・公開時の検証は通常と同じで、呼出し側の取消を解析とcommitへ渡す。取消は協調的であり、同期処理の即時停止は保証しない。応答は`coordinatorState: "exclusive"`を返す。`serve --watch`とowner IPCは0を受理せず、共有ownerの300秒期限は変わらない。
 
 watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの300秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
 
@@ -54,7 +56,7 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 `--project-id`、`--path-prefix`、繰返し`--variant`、`--node-kind`でscopeを絞る。statusのscopeは`--variant`だけで、実装されていないproject/path/node-kind filterを拒否する。繰返し`--edge-kind`、`--include-candidates`、`--no-documents`、`--max-edges`、`--max-depth`は`callers`/`callees`/`impact`/`context`で使う。候補の取得と文書関係の除外を明示し、search/symbol/statusにはこれらの探索flagを渡さない。Impactの既定はdependentsで、Impact専用の`--dependencies`は依存先方向を選ぶ。`--page-size`は既定100、`--cursor`は同じquery/世代の次pageへ使う。
 
-`--freshness allow-stale|require-fresh|refresh`、`--require-complete`と、`--max-nodes`/`--max-edges`/`--max-depth`/`--max-milliseconds`/`--max-chars`/`--max-bytes`を使える。Query既定は60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes。設定範囲と探索・certainty・cursorの意味は[Query/context契約](query-context-v1.ja.md)に従う。commandに非対応のflagと、繰返し指定を許可したflag以外の重複を拒否する。
+`--freshness allow-stale|require-fresh|refresh`、`--require-complete`と、`--max-nodes`/`--max-edges`/`--max-depth`/`--max-milliseconds`/`--max-chars`/`--max-bytes`を使える。Query既定は60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes。Queryと`explore`の`--max-milliseconds 0`は計算期限だけを外し、呼出し側の取消、件数・深さ・出力予算、trustと鮮度の検証は維持する。正の時間枠は10〜30000msで、1〜9は拒否する。設定範囲と探索・certainty・cursorの意味は[Query/context契約](query-context-v1.ja.md)に従う。commandに非対応のflagと、繰返し指定を許可したflag以外の重複を拒否する。
 
 ## JSONと終了コード
 

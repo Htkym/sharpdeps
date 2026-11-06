@@ -61,14 +61,14 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         var pathArguments = new List<string>(arguments);
         pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
         pathArguments.AddRange(["--project-id", fixture.Project, "--variant", fixture.Variant, "--path-prefix", "App.cs",
-            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "1500", "--owner-status"]);
+            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "0", "--owner-status"]);
         var pathRequest = Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence);
         foreach (var (name, value) in new[] { ("projectId", fixture.Project), ("variantId", fixture.Variant),
             ("pathPrefix", "App.cs"), ("freshness", "allow-stale") })
             pathRequest.Arguments![name] = JsonSerializer.SerializeToElement(value);
         pathRequest.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(10000);
         pathRequest.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(40000);
-        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(1500);
+        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
         pathRequest.Arguments["ownerStatus"] = JsonSerializer.SerializeToElement(true);
         var (pathExit, pathText, pathResult) = await AssertEquivalent(adapter, pathRequest, pathArguments);
         Assert.Equal(0, pathExit);

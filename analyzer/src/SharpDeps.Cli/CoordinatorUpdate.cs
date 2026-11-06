@@ -21,8 +21,10 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
         if (projects is not null && (projects.Length > 64 || projects.Distinct(StringComparer.OrdinalIgnoreCase).Count() != projects.Length
             || projects.Any(path => !File.Exists(path) || !path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))))
             throw new CliFailure("PROJECT_SELECTION_INVALID", 2);
+        var timeout = arguments.Number("timeout-seconds", 180, 0, 300);
+        if (timeout == 0 && arguments.Command == "serve") throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
         return new(new(root, target, indexPath, uuid, arguments.Get("configuration") ?? "Debug", arguments.Get("platform"),
-            projects, arguments.Get("tfm"), arguments.Number("timeout-seconds", 180, 1, 300),
+            projects, arguments.Get("tfm"), timeout,
             AllowSemanticReuse: arguments.Command == "update"), arguments.Command == "index");
     }
 
@@ -48,9 +50,20 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
     private CliSdkSelection? selection;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal async Task<CliIndexBuild> BuildAsync(CoordinatorUpdate update, CancellationToken token)
+    internal Task<CliIndexBuild> BuildAsync(CoordinatorUpdate update, CancellationToken token)
+        => BuildCoreAsync(update.Options with { TimeoutSeconds = 300 }, update.Full, token);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal Task<CliIndexBuild> BuildExclusiveAsync(CoordinatorUpdate update, CancellationToken token)
     {
-        var options = update.Options with { TimeoutSeconds = 300 };
+        if (update.Options.TimeoutSeconds != 0) throw new CliFailure("ARGUMENT_INVALID", 2);
+        return BuildCoreAsync(update.Options, update.Full, token);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private async Task<CliIndexBuild> BuildCoreAsync(CliIndexOptions options, bool full, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
         CliSdkSelection selected;
         try { selected = CliSdkSelection.Capture(Path.GetDirectoryName(options.Target)!); }
         catch (CliFailure failure) when (selection is not null && failure.Code == "CLI_SDK_UNAVAILABLE")
@@ -66,10 +79,10 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
         IndexSnapshot? previous = null;
         try
         {
-            using var reader = IndexReader.Open(writer.IndexPath, writer.WorkspaceUuid);
-            previous = reader.Snapshot();
+            using var reader = IndexReader.Open(writer.IndexPath, writer.WorkspaceUuid, token);
+            previous = reader.Snapshot(token);
         }
-        catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && update.Full) { }
+        catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && full) { }
         var build = await CliIndexer.BuildForPublicationAsync(options, previous, token);
         var directory = Path.GetDirectoryName(options.Target)!;
         return build with

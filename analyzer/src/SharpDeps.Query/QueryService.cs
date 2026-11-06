@@ -624,7 +624,7 @@ public sealed class QueryService
         static bool Short(string? s, int max) => s is null || (s.Length <= max && !s.Any(char.IsControl));
         if (string.IsNullOrWhiteSpace(r.RequestId) || !Short(r.RequestId, 64) || !Enum.IsDefined(r.Kind) || !Enum.IsDefined(r.Freshness)
             || r.PageSize is < 1 or > 500 || b.MaxNodes is < 1 or > 500 || b.MaxEdges is < 1 or > 1000
-            || b.MaxDepth is < 1 or > 8 || b.MaxMilliseconds is < 10 or > 30000
+            || b.MaxDepth is < 1 or > 8 || b.MaxMilliseconds != 0 && (b.MaxMilliseconds is < 10 or > 30000)
             || b.MaxChars is < 2048 or > 1000000 || b.MaxBytes is < 2048 or > 4000000
             || !Short(r.Term, 128) || !Short(r.NodeId, 128) || !Short(r.Scope?.ProjectId, 128) || !Short(r.Scope?.PathPrefix, 512)
             || !Short(r.Scope?.ParentId, 128)
@@ -651,7 +651,7 @@ public sealed class QueryService
         public Work(QueryRequest request, CancellationToken token)
         {
             Request = request; Timer = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Timer.CancelAfter(request.Budget!.MaxMilliseconds);
+            if (request.Budget!.MaxMilliseconds != 0) Timer.CancelAfter(request.Budget.MaxMilliseconds);
         }
         public QueryRequest Request { get; }
         public CancellationTokenSource Timer { get; }
@@ -661,7 +661,12 @@ public sealed class QueryService
         public List<QueryIssue> Diagnostics { get; } = [];
         public List<QueryIssue> Errors { get; } = [];
         public HashSet<string> Reasons { get; } = new(StringComparer.Ordinal);
-        public void Check() { Token.ThrowIfCancellationRequested(); if (clock.ElapsedMilliseconds > Request.Budget!.MaxMilliseconds) throw new OperationCanceledException(); }
+        public void Check()
+        {
+            Token.ThrowIfCancellationRequested();
+            if (Request.Budget!.MaxMilliseconds != 0 && clock.ElapsedMilliseconds > Request.Budget.MaxMilliseconds)
+                throw new OperationCanceledException();
+        }
         public bool CanNode(string id) => nodeIds.Contains(id) || nodeIds.Count < Request.Budget!.MaxNodes;
         public bool Add(QueryItem item)
         {

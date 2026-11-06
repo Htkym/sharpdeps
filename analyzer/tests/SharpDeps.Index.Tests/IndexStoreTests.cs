@@ -228,12 +228,20 @@ public sealed class IndexStoreTests
     {
         using var fixture = new StoreFixture();
         var snapshot = fixture.Snapshot(1, "Before");
+        snapshot = snapshot with { Files = snapshot.Files.Select((file, i) => i == 0
+            ? file with { Kind = "source" } : file).ToArray() };
         var inputManifestHash = IndexStage.Create(snapshot).ManifestHash;
         var reuseCatalog = new[] { new IndexReuseSymbol(fixture.MemberId, "App.Service.Before", "Before",
             "M:App.Service.Before", "src/App.csproj", null, snapshot.Graph.Variants[0].Id, fixture.CodeLocation.SourceId) };
         var reuse = new IndexReuseProof("test-owner/1", new string('a', 64), new string('b', 64),
-            new string('c', 64), new string('d', 64), "unused-sdk-path", reuseCatalog);
-        snapshot = snapshot with { Files = snapshot.Files.Select((file, i) => i == 0 ? file with { Reuse = reuse } : file).ToArray() };
+            new string('c', 64), new string('d', 64), "unused-sdk-path", reuseCatalog)
+        {
+            Projects = new("test-projects/1", new string('e', 64),
+                [new("project-key", snapshot.Graph.Variants[0].Id, fixture.ProjectId,
+                    [fixture.CodeLocation.SourceId], [], JsonSerializer.SerializeToElement(new { retained = "exact data" }))])
+        };
+        snapshot = snapshot with { Files = snapshot.Files.Select((file, i) => i == 0
+            ? file with { Reuse = reuse } : file).ToArray() };
         var mutableNodes = snapshot.Graph.Nodes.ToArray();
         var mutableSections = snapshot.Documents[0].Sections.ToArray();
         var mutableSearch = snapshot.SearchText.ToArray();
@@ -258,6 +266,16 @@ public sealed class IndexStoreTests
         // Reopening has no dependency on the producer's objects or an in-memory identity cache.
         using var reader = fixture.Reader();
         var saved = reader.Snapshot();
+        ReadOnly(saved.Graph.Variants); ReadOnly(saved.Graph.Nodes); ReadOnly(saved.Graph.SymbolOccurrences);
+        ReadOnly(saved.Graph.SymbolOccurrences[0].Declarations!); ReadOnly(saved.Graph.Edges);
+        ReadOnly(saved.Graph.LegacyReferences); ReadOnly(saved.Graph.Diagnostics!);
+        ReadOnly(saved.Files); ReadOnly(saved.Documents); ReadOnly(saved.Documents[0].Sections);
+        ReadOnly(saved.Aliases); ReadOnly(saved.SearchText); ReadOnly(saved.StoredGeneratedBodies); ReadOnly(saved.StoredPackageBodies);
+        var savedReuse = Assert.Single(saved.Files, f => f.Reuse is not null).Reuse!;
+        ReadOnly(savedReuse.Catalog); ReadOnly(savedReuse.Projects!.Variants);
+        var savedProject = Assert.Single(savedReuse.Projects.Variants);
+        ReadOnly(savedProject.SourceIds); ReadOnly(savedProject.References);
+        Assert.Equal(reuse.Projects.Variants[0].Data.GetRawText(), savedProject.Data.GetRawText());
         Assert.Equal(HarnessIdentity.WorkspaceId(fixture.Workspace), saved.Graph.WorkspaceId);
         Assert.Equal(stage.ManifestHash, reader.ManifestHash);
         Assert.Equal("App.Service.Before", Assert.Single(Assert.Single(saved.Files, f => f.Reuse is not null).Reuse!.Catalog).FullName);
@@ -280,6 +298,13 @@ public sealed class IndexStoreTests
         Assert.Equal(saved.Graph.SnapshotId, backup.Snapshot().Graph.SnapshotId);
         Assert.Equal(stage.ManifestHash, backup.ManifestHash);
         Assert.Equal(fixture.SectionId, Assert.Single(backup.Search("設定")).NodeId);
+
+        static void ReadOnly<T>(IReadOnlyList<T> collection)
+        {
+            var mutable = Assert.IsAssignableFrom<IList<T>>(collection);
+            Assert.True(mutable.IsReadOnly);
+            Assert.Throws<NotSupportedException>(mutable.Clear);
+        }
     }
 
     [Fact]
@@ -600,6 +625,49 @@ public sealed class IndexStoreTests
         Assert.Equal(Assert.Single(snapshot.StoredGeneratedBodies), Assert.Single(saved.StoredGeneratedBodies));
         Assert.Equal(Assert.Single(snapshot.Files, file => file.Kind == IndexFileKinds.GeneratedSource),
             Assert.Single(saved.Files, file => file.Kind == IndexFileKinds.GeneratedSource));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ExistingSchemaAddsParentLookupOnlyWithSuccessfulPublicationAndPreservesNodeOrder(int schema)
+    {
+        using var fixture = new StoreFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
+            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), schema);
+        }
+        using var writer = fixture.Writer();
+        var snapshot = fixture.Snapshot(1, "Before");
+        // Production IDs can place children before their parents; storage must retain that order.
+        snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = snapshot.Graph.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).ToArray()
+        } };
+        var stage = IndexStage.Create(snapshot);
+        writer.BeforePublish = () => throw new InvalidOperationException("Injected publication failure.");
+        Assert.Throws<InvalidOperationException>(() => writer.Commit(stage));
+        AssertStorage(0, 0);
+
+        writer.BeforePublish = null;
+        writer.Commit(stage);
+        AssertStorage(1, 1);
+        using var reader = fixture.Reader();
+        Assert.Equal(snapshot.Graph.Nodes, reader.Snapshot().Graph.Nodes);
+        Assert.Equal(stage.ManifestHash, reader.ManifestHash);
+        Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
+
+        void AssertStorage(long generations, long parentIndexes)
+        {
+            using var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: true);
+            Assert.Equal(generations, (long)IndexDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM generations")!);
+            Assert.Equal(parentIndexes, (long)IndexDatabase.Scalar(connection, null,
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='nodes_parent'")!);
+            Assert.Equal(schema, Convert.ToInt32(IndexDatabase.Scalar(connection, null, "PRAGMA user_version")));
+        }
     }
 
     [Theory]

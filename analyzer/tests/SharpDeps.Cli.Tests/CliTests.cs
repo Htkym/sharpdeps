@@ -398,6 +398,19 @@ public sealed class CliTests
     }
 
     [Fact]
+    public async Task ZeroQueryBudgetWorksAtTheCliBoundaryAndRejectsSubMinimumPositiveValues()
+    {
+        using var fixture = new Fixture();
+        foreach (var command in new[] { "search", "explore" })
+        {
+            var arguments = new[] { command, "--root", fixture.Root, "--term", "Service", "--max-milliseconds" };
+            var actual = await Run([.. arguments, "0"]);
+            Assert.Equal(0, actual.Exit);
+            Assert.Equal("ARGUMENT_INVALID", Code((await Run([.. arguments, "1"])).Json));
+        }
+    }
+
+    [Fact]
     public async Task CancellationAndUnsupportedStateProduceOneJsonWithoutWritingOrLeakingPaths()
     {
         using var fixture = new Fixture();
@@ -512,9 +525,10 @@ public sealed class CliTests
     }
 
     [Fact]
-    public async Task IpcRejectsUntrustedAndWrongProtocolWithoutPublishingOrStealingTheLease()
+    public async Task IpcRejectsUnsupportedRequestsAndExclusiveIndexCannotJoinItsOwner()
     {
         using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
         await using var owner = new CliCoordinator(writer, (_, _) => throw new InvalidOperationException("Must not extract"));
@@ -524,6 +538,18 @@ public sealed class CliTests
         var mismatch = await CoordinatorProtocol.TrySendAsync(owner.Owner, new(99, owner.Owner.Instance,
             fixture.Uuid, "mismatch", "status", fixture.Root, fixture.IndexPath, false, []), deadline.Token);
         Assert.Equal("COORDINATOR_PROTOCOL_MISMATCH", mismatch!.ErrorCode);
+        foreach (var command in new[] { "index", "update" })
+        {
+            var arguments = new[] { command, "--root", fixture.Root, "--index", fixture.IndexPath,
+                "--trusted", "--target", "App.csproj", "--timeout-seconds", "0" };
+            var remote = await CoordinatorProtocol.TrySendAsync(owner.Owner, new(CoordinatorProtocol.Version,
+                owner.Owner.Instance, fixture.Uuid, "exclusive", "update", fixture.Root, fixture.IndexPath, true,
+                arguments), deadline.Token);
+            Assert.Equal("ARGUMENT_UNSUPPORTED", remote!.ErrorCode);
+            var exclusive = await Run(arguments);
+            Assert.Equal(6, exclusive.Exit);
+            Assert.Equal("INDEX_BUSY", Code(exclusive.Json));
+        }
         Assert.Equal(0, owner.Status("status").DesiredRevision);
         Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
             IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);

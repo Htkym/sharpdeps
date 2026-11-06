@@ -29,7 +29,8 @@ internal static class ExploreRequestFactory
         if (!Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
             || request.QueryKind == ExploreQueryKind.HttpGetLiteral && request.PathTo is not null
             || budget.MaxNodes is < 1 or > 500 || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
-            || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
+            || budget.MaxMilliseconds != 0 && (budget.MaxMilliseconds is < 10 or > 30000)
+            || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
             throw new CliFailure("ARGUMENT_INVALID", 2);
         return request with { Budget = budget };

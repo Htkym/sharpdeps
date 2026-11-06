@@ -33,12 +33,13 @@ public sealed class ExplorationService
         Validate(request);
         var clock = Stopwatch.StartNew();
         using var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
-        timer.CancelAfter(request.Budget!.MaxMilliseconds);
+        if (request.Budget!.MaxMilliseconds != 0) timer.CancelAfter(request.Budget.MaxMilliseconds);
         Run? run = null;
         try
         {
             timer.Token.ThrowIfCancellationRequested();
-            var saved = ExplorationSnapshotCache.Get(index.ReadSnapshot(timer.Token), timer.Token);
+            var saved = index is PinnedQueryIndex pinned ? pinned.PrepareExploration(timer.Token)
+                : ExplorationSnapshotCache.Get(index.ReadSnapshot(timer.Token), timer.Token);
             timer.Token.ThrowIfCancellationRequested();
             if (request.ProjectId is not null && request.VariantId is not null
                 && saved.saved.Graph.Variants.Any(v => v.Id == request.VariantId && v.ProjectId != request.ProjectId))
@@ -102,7 +103,8 @@ public sealed class ExplorationService
             || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy) || !Enum.IsDefined(request.QueryKind)
             || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
-            || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
+            || budget.MaxMilliseconds != 0 && (budget.MaxMilliseconds is < 10 or > 30000)
+            || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
             throw new ArgumentException("Invalid exploration arguments or budgets.", nameof(request));
         if (request.PathPrefix is { } prefix)
@@ -201,7 +203,8 @@ public sealed class ExplorationService
         public void Check()
         {
             timer.Token.ThrowIfCancellationRequested();
-            if (clock.ElapsedMilliseconds > request.Budget!.MaxMilliseconds) throw new OperationCanceledException();
+            if (request.Budget!.MaxMilliseconds != 0 && clock.ElapsedMilliseconds > request.Budget.MaxMilliseconds)
+                throw new OperationCanceledException();
         }
         public void Error(string code, string message, string? path = null)
         {

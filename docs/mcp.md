@@ -156,6 +156,10 @@ Owner observation defaults to disabled. When enabled, its bounded advisory line 
 
 Defaults are 12,000 response characters, 48,000 UTF-8 bytes, and 1,000 milliseconds. Character and byte limits include conservative JSON escaping for one text-content tool result, not only source text; the client-controlled JSON-RPC envelope is excluded. CLI exploration also accepts `--max-nodes`, `--max-edges`, and `--max-depth` to bound collection.
 
+Use `--max-milliseconds 0` (MCP `maxMilliseconds: 0`) to disable the computation deadline explicitly. Caller cancellation, source and freshness checks, and node, depth and output limits still apply. Positive time budgets remain 10–30,000 milliseconds.
+
+For .NET consumers, `IndexReader.Snapshot` returns a validated snapshot with recursively read-only collections. Mutation through an `IList` cast throws `NotSupportedException`; create a new snapshot with copied collections for an explicit update. Exploration through `PinnedQueryIndex` reuses preparation within that reader, while arbitrary `IQueryIndex` payloads retain defensive cloning and validation. Reader lifetime and generation pins still apply.
+
 The deadline includes opening and validating the saved index and preparing exploration data. Cancellation is cooperative: an individual connection, JSON, or manifest operation may finish before its next check. Expired preparation returns no source. In-process preparation reuse requires an exact full snapshot-payload match; each request still opens the current index and performs its own source and freshness checks. It does not retain a live reader or an implicit already-read state.
 
 Preparation reuse does not retain a previous request's scope, format, budgets, trust or freshness outcome. The cache retains one latest prepared entry without time expiry; this limits its entry count, rather than process memory. Active requests can keep older snapshots alive until they finish.

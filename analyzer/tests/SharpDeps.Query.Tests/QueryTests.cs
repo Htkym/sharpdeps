@@ -10,6 +10,26 @@ using Xunit;
 
 public sealed class QueryTests
 {
+    [Fact]
+    public void NoDeadlineQueryPreservesSavedResultsAndCallerCancellation()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1)));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        var request = new QueryRequest("no-deadline", QueryKind.Search, Term: "Service", Budget: Generous);
+        var expected = query.Execute(request);
+        var unbounded = request with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var actual = query.Execute(unbounded);
+        Assert.True(actual.Succeeded);
+        Assert.Equal(expected.Envelope.Items.Select(item => item.Id), actual.Envelope.Items.Select(item => item.Id));
+        Assert.Equal(0, actual.Envelope.Budget.Limits.MaxMilliseconds);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Error(query.Execute(unbounded, cancelled.Token), "CANCELLED");
+    }
+
     private static readonly QueryBudget Generous = new(MaxNodes: 100, MaxEdges: 100, MaxDepth: 8,
         MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 

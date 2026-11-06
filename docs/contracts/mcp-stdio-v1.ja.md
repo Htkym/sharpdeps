@@ -9,6 +9,7 @@ rootとindexは起動時に固定する。各toolのargumentsは同じCLI comman
 既存CLIへ渡す。search／symbol／callers／callees／impact／context／statusを公開する。
 root／index／trusted／quietをclientが差し替えるrequestは拒否する。Queryのscope、freshness、
 cursor、page-size、budgetは既存CLIに従い、saved coverage／unverifiedの意味を変えない。
+Query／exploreの時間予算0は計算期限だけを外し、MCP requestの取消と件数・出力予算は維持する。
 各requestは独自の実reader pinを持ち、同request内のFTSとgraphは同じgenerationを使う。
 同時request全体が同じgenerationになるという保証ではない。
 

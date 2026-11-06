@@ -87,9 +87,16 @@ public sealed class IndexWriter : IDisposable
                 throw new IndexStoreException("INDEX_WORKSPACE_MISMATCH", "Staging belongs to a different workspace.");
             IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
             using var transaction=connection.BeginTransaction();
+            var statements = new Dictionary<string, SqliteCommand>(StringComparer.Ordinal);
+            try
+            {
             var active=IndexDatabase.Scalar(connection,transaction,"SELECT active_generation FROM metadata WHERE singleton=1");
             if (active is long prior && generation<=prior)
                 throw new IndexStoreException("INDEX_GENERATION_CONFLICT", "A new commit must advance the active generation.");
+            cancellationToken.ThrowIfCancellationRequested();
+            // Deferred parent checks must not scan every prior node when children precede parents.
+            // Create this in the publication transaction so existing schemas benefit and failures roll back.
+            IndexDatabase.Execute(connection,transaction,"CREATE INDEX IF NOT EXISTS nodes_parent ON nodes(generation,parent_id);");
             Execute("INSERT INTO generations VALUES($g,$snapshot,$manifest,$coverage,'committed',$utc,$json)",
                 ("$snapshot",graph.SnapshotId),("$manifest",stage.ManifestHash),("$coverage",graph.Coverage.ToString()),
                 ("$utc",DateTimeOffset.UtcNow.ToString("o")),("$json",JsonSerializer.Serialize(graph,HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));
@@ -133,8 +140,17 @@ public sealed class IndexWriter : IDisposable
             void Execute(string sql, params (string Name,object? Value)[] values)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                IndexDatabase.Execute(connection,transaction,sql,[("$g",generation),..values]);
+                if (!statements.TryGetValue(sql, out var command))
+                {
+                    command = IndexDatabase.Command(connection, transaction, sql, [("$g", generation), ..values]);
+                    statements.Add(sql, command);
+                }
+                else
+                    foreach (var (name, value) in values) command.Parameters[name].Value = value ?? DBNull.Value;
+                command.ExecuteNonQuery();
             }
+            }
+            finally { foreach (var command in statements.Values) command.Dispose(); }
         }
         catch (SqliteException error) { throw new IndexStoreException(error.SqliteErrorCode is 5 or 6 ? "INDEX_BUSY" : "INDEX_WRITE_FAILED", "The staged index transaction was not published.",error); }
         finally { Monitor.Exit(gate); }

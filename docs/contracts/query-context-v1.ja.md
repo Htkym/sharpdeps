@@ -2,7 +2,9 @@
 
 SD2-06は`SharpDeps.Query`にsearch、symbol、callers、callees、impact、context、statusを追加する。`QueryService.Execute(QueryRequest)`が共通入口で、host/CLI/provider/coordinatorへの接続は後続taskである。旧report v2、Core/Contracts/Quickの参照、保存schema、固定Markdown packageは変更しない。
 
-`PinnedQueryIndex`は呼出し側が所有する一つの`IndexReader`を使う。graphとFTSは同じcommitted世代に固定される。呼出し側はQueryを終えた後にreaderをdisposeする。QueryServiceはthread-safeではない。保存graphとrequestの配列を複製し、storage validatorで完全入力を検査してから使う。Query自体にwriter、解析器、restore、network、process、cache生成の入口はない。
+`PinnedQueryIndex`は呼出し側が所有する一つの`IndexReader`を使う。graphとFTSは同じcommitted世代に固定される。呼出し側はQueryを終えた後にreaderをdisposeする。QueryServiceはthread-safeではなく、保存graphとrequestの配列を複製・検証して使う。QueryService自体にwriter、解析器、restore、network、processの入口はない。
+
+`IndexReader.Snapshot`は全体の検証後に入れ子のcollectionまでread-onlyに固定したsnapshotを返す。`IReadOnlyList`を`IList`等へcastして変更すると`NotSupportedException`になる。変更には必要なcollectionを複製した新しいsnapshotを作り、明示更新を使う。exploreは`PinnedQueryIndex`の同じreader内で準備済みデータを再利用し、全量の再JSON化・clone・再検証を行わない。任意の`IQueryIndex`から受け取るpayloadは従来どおり複製・検証する。内容検証、世代固定、readerの寿命、requestごとのsource／鮮度検証は維持する。
 
 ## 検索、詳細と探索
 
@@ -36,7 +38,7 @@ refreshは`UPDATE_REQUIRED`を返す。trusted coordinatorで更新し、新し�
 
 ## 出力と実行予算
 
-今回の実装defaultは60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes、pageSize100である。設定範囲はnodes1–500、edges1–1000、depth1–8、time10–30000ms、chars2048–1000000、bytes2048–4000000、pageSize1–500。宣言itemもnode枠へ数える。snippet本文は文字枠の半分まで先に割り当て、最終JSONでさらに制限する。
+今回の実装defaultは60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes、pageSize100である。設定範囲はnodes1–500、edges1–1000、depth1–8、time10–30000msまたは0、chars2048–1000000、bytes2048–4000000、pageSize1–500。`QueryBudget.MaxMilliseconds = 0`は計算期限を外す明示指定で、呼出し側の取消とその他の予算・検証は維持する。既定値と正の時間枠の意味は変わらない。宣言itemもnode枠へ数える。snippet本文は文字枠の半分まで先に割り当て、最終JSONでさらに制限する。
 
 JSON escape、envelope、coverage/診断、error、cursor、使用量fieldを含む実serialized応答を計測し、自己サイズを安定化してから上限を検査する。必要ならpage末尾を減らし、optional metadataを省略してcountと打切り理由を残す。最小error envelopeが実snapshotの必須metadataを含めて収まらない予算はArgumentExceptionで事前拒否する。不正引数もArgumentExceptionで、hostが共通protocol errorへ変換する責務を持つ。本文の途中切断で壊れたJSONを返さない。
 

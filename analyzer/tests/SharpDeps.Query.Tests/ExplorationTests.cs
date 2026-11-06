@@ -13,6 +13,31 @@ public sealed class ExplorationTests
 {
     private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
+    [Fact]
+    public void PinnedPreparationReusesTheValidatedReadOnlySnapshotAndHonorsReaderLifetime()
+    {
+        using var fixture = new Fixture(partial: true, dense: true);
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var path = Path.Combine(fixture.Root, ".sharpdeps", "pinned.sqlite");
+        using (var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true))
+            writer.Commit(IndexStage.Create(fixture.Snapshot));
+        using var reader = IndexReader.Open(path, workspace);
+        var pinned = new PinnedQueryIndex(reader);
+        var prepared = pinned.PrepareExploration(default);
+        Assert.Same(reader.Snapshot(), prepared.saved);
+        Assert.Same(prepared, pinned.PrepareExploration(default));
+        var request = fixture.Request(fixture.RunInt);
+        var expected = new ExplorationService(new FixedIndex(fixture.Snapshot), new QueryWorkspace(fixture.Root), true).Execute(request);
+        var actual = new ExplorationService(pinned, new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.True(actual.Succeeded);
+        Assert.Equal(expected.Text, actual.Text);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => pinned.PrepareExploration(cancellation.Token));
+        reader.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => pinned.PrepareExploration(default));
+    }
+
     [Theory]
     [InlineData(ExploreFormat.Audit)]
     [InlineData(ExploreFormat.Agent)]
@@ -382,17 +407,20 @@ public sealed class ExplorationTests
         Assert.Same(recovered, cache.GetOrCreate(fixture.Snapshot, default));
     }
 
-    [Fact]
-    public void PreparationIsLazyAndDistinguishesCallerCancellationFromAnExternalDeadline()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10000)]
+    public void PreparationIsLazyAndDistinguishesCallerCancellationFromAnExternalDeadline(int milliseconds)
     {
         using var fixture = new Fixture();
+        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = milliseconds } };
         using var caller = new CancellationTokenSource();
         var reads = 0;
         var observed = new ObservedIndex(() => { reads++; return fixture.Snapshot; });
         var engine = new ExplorationService(observed, new QueryWorkspace(fixture.Root), true);
         Assert.Equal(0, reads);
         caller.Cancel();
-        var cancelled = engine.Execute(fixture.Request(fixture.RunInt), caller.Token);
+        var cancelled = engine.Execute(request, caller.Token);
         Assert.Contains(cancelled.Errors, error => error.Code == "CANCELLED");
         Assert.Empty(cancelled.Units);
         Assert.Equal(0, reads);
@@ -400,7 +428,7 @@ public sealed class ExplorationTests
         using var deadline = new CancellationTokenSource();
         var expiring = new ObservedIndex(() => { deadline.Cancel(); return fixture.Snapshot; });
         var expired = new ExplorationService(expiring, new QueryWorkspace(fixture.Root), true)
-            .Execute(fixture.Request(fixture.RunInt), deadlineToken: deadline.Token);
+            .Execute(request, deadlineToken: deadline.Token);
         Assert.Contains(expired.Errors, error => error.Code == "QUERY_TIMEOUT");
         Assert.DoesNotContain(expired.Errors, error => error.Code == "CANCELLED");
         Assert.Empty(expired.Units);
@@ -409,11 +437,11 @@ public sealed class ExplorationTests
         var interrupted = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
         { Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, duringPreparation.Cancel) } };
         var interruptedReply = new ExplorationService(new FixedIndex(interrupted), new QueryWorkspace(fixture.Root), true)
-            .Execute(fixture.Request(fixture.RunInt), duringPreparation.Token);
+            .Execute(request, duringPreparation.Token);
         Assert.True(duringPreparation.IsCancellationRequested);
         Assert.Contains(interruptedReply.Errors, error => error.Code == "CANCELLED");
         Assert.Empty(interruptedReply.Units);
-        var recovered = engine.Execute(fixture.Request(fixture.RunInt));
+        var recovered = engine.Execute(request);
         Assert.True(recovered.Succeeded);
         Assert.Contains(recovered.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
     }
