@@ -181,11 +181,12 @@ public sealed class PackageSourceTests
     public void MatchingLockEntriesWithoutHashesCannotBypassProvenance(string framework, string version)
     {
         using var fixture = new PackageFixture();
-        File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), new JsonObject
-        {
-            ["dependencies"] = new JsonObject { [framework] = new JsonObject
-                { ["Test.Package"] = new JsonObject { ["resolved"] = version } } }
-        }.ToJsonString());
+        var lockPath = Path.Combine(fixture.Root, "packages.lock.json");
+        fixture.WriteLock(lockPath);
+        var locked = JsonNode.Parse(File.ReadAllText(lockPath))!;
+        locked["dependencies"]![framework] = new JsonObject
+            { ["Test.Package"] = new JsonObject { ["resolved"] = version } };
+        File.WriteAllText(lockPath, locked.ToJsonString());
         var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind());
         Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
     }
@@ -197,11 +198,37 @@ public sealed class PackageSourceTests
     {
         using var fixture = new PackageFixture();
         var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.PackageDirectory, ".nupkg.metadata")))!;
-        File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), new JsonObject
+        var lockPath = Path.Combine(fixture.Root, "packages.lock.json");
+        fixture.WriteLock(lockPath);
+        var locked = JsonNode.Parse(File.ReadAllText(lockPath))!;
+        locked["dependencies"]![framework] = new JsonObject
+            { ["Test.Package"] = new JsonObject { ["contentHash"] = metadata["contentHash"]!.DeepClone() } };
+        File.WriteAllText(lockPath, locked.ToJsonString());
+        var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind());
+        Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
+    }
+
+    [Theory]
+    [InlineData("framework")]
+    [InlineData("package")]
+    [InlineData("other-framework-only")]
+    public void SelectedLockMustIdentifyTheCurrentFrameworkPackage(string missing)
+    {
+        using var fixture = new PackageFixture();
+        var lockPath = Path.Combine(fixture.Root, "packages.lock.json");
+        fixture.WriteLock(lockPath);
+        var locked = JsonNode.Parse(File.ReadAllText(lockPath))!;
+        var dependencies = locked["dependencies"]!.AsObject();
+        if (missing == "framework")
+            dependencies.Clear();
+        else if (missing == "package")
+            dependencies["net10.0"] = new JsonObject();
+        else
         {
-            ["dependencies"] = new JsonObject { [framework] = new JsonObject
-                { ["Test.Package"] = new JsonObject { ["contentHash"] = metadata["contentHash"]!.DeepClone() } } }
-        }.ToJsonString());
+            dependencies["net8.0"] = dependencies["net10.0"]!.DeepClone();
+            dependencies.Remove("net10.0");
+        }
+        File.WriteAllText(lockPath, locked.ToJsonString());
         var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind());
         Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
     }

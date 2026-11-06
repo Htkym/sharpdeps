@@ -133,6 +133,7 @@ internal static class CliPackageSource
             if (lockExists)
             {
                 using var locked = JsonDocument.Parse(ReadEvidence(lockPath));
+                var currentPackageMatched = false;
                 foreach (var group in locked.RootElement.GetProperty("dependencies").EnumerateObject())
                     foreach (var package in group.Value.EnumerateObject())
                         if (package.Name.Equals(id, StringComparison.OrdinalIgnoreCase))
@@ -148,7 +149,9 @@ internal static class CliPackageSource
                             }
                             Require(package.Value.TryGetProperty("contentHash", out var hash)
                                 && HashMatches(hash.GetString(), archiveHash));
+                            currentPackageMatched |= group.Name == framework;
                         }
+                Require(currentPackageMatched);
             }
             else Append("no-lock");
             // Assets pin the restored content; metadata and an optional lock must agree.
