@@ -97,9 +97,11 @@ public sealed class IndexWriter : IDisposable
             // Deferred parent checks must not scan every prior node when children precede parents.
             // Create this in the publication transaction so existing schemas benefit and failures roll back.
             IndexDatabase.Execute(connection,transaction,"CREATE INDEX IF NOT EXISTS nodes_parent ON nodes(generation,parent_id);");
+            // Readers reconstruct these collections from validated rows, not the duplicated envelope payload.
+            var header = graph with { Variants = [], Nodes = [], SymbolOccurrences = [], Edges = [], LegacyReferences = [] };
             Execute("INSERT INTO generations VALUES($g,$snapshot,$manifest,$coverage,'committed',$utc,$json)",
                 ("$snapshot",graph.SnapshotId),("$manifest",stage.ManifestHash),("$coverage",graph.Coverage.ToString()),
-                ("$utc",DateTimeOffset.UtcNow.ToString("o")),("$json",JsonSerializer.Serialize(graph,HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));
+                ("$utc",DateTimeOffset.UtcNow.ToString("o")),("$json",JsonSerializer.Serialize(header,HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));
             foreach (var file in snapshot.Files) Execute("INSERT INTO files VALUES($g,$id,$path,$deleted,$json)",("$id",file.SourceId),("$path",file.RelativePath),("$deleted",file.Deleted?1:0),("$json",Serialize(file)));
             foreach (var body in snapshot.StoredGeneratedBodies) Execute("INSERT INTO generated_bodies VALUES($g,$id,$body)",("$id",body.SourceId),("$body",body.Body));
             foreach (var body in snapshot.StoredPackageBodies) Execute("INSERT INTO package_bodies VALUES($g,$id,$body)",("$id",body.SourceId),("$body",body.Body));

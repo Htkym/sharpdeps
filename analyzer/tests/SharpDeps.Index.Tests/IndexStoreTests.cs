@@ -26,6 +26,68 @@ public sealed class IndexStoreTests
         Assert.Equal(json, JsonSerializer.Serialize(restored, IndexStage.Json));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void LegacyFullEnvelopeAndCompactGenerationPreserveCompleteSnapshotsAndReaderPins(int schema)
+    {
+        using var fixture = new StoreFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
+            IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), schema);
+        }
+        using var writer = fixture.Writer();
+        var before = Expected(fixture.Snapshot(1, "Before"));
+        var beforeStage = IndexStage.Create(before);
+        writer.Commit(beforeStage);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "UPDATE generations SET graph_json=$json WHERE generation=1",
+                ("$json", JsonSerializer.Serialize(before.Graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));
+        }
+        using var pinned = fixture.Reader();
+        var beforeJson = JsonSerializer.Serialize(before, IndexStage.Json);
+        Assert.Equal(beforeJson, JsonSerializer.Serialize(pinned.Snapshot(), IndexStage.Json));
+        Assert.Equal(beforeStage.ManifestHash, pinned.ManifestHash);
+        var beforeHits = pinned.Search("Before").ToArray();
+        Assert.Equal(fixture.MemberId, Assert.Single(beforeHits).NodeId);
+
+        var after = Expected(fixture.Snapshot(2, "After"));
+        var afterStage = IndexStage.Create(after);
+        writer.Commit(afterStage);
+        using var current = fixture.Reader();
+        Assert.Equal(JsonSerializer.Serialize(after, IndexStage.Json), JsonSerializer.Serialize(current.Snapshot(), IndexStage.Json));
+        Assert.Equal(afterStage.ManifestHash, current.ManifestHash);
+        Assert.Equal(beforeJson, JsonSerializer.Serialize(pinned.Snapshot(), IndexStage.Json));
+        Assert.Equal(beforeStage.ManifestHash, pinned.ManifestHash);
+        Assert.Equal(beforeHits, pinned.Search("Before").ToArray());
+        Assert.Empty(pinned.Search("After"));
+        Assert.Empty(current.Search("Before"));
+        Assert.Equal(fixture.MemberId, Assert.Single(current.Search("After")).NodeId);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: true))
+        {
+            Assert.Equal(schema, Convert.ToInt32(IndexDatabase.Scalar(connection, null, "PRAGMA user_version")));
+            using var legacy = JsonDocument.Parse((string)IndexDatabase.Scalar(connection, null, "SELECT graph_json FROM generations WHERE generation=1")!);
+            using var compact = JsonDocument.Parse((string)IndexDatabase.Scalar(connection, null, "SELECT graph_json FROM generations WHERE generation=2")!);
+            foreach (var name in new[] { "variants", "nodes", "symbolOccurrences", "edges", "legacyReferences" })
+            {
+                Assert.True(legacy.RootElement.GetProperty(name).GetArrayLength() > 0);
+                Assert.Equal(JsonValueKind.Array, compact.RootElement.GetProperty(name).ValueKind);
+                Assert.Equal(0, compact.RootElement.GetProperty(name).GetArrayLength());
+            }
+        }
+
+        static IndexSnapshot Expected(IndexSnapshot snapshot) => snapshot with
+        {
+            SearchText = snapshot.SearchText.OrderBy(text => text.NodeId, StringComparer.Ordinal).ToArray(),
+            GeneratedBodies = snapshot.StoredGeneratedBodies,
+            PackageBodies = snapshot.StoredPackageBodies
+        };
+    }
+
     [Fact]
     public void HttpGetDeclarationRoundTripsThroughSqliteWithLiteralProvenanceAndLegacyNull()
     {
