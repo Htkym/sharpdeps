@@ -41,7 +41,7 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 
 解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定180、最大300で、通常は共有ownerへの応答待ち期限である。短命ownerは期限後も受理済み処理の終了を待つため、process全体の上限ではない。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
 
-`index`／`update`の`--timeout-seconds 0`は、期限のない専有実行を明示する。既存ownerへの接続や共有ownerの起動は行わず、OS writer leaseを取得できなければ`INDEX_BUSY`で終了する。SDK・入力・公開時の検証は通常と同じで、呼出し側の取消を解析とcommitへ渡す。取消は協調的であり、同期処理の即時停止は保証しない。応答は`coordinatorState: "exclusive"`を返す。`serve --watch`とowner IPCは0を受理せず、共有ownerの300秒期限は変わらない。
+`index`／`update`の`--timeout-seconds 0`は期限のない専有実行を明示する。既存ownerへの接続や共有ownerの起動は行わず、OS writer leaseを取得できなければ`INDEX_BUSY`で終了する。SDK・入力・公開時の検証は通常と同じで、呼出し側の取消を解析とcommitへ渡す。取消は協調的であり、同期処理の即時停止は保証しない。応答は`coordinatorState: "exclusive"`を返す。`serve --watch`とowner IPCは0を受理せず、共有ownerの300秒期限は変わらない。
 
 watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの300秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
 
