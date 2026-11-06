@@ -102,16 +102,14 @@ internal static class CliPackageSource
                     foreach (var package in group.Value.EnumerateObject())
                         if (package.Name.Equals(id, StringComparison.OrdinalIgnoreCase))
                         {
-                            if (package.Value.TryGetProperty("resolved", out var resolved))
+                            Require(package.Value.TryGetProperty("resolved", out var resolved));
+                            var resolvedVersion = NormalizeVersion(resolved.GetString()!);
+                            Require(resolvedVersion is not null);
+                            if (resolvedVersion != version)
                             {
-                                var resolvedVersion = NormalizeVersion(resolved.GetString()!);
-                                Require(resolvedVersion is not null);
-                                if (resolvedVersion != version)
-                                {
-                                    // Another TFM may legitimately restore a different version of the same ID.
-                                    Require(group.Name != framework);
-                                    continue;
-                                }
+                                // Another TFM may legitimately restore a different version of the same ID.
+                                Require(group.Name != framework);
+                                continue;
                             }
                             Require(package.Value.TryGetProperty("contentHash", out var hash)
                                 && HashMatches(hash.GetString(), archiveHash));

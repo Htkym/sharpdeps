@@ -191,6 +191,22 @@ public sealed class PackageSourceTests
     }
 
     [Theory]
+    [InlineData("net10.0")]
+    [InlineData("net8.0")]
+    public void MatchingLockEntriesRequireResolvedVersionEvenWithValidHash(string framework)
+    {
+        using var fixture = new PackageFixture();
+        var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.PackageDirectory, ".nupkg.metadata")))!;
+        File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), new JsonObject
+        {
+            ["dependencies"] = new JsonObject { [framework] = new JsonObject
+                { ["Test.Package"] = new JsonObject { ["contentHash"] = metadata["contentHash"]!.DeepClone() } } }
+        }.ToJsonString());
+        var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind());
+        Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
+    }
+
+    [Theory]
     [InlineData("missing-entry")]
     [InlineData("extracted-mismatch")]
     [InlineData("tree-mismatch")]
