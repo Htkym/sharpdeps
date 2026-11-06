@@ -497,8 +497,12 @@ public sealed class QueryService
             try
             {
                 var text = new UTF8Encoding(false, true).GetString(ReadSource(file, work.Token));
-                if (QueryWorkspace.IsGenerated(file)) work.Reasons.Add("GENERATED_SOURCE_FROM_SNAPSHOT");
-                if (QueryWorkspace.IsPackage(file)) work.Reasons.Add("PACKAGE_SOURCE_FROM_SNAPSHOT");
+                if (QueryWorkspace.IsStored(file))
+                {
+                    var marker = QueryWorkspace.IsPackage(file) ? "PACKAGE_SOURCE_FROM_SNAPSHOT" : "GENERATED_SOURCE_FROM_SNAPSHOT";
+                    if (!work.Diagnostics.Any(diagnostic => diagnostic.Code == marker))
+                        work.Diagnostics.Add(new(marker, "Source text comes from a verified saved body; current source is unverified."));
+                }
                 var sorted = group.Select(p => (p.index, Location: p.item.Evidence!, Span: p.item.Evidence!.RawSpan!.Value))
                     .OrderBy(p => p.Span.Start).ThenBy(p => p.Span.End).ToArray();
                 if (sorted.Any(p => p.Location.ContentHash != file.ContentHash || p.Span.End > text.Length))
@@ -558,7 +562,8 @@ public sealed class QueryService
             work.Reasons.Add("FRESHNESS_METADATA_LIMIT");
         foreach (var diagnostic in (saved.Graph.Diagnostics ?? []).Take(16))
             work.Diagnostics.Add(new(diagnostic.Code.Length <= 64 ? diagnostic.Code : "GRAPH_DIAGNOSTIC", "Saved graph diagnostic count: " + diagnostic.Count));
-        if ((saved.Graph.Diagnostics?.Count ?? 0) > 16) work.Reasons.Add("DIAGNOSTIC_LIMIT");
+        if ((saved.Graph.Diagnostics?.Count ?? 0) > 16 || work.Diagnostics.Count > 16)
+            work.Reasons.Add("DIAGNOSTIC_LIMIT");
         var budget = work.Request.Budget!;
         var minimalError = false;
         while (true)

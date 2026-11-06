@@ -875,6 +875,7 @@ public sealed class QueryTests
     {
         using var fixture = new StoreFixture();
         var snapshot = StoredSnapshot(fixture, package);
+        Assert.Equal(HarnessCoverage.CompleteWithinScope, snapshot.Graph.Coverage);
         IndexSnapshotValidator.Validate(snapshot);
         var type = Assert.Single(snapshot.Graph.Nodes, node => node.Kind == HarnessNodeKind.Type);
         var file = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
@@ -882,11 +883,13 @@ public sealed class QueryTests
         var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
         var query = new QueryService(new FixedIndex(snapshot), workspace, isTrusted: true);
         var request = new QueryRequest("generated", QueryKind.Context, NodeId: type.Id,
-            Scope: new(VariantIds: [fixture.Variant]), Freshness: QueryFreshnessPolicy.AllowStale, Budget: Generous);
+            Scope: new(VariantIds: [fixture.Variant]), Freshness: QueryFreshnessPolicy.AllowStale,
+            RequireComplete: true, Budget: Generous);
 
         var reply = query.Execute(request);
 
         Assert.True(reply.Succeeded);
+        Assert.False(reply.Envelope.Truncated);
         var snippet = Assert.Single(All(reply), item => item.Snippet is not null).Snippet!;
         var span = type.Location!.RawSpan!.Value;
         var body = package ? snapshot.StoredPackageBodies[0].Body : snapshot.StoredGeneratedBodies[0].Body;
@@ -894,11 +897,39 @@ public sealed class QueryTests
         Assert.Equal("public class GeneratedType { }", snippet.Text);
         Assert.Equal(file.SourceId, snippet.SourceId);
         Assert.Equal(file.ContentHash, snippet.ContentHash);
-        Assert.Contains((package ? "PACKAGE" : "GENERATED") + "_SOURCE_FROM_SNAPSHOT", reply.Envelope.TruncationReasons);
+        var marker = (package ? "PACKAGE" : "GENERATED") + "_SOURCE_FROM_SNAPSHOT";
+        Assert.Single(reply.Envelope.Diagnostics, diagnostic => diagnostic.Code == marker);
+        Assert.DoesNotContain(marker, reply.Envelope.TruncationReasons);
         Assert.Equal("unverified", reply.Envelope.Snapshot.Freshness);
         var fresh = query.Execute(request with { Freshness = QueryFreshnessPolicy.RequireFresh });
         Error(fresh, "FRESHNESS_REQUIREMENT_NOT_MET");
         Assert.Empty(All(fresh));
+    }
+
+    [Fact]
+    public void StoredProvenanceDoesNotHideDiagnosticTruncationFromRequireComplete()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package: false);
+        snapshot = snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Diagnostics = Enumerable.Range(0, 16)
+                    .Select(index => new HarnessGraphDiagnostic("fixture.saved." + index, 1)).ToArray()
+            }
+        };
+        var type = Assert.Single(snapshot.Graph.Nodes, node => node.Kind == HarnessNodeKind.Type);
+        var query = new QueryService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), isTrusted: true);
+        var reply = query.Execute(new("stored-diagnostics", QueryKind.Context, NodeId: type.Id,
+            Scope: new(VariantIds: [fixture.Variant]), Freshness: QueryFreshnessPolicy.AllowStale,
+            RequireComplete: true, Budget: Generous));
+
+        Error(reply, "INCOMPLETE_RESULT");
+        Assert.True(reply.Envelope.Truncated);
+        Assert.Contains("DIAGNOSTIC_LIMIT", reply.Envelope.TruncationReasons);
+        Assert.Equal(16, reply.Envelope.Diagnostics.Count);
+        Assert.Contains(reply.Envelope.Diagnostics, diagnostic => diagnostic.Code == "GENERATED_SOURCE_FROM_SNAPSHOT");
     }
 
     private static IndexSnapshot StoredSnapshot(StoreFixture fixture, bool package)
