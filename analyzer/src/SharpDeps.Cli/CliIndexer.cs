@@ -80,7 +80,7 @@ public static class CliIndexer
         var snapshotId = Guid.NewGuid().ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);
         var manifest = new Dictionary<string, InputText>(StringComparer.OrdinalIgnoreCase);
-        var packageVerifiers = new List<Action>();
+        var packageVerifiers = new List<Action<CancellationToken>>();
         long inputBytes = 0;
 
         // Capture selected documentation/configuration before evaluation. The configuration inventory is
@@ -251,12 +251,13 @@ public static class CliIndexer
                             info.PackageId, info.Version, info.RelativePath, path, info.ContentHash, info.ByteLength);
                         packageInfoByDocumentId[document.Id] = info;
                         // Rebind all evidence, including assets/lock/independent boundary, at staging and publication.
-                        packageVerifiers.Add(() =>
+                        packageVerifiers.Add(verifyToken =>
                         {
                             try
                             {
-                                var current = CliPackageSource.Bind(variant.ProjectPath, variant.TargetFramework!, path, text, publicationToken);
-                                if (current != info) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+                                var current = CliPackageSource.Bind(variant.ProjectPath, variant.TargetFramework!, path, text, verifyToken);
+                                if (current != info)
+                                    throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                             }
                             catch (PackageDocumentRegistrationException error)
                             { throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", error.Message); }
@@ -539,7 +540,8 @@ public static class CliIndexer
         var packageBodies = manifest.Values.Where(i => i.File.Kind == IndexFileKinds.PackageSource)
             .Select(i => new IndexPackageBody(i.File.SourceId, i.Text))
             .OrderBy(b => b.SourceId, StringComparer.Ordinal).ToArray();
-        foreach (var verifyPackage in packageVerifiers) verifyPackage();
+        foreach (var verifyPackage in packageVerifiers)
+            verifyPackage(token);
         var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
             identities.ToArray(), [], search, generatedBodies, packageBodies);
         IndexSnapshotValidator.Validate(snapshot);
@@ -552,7 +554,8 @@ public static class CliIndexer
         return new(snapshot, () =>
         {
             VerifySelection(options, files, publicationInputs, publicationToken);
-            foreach (var verifyPackage in packageVerifiers) verifyPackage();
+            foreach (var verifyPackage in packageVerifiers)
+                verifyPackage(publicationToken);
         })
         {
             // Only a production extraction with a closed dependency/SDK proof may attest freshness.
