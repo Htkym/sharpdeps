@@ -45,6 +45,11 @@ public sealed class PackageSourceTests
         Assert.Equal(location, Assert.Single(occurrence.Declarations!));
         Assert.Equal(bom ? 1 : 0, span.Start);
         Assert.StartsWith("public class PackageType", savedBody.Substring(span.Start, span.Length));
+        var httpGet = Assert.Single(first.Snapshot.Graph.Edges,
+            e => e.Evidence?.SourceId == package.SourceId && e.HttpGetDeclaration?.State == HarnessHttpGetDeclarationState.Saved);
+        Assert.Equal("items/{id}", httpGet.HttpGetDeclaration!.Template);
+        var templateSpan = Assert.IsType<HarnessRawSpan>(httpGet.HttpGetDeclaration!.TemplateSpan);
+        Assert.Equal("\"items/{id}\"", savedBody.Substring(templateSpan.Start, templateSpan.Length));
         var workspaceReader = new QueryWorkspace(fixture.Root);
         Assert.Equal(savedBody, Encoding.UTF8.GetString(workspaceReader.ReadStored(package, savedBody)));
 
@@ -64,6 +69,8 @@ public sealed class PackageSourceTests
         using var reader = IndexReader.Open(index, workspace);
         Assert.Equal(1, reader.Snapshot().Graph.Generation);
         Assert.Equal(first.Snapshot.StoredPackageBodies, reader.Snapshot().StoredPackageBodies);
+        Assert.Equal(httpGet.HttpGetDeclaration,
+            Assert.Single(reader.Snapshot().Graph.Edges, e => e.Id == httpGet.Id).HttpGetDeclaration);
     }
 
     [Fact]
@@ -114,7 +121,9 @@ public sealed class PackageSourceTests
                 ["net10.0"] = new JsonObject { ["Test.Package"] = new JsonObject
                     { ["resolved"] = "1.0.0", ["contentHash"] = metadata["contentHash"]!.DeepClone() } },
                 ["net8.0"] = new JsonObject { ["Test.Package"] = new JsonObject
-                    { ["resolved"] = "2.0.0", ["contentHash"] = "another-version" } }
+                    { ["resolved"] = "2.0.0", ["contentHash"] = "another-version" } },
+                ["net9.0"] = new JsonObject { ["Test.Package"] = new JsonObject
+                    { ["resolved"] = "3.0.0" } }
             }
         }.ToJsonString());
         var info = fixture.Bind();
@@ -162,6 +171,23 @@ public sealed class PackageSourceTests
         Assert.Empty(freshness.DirtyPaths);
         Assert.Equal(["PACKAGE_INPUT_UNVERIFIED:" + first.RelativePath], freshness.Unverified);
         Assert.Equal(info.Text, Encoding.UTF8.GetString(query.ReadStored(input, saved.StoredPackageBodies[0].Body)));
+    }
+
+    [Theory]
+    [InlineData("net10.0", "2.0.0")]
+    [InlineData("net10.0", "1.0.0")]
+    [InlineData("net8.0", "1.0.0")]
+    [InlineData("net8.0", "not-a-version")]
+    public void MatchingLockEntriesWithoutHashesCannotBypassProvenance(string framework, string version)
+    {
+        using var fixture = new PackageFixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), new JsonObject
+        {
+            ["dependencies"] = new JsonObject { [framework] = new JsonObject
+                { ["Test.Package"] = new JsonObject { ["resolved"] = version } } }
+        }.ToJsonString());
+        var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind());
+        Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
     }
 
     [Theory]
@@ -245,7 +271,7 @@ public sealed class PackageSourceTests
 
     private sealed class PackageFixture : IDisposable
     {
-        public const string Text = "public class PackageType { } // café 😀\n";
+        public const string Text = "public class PackageType { [Microsoft.AspNetCore.Mvc.HttpGet(\"items/{id}\")] public void Get() { } } // café 😀\n";
         private readonly string directory = Path.Combine(Path.GetTempPath(), "sharpdeps-package-" + Guid.NewGuid().ToString("N"));
         public string Root => Path.Combine(directory, "workspace");
         public string Cache => Path.Combine(directory, "cache");
@@ -260,7 +286,8 @@ public sealed class PackageSourceTests
         {
             Directory.CreateDirectory(Path.Combine(Root, "obj"));
             Directory.CreateDirectory(Path.GetDirectoryName(SourcePath)!);
-            File.WriteAllText(ProjectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(ProjectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
+                + "<ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup></Project>");
             Assert.True(SemanticEnvironment.TryRegister(Root, out var reason), reason);
             File.WriteAllText(SourcePath, Text, new UTF8Encoding(bom));
             WriteArchive("build/Source.cs", Text, bom);

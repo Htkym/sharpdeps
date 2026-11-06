@@ -872,10 +872,14 @@ public static class CliIndexer
         HarnessEdge AlignEdge(HarnessEdge edge)
         {
             var evidence = Align(edge.Evidence);
-            if (evidence == edge.Evidence) return edge;
+            if (evidence == edge.Evidence)
+                return edge;
             if (edge.SourceOccurrenceId is null || edge.TargetOccurrenceId is null || evidence?.ContentHash is null)
                 throw new CliIndexException("CLI_SOURCE_COORDINATES_INCONSISTENT");
-            return edge with { Evidence = evidence, Id = HarnessIdentity.EdgeId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
+            return edge with { Evidence = evidence,
+                HttpGetDeclaration = edge.HttpGetDeclaration is { TemplateSpan: { } literal } declaration
+                    ? declaration with { TemplateSpan = new(checked(literal.Start + 1), literal.Length) } : edge.HttpGetDeclaration,
+                Id = HarnessIdentity.EdgeId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
                 edge.SourceOccurrenceId, edge.TargetOccurrenceId, edge.Kind, evidence.SourceId, evidence.ContentHash,
                 evidence.RawSpan, edge.Producer) };
         }

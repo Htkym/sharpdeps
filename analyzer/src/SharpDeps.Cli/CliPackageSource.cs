@@ -100,17 +100,21 @@ internal static class CliPackageSource
                 using var locked = JsonDocument.Parse(ReadEvidence(lockPath));
                 foreach (var group in locked.RootElement.GetProperty("dependencies").EnumerateObject())
                     foreach (var package in group.Value.EnumerateObject())
-                        if (package.Name.Equals(id, StringComparison.OrdinalIgnoreCase)
-                            && package.Value.TryGetProperty("contentHash", out var hash))
+                        if (package.Name.Equals(id, StringComparison.OrdinalIgnoreCase))
                         {
-                            if (package.Value.TryGetProperty("resolved", out var resolved)
-                                && NormalizeVersion(resolved.GetString()!) != version)
+                            if (package.Value.TryGetProperty("resolved", out var resolved))
                             {
-                                // Another TFM may legitimately restore a different version of the same ID.
-                                Require(group.Name != framework);
-                                continue;
+                                var resolvedVersion = NormalizeVersion(resolved.GetString()!);
+                                Require(resolvedVersion is not null);
+                                if (resolvedVersion != version)
+                                {
+                                    // Another TFM may legitimately restore a different version of the same ID.
+                                    Require(group.Name != framework);
+                                    continue;
+                                }
                             }
-                            Require(HashMatches(hash.GetString(), archiveHash));
+                            Require(package.Value.TryGetProperty("contentHash", out var hash)
+                                && HashMatches(hash.GetString(), archiveHash));
                         }
             }
             else Append("no-lock");
