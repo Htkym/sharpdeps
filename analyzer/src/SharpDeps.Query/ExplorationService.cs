@@ -180,7 +180,7 @@ public sealed class ExplorationService
         private int omissionDisplayLimit = 8;
         private string? cachedSourceId;
         private string? cachedSourceText;
-        private readonly Dictionary<string, string> generatedBodies;
+        private readonly Dictionary<string, string> storedBodies;
         private bool cancelled;
         private QueryFreshness freshness = new("unverified", null, [], ["complete inventory/configuration not checked"]);
         private ExploreOwnerObservation? ownerObservation;
@@ -192,7 +192,9 @@ public sealed class ExplorationService
         {
             this.owner = owner; this.index = index; this.workspace = workspace; this.trusted = trusted;
             this.request = request; originalToken = token; this.timer = timer; this.clock = clock;
-            generatedBodies = owner.saved.StoredGeneratedBodies.ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
+            storedBodies = owner.saved.StoredGeneratedBodies.Select(b => (b.SourceId, b.Body))
+                .Concat(owner.saved.StoredPackageBodies.Select(b => (b.SourceId, b.Body)))
+                .ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
             project = request.ProjectId; variant = request.VariantId;
         }
 
@@ -1059,8 +1061,8 @@ public sealed class ExplorationService
         /// never resolved against the filesystem.
         /// </summary>
         private byte[] ReadSource(IndexFile file)
-            => QueryWorkspace.IsGenerated(file)
-                ? workspace!.ReadStored(file, generatedBodies.TryGetValue(file.SourceId, out var body)
+            => QueryWorkspace.IsStored(file)
+                ? workspace!.ReadStored(file, storedBodies.TryGetValue(file.SourceId, out var body)
                     ? body : throw new QuerySourceException("SOURCE_CHANGED_SINCE_SNAPSHOT", file.RelativePath), timer.Token)
                 : workspace!.Read(file, timer.Token);
 

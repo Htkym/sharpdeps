@@ -9,10 +9,10 @@ internal static class IndexDatabase
 {
     public const int SchemaVersion = 1;
     /// <summary>
-    /// The schema written for new indexes. Version 2 adds the generated_bodies table;
-    /// readers that only know schema 1 reject it explicitly through InspectHeader.
+    /// The schema written for new indexes. Version 2 adds generated_bodies;
+    /// version 3 adds package_bodies. Older indexes are never converted in place.
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     private const int ApplicationId = 0x53444831; // SDH1, separate from graph/report versions.
 
     public static int InspectHeader(string path)
@@ -22,7 +22,7 @@ internal static class IndexDatabase
         if (file.Read(header) != 100 || !header[..16].SequenceEqual("SQLite format 3\0"u8))
             throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "This index schema is not supported; retain it and rebuild into a separate index.");
         var version = BinaryPrimitives.ReadInt32BigEndian(header[60..64]);
-        if ((version != SchemaVersion && version != CurrentSchemaVersion)
+        if ((version < SchemaVersion || version > CurrentSchemaVersion)
             || BinaryPrimitives.ReadInt32BigEndian(header[68..72]) != ApplicationId)
             throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "This index schema is not supported; retain it and rebuild into a separate index.");
         return version;
@@ -68,7 +68,7 @@ internal static class IndexDatabase
     public static int CheckMetadata(SqliteConnection connection, SqliteTransaction? transaction, string workspace)
     {
         var version = Convert.ToInt32(Scalar(connection,transaction,"PRAGMA user_version;"));
-        if ((version != SchemaVersion && version != CurrentSchemaVersion)
+        if ((version < SchemaVersion || version > CurrentSchemaVersion)
             || Convert.ToInt32(Scalar(connection,transaction,"PRAGMA application_id;")) != ApplicationId)
             throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "The index schema is unsupported.");
         if ((string?)Scalar(connection,transaction,"SELECT workspace_id FROM metadata WHERE singleton=1") != workspace)
@@ -79,7 +79,8 @@ internal static class IndexDatabase
     {
         using var transaction=c.BeginTransaction();
         Execute(c,transaction,Schema);
-        if (schemaVersion >= CurrentSchemaVersion) Execute(c,transaction,GeneratedBodiesSchema);
+        if (schemaVersion >= 2) Execute(c,transaction,GeneratedBodiesSchema);
+        if (schemaVersion >= 3) Execute(c,transaction,PackageBodiesSchema);
         Execute(c,transaction,"INSERT INTO metadata(singleton,workspace_id,active_generation) VALUES(1,$workspace,NULL)",("$workspace",workspace));
         Execute(c,transaction,$"PRAGMA user_version={schemaVersion}; PRAGMA application_id={ApplicationId};");
         transaction.Commit();
@@ -104,6 +105,11 @@ internal static class IndexDatabase
     }
     private const string GeneratedBodiesSchema = """
         CREATE TABLE generated_bodies(generation INTEGER NOT NULL REFERENCES generations, source_id TEXT NOT NULL,
+          body TEXT NOT NULL, PRIMARY KEY(generation,source_id),
+          FOREIGN KEY(generation,source_id) REFERENCES files(generation,source_id));
+        """;
+    private const string PackageBodiesSchema = """
+        CREATE TABLE package_bodies(generation INTEGER NOT NULL REFERENCES generations, source_id TEXT NOT NULL,
           body TEXT NOT NULL, PRIMARY KEY(generation,source_id),
           FOREIGN KEY(generation,source_id) REFERENCES files(generation,source_id));
         """;

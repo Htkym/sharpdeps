@@ -76,12 +76,16 @@ public sealed class IndexWriter : IDisposable
             ObjectDisposedException.ThrowIf(disposed,this);
             var snapshot=stage.Materialize(); var graph=snapshot.Graph; var generation=graph.Generation;
             IndexSnapshotValidator.Validate(snapshot);
-            var generatedBodies=snapshot.StoredGeneratedBodies.ToDictionary(body=>body.SourceId,body=>body.Body,StringComparer.Ordinal);
-            if (snapshot.StoredGeneratedBodies.Count != 0 && schemaVersion < IndexDatabase.CurrentSchemaVersion)
+            var storedBodies=snapshot.StoredGeneratedBodies.Select(body=>(body.SourceId,body.Body))
+                .Concat(snapshot.StoredPackageBodies.Select(body=>(body.SourceId,body.Body)))
+                .ToDictionary(body=>body.SourceId,body=>body.Body,StringComparer.Ordinal);
+            if (snapshot.StoredGeneratedBodies.Count != 0 && schemaVersion < 2)
                 throw new IndexStoreException("INDEX_SCHEMA_MIGRATION_REQUIRED", "This schema 1 index cannot store generated document bodies; retain it and rebuild into a separate index.");
+            if (snapshot.StoredPackageBodies.Count != 0 && schemaVersion < 3)
+                throw new IndexStoreException("INDEX_SCHEMA_MIGRATION_REQUIRED", "This index cannot store package document bodies; retain it and rebuild into a separate index.");
             if (graph.WorkspaceId!=HarnessIdentity.WorkspaceId(WorkspaceUuid))
                 throw new IndexStoreException("INDEX_WORKSPACE_MISMATCH", "Staging belongs to a different workspace.");
-            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,generatedBodies);
+            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
             using var transaction=connection.BeginTransaction();
             var active=IndexDatabase.Scalar(connection,transaction,"SELECT active_generation FROM metadata WHERE singleton=1");
             if (active is long prior && generation<=prior)
@@ -91,6 +95,7 @@ public sealed class IndexWriter : IDisposable
                 ("$utc",DateTimeOffset.UtcNow.ToString("o")),("$json",JsonSerializer.Serialize(graph,HarnessGraphJsonContext.Default.HarnessGraphEnvelope)));
             foreach (var file in snapshot.Files) Execute("INSERT INTO files VALUES($g,$id,$path,$deleted,$json)",("$id",file.SourceId),("$path",file.RelativePath),("$deleted",file.Deleted?1:0),("$json",Serialize(file)));
             foreach (var body in snapshot.StoredGeneratedBodies) Execute("INSERT INTO generated_bodies VALUES($g,$id,$body)",("$id",body.SourceId),("$body",body.Body));
+            foreach (var body in snapshot.StoredPackageBodies) Execute("INSERT INTO package_bodies VALUES($g,$id,$body)",("$id",body.SourceId),("$body",body.Body));
             foreach (var node in graph.Nodes) Execute("INSERT INTO nodes VALUES($g,$id,$kind,$parent,$json)",("$id",node.Id),("$kind",node.Kind.ToString()),("$parent",node.ParentId),("$json",Serialize(node)));
             foreach (var variant in graph.Variants) Execute("INSERT INTO variants VALUES($g,$id,$project,$json)",("$id",variant.Id),("$project",variant.ProjectId),("$json",Serialize(variant)));
             foreach (var occurrence in graph.SymbolOccurrences) Execute("INSERT INTO occurrences VALUES($g,$id,$logical,$variant,$json)",("$id",occurrence.Id),("$logical",occurrence.LogicalSymbolId),("$variant",occurrence.VariantId),("$json",Serialize(occurrence)));
@@ -113,13 +118,13 @@ public sealed class IndexWriter : IDisposable
             }
             // Test fault injection uses the real boundary after all rows and FTS, before manifest/active publication.
             BeforePublish?.Invoke();
-            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,generatedBodies);
+            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
             // The extraction owner can also verify negative inventory and non-root dependencies.
             // Failures roll back rows/FTS before the active generation changes.
             if (verifySelection is not null)
             {
                 verifySelection();
-                IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,generatedBodies);
+                IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
             }
             Execute("UPDATE metadata SET active_generation=$g,canonical_root=$root,writer_version='sharpdeps-index/1' WHERE singleton=1",("$root",CanonicalRoot));
             cancellationToken.ThrowIfCancellationRequested();

@@ -12,8 +12,9 @@ using SharpDeps.Cli;
 using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
+using Xunit.Abstractions;
 
-public sealed class McpFlowTests
+public sealed class McpFlowTests(ITestOutputHelper output)
 {
     [Theory]
     [InlineData(false, null, null)]
@@ -275,11 +276,12 @@ public sealed class McpFlowTests
                     Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
                 }
             }
-            await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service"}}}""");
+            // This checks RPC lifecycle, not cold-start latency; deadline behavior has separate tests.
+            await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service","maxMilliseconds":10000}}}""");
             using (var query = await Reply(3))
             {
                 var result = query.RootElement.GetProperty("result");
-                Assert.False(result.GetProperty("isError").GetBoolean());
+                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
                 Assert.False(result.TryGetProperty("structuredContent", out _));
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains(Fixture.Code.TrimEnd('\n'), source, StringComparison.Ordinal);
@@ -287,7 +289,7 @@ public sealed class McpFlowTests
             }
             if (!allowMutations)
             {
-                await Send("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"explore","arguments":{"query":"","queryKind":"http-get-literal"}}}""");
+                await Send("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"explore","arguments":{"query":"","queryKind":"http-get-literal","maxMilliseconds":10000}}}""");
                 using var missing = await Reply(7);
                 var result = missing.RootElement.GetProperty("result");
                 Assert.True(result.GetProperty("isError").GetBoolean());
@@ -306,10 +308,10 @@ public sealed class McpFlowTests
                 File.AppendAllText(Path.Combine(fixture.Root, "App.cs"), " public sealed class Added { }");
                 await Send("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update","arguments":{"arguments":["--target","App.csproj"]}}}""");
                 using (var updated = await Reply(5)) AssertMutation(updated, "update");
-                await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit"}}}""");
+                await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit","maxMilliseconds":10000}}}""");
                 using var saved = await Reply(6);
                 var result = saved.RootElement.GetProperty("result");
-                Assert.False(result.GetProperty("isError").GetBoolean());
+                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
                 Assert.False(result.TryGetProperty("structuredContent", out _));
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains("public sealed class Added { }", source, StringComparison.Ordinal);
@@ -326,6 +328,16 @@ public sealed class McpFlowTests
         {
             // This test created this exact Process handle; a timed-out fixture must not leave its host running.
             if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
+            try
+            {
+                var diagnostic = await stderr.WaitAsync(TimeSpan.FromSeconds(10));
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    output.WriteLine("MCP fixture stderr: {0}", diagnostic);
+            }
+            catch (TimeoutException)
+            {
+                output.WriteLine("MCP fixture stderr did not close within 10 seconds after host exit.");
+            }
         }
         async Task Send(string line) { await process.StandardInput.WriteLineAsync(line); await process.StandardInput.FlushAsync(); }
         async Task<JsonDocument> Reply(int id)

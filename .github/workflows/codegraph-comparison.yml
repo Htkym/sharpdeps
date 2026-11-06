@@ -15,6 +15,7 @@ on:
         options:
           - prepare
           - smoke
+          - small-index
         default: smoke
       corpus:
         description: 'Corpus to prepare'
@@ -32,7 +33,7 @@ permissions:
 
 jobs:
   comparison:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[comparison]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.stage != 'small-index') || contains(github.event.head_commit.message, '[comparison]')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -63,5 +64,90 @@ jobs:
         with:
           name: comparison-prep-${{ github.run_id }}
           path: ${{ runner.temp }}/scg/o
+          retention-days: 7
+          if-no-files-found: warn
+
+  small-index:
+    if: github.event_name == 'workflow_dispatch' && inputs.stage == 'small-index'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.403
+      - name: Prepare the fixed Small corpus only
+        shell: pwsh
+        run: ./comparison/prepare.ps1 -Root "${{ runner.temp }}/small-index-${{ github.run_id }}-${{ github.run_attempt }}" -Stage Inputs -Corpus Small
+      - name: Build and index Small once (not a comparison)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./comparison/Invoke-Query.ps1
+          $root = "${{ runner.temp }}/small-index-${{ github.run_id }}-${{ github.run_attempt }}"
+          $out = Join-Path $root 'o/index-smoke'
+          if (Test-Path $out) { throw 'Output directory must be new.' }
+          New-Item -ItemType Directory -Path $out | Out-Null
+          $spec = (Get-Content ./comparison/pins.json -Raw | ConvertFrom-Json).corpora | Where-Object id -eq small
+          if ($spec.repository -ne 'https://github.com/realworld-apps/aspnetcore-realworld-example-app' -or $spec.commit -ne '8aa617abed5dd645f8f9d99578a3e07b4e2e52e7' -or $spec.sharpdepsTarget -ne 'Conduit.slnx' -or $spec.expectedTrackedCSharp -ne 106) { throw 'Unexpected Small pin.' }
+          $copy = Join-Path $root 'i/small-sharpdeps'
+          $head = (git -C $copy rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $spec.commit) { throw 'Corpus HEAD mismatch.' }
+          $tracked = @(git -C $copy ls-files -- '*.cs')
+          if ($LASTEXITCODE -ne 0 -or $tracked.Count -ne $spec.expectedTrackedCSharp) { throw 'Corpus count mismatch.' }
+          $summary = [ordered]@{ sourceCommit = (git rev-parse HEAD).Trim(); corpusCommit = $head; trackedCSharp = $tracked.Count; os = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription; sdk = (dotnet --version).Trim(); internalIndexSeconds = 180; comparisonQueryCalls = 0; success = $false; steps = @() }
+          $dotnet = (Get-Command dotnet).Source
+          function Run-SmokeStep($name, $arguments, $workingDirectory, $seconds) {
+            $result = Invoke-ComparisonQuery -Tool sharpdeps -FilePath $dotnet -Arguments $arguments -WorkingDirectory $workingDirectory -TimeoutSeconds $seconds -OutBase (Join-Path $out $name)
+            $summary.steps += $result
+            if ($result.exitCode -ne 0 -or $result.timedOut -or -not $result.collectionComplete) { throw "$name failed; retained captures are authoritative." }
+          }
+          try {
+            $tool = Join-Path $root 't/cli'
+            Run-SmokeStep build @('build', 'analyzer/src/SharpDeps.Cli/SharpDeps.Cli.csproj', '-c', 'Release', '-o', $tool) $PWD.Path 600
+            Run-SmokeStep restore @('restore', $spec.sharpdepsTarget, '--disable-parallel', '--nologo', '-p:Configuration=Release') $copy 600
+            Run-SmokeStep index @('exec', (Join-Path $tool 'SharpDeps.Cli.dll'), 'index', '--root', $copy, '--target', $spec.sharpdepsTarget, '--configuration', 'Release', '--index', '.sharpdeps/smoke.sqlite', '--timeout-seconds', '180', '--trusted') $copy 210
+            Run-SmokeStep status @('exec', (Join-Path $tool 'SharpDeps.Cli.dll'), 'status', '--root', $copy, '--index', '.sharpdeps/smoke.sqlite', '--quiet') $copy 30
+            $summary.indexAndStatusSucceeded = $true
+          }
+          finally {
+            Stop-ComparisonProcesses
+            $summary | ConvertTo-Json -Depth 30 | Set-Content (Join-Path $out 'summary.json') -Encoding utf8
+          }
+      - name: Verify retained package and generated bodies
+        shell: python
+        env:
+          SMOKE_ROOT: ${{ runner.temp }}/small-index-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          import hashlib, json, os, pathlib, sqlite3
+          root = pathlib.Path(os.environ['SMOKE_ROOT'])
+          out = root / 'o/index-smoke'
+          db = root / 'i/small-sharpdeps/.sharpdeps/smoke.sqlite'
+          with sqlite3.connect(db.as_uri() + '?mode=ro', uri=True) as con:
+              generation = con.execute('select active_generation from metadata where singleton=1').fetchone()[0]
+              records = []
+              for kind, table in [('packageSource', 'package_bodies'), ('generatedSource', 'generated_bodies')]:
+                  rows = con.execute(f'select f.json, b.body from files f join {table} b using(generation,source_id) where f.generation=? and f.deleted=0', (generation,))
+                  for encoded, body in rows:
+                      item = json.loads(encoded)
+                      data = body.encode('utf-8')
+                      digest = hashlib.sha256(data).hexdigest()
+                      assert item['kind'] == kind and item['contentHash'] == digest
+                      assert item['byteLength'] == len(data) and item['utf16Length'] == len(body.encode('utf-16-le')) // 2
+                      records.append({'kind': kind, 'path': item['relativePath'], 'sourceId': item['sourceId'], 'sha256': digest, 'bytes': len(data)})
+              assert any(r['kind'] == 'packageSource' and r['path'].endswith('/Microsoft.NET.Test.Sdk.Program.cs') for r in records), 'Expected package source was not retained'
+              assert any(r['kind'] == 'generatedSource' for r in records), 'Expected generated sources were not retained'
+          (out / 'stored-source-evidence.json').write_text(json.dumps({'generation': generation, 'sources': records}, indent=2), encoding='utf-8')
+          summary = json.loads((out / 'summary.json').read_text(encoding='utf-8-sig'))
+          summary['success'] = True
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+      - name: Retain Small smoke evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: small-index-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/small-index-${{ github.run_id }}-${{ github.run_attempt }}/o
           retention-days: 7
           if-no-files-found: warn

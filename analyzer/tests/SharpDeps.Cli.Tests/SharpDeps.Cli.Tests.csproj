@@ -1,10 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" GeneratePathProperty="true" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <ProjectReference Include="..\..\src\SharpDeps.Cli\SharpDeps.Cli.csproj" />
   </ItemGroup>
+  <Target Name="CopySignedPackageFixture" AfterTargets="Build">
+    <ItemGroup>
+      <SignedPackageFixture Include="$(PkgMicrosoft_NET_Test_Sdk)/*.nupkg" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SignedPackageFixture)" DestinationFolder="$(TargetDir)signed-package-fixture" />
+    <Copy SourceFiles="$(PkgMicrosoft_NET_Test_Sdk)/.nupkg.metadata" DestinationFiles="$(TargetDir)signed-package-fixture/metadata.json" />
+    <Copy SourceFiles="$(ProjectAssetsFile)" DestinationFiles="$(TargetDir)signed-package-fixture/assets.json" />
+  </Target>
 </Project>
