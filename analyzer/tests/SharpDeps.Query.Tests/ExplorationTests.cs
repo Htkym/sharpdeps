@@ -316,6 +316,17 @@ public sealed class ExplorationTests
     }
 
     [Fact]
+    public void GeneratedCloneMetadataPreservesTheExactQueryPayload()
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true);
+        var json = JsonSerializer.Serialize(fixture.Snapshot, QueryJson.Options);
+        Assert.Equal(json, JsonSerializer.Serialize(fixture.Snapshot, QuerySnapshotJsonContext.Default.IndexSnapshot));
+        var restored = JsonSerializer.Deserialize(json, QuerySnapshotJsonContext.Default.IndexSnapshot)!;
+        IndexSnapshotValidator.Validate(restored);
+        Assert.Equal(json, JsonSerializer.Serialize(restored, QueryJson.Options));
+    }
+
+    [Fact]
     public void PreparationCacheUsesTheExactPayloadAndKeepsFailuresOutOfTheSharedEntry()
     {
         using var fixture = new Fixture();
@@ -333,6 +344,42 @@ public sealed class ExplorationTests
         var stable = ExplorationSnapshotCache.Get(fixture.Snapshot, default);
         Assert.Throws<IndexStoreException>(() => ExplorationSnapshotCache.Get(fixture.Snapshot with { Files = [] }, default));
         Assert.Same(stable, ExplorationSnapshotCache.Get(fixture.Snapshot, default));
+    }
+
+    [Fact]
+    public void EmptyPreparationCacheSerializesOnceAndWarmHitsStillVerifyTheExactPayload()
+    {
+        using var fixture = new Fixture();
+        var cache = new ExplorationSnapshotCache();
+        var reads = 0;
+        var nodes = fixture.Snapshot.Graph.Nodes.ToArray();
+        var observed = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        { Nodes = new ObservedNodes(nodes, () => reads++) } };
+        var first = cache.GetOrCreate(observed, default);
+        Assert.Equal(nodes.Length, reads);
+
+        reads = 0;
+        Assert.Same(first, cache.GetOrCreate(observed, default));
+        Assert.Equal(nodes.Length, reads);
+
+        // Same object and generation, different payload: never trust identity alone.
+        nodes[0] = nodes[0] with { Name = nodes[0].Name + "Changed" };
+        var changed = cache.GetOrCreate(observed, default);
+        Assert.NotSame(first, changed);
+        Assert.NotEqual(first.saved.Graph.Nodes[0].Name, changed.saved.Graph.Nodes[0].Name);
+    }
+
+    [Fact]
+    public void CancelledColdPreparationDoesNotPublishAndCanRecover()
+    {
+        using var fixture = new Fixture();
+        var cache = new ExplorationSnapshotCache();
+        using var cancellation = new CancellationTokenSource();
+        var interrupted = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        { Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, cancellation.Cancel) } };
+        Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(interrupted, cancellation.Token));
+        var recovered = cache.GetOrCreate(fixture.Snapshot, default);
+        Assert.Same(recovered, cache.GetOrCreate(fixture.Snapshot, default));
     }
 
     [Fact]

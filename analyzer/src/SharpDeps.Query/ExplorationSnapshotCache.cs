@@ -259,30 +259,41 @@ internal sealed class ExplorationSnapshot
     }
 }
 
-internal static class ExplorationSnapshotCache
+internal sealed class ExplorationSnapshotCache
 {
+    private static readonly ExplorationSnapshotCache Shared = new();
     private sealed record Entry(Fingerprint Key, ExplorationSnapshot Snapshot);
     private readonly record struct Fingerprint(string Sha256, long Bytes);
-    private static readonly SemaphoreSlim Gate = new(1, 1);
-    private static Entry? latest;
+    private readonly SemaphoreSlim Gate = new(1, 1);
+    private Entry? latest;
 
     internal static ExplorationSnapshot Get(IndexSnapshot current, CancellationToken token)
+        => Shared.GetOrCreate(current, token);
+
+    internal ExplorationSnapshot GetOrCreate(IndexSnapshot current, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(current);
         token.ThrowIfCancellationRequested();
-        var wanted = Serialize(current, Stream.Null, token);
         var cached = Volatile.Read(ref latest);
-        if (cached is not null && cached.Key == wanted)
+        Fingerprint? wanted = null;
+        // An empty cache cannot hit. Hash the clone bytes below once, rather than
+        // walking the entire payload twice on the first saved exploration.
+        // A populated cache still checks the exact payload without allocating clone bytes.
+        if (cached is not null)
         {
-            token.ThrowIfCancellationRequested();
-            return cached.Snapshot;
+            wanted = Serialize(current, Stream.Null, token);
+            if (cached.Key == wanted)
+            {
+                token.ThrowIfCancellationRequested();
+                return cached.Snapshot;
+            }
         }
         Gate.Wait(token);
         try
         {
             token.ThrowIfCancellationRequested();
             cached = Volatile.Read(ref latest);
-            if (cached is not null && cached.Key == wanted) return cached.Snapshot;
+            if (wanted is { } fingerprint && cached is not null && cached.Key == fingerprint) return cached.Snapshot;
 
             // Only a miss holds clone bytes; the key is computed from those exact bytes.
             using var bytes = new MemoryStream();
@@ -295,7 +306,7 @@ internal static class ExplorationSnapshotCache
             }
             bytes.Position = 0;
             using var input = new CheckedStream(bytes, token);
-            var frozen = JsonSerializer.Deserialize<IndexSnapshot>(input, QueryJson.Options)
+            var frozen = JsonSerializer.Deserialize(input, QuerySnapshotJsonContext.Default.IndexSnapshot)
                 ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data cannot be null.");
             token.ThrowIfCancellationRequested();
             IndexSnapshotValidator.Validate(frozen, token);
@@ -312,7 +323,7 @@ internal static class ExplorationSnapshotCache
         token.ThrowIfCancellationRequested();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var output = new CheckedStream(destination, token, hash);
-        JsonSerializer.Serialize(output, snapshot, QueryJson.Options);
+        JsonSerializer.Serialize(output, snapshot, QuerySnapshotJsonContext.Default.IndexSnapshot);
         token.ThrowIfCancellationRequested();
         return new(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), output.BytesWritten);
     }

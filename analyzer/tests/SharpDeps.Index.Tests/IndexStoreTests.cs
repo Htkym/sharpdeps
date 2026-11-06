@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
@@ -12,6 +13,18 @@ using Xunit;
 public sealed class IndexStoreTests
 {
     private const string HttpGetCode = "namespace App; partial class Service { partial void Before(); [HttpGet(\" /café/{id} \"), HttpGet(\"\"), HttpGet] partial void Before() { } }\n";
+
+    [Fact]
+    public void GeneratedReadMetadataPreservesTheStoredSnapshotContract()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        var json = JsonSerializer.Serialize(snapshot, IndexStage.Json);
+        Assert.Equal(json, JsonSerializer.Serialize(snapshot, IndexReadJsonContext.Default.IndexSnapshot));
+        var restored = JsonSerializer.Deserialize(json, IndexReadJsonContext.Default.IndexSnapshot)!;
+        IndexSnapshotValidator.Validate(restored);
+        Assert.Equal(json, JsonSerializer.Serialize(restored, IndexStage.Json));
+    }
 
     [Fact]
     public void HttpGetDeclarationRoundTripsThroughSqliteWithLiteralProvenanceAndLegacyNull()
