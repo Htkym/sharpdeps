@@ -7,12 +7,12 @@ using Syntamark;
 /// <summary>MD-05 immutable runtime pin. Startup verification is host I/O, outside the pure parser.</summary>
 public static class MarkdownRuntimePin
 {
-    public const string ComponentVersion = "1.0.0";
-    public const string CanonicalSourceHash = "7e854150d5cad96e554b90a550251dce74d29b79ceef2964fa9cfa4a226e2051";
+    public const string ComponentVersion = "1.1.0";
+    public const string CanonicalSourceHash = "622f375cff4e2997c92e7379873fcab5b8ee6b3928260f74c59be0d97b20e5fe";
     public const string ParserVersion = "1/" + CanonicalSourceHash;
     public const string ContractVersion = "1.0";
     public const string ProfileId = "lithosharp-markdown/1";
-    public const string RuntimeAssemblySha256 = "e2aec0cdab280d8b721ea5142dde20ed0e55a469da7a0d32abf0959fb2978a4b";
+    public const string RuntimeAssemblySha256 = "6347fadec31fcc87796989d499d81ce9aa10df6763e9e1559e8dc1373c7a7bc8";
     public const string YamlPackageVersion = "18.1.0";
     public const string YamlAssemblyName = "YamlDotNet, Version=18.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e";
     public const string YamlInformationalVersion = "18.1.0";
