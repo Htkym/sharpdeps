@@ -114,7 +114,7 @@ public sealed class IndexReader : IDisposable
         using var rows=command.ExecuteReader();
         while(ReadRow(rows,token))
         {
-            var item=JsonSerializer.Deserialize<T>(rows.GetString(0),IndexStage.Json)
+            var item=JsonSerializer.Deserialize<T>(rows.GetString(0),IndexReadJsonContext.Default.Options)
                 ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
             token.ThrowIfCancellationRequested();
             result.Add(item);

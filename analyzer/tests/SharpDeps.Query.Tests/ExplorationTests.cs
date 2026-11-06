@@ -316,6 +316,17 @@ public sealed class ExplorationTests
     }
 
     [Fact]
+    public void GeneratedCloneMetadataPreservesTheExactQueryPayload()
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true);
+        var json = JsonSerializer.Serialize(fixture.Snapshot, QueryJson.Options);
+        Assert.Equal(json, JsonSerializer.Serialize(fixture.Snapshot, QuerySnapshotJsonContext.Default.IndexSnapshot));
+        var restored = JsonSerializer.Deserialize(json, QuerySnapshotJsonContext.Default.IndexSnapshot)!;
+        IndexSnapshotValidator.Validate(restored);
+        Assert.Equal(json, JsonSerializer.Serialize(restored, QueryJson.Options));
+    }
+
+    [Fact]
     public void PreparationCacheUsesTheExactPayloadAndKeepsFailuresOutOfTheSharedEntry()
     {
         using var fixture = new Fixture();

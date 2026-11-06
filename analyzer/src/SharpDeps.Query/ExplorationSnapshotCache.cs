@@ -306,7 +306,7 @@ internal sealed class ExplorationSnapshotCache
             }
             bytes.Position = 0;
             using var input = new CheckedStream(bytes, token);
-            var frozen = JsonSerializer.Deserialize<IndexSnapshot>(input, QueryJson.Options)
+            var frozen = JsonSerializer.Deserialize(input, QuerySnapshotJsonContext.Default.IndexSnapshot)
                 ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data cannot be null.");
             token.ThrowIfCancellationRequested();
             IndexSnapshotValidator.Validate(frozen, token);
@@ -323,7 +323,7 @@ internal sealed class ExplorationSnapshotCache
         token.ThrowIfCancellationRequested();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var output = new CheckedStream(destination, token, hash);
-        JsonSerializer.Serialize(output, snapshot, QueryJson.Options);
+        JsonSerializer.Serialize(output, snapshot, QuerySnapshotJsonContext.Default.IndexSnapshot);
         token.ThrowIfCancellationRequested();
         return new(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), output.BytesWritten);
     }
