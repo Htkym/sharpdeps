@@ -83,6 +83,42 @@ public sealed class QueryTests
         Assert.Equal("file-code", Assert.Single(internalCode.Envelope.Items).Id);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StoredSourceFilesRemainVisibleToCodeSearchAndBrowse(bool package)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        var file = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        var source = new HarnessNode("stored-file", HarnessNodeKind.SourceFile, "RetainedSource", snapshot.Graph.WorkspaceId,
+            new(file.SourceId, "stored-v1", file.ContentHash, new(0, file.Utf16Length!.Value)));
+        snapshot = snapshot with
+        {
+            Graph = snapshot.Graph with { Nodes = [.. snapshot.Graph.Nodes, source] },
+            SearchText = [new(source.Id, source.Name, "", "", "", file.RelativePath)]
+        };
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        foreach (var kind in new[] { QueryKind.Search, QueryKind.Browse })
+        {
+            var request = new QueryRequest("stored-code", kind, Term: kind == QueryKind.Search ? source.Name : null,
+                Scope: new(Kind: HarnessNodeKind.SourceFile, ResultKinds: [QueryResultKind.Code]), Budget: Generous);
+            var reply = query.Execute(request);
+            Assert.True(reply.Succeeded);
+            var item = Assert.Single(reply.Envelope.Items);
+            Assert.Equal(source.Id, item.Id);
+            Assert.Equal(QueryResultKind.Code, item.ResultKind);
+            using var json = JsonDocument.Parse(reply.Json);
+            Assert.Equal("Code", json.RootElement.GetProperty("items")[0].GetProperty("resultKind").GetString());
+            var other = query.Execute(request with { Scope = request.Scope! with { ResultKinds = [QueryResultKind.Other] } });
+            Assert.True(other.Succeeded);
+            Assert.Empty(other.Envelope.Items);
+        }
+    }
+
     [Fact]
     public void CodeOutputFilterTraversesHiddenDocumentMentionsWithoutInventingEdgesOrOccurrences()
     {

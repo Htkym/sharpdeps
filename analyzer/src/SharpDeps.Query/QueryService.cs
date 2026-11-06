@@ -428,7 +428,7 @@ public sealed class QueryService
             return files.GetValueOrDefault(node.Location?.SourceId ?? "")?.Kind switch
             {
                 "markdown" => QueryResultKind.Docs,
-                "source" or "code" => QueryResultKind.Code,
+                "source" or "code" or IndexFileKinds.GeneratedSource or IndexFileKinds.PackageSource => QueryResultKind.Code,
                 _ => QueryResultKind.Other
             };
         return node.Kind is HarnessNodeKind.Project or HarnessNodeKind.Namespace or HarnessNodeKind.Type

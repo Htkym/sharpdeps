@@ -20,7 +20,7 @@ Resolved、Candidate、Unresolvedはそれぞれ`items`、`candidates`、`unreso
 
 ## 世代、鮮度とtrust
 
-`scope.resultKinds`はCode/Docs/Otherの返却分類、`scope.includeExternal=false`はExternalSymbolの除外を指定する。Document、Section、FrontMatter、CodeFence、LinkTarget、SymbolMentionはDocsである。SourceFileは保存manifestのkindからcode/sourceをCode、markdownをDocs、それ以外をOtherへ分類する。Project、Namespace、Type、Member、ExternalSymbolはCode、WorkspaceはOtherであり、文書kindの補集合をCodeとは扱わない。
+`scope.resultKinds`はCode/Docs/Otherの返却分類、`scope.includeExternal=false`はExternalSymbolの除外を指定する。Document、Section、FrontMatter、CodeFence、LinkTarget、SymbolMentionはDocsである。SourceFileは保存manifestのkindからcode/source/generatedSource/packageSourceをCode、markdownをDocs、それ以外をOtherへ分類する。Project、Namespace、Type、Member、ExternalSymbolはCode、WorkspaceはOtherであり、文書kindの補集合をCodeとは扱わない。
 
 Search/Browseでは分類をページング前に適用する。探索では非表示の文書構造を経由でき、返却時にnode/occurrenceを絞る。返却edgeは両端が表示条件に合う場合だけ残し、非表示区間を短絡する辺は作らない。探索予算、候補leaf、variant/occurrence接続条件は従来どおりで、非表示nodeを含む探索の打切りも記録する。分類集合は重複除去・整列してcursorへ結び付ける。応答のnode/occurrenceにはresultKind、snapshotにはresultFilterVersion=1を付ける。この機能は同markerを持つQueryHostでのみ利用でき、index schemaやsource読取り権限を変更しない。
 
