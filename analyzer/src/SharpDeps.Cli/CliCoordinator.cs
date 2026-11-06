@@ -289,12 +289,20 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 try { await pipe!.WaitForConnectionAsync(admission.Token); }
                 catch { slots.Release(); throw; }
                 var connected = pipe;
-                pipe = null;
+                // Keep the Unix listener alive even when the session completes synchronously.
+                try
+                {
+                    pipe = NewPipe();
+                }
+                catch
+                {
+                    slots.Release();
+                    throw;
+                }
                 var task = SessionAsync(connected);
                 lock (gate) sessions.Add(task);
                 _ = task.ContinueWith(completed => { lock (gate) sessions.Remove(completed); },
                     CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                pipe = NewPipe();
             }
         }
         catch (OperationCanceledException) when (admission.IsCancellationRequested) { }
