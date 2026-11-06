@@ -2,6 +2,7 @@ namespace SharpDeps.Markdown.Tests;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
@@ -13,6 +14,80 @@ public sealed class MarkdownGraphAdapterTests
     private static readonly Guid Workspace = Guid.Parse("11111111-2222-4333-8444-555555555555");
     private static readonly Guid Document = Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
     private static MarkdownGraphRequest Request(string raw) => new(raw, Workspace, Document, "scope", "readme.md", "version-a", "snapshot-a", 1);
+
+    [Fact]
+    public void PreparedInputReprojectsTheSameFactsWithNewDocumentAndSectionIdentities()
+    {
+        var request = Request("\uFEFF---\r\ntitle: intro\r\nsecret: ignored\r\n---\r\n# A &amp; 😀\r\n\r\n`App.Service`\r\n[link](target.md)\r\n~~~csharp\r\nApp.Service\r\n~~~\r\n");
+        var adapter = new LithoSharpMarkdownAdapter();
+        var prepared = adapter.Prepare(request, true);
+        var projected = adapter.Project(request, prepared, true);
+        Assert.Equal(JsonSerializer.Serialize(adapter.Analyze(request, true)), JsonSerializer.Serialize(projected));
+        Assert.Same(prepared.Facts, projected.Facts);
+        Assert.NotNull(prepared.SyntaxRoot);
+        Assert.Throws<NotSupportedException>(() => ((IList<MarkdownMetadataValue>)prepared.Attributes).Add(prepared.Attributes[0]));
+        Assert.Throws<NotSupportedException>(() => ((IList<string>)prepared.IgnoredMetadataKeys).Clear());
+
+        var rebound = request with
+        {
+            DocumentUuid = Guid.Parse("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"), SnapshotId = "snapshot-b", Generation = 2,
+            Options = new MarkdownParseOptions(),
+            SectionTokens = prepared.Facts.Sections.Select((section, index) => (section.LocalKey, Token: "prepared:" + index))
+                .ToDictionary(section => section.LocalKey, section => section.Token, StringComparer.Ordinal),
+            SectionIdentityTextHash = prepared.Facts.TextHash
+        };
+        var durable = adapter.Project(rebound, prepared, true);
+        Assert.Equal(JsonSerializer.Serialize(adapter.Analyze(rebound, true)), JsonSerializer.Serialize(durable));
+        Assert.Same(prepared.Facts, durable.Facts);
+        Assert.Same(prepared.Attributes, durable.Attributes);
+        Assert.All(durable.Sections, section => Assert.True(section.Durable));
+        Assert.Throws<ArgumentException>(() => adapter.Project(rebound with { SectionIdentityTextHash = new string('0', 64) }, prepared, true));
+    }
+
+    [Fact]
+    public void PreparedInputRejectsChangedSourceOptionsTrustAndCancellation()
+    {
+        var adapter = new LithoSharpMarkdownAdapter();
+        var request = Request("# A\ntext\n");
+        var prepared = adapter.Prepare(request, true);
+        var mismatches = new[]
+        {
+            request with { RawText = request.RawText + "changed" },
+            request with { WorkspaceUuid = Guid.Parse("22222222-3333-4444-8555-666666666666") },
+            request with { ScopeId = "other-scope" },
+            request with { SourceId = "other.md" },
+            request with { SourceVersion = "version-b" },
+            request with { Options = new MarkdownParseOptions(maxInputUtf16: 1048577) },
+            request with { Options = new MarkdownParseOptions(maxOutputItems: 131073) },
+            request with { Options = new MarkdownParseOptions(maxNestingDepth: 201) },
+            request with { Options = new MarkdownParseOptions(maxScanUnits: 16777217) },
+            request with { Options = new MarkdownParseOptions(profileId: "commonmark/0.31.2") }
+        };
+        foreach (var mismatch in mismatches)
+            Assert.Throws<ArgumentException>(() => adapter.Project(mismatch, prepared, true));
+        Assert.Throws<InvalidOperationException>(() => adapter.Project(request with { ExpectedParserVersion = "other" }, prepared, true));
+        Assert.Throws<UnauthorizedAccessException>(() => adapter.Prepare(request, false));
+        Assert.Throws<UnauthorizedAccessException>(() => adapter.Project(request, prepared, false));
+        Assert.Throws<OperationCanceledException>(() => adapter.Prepare(request, true, new CancellationToken(true)));
+        Assert.Throws<OperationCanceledException>(() => adapter.Project(request, prepared, true, new CancellationToken(true)));
+    }
+
+    [Fact]
+    public void SyntaxBudgetFailureFallsBackToTheExactOrdinaryFactsAndDiagnostics()
+    {
+        var request = Request("# A\n") with { Options = new MarkdownParseOptions(maxOutputItems: 5) };
+        var adapter = new LithoSharpMarkdownAdapter();
+        var baseline = adapter.Analyze(request, true);
+        Assert.Equal(MarkdownParseStatus.Complete, baseline.Facts.Status);
+        var syntax = MarkdownParser.ParseWithSyntax(request.RawText, request.ScopeId, request.SourceId,
+            request.SourceVersion, request.Options);
+        Assert.Contains(syntax.Facts.Diagnostics, diagnostic => diagnostic.Id == "LMD003");
+
+        var prepared = adapter.Prepare(request, true);
+        var projected = adapter.Project(request, prepared, true);
+        Assert.Equal(JsonSerializer.Serialize(baseline), JsonSerializer.Serialize(projected));
+        Assert.DoesNotContain(projected.Facts.Diagnostics, diagnostic => diagnostic.Id == "LMD003");
+    }
 
     [Fact]
     public void KeepsAtomicOriginalEvidenceAndRequiresTextBoundDurableSectionTokens()

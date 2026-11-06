@@ -15,23 +15,81 @@ public sealed class LithoSharpMarkdownAdapter
 
     public MarkdownGraphProjection Analyze(MarkdownGraphRequest request, bool isTrusted, CancellationToken cancellationToken = default)
     {
+        var options = ValidateRequest(request, isTrusted, cancellationToken);
+        var tokens = CopyTokens(request);
+        var prepared = PrepareCore(request, options, includeSyntax: false, cancellationToken);
+        return ProjectCore(request, prepared, tokens, cancellationToken);
+    }
+
+    public MarkdownPreparedInput Prepare(MarkdownGraphRequest request, bool isTrusted, CancellationToken cancellationToken = default)
+    {
+        var options = ValidateRequest(request, isTrusted, cancellationToken);
+        return PrepareCore(request, options, includeSyntax: true, cancellationToken);
+    }
+
+    public MarkdownGraphProjection Project(MarkdownGraphRequest request, MarkdownPreparedInput prepared, bool isTrusted,
+        CancellationToken cancellationToken = default)
+    {
+        var options = ValidateRequest(request, isTrusted, cancellationToken);
+        ArgumentNullException.ThrowIfNull(prepared);
+        prepared.RequireMatches(request, options);
+        return ProjectCore(request, prepared, CopyTokens(request), cancellationToken);
+    }
+
+    private static MarkdownParseOptions ValidateRequest(MarkdownGraphRequest request, bool isTrusted, CancellationToken cancellationToken)
+    {
         if (!HarnessTrustPolicy.Allows(HarnessOperation.Index, isTrusted))
             throw new UnauthorizedAccessException("Markdown indexing requires a trusted workspace.");
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SnapshotId);
-        if (request.Generation < 0) throw new ArgumentOutOfRangeException(nameof(request.Generation));
-        var workspaceId = HarnessIdentity.WorkspaceId(request.WorkspaceUuid);
-        var documentId = HarnessIdentity.DocumentId(request.WorkspaceUuid, request.DocumentUuid);
+        if (request.Generation < 0)
+            throw new ArgumentOutOfRangeException(nameof(request.Generation));
+        _ = HarnessIdentity.WorkspaceId(request.WorkspaceUuid);
+        _ = HarnessIdentity.DocumentId(request.WorkspaceUuid, request.DocumentUuid);
         var options = request.Options ?? new MarkdownParseOptions();
         if (options.ProfileId != MarkdownRuntimePin.ProfileId)
             throw new ArgumentException("Only the pinned Markdown profile is supported.");
-        var tokens = request.SectionTokens is null
+        return options;
+    }
+
+    private static Dictionary<string, string> CopyTokens(MarkdownGraphRequest request)
+        => request.SectionTokens is null
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             : request.SectionTokens.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+
+    private static MarkdownPreparedInput PrepareCore(MarkdownGraphRequest request, MarkdownParseOptions options,
+        bool includeSyntax, CancellationToken cancellationToken)
+    {
         MarkdownRuntimePin.RequireLoaded(request.ExpectedParserVersion);
-        var facts = MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken);
+        MarkdownDocument facts;
+        MarkdownSyntaxNode? syntaxRoot = null;
+        if (includeSyntax)
+        {
+            var syntax = MarkdownParser.ParseWithSyntax(request.RawText, request.ScopeId, request.SourceId,
+                request.SourceVersion, options, cancellationToken);
+            facts = syntax.Facts;
+            syntaxRoot = syntax.Root;
+            if (facts.Status != MarkdownParseStatus.Complete || facts.Coverage.RawPositions != MarkdownCoverageState.Complete
+                || facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete || facts.Coverage.UnprojectedRegions.Count != 0
+                || facts.Coverage.Reasons.Count != 0 || facts.Diagnostics.Count != 0)
+                facts = MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken);
+        }
+        else
+            facts = MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken);
         MarkdownRuntimePin.RequireFacts(facts);
+        var (attributes, ignored) = Metadata(facts.FrontMatter.Root);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new(request, options, facts, attributes, ignored, syntaxRoot);
+    }
+
+    private static MarkdownGraphProjection ProjectCore(MarkdownGraphRequest request, MarkdownPreparedInput prepared,
+        Dictionary<string, string> tokens, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var workspaceId = HarnessIdentity.WorkspaceId(request.WorkspaceUuid);
+        var documentId = HarnessIdentity.DocumentId(request.WorkspaceUuid, request.DocumentUuid);
+        var facts = prepared.Facts;
         if (tokens.Count > 0 && (facts.TextHash is null || request.SectionIdentityTextHash != facts.TextHash))
             throw new ArgumentException("Section identity bindings must match this parsed raw TextHash.");
         var sectionsByKey = facts.Sections.ToDictionary(s => s.LocalKey, StringComparer.Ordinal);
@@ -45,7 +103,8 @@ public sealed class LithoSharpMarkdownAdapter
         var fences = new List<MarkdownFenceBinding>();
         var search = new List<MarkdownSearchField>();
         var reasons = new List<string>();
-        var (attributes, ignored) = Metadata(facts.FrontMatter.Root);
+        var attributes = prepared.Attributes;
+        var ignored = prepared.IgnoredMetadataKeys;
         var title = attributes.FirstOrDefault(a => a.Key == "title" && a.Source.Kind == MarkdownYamlKind.Scalar)?.Source.Scalar.Text
             ?? facts.Headings.FirstOrDefault()?.Text.Text ?? request.SourceId;
         nodes.Add(new(workspaceId, HarnessNodeKind.Workspace, "workspace", null, null));
@@ -139,7 +198,7 @@ public sealed class LithoSharpMarkdownAdapter
                 facts.ParserVersion, facts.ContractVersion, facts.ProfileId, facts.OptionsHash));
         HarnessGraphContract.ValidateHeader(graph);
         cancellationToken.ThrowIfCancellationRequested();
-        return new(graph, facts, Freeze(sections), Freeze(links), Freeze(fences), Freeze(attributes), Freeze(ignored),
+        return new(graph, facts, Freeze(sections), Freeze(links), Freeze(fences), attributes, ignored,
             Freeze(search), Freeze(reasons.Distinct(StringComparer.Ordinal)));
 
         HarnessLocation Location(RawSpan? span) => new(facts.SourceId, facts.SourceVersion, facts.TextHash,

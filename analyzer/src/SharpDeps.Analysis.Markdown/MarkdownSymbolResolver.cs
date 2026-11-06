@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
+using SharpDeps.Analysis.Core.Identity;
 
 /// <summary>The trusted owner supplies aliases from actual nodes/occurrences in Graph; no files are opened.</summary>
 public sealed record MarkdownSymbolCandidate(string NodeId, string FullName, string ShortName,
@@ -14,7 +15,7 @@ public sealed record MarkdownSymbolCandidate(string NodeId, string FullName, str
 public sealed record MarkdownSymbolCatalog(HarnessGraphEnvelope Graph, IReadOnlyList<MarkdownSymbolCandidate> Symbols,
     IReadOnlyDictionary<string, string>? CodeFileAliases = null);
 public sealed record MarkdownSymbolScope(string? Project = null, string? Namespace = null, string? VariantId = null);
-public enum MarkdownMentionOrigin { ExplicitMetadata, CodeFileLink, CodeFence, BodyText }
+public enum MarkdownMentionOrigin { ExplicitMetadata, CodeFileLink, CodeFence, BodyText, InlineCode }
 
 public sealed record MarkdownSymbolMention(string Id, string OwnerNodeId, string Token, string Selector,
     string Relation, MarkdownMentionOrigin Origin, MarkdownSymbolScope Scope, HarnessLocation Location,
@@ -69,6 +70,23 @@ public static class MarkdownSymbolResolver
 
     public static MarkdownSymbolResolution Resolve(MarkdownGraphProjection projection, string rawText,
         MarkdownSymbolCatalog catalog, MarkdownSymbolScope? scope = null, CancellationToken cancellationToken = default)
+        => ResolveCore(projection, rawText, catalog, scope, null, cancellationToken);
+
+    public static MarkdownSymbolResolution ResolvePrepared(MarkdownGraphProjection projection, MarkdownPreparedInput prepared,
+        MarkdownSymbolCatalog catalog, MarkdownSymbolScope? scope = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        ArgumentNullException.ThrowIfNull(prepared);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(projection.Facts, prepared.Facts)
+            || projection.Graph?.WorkspaceId != HarnessIdentity.WorkspaceId(prepared.WorkspaceUuid))
+            throw new ArgumentException("Projection facts and workspace must belong to this prepared input.");
+        return ResolveCore(projection, prepared.RawText, catalog, scope, prepared.SyntaxRoot, cancellationToken);
+    }
+
+    private static MarkdownSymbolResolution ResolveCore(MarkdownGraphProjection projection, string rawText,
+        MarkdownSymbolCatalog catalog, MarkdownSymbolScope? scope, MarkdownSyntaxNode? syntaxRoot,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(projection);
         ArgumentNullException.ThrowIfNull(rawText);
@@ -87,6 +105,27 @@ public static class MarkdownSymbolResolver
             || location.RawSpan != new HarnessRawSpan(0, rawText.Length))
             throw new ArgumentException("Raw source and graph binding must match the parser source/version/TextHash.");
         ValidateCatalog(catalog, projection.Graph.WorkspaceId, cancellationToken);
+        int[] inlineCodeStarts = [];
+        int[] inlineCodeMaxEnds = [];
+        if (syntaxRoot is not null)
+        {
+            var inlineCodeSpans = new List<RawSpan>();
+            foreach (var node in syntaxRoot.DescendantsAndSelf(cancellationToken))
+                if (node.Kind == MarkdownSyntaxKind.CodeSpan && node.RawSpan is { Length: > 0 } span
+                    && span.End <= rawText.Length)
+                    inlineCodeSpans.Add(span);
+            inlineCodeSpans.Sort(static (left, right) => left.Start.CompareTo(right.Start));
+            inlineCodeStarts = new int[inlineCodeSpans.Count];
+            inlineCodeMaxEnds = new int[inlineCodeSpans.Count];
+            var maxEnd = 0;
+            for (var i = 0; i < inlineCodeSpans.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                inlineCodeStarts[i] = inlineCodeSpans[i].Start;
+                maxEnd = Math.Max(maxEnd, inlineCodeSpans[i].End);
+                inlineCodeMaxEnds[i] = maxEnd;
+            }
+        }
         scope ??= new MarkdownSymbolScope();
         var mentions = new List<MarkdownSymbolMention>();
         var reasons = new List<string>();
@@ -111,6 +150,8 @@ public static class MarkdownSymbolResolver
         cancellationToken.ThrowIfCancellationRequested();
         if (mentions.Any(m => m.Origin == MarkdownMentionOrigin.BodyText))
             reasons.Add("inline-code-kind-unavailable: shared DTO merges inline code into body text; body bindings remain heuristic");
+        if (mentions.Any(m => m.Origin == MarkdownMentionOrigin.InlineCode))
+            reasons.Add("inline-code-symbol-heuristic: shared syntax identifies code spans; symbol bindings remain heuristic");
         if (facts.FrontMatter.State is MarkdownFrontMatterState.Invalid or MarkdownFrontMatterState.Unterminated or MarkdownFrontMatterState.Unknown)
             reasons.Add("front-matter-not-usable: no explicit symbol mapping was inferred from invalid/unknown YAML");
         if (catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope) reasons.Add(CatalogIncomplete);
@@ -187,6 +228,10 @@ public static class MarkdownSymbolResolver
             if (fragments.Any(s => s.End > rawText.Length)) throw new ArgumentException("Parser mapping is outside raw source.");
             HarnessRawSpan? covering = fragments.Length == 0 ? null : new(fragments.Min(s => s.Start),
                 fragments.Max(s => s.End) - fragments.Min(s => s.Start));
+            if (origin == MarkdownMentionOrigin.BodyText && covering is { } span
+                && precision is MarkdownMappingPrecision.Exact or MarkdownMappingPrecision.CoveringTokens
+                && fragments.All(fragment => fragment.Length > 0) && IsInlineCode(span))
+                origin = MarkdownMentionOrigin.InlineCode;
             var snippet = fragments.Length == 0 ? null : string.Concat(fragments.Select(s => rawText.Substring(s.Start, s.Length)));
             var mention = new MarkdownSymbolMention(LocalId(document.Id, hash, "mention", mentions.Count.ToString()),
                 owner, token, selector, origin is MarkdownMentionOrigin.ExplicitMetadata or MarkdownMentionOrigin.CodeFileLink
@@ -194,6 +239,23 @@ public static class MarkdownSymbolResolver
                 origin, selectedScope, new(facts.SourceId, facts.SourceVersion, hash, covering),
                 Array.AsReadOnly(fragments), precision, snippet, HarnessCertainty.Unresolved, null, Array.Empty<string>(), null);
             mentions.Add(Bind(mention, catalog));
+        }
+
+        bool IsInlineCode(HarnessRawSpan span)
+        {
+            var low = 0;
+            var high = inlineCodeStarts.Length;
+            while (low < high)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var middle = low + (high - low) / 2;
+                if (inlineCodeStarts[middle] <= span.Start)
+                    low = middle + 1;
+                else
+                    high = middle;
+            }
+            // A prefix maximum proves one containing span without joining adjacent spans.
+            return low > 0 && inlineCodeMaxEnds[low - 1] >= span.End;
         }
     }
 
@@ -293,7 +355,7 @@ public static class MarkdownSymbolResolver
         // Filter occurrences before deduplicating their logical identity; two TFMs are not two symbols.
         var ids = candidates.Select(s => s.NodeId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var incompleteCatalog = catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope;
-        var uncertain = incompleteCatalog || mention.Origin == MarkdownMentionOrigin.BodyText
+        var uncertain = incompleteCatalog || mention.Origin is MarkdownMentionOrigin.BodyText or MarkdownMentionOrigin.InlineCode
             || mention.Precision is MarkdownMappingPrecision.Unknown or MarkdownMappingPrecision.Partial
             || mention.RawFragments.Count == 0;
         var certainty = ids.Length == 0 ? HarnessCertainty.Unresolved

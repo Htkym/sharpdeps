@@ -142,6 +142,83 @@ public sealed class MarkdownSymbolResolverTests
     }
 
     [Fact]
+    public void PreparedCodeSpansRetainMentionEvidenceOrderAndConservativeBindings()
+    {
+        const string raw = "\uFEFF# Guide\r\n\r\n😀 `Service` and &#65;pp.Service\r\n\r\n```csharp\r\nApp.Service\r\n```\r\n";
+        var request = new MarkdownGraphRequest(raw, Workspace, Document, "scope", "readme.md", "version-a", "snapshot-a", 1);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var prepared = adapter.Prepare(request, true);
+        var projection = adapter.Project(request, prepared, true);
+        var first = Symbol("App.Service", "Service", "T:App.Service", "App", Net10);
+        var second = Symbol("Other.Service", "Service", "T:Other.Service", "Other", Net9);
+        var catalog = Catalog(projection, first, second);
+        var legacy = MarkdownSymbolResolver.Resolve(projection, raw, catalog);
+        var result = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog);
+        Assert.Equal(legacy.Mentions.Select(m => (m.Id, m.OwnerNodeId, m.Token, m.Selector, m.Relation, m.Scope,
+                m.Location, m.Precision, m.Snippet, m.Certainty, m.TargetNodeId, m.Reason)),
+            result.Mentions.Select(m => (m.Id, m.OwnerNodeId, m.Token, m.Selector, m.Relation, m.Scope,
+                m.Location, m.Precision, m.Snippet, m.Certainty, m.TargetNodeId, m.Reason)));
+        for (var i = 0; i < legacy.Mentions.Count; i++)
+        {
+            Assert.Equal(legacy.Mentions[i].RawFragments, result.Mentions[i].RawFragments);
+            Assert.Equal(legacy.Mentions[i].CandidateNodeIds, result.Mentions[i].CandidateNodeIds);
+        }
+        var inline = Assert.Single(result.Mentions, m => m.Origin == MarkdownMentionOrigin.InlineCode);
+        Assert.Equal("Service", inline.Token);
+        Assert.Equal(2, inline.CandidateNodeIds.Count);
+        Assert.Equal(HarnessCertainty.Candidate, inline.Certainty);
+        Assert.Null(inline.TargetNodeId);
+        Assert.Equal(MarkdownMentionOrigin.BodyText, legacy.Mentions.Single(m => m.Id == inline.Id).Origin);
+        Assert.Contains(result.Mentions, m => m.Origin == MarkdownMentionOrigin.BodyText && m.Snippet!.Contains("&#65;", StringComparison.Ordinal));
+        Assert.Equal(HarnessCertainty.Resolved, Assert.Single(result.Mentions, m => m.Origin == MarkdownMentionOrigin.CodeFence).Certainty);
+        Assert.Contains(result.Reasons, reason => reason.StartsWith("inline-code-kind-unavailable", StringComparison.Ordinal));
+        Assert.Contains(result.Reasons, reason => reason.StartsWith("inline-code-symbol-heuristic", StringComparison.Ordinal));
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.ResolvePrepared(Parse(raw), prepared, catalog));
+        var otherWorkspace = HarnessIdentity.WorkspaceId(Guid.Parse("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.ResolvePrepared(
+            projection with { Graph = projection.Graph with { WorkspaceId = otherWorkspace } }, prepared,
+            catalog with { Graph = catalog.Graph with { WorkspaceId = otherWorkspace } }));
+        Assert.Throws<OperationCanceledException>(() => MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog,
+            cancellationToken: new CancellationToken(true)));
+
+        var scoped = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog, new(VariantId: Net10));
+        var rebound = MarkdownSymbolResolver.ReResolve(scoped, catalog);
+        var scopedInline = Assert.Single(rebound.Mentions, m => m.Origin == MarkdownMentionOrigin.InlineCode);
+        Assert.Equal(new[] { first.NodeId }, scopedInline.CandidateNodeIds);
+        Assert.Equal(HarnessCertainty.Candidate, scopedInline.Certainty);
+        Assert.Null(scopedInline.TargetNodeId);
+    }
+
+    [Fact]
+    public void PreparedInlineOnlyEvidenceKeepsItsHeuristicReasonAndPartialGraph()
+    {
+        const string raw = "`App.Service`";
+        var request = new MarkdownGraphRequest(raw, Workspace, Document, "scope", "readme.md", "version-a", "snapshot-a", 1);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var prepared = adapter.Prepare(request, true);
+        var projection = adapter.Project(request with
+        {
+            SectionTokens = prepared.Facts.Sections.ToDictionary(section => section.LocalKey, section => "inline-only-" + section.LocalKey),
+            SectionIdentityTextHash = prepared.Facts.TextHash
+        }, prepared, true);
+        Assert.Equal(HarnessCoverage.CompleteWithinScope, projection.Graph.Coverage);
+        var symbol = Symbol("App.Service", "Service", "T:App.Service", "App");
+        var catalog = Catalog(projection, symbol);
+        var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog);
+        var mention = Assert.Single(resolution.Mentions);
+        Assert.Equal(MarkdownMentionOrigin.InlineCode, mention.Origin);
+        Assert.Equal(HarnessCertainty.Candidate, mention.Certainty);
+        Assert.Contains(resolution.Reasons, reason => reason.StartsWith("inline-code-symbol-heuristic", StringComparison.Ordinal));
+        Assert.DoesNotContain(resolution.Reasons, reason => reason.StartsWith("inline-code-kind-unavailable", StringComparison.Ordinal));
+        var merged = projection.Graph with { Nodes = projection.Graph.Nodes.Concat(catalog.Graph.Nodes).ToArray() };
+        var graph = MarkdownSymbolResolver.ProjectGraph(merged, resolution);
+        Assert.Equal(HarnessCoverage.Partial, graph.Coverage);
+        Assert.Contains(graph.Edges, edge => edge.SourceNodeId == mention.Id && edge.Kind == "mentions_symbol"
+            && edge.Origin == "InlineCode" && edge.Certainty == HarnessCertainty.Candidate);
+        Assert.DoesNotContain(graph.Edges, edge => edge.Kind is "calls" or "conforms_to");
+    }
+
+    [Fact]
     public void ExplicitCodeFileLinksUseOwnerAliasesAndParserTargetEvidenceWithoutUrlGuessing()
     {
         var raw = "[source][code]\n[unknown](../unknown.cs)\n[remote](https://example.invalid/App.cs)\n\n[code]: src/App.cs\n";

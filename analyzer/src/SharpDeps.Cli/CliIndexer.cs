@@ -465,24 +465,24 @@ public static class CliIndexer
         // Document projection coverage must not change the completeness of the supplied code catalog.
         var codeCatalog = graph;
         var adapter = new LithoSharpMarkdownAdapter();
-        var markdown = new List<(InputText Input, MarkdownGraphProjection Projection, string? ExplicitId)>();
+        var markdown = new List<(InputText Input, MarkdownPreparedInput Prepared, string? ExplicitId)>();
         foreach (var input in manifest.Values.Where(i => i.File.Kind == "markdown").OrderBy(i => i.File.RelativePath, StringComparer.Ordinal))
         {
             var request = new MarkdownGraphRequest(input.Text, options.WorkspaceUuid, Guid.NewGuid(), workspaceId,
                 input.File.SourceId, input.File.ContentHash, snapshotId, generation);
-            var projection = adapter.Analyze(request, isTrusted: true, token);
-            RequireIndexableMarkdownFacts(projection.Facts, input.File.RelativePath);
-            var ids = projection.Attributes.Where(a => a.Key == "sharpdeps.id").ToArray();
+            var prepared = adapter.Prepare(request, isTrusted: true, token);
+            RequireIndexableMarkdownFacts(prepared.Facts, input.File.RelativePath);
+            var ids = prepared.Attributes.Where(a => a.Key == "sharpdeps.id").ToArray();
             if (ids.Length > 1 || (ids.Length == 1 && string.IsNullOrWhiteSpace(ids[0].Source.Scalar.Text)))
                 throw new CliIndexException("CLI_MARKDOWN_ID_INVALID");
-            markdown.Add((input, projection, ids.FirstOrDefault()?.Source.Scalar.Text));
+            markdown.Add((input, prepared, ids.FirstOrDefault()?.Source.Scalar.Text));
         }
         var oldDocuments = (previous?.Documents ?? []).Select(d => new MarkdownDocumentIdentity(d.DocumentUuid,
             d.RelativePath, d.ExplicitId, d.ContentHash)).ToArray();
         var matches = MarkdownIdentityMatcher.MatchDocuments(oldDocuments, markdown.Select(m =>
             new MarkdownDocumentMatchInput(m.Input.File.RelativePath, m.ExplicitId, m.Input.File.ContentHash)).ToArray(), token);
         var identities = new List<IndexDocumentIdentity>();
-        var projections = new List<(InputText Input, MarkdownGraphProjection Projection)>();
+        var projections = new List<(InputText Input, MarkdownGraphProjection Projection, MarkdownPreparedInput Prepared)>();
         foreach (var item in markdown)
         {
             token.ThrowIfCancellationRequested();
@@ -493,28 +493,29 @@ public static class CliIndexer
             var scope = old?.ScopeId ?? workspaceId;
             var request = new MarkdownGraphRequest(item.Input.Text, options.WorkspaceUuid, uuid, scope,
                 item.Input.File.SourceId, item.Input.File.ContentHash, snapshotId, generation);
-            var facts = scope == workspaceId ? item.Projection.Facts : adapter.Analyze(request, true, token).Facts;
+            var prepared = scope == workspaceId ? item.Prepared : adapter.Prepare(request, true, token);
+            var facts = prepared.Facts;
             var oldSections = old is null ? null : new MarkdownSectionIdentitySnapshot(
                 HarnessIdentity.DocumentId(options.WorkspaceUuid, uuid), old.ScopeId, old.ContentHash,
                 old.ParserVersion, old.ContractVersion, old.ProfileId, old.OptionsHash,
                 old.Sections.Select(s => new MarkdownSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray());
             var sections = MarkdownIdentityMatcher.MatchSections(options.WorkspaceUuid, uuid, item.Input.Text,
                 facts, oldSections, () => Guid.NewGuid().ToString("N"), token);
-            var projection = adapter.Analyze(request with { SectionTokens = sections.SectionTokens,
-                SectionIdentityTextHash = sections.TextHash }, true, token);
+            var projection = adapter.Project(request with { SectionTokens = sections.SectionTokens,
+                SectionIdentityTextHash = sections.TextHash }, prepared, true, token);
             identities.Add(new(uuid, item.Input.File.RelativePath, item.ExplicitId, item.Input.File.ContentHash,
                 scope, sections.Snapshot.ParserVersion, sections.Snapshot.ContractVersion, sections.Snapshot.ProfileId,
                 sections.Snapshot.OptionsHash, sections.Snapshot.Sections.Select(s =>
                     new IndexSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray()));
             graph = Merge(graph, projection.Graph);
-            projections.Add((item.Input, projection));
+            projections.Add((item.Input, projection, prepared));
             if (match.DocumentUuid is null && match.Candidates.Count != 0)
                 diagnostics["cli.documentIdentityAmbiguous"] = diagnostics.GetValueOrDefault("cli.documentIdentityAmbiguous") + 1;
         }
-        foreach (var (input, projection) in projections)
+        foreach (var (input, projection, prepared) in projections)
         {
             var aliases = CodeAliases(Path.GetDirectoryName(input.AbsolutePath)!, manifest.Values.Where(i => i.File.Kind == "source"));
-            var resolution = MarkdownSymbolResolver.Resolve(projection, input.Text, new(codeCatalog, catalogSymbols, aliases),
+            var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, new(codeCatalog, catalogSymbols, aliases),
                 cancellationToken: token);
             graph = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
             foreach (var reason in projection.ProjectionReasons.Concat(resolution.Reasons).Distinct(StringComparer.Ordinal))
