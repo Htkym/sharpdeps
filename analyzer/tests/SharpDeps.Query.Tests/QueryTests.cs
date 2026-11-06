@@ -761,6 +761,33 @@ public sealed class QueryTests
         Assert.DoesNotContain(freshness.Unverified, entry => entry.StartsWith("GENERATED_BODY_INVALID:", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void VerifyUsesStoredBodyIdentitiesForMixedInputs()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package: false);
+        var first = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        var text = snapshot.StoredGeneratedBodies[0].Body + "\n";
+        var second = first with { SourceId = "generated/second.g.cs", RelativePath = "generated/second.g.cs",
+            ContentHash = StoreFixture.Hash(text), ByteLength = StoreFixture.Utf8.GetByteCount(text), Utf16Length = text.Length };
+        var package = second with { SourceId = "package/Source.cs", RelativePath = "package/Source.cs", Kind = IndexFileKinds.PackageSource };
+        snapshot = snapshot with
+        {
+            Files = [.. snapshot.Files, second, package],
+            GeneratedBodies = [new(second.SourceId, text), snapshot.StoredGeneratedBodies[0]],
+            PackageBodies = [new(package.SourceId, "corrupted")]
+        };
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
+
+        var freshness = workspace.Verify(snapshot);
+
+        Assert.Equal("unverified", freshness.State);
+        Assert.Empty(freshness.DirtyPaths);
+        Assert.Equal(new[] { "GENERATED_INPUT_UNVERIFIED:" + first.RelativePath,
+            "GENERATED_INPUT_UNVERIFIED:" + second.RelativePath, "PACKAGE_BODY_INVALID:" + package.RelativePath }
+            .Order(StringComparer.Ordinal), freshness.Unverified);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -780,6 +807,29 @@ public sealed class QueryTests
         Assert.Empty(freshness.DirtyPaths);
         Assert.Contains(freshness.Unverified, entry => entry.StartsWith(
             (package ? "PACKAGE" : "GENERATED") + "_BODY_INVALID:" + generated.RelativePath, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void VerifyRejectsStructuralErrorsAlongsideStoredBodyCorruption(bool package, bool invalidSearchText)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        snapshot = package
+            ? snapshot with { PackageBodies = [snapshot.StoredPackageBodies[0] with { Body = "corrupted" }] }
+            : snapshot with { GeneratedBodies = [snapshot.StoredGeneratedBodies[0] with { Body = "corrupted" }] };
+        snapshot = invalidSearchText
+            ? snapshot with { SearchText = [new("missing-node", "", "", "", "", "")] }
+            : snapshot with { Graph = snapshot.Graph with { Edges = [new("dangling-edge", "missing-node", "missing-node",
+                null, null, null, "calls", HarnessCertainty.Resolved, "fixture", null)] } };
+        var workspace = new QueryWorkspace(fixture.Root);
+
+        Assert.Equal("INDEX_INVALID_SNAPSHOT", Assert.Throws<IndexStoreException>(() =>
+            IndexSnapshotValidator.Validate(snapshot)).Code);
+        Assert.Equal("INDEX_INVALID_SNAPSHOT", Assert.Throws<IndexStoreException>(() => workspace.Verify(snapshot)).Code);
     }
 
     [Theory]

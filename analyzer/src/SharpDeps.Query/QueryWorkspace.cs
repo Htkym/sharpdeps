@@ -127,6 +127,18 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
         {
             return new("unverified", DateTimeOffset.UtcNow, Array.Empty<string>(), new[] { error.Code });
         }
+        var generatedBodies = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var body in snapshot.StoredGeneratedBodies)
+        {
+            token.ThrowIfCancellationRequested();
+            generatedBodies.TryAdd(body.SourceId, body.Body);
+        }
+        var packageBodies = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var body in snapshot.StoredPackageBodies)
+        {
+            token.ThrowIfCancellationRequested();
+            packageBodies.TryAdd(body.SourceId, body.Body);
+        }
         foreach (var input in snapshot.Files)
         {
             token.ThrowIfCancellationRequested();
@@ -135,11 +147,10 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
                 // A stored input has no live file to re-read and no inventory entry:
                 // it is never dirty, and it is never verified-current either.
                 if (input.Deleted) continue;
-                var body = IsPackage(input)
-                    ? snapshot.StoredPackageBodies.FirstOrDefault(candidate => candidate.SourceId == input.SourceId)?.Body
-                    : snapshot.StoredGeneratedBodies.FirstOrDefault(candidate => candidate.SourceId == input.SourceId)?.Body;
+                var bodies = IsPackage(input) ? packageBodies : generatedBodies;
+                bodies.TryGetValue(input.SourceId, out var body);
                 var prefix = IsPackage(input) ? "PACKAGE" : "GENERATED";
-                unverified.Add(body is not null && StoredBodyMatches(input, body)
+                unverified.Add(body is not null && StoredBodyMatches(input, body, token)
                     ? prefix + "_INPUT_UNVERIFIED:" + input.RelativePath
                     : prefix + "_BODY_INVALID:" + input.RelativePath);
                 continue;
@@ -199,10 +210,17 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
             unverified.OrderBy(value => value, StringComparer.Ordinal).ToArray());
     }
 
-    private bool StoredBodyMatches(IndexFile input, string body)
+    private bool StoredBodyMatches(IndexFile input, string body, CancellationToken token)
     {
-        try { _ = ReadStored(input, body); return true; }
-        catch (QuerySourceException) { return false; }
+        try
+        {
+            _ = ReadStored(input, body, token);
+            return true;
+        }
+        catch (QuerySourceException)
+        {
+            return false;
+        }
     }
 
     private static void ValidateInput(IndexFile input)
