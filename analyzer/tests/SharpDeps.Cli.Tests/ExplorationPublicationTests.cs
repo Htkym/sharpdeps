@@ -15,6 +15,51 @@ public sealed class ExplorationPublicationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task ExclusiveIndexAndUpdatePublishWithoutStartingAnOwner()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(cancellation.Token);
+        long generation = 0;
+        foreach (var command in new[] { "index", "update" })
+        {
+            var output = new StringWriter();
+            var arguments = new[] { command, "--root", fixture.Root, "--target", "App.csproj",
+                "--trusted", "--timeout-seconds", "0", "--quiet" };
+            Assert.Equal(0, await CliApplication.RunAsync(arguments, output, new StringWriter(), cancellation.Token));
+            using var response = System.Text.Json.JsonDocument.Parse(output.ToString());
+            var result = response.RootElement.GetProperty("result");
+            Assert.Equal("exclusive", result.GetProperty("coordinatorState").GetString());
+            using var reader = fixture.Open();
+            Assert.Equal(++generation, reader.Snapshot().Graph.Generation);
+            Assert.Equal(generation, result.GetProperty("generation").GetInt64());
+            Assert.Null(CoordinatorProtocol.Discover(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid));
+            using var cancelled = new CancellationTokenSource();
+            var progress = new CancelOnExtractionWriter(cancelled);
+            Assert.Equal(130, await CliApplication.RunAsync(arguments.Where(argument => argument != "--quiet").ToArray(),
+                new StringWriter(), progress, cancelled.Token));
+            Assert.True(progress.Started);
+            using var afterCancellation = fixture.Open();
+            Assert.Equal(generation, afterCancellation.Snapshot().Graph.Generation);
+        }
+    }
+
+    private sealed class CancelOnExtractionWriter(CancellationTokenSource cancellation) : StringWriter
+    {
+        internal bool Started { get; private set; }
+        public override Task WriteLineAsync(string? value)
+        {
+            if (value?.StartsWith("sharpdeps: exclusive extraction started", StringComparison.Ordinal) == true)
+            {
+                Started = true;
+                cancellation.Cancel();
+            }
+            return base.WriteLineAsync(value);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task HttpGetLiteralSurvivesPublicationWithItsOwnSpanAndDeclaringMethod()
     {
         using var fixture = new Fixture();

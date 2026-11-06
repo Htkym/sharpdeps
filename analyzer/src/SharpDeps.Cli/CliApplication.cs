@@ -20,9 +20,9 @@ public static class CliApplication
             if (options.Command == "help")
                 return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall" },
                     root = "--root absolute-directory",
-                    index = "--target root-contained.slnx|.sln|.csproj --trusted",
+                    index = "--target root-contained.slnx|.sln|.csproj --trusted [--timeout-seconds 0 for exclusive execution without a deadline]",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
-                    query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh",
+                    query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh; --max-milliseconds 0 disables the computation deadline",
                     explore = "--term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
@@ -98,7 +98,7 @@ public static class CliApplication
             var budget = request.Budget!;
             var clock = Stopwatch.StartNew();
             deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            deadline.CancelAfter(budget.MaxMilliseconds);
+            if (budget.MaxMilliseconds != 0) deadline.CancelAfter(budget.MaxMilliseconds);
             root = CliPaths.Root(root);
             index = CliPaths.InRoot(root, index);
             foreach (var sidecar in new[] { index + "-wal", index + "-shm", index + ".writer.lock" }) CliPaths.RejectLinks(sidecar);
@@ -110,7 +110,7 @@ public static class CliApplication
             var pinned = new PinnedQueryIndex(reader, queryToken);
             var sourceWorkspace = trusted ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, index, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
-            if (clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
+            if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
             var service = new ExplorationService(pinned, sourceWorkspace, trusted)
             {
                 OwnerStatusProvider = request.ObserveOwner
@@ -118,7 +118,7 @@ public static class CliApplication
             };
             var explored = service.Execute(request, token, queryToken);
             token.ThrowIfCancellationRequested();
-            if (clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
+            if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
             var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
             return Task.FromResult((explored.Text, exit));
         }
@@ -194,9 +194,9 @@ public static class CliApplication
     {
         // Validate the entire selection before creating workspace identity or trying IPC.
         var update = CoordinatorUpdate.Parse(options, root, indexPath, Guid.Empty);
-        var timeout = options.Number("timeout-seconds", 180, 1, 300);
+        var timeout = options.Number("timeout-seconds", 180, 0, 300);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
-        operation.CancelAfter(TimeSpan.FromSeconds(timeout));
+        if (timeout != 0) operation.CancelAfter(TimeSpan.FromSeconds(timeout));
         try
         {
             // A missing identity on an existing index is never silently replaced.
@@ -204,6 +204,7 @@ public static class CliApplication
             if (options.Command == "update" && !existed) throw new CliFailure("INDEX_MISSING", 3);
             var state = CliWorkspaceState.Open(root, create: !existed);
             update = update with { Options = update.Options with { WorkspaceUuid = state.WorkspaceUuid } };
+            if (timeout == 0) return await IndexExclusiveAsync(options, update, stdout, stderr, token);
             var discovered = CoordinatorProtocol.Discover(root, indexPath, state.WorkspaceUuid);
             CoordinatorReply? reply = null;
             if (discovered is not null)
@@ -230,6 +231,29 @@ public static class CliApplication
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new CliFailure("TIMEOUT", 4); }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<int> IndexExclusiveAsync(CliArguments options, CoordinatorUpdate update,
+        TextWriter stdout, TextWriter stderr, CancellationToken token)
+    {
+        var selection = update.Options;
+        using var writer = IndexWriter.Open(selection.Root, selection.IndexPath, selection.WorkspaceUuid, isTrusted: true);
+        if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: exclusive extraction started (no deadline; no automatic restore)");
+        var built = await new CoordinatorExecutor(writer).BuildExclusiveAsync(update, token);
+        token.ThrowIfCancellationRequested();
+        var stage = IndexStage.Create(built.Snapshot);
+        token.ThrowIfCancellationRequested();
+        writer.Commit(stage, token, built.VerifySelection);
+        var snapshot = built.Snapshot;
+        var mode = snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.semanticGraphReused" && d.Count == 1) == true
+            ? "markdown-incremental" : snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.projectCollectorsReused" && d.Count > 0) == true
+                ? "project-incremental" : "full-rebuild";
+        if (!options.Has("quiet")) await stderr.WriteLineAsync($"sharpdeps: {mode} committed");
+        return await Reply(stdout, options, new { snapshot.Graph.WorkspaceId, snapshot.Graph.SnapshotId,
+            snapshot.Graph.Generation, snapshot.Graph.Coverage, updateMode = mode, configurationProof = "unverified",
+            coordinatorState = "exclusive", files = snapshot.Files.Count, nodes = snapshot.Graph.Nodes.Count,
+            edges = snapshot.Graph.Edges.Count });
     }
 
     private static async Task<int> ServeAsync(CliArguments options, string root, string indexPath,

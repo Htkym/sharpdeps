@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 
-/// <summary>One reader transaction pins one committed generation. Dispose promptly; not thread-safe.</summary>
+/// <summary>One reader transaction pins one committed, recursively read-only snapshot. Dispose promptly; not thread-safe.</summary>
 public sealed class IndexReader : IDisposable
 {
     private readonly SqliteConnection connection;
@@ -83,6 +83,19 @@ public sealed class IndexReader : IDisposable
             token.ThrowIfCancellationRequested();
             if(manifestHash!=ManifestHash)
                 throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved input manifest hash differs.");
+            snapshot = snapshot with
+            {
+                Graph = graph with
+                {
+                    SymbolOccurrences = Copy(graph.SymbolOccurrences, token, occurrence => occurrence with
+                        { Declarations = occurrence.Declarations is null ? null : Copy(occurrence.Declarations, token) }),
+                    Diagnostics = graph.Diagnostics is null ? null : Copy(graph.Diagnostics, token)
+                },
+                Files = Copy(snapshot.Files, token, file => Freeze(file, token)),
+                Documents = Copy(snapshot.Documents, token, document => document with
+                    { Sections = Copy(document.Sections, token) })
+            };
+            token.ThrowIfCancellationRequested();
             return cachedSnapshot=snapshot;
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)
@@ -106,6 +119,34 @@ public sealed class IndexReader : IDisposable
         while(ReadRow(rows,token)) result.Add(new IndexPackageBody(rows.GetString(0),rows.GetString(1)));
         return result.AsReadOnly();
     }
+    private static IndexFile Freeze(IndexFile file, CancellationToken token)
+    {
+        if (file.Reuse is not { } reuse) return file;
+        return file with { Reuse = reuse with
+        {
+            Catalog = Copy(reuse.Catalog, token),
+            Projects = reuse.Projects is not { } projects ? null : projects with
+            {
+                Variants = Copy(projects.Variants, token, project => project with
+                {
+                    SourceIds = Copy(project.SourceIds, token),
+                    References = Copy(project.References, token)
+                })
+            }
+        } };
+    }
+
+    private static IReadOnlyList<T> Copy<T>(IReadOnlyList<T> items, CancellationToken token, Func<T,T>? freeze = null)
+    {
+        var copy = new T[items.Count];
+        for (var i = 0; i < copy.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            copy[i] = freeze is null ? items[i] : freeze(items[i]);
+        }
+        return Array.AsReadOnly(copy);
+    }
+
     private IReadOnlyList<T> Read<T>(string table,CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

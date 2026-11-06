@@ -40,6 +40,8 @@ watch通知はowner gateを取る前に独立revisionを進める。root内の�
 
 各clientの取消はそのwaiterだけを外す。他clientの共有更新tokenへ接続しない。受理済みの共有更新はownerの300秒deadline、owner終了要求、公開guardで中断できる。すべてのclientが取消された未開始batchは抽出しない。短命ownerは自分のclient完了／取消後に新規更新の受理を閉じ、受理済みの処理を終える。
 
+`index`／`update --timeout-seconds 0`は共有ownerを使わない専有実行であり、このIPCへ送ると`ARGUMENT_UNSUPPORTED`となる。専有実行は同じOS writer leaseと公開guardを使い、既存ownerのleaseを奪わない。共有batchのcoalescing key、300秒期限、waiterの取消規則は変更しない。
+
 SDK登録はprocess全体に固定される。ownerは実SDK path/versionに固定し、同じSDKを使う別target directoryの依頼を受ける。各buildではtarget directoryから祖先のglobal.json集合とraw bytes、SDK探索に関係する環境を照合する。登録による環境初期化後のstampを使い、公開直前にも同じtargetのstampを検査する。公開guardは全dotnet設置先の候補を照合し、選択SDKが登録済みSDKと合わない場合やSDKが見つからなくなった場合は`COORDINATOR_SDK_RESTART_REQUIRED`を返す。旧SDKで新設定を公開しない。利用者がownerを停止して新processで起動する。複数のdotnet設置先がある環境では、意図したSDKの設置先を`DOTNET_ROOT`等で明示して起動する必要がある。ownerが任意root／SDKを同じprocessで再登録する機能はない。
 
 ## IPC境界と予算

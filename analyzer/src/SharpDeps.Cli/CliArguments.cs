@@ -158,12 +158,14 @@ internal sealed class CliArguments
             "refresh" => QueryFreshnessPolicy.Refresh,
             _ => throw new CliFailure("ARGUMENT_INVALID", 2)
         };
+        var milliseconds = Number("max-milliseconds", 1000, 0, 30000);
+        if (milliseconds is > 0 and < 10) throw new CliFailure("ARGUMENT_INVALID", 2);
         return new(RequestId, kind, Get("term"), Get("id"), ids,
             new QueryScope(nodeKind, Get("project-id"), Get("path-prefix"), Many("variant")), Many("edge-kind"),
             Has("include-candidates"), !Has("no-documents"), !Has("dependencies"), freshness,
             Has("require-complete"), Number("page-size", 100, 1, 500), Get("cursor"),
             new QueryBudget(Number("max-nodes", 60, 1, 500), Number("max-edges", 120, 1, 1000),
-                Number("max-depth", 2, 1, 8), Number("max-milliseconds", 1000, 10, 30000),
+                Number("max-depth", 2, 1, 8), milliseconds,
                 Number("max-chars", 18000, 2048, 1000000), Number("max-bytes", 64000, 2048, 4000000)));
     }
 

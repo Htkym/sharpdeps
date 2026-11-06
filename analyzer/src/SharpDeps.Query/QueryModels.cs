@@ -77,11 +77,40 @@ public interface IQueryIndex
 public sealed class PinnedQueryIndex : IQueryIndex
 {
     private readonly IndexReader reader;
+    private readonly SemaphoreSlim preparationGate = new(1, 1);
+    private ExplorationSnapshot? exploration;
     public PinnedQueryIndex(IndexReader reader, CancellationToken token = default) { this.reader = reader; Snapshot = reader.Snapshot(token); }
     public IndexSnapshot Snapshot { get; }
     public IReadOnlyList<IndexSearchHit> Search(string literal, int limit) => reader.Search(literal, limit);
     public IndexSnapshot ReadSnapshot(CancellationToken token) => reader.Snapshot(token);
     public IReadOnlyList<IndexSearchHit> Search(string literal, int limit, CancellationToken token) => reader.Search(literal, limit, token);
+
+    internal ExplorationSnapshot PrepareExploration(CancellationToken token)
+    {
+        // Snapshot checks the reader lifetime even when preparation is already cached.
+        var saved = reader.Snapshot(token);
+        var prepared = Volatile.Read(ref exploration);
+        if (prepared is not null)
+        {
+            token.ThrowIfCancellationRequested();
+            return prepared;
+        }
+        preparationGate.Wait(token);
+        try
+        {
+            prepared = exploration;
+            if (prepared is null)
+            {
+                // IndexReader validated and froze every reachable collection before publication.
+                prepared = new ExplorationSnapshot(saved, token);
+                token.ThrowIfCancellationRequested();
+                Volatile.Write(ref exploration, prepared);
+            }
+            token.ThrowIfCancellationRequested();
+            return prepared;
+        }
+        finally { preparationGate.Release(); }
+    }
 }
 public static class QueryJson
 {
