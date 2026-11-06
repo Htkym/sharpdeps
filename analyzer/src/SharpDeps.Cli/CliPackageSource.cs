@@ -94,8 +94,43 @@ internal static class CliPackageSource
             Append(Convert.ToBase64String(archiveHash));
             Require(HashMatches(matches[0].Hash, archiveHash));
             Require(HashMatches(metadata.RootElement.GetProperty("contentHash").GetString(), archiveHash));
-            var lockPath = Path.Combine(directory, "packages.lock.json");
-            if (EvidenceExists(lockPath))
+            var lockRequired = false;
+            string? configuredLockPath = null;
+            if (restore.TryGetProperty("restoreLockProperties", out var lockProperties))
+            {
+                foreach (var property in lockProperties.EnumerateObject())
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (property.Name is not ("restorePackagesWithLockFile" or "restoreLockedMode"))
+                        continue;
+                    var value = property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                        ? property.Value.GetBoolean().ToString() : property.Value.GetString();
+                    Require(bool.TryParse(value, out var enabled));
+                    lockRequired |= enabled;
+                }
+                if (lockProperties.TryGetProperty("nuGetLockFilePath", out var configuredLock))
+                {
+                    configuredLockPath = configuredLock.GetString();
+                    if (string.IsNullOrEmpty(configuredLockPath))
+                        configuredLockPath = null;
+                    else
+                    {
+                        Require(!string.IsNullOrWhiteSpace(configuredLockPath));
+                        lockRequired = true;
+                    }
+                }
+            }
+            var lockPath = configuredLockPath is not null
+                ? CliPaths.InRoot(directory, configuredLockPath)
+                : Path.Combine(directory, "packages." + Path.GetFileNameWithoutExtension(projectPath).Replace(' ', '_') + ".lock.json");
+            var lockExists = EvidenceExists(lockPath);
+            if (configuredLockPath is null && !lockExists)
+            {
+                lockPath = Path.Combine(directory, "packages.lock.json");
+                lockExists = EvidenceExists(lockPath);
+            }
+            Require(!lockRequired || lockExists);
+            if (lockExists)
             {
                 using var locked = JsonDocument.Parse(ReadEvidence(lockPath));
                 foreach (var group in locked.RootElement.GetProperty("dependencies").EnumerateObject())

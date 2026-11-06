@@ -207,6 +207,61 @@ public sealed class PackageSourceTests
     }
 
     [Theory]
+    [InlineData("named")]
+    [InlineData("relative")]
+    [InlineData("absolute")]
+    public void LockFileSelectionUsesNuGetPrecedenceAndHashesSelectedEvidence(string selection)
+    {
+        using var fixture = new PackageFixture();
+        var named = Path.Combine(fixture.Root, "packages.App.lock.json");
+        var selected = selection == "named" ? named : Path.Combine(fixture.Root, "locks", "custom.lock.json");
+        fixture.WriteLock(Path.Combine(fixture.Root, "packages.lock.json"), validHash: false);
+        if (selection != "named")
+        {
+            fixture.WriteLock(named, validHash: false);
+            fixture.Assets["project"]!["restore"]!["restoreLockProperties"] = new JsonObject
+            {
+                ["restorePackagesWithLockFile"] = "true", ["restoreLockedMode"] = true,
+                ["nuGetLockFilePath"] = selection == "absolute" ? selected : "locks/custom.lock.json"
+            };
+            fixture.SaveAssets();
+        }
+        fixture.WriteLock(selected);
+        var first = fixture.Bind();
+        File.AppendAllText(selected, "\n");
+        Assert.NotEqual(first.EvidenceHash, fixture.Bind().EvidenceHash);
+    }
+
+    [Theory]
+    [InlineData("custom-missing")]
+    [InlineData("custom-hash")]
+    [InlineData("required-missing")]
+    [InlineData("outside")]
+    public void RequiredLockEvidenceCannotFallBackOrEscapeTheProject(string failure)
+    {
+        using var fixture = new PackageFixture();
+        var properties = new JsonObject
+        {
+            ["restorePackagesWithLockFile"] = failure == "required-missing" ? "true" : "false",
+            ["nuGetLockFilePath"] = ""
+        };
+        if (failure != "required-missing")
+        {
+            fixture.WriteLock(Path.Combine(fixture.Root, "packages.lock.json"));
+            fixture.WriteLock(Path.Combine(fixture.Root, "packages.App.lock.json"));
+            properties["nuGetLockFilePath"] = failure == "outside" ? "../outside.lock.json" : "locks/custom.lock.json";
+            if (failure == "custom-hash")
+                fixture.WriteLock(Path.Combine(fixture.Root, "locks", "custom.lock.json"), validHash: false);
+            if (failure == "outside")
+                fixture.WriteLock(Path.GetFullPath(Path.Combine(fixture.Root, "..", "outside.lock.json")));
+        }
+        fixture.Assets["project"]!["restore"]!["restoreLockProperties"] = properties;
+        fixture.SaveAssets();
+        var error = Assert.Throws<PackageDocumentRegistrationException>(() => fixture.Bind());
+        Assert.Equal(PackageDocumentRegistrationException.ProvenanceUnidentified, error.Code);
+    }
+
+    [Theory]
     [InlineData("missing-entry")]
     [InlineData("extracted-mismatch")]
     [InlineData("tree-mismatch")]
@@ -244,7 +299,7 @@ public sealed class PackageSourceTests
             case "tree-mismatch": text += "//changed"; break;
             case "escape": fixture.Assets["libraries"]!["test.package/1.0.0"]!["files"] = new JsonArray("../build/Source.cs"); fixture.SaveAssets(); break;
             case "metadata-hash": File.WriteAllText(Path.Combine(fixture.PackageDirectory, ".nupkg.metadata"), "{\"contentHash\":\"bad\"}"); break;
-            case "lock-hash": File.WriteAllText(Path.Combine(fixture.Root, "packages.lock.json"), "{\"dependencies\":{\"net10.0\":{\"Test.Package\":{\"contentHash\":\"bad\"}}}}"); break;
+            case "lock-hash": fixture.WriteLock(Path.Combine(fixture.Root, "packages.lock.json"), validHash: false); break;
             case "unconfirmed-boundary": File.Delete(fixture.PropsPath); break;
             case "wrong-framework": fixture.Assets["targets"] = new JsonObject { ["net8.0"] = new JsonObject() }; fixture.SaveAssets(); break;
             case "linked-cache":
@@ -328,6 +383,19 @@ public sealed class PackageSourceTests
             => CliPackageSource.Bind(ProjectPath, "net10.0", Tree.FilePath, text ?? Tree.GetText().ToString());
 
         public void SaveAssets() => File.WriteAllText(Path.Combine(Root, "obj", "project.assets.json"), Assets.ToJsonString());
+
+        public void WriteLock(string path, bool validHash = true)
+        {
+            var hash = validHash
+                ? JsonNode.Parse(File.ReadAllText(Path.Combine(PackageDirectory, ".nupkg.metadata")))!["contentHash"]!.GetValue<string>()
+                : "bad";
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, new JsonObject
+            {
+                ["dependencies"] = new JsonObject { ["net10.0"] = new JsonObject
+                    { ["Test.Package"] = new JsonObject { ["resolved"] = "1.0.0", ["contentHash"] = hash } } }
+            }.ToJsonString());
+        }
 
         public async Task RestoreProject(CancellationToken token)
         {
