@@ -162,7 +162,8 @@
         "indexSchemaVersion": { "const": 1 },
         "coordinatorState": { "const": "not-connected" },
         "resultFilterVersion": { "const": 1 },
-        "symbolDeclarationRowsVersion": { "const": 1 }
+        "symbolDeclarationRowsVersion": { "const": 1 },
+        "namespaceBrowseVersion": { "const": 1 }
       }
     },
     "limits": {
@@ -221,7 +222,8 @@
         "occurrence": { "$ref": "#/$defs/occurrence" },
         "snippet": { "$ref": "#/$defs/snippet" },
         "rank": { "type": "number" },
-        "matchMethod": { "$ref": "#/$defs/id" }
+        "matchMethod": { "$ref": "#/$defs/id" },
+        "resultKind": { "enum": ["Code", "Docs", "Other"] }
       }
     },
     "span": {
@@ -290,8 +292,69 @@
         "certainty": { "$ref": "#/$defs/certainty" },
         "producer": { "type": "string", "minLength": 1, "maxLength": 256 },
         "evidence": { "$ref": "#/$defs/location" },
-        "origin": { "type": "string", "minLength": 1, "maxLength": 256 }
+        "origin": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "extensionBinding": { "$ref": "#/$defs/extensionBinding" },
+        "httpGetDeclaration": { "$ref": "#/$defs/httpGetDeclaration" }
       }
+    },
+    "extensionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["Saved", "Omitted"] },
+        "receiverTypeDisplay": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "constructedMethodDisplay": { "type": "string", "minLength": 1, "maxLength": 3072 },
+        "omissionReason": {
+          "enum": ["unsupported-type", "metadata-budget", "semantic-unavailable"]
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["receiverTypeDisplay", "constructedMethodDisplay"],
+          "properties": { "state": { "const": "Saved" }, "omissionReason": false }
+        },
+        {
+          "required": ["omissionReason"],
+          "properties": {
+            "state": { "const": "Omitted" },
+            "receiverTypeDisplay": false,
+            "constructedMethodDisplay": false
+          }
+        }
+      ]
+    },
+    "httpGetDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["Saved", "Omitted"] },
+        "template": { "type": "string", "maxLength": 1024 },
+        "templateSpan": {
+          "allOf": [
+            { "$ref": "#/$defs/span" },
+            { "properties": { "length": { "minimum": 1, "maximum": 16384 } } }
+          ]
+        },
+        "omissionReason": {
+          "enum": ["no-template", "nonliteral-template", "metadata-budget", "semantic-unavailable"]
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["template", "templateSpan"],
+          "properties": { "state": { "const": "Saved" }, "omissionReason": false }
+        },
+        {
+          "required": ["omissionReason"],
+          "properties": {
+            "state": { "const": "Omitted" },
+            "template": false,
+            "templateSpan": false
+          }
+        }
+      ]
     },
     "occurrence": {
       "type": "object",
