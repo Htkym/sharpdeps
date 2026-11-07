@@ -8,6 +8,19 @@ using Xunit.Abstractions;
 public sealed class FixedQueryReplayTests(ITestOutputHelper output)
 {
     [Fact]
+    public void UnavailableProcessCpuRemainsNullWithoutInvalidatingTheCapture()
+    {
+        using var unavailable = new System.Diagnostics.Process();
+        var cpu = ReplayProcess.ReadCpuMilliseconds(unavailable);
+        Assert.Null(cpu);
+        var capture = new ReplayCapture([], [], 0, 1, cpu, 123);
+        using var receipt = JsonDocument.Parse(JsonSerializer.Serialize(capture, FixedQueryReplay.Json));
+        Assert.Equal(JsonValueKind.Null, receipt.RootElement.GetProperty("cpuMilliseconds").ValueKind);
+        Assert.Equal(0, capture.ExitCode);
+        Assert.Equal(1, capture.WallMilliseconds);
+    }
+
+    [Fact]
     public async Task PublicProcessesKeepWholeSourceScopesEncodingsAndWireBudgets()
     {
         using var fixture = new ReplayFixture();

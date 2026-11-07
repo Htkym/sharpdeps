@@ -352,7 +352,7 @@ internal static class FixedQueryReplay
         WriteManifest(directory);
         return observations;
 
-        async Task<(byte[] Bytes, double WallMilliseconds, double CpuMilliseconds)> RpcAsync(string method, object parameters, string label)
+        async Task<(byte[] Bytes, double WallMilliseconds, double? CpuMilliseconds)> RpcAsync(string method, object parameters, string label)
         {
             var id = ++sequence;
             var request = Utf8.GetBytes(JsonSerializer.Serialize(new { jsonrpc = "2.0", id, method, @params = parameters }) + "\n");

@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Text;
 
 internal sealed record ReplayCapture(byte[] Stdout, byte[] Stderr, int ExitCode, double WallMilliseconds,
-    double CpuMilliseconds, int ProcessId);
+    double? CpuMilliseconds, int ProcessId);
 
 internal sealed class ReplayProcess : IAsyncDisposable
 {
@@ -42,12 +42,18 @@ internal sealed class ReplayProcess : IAsyncDisposable
     }
 
     internal int Id => process.Id;
-    internal double CpuMilliseconds
+    internal double? CpuMilliseconds => ReadCpuMilliseconds(process);
+
+    internal static double? ReadCpuMilliseconds(Process target)
     {
-        get
+        try
         {
-            process.Refresh();
-            return process.TotalProcessorTime.TotalMilliseconds;
+            target.Refresh();
+            return target.TotalProcessorTime.TotalMilliseconds;
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return null;
         }
     }
 
