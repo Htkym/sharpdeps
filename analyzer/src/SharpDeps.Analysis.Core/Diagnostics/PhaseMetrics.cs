@@ -124,8 +124,14 @@ internal static class PhaseMetrics
         {
             RunId = id;
             this.writer = writer;
-            Write(new { type = "run.start", schema = "sharpdeps-phase-metrics/1", operation,
-                utc = DateTimeOffset.UtcNow.ToString("O"), timing = "inclusive-and-measured-child-exclusive" });
+            Write(new
+            {
+                type = "run.start",
+                schema = "sharpdeps-phase-metrics/1",
+                operation,
+                utc = DateTimeOffset.UtcNow.ToString("O"),
+                timing = "inclusive-and-measured-child-exclusive"
+            });
             root = new Scope(this, Ambient.Value, "run", isRoot: true);
         }
 
@@ -155,12 +161,16 @@ internal static class PhaseMetrics
                 return;
             root.Dispose();
             var endCpu = Cpu();
-            Write(new { type = "run.end", outcome,
+            Write(new
+            {
+                type = "run.end",
+                outcome,
                 processWideCpuMilliseconds = cpu is { } start && endCpu is { } end ? (double?)(end - start).TotalMilliseconds : null,
                 processWideAllocatedBytesDelta = GC.GetTotalAllocatedBytes() - allocated,
                 processWideGen0Collections = GC.CollectionCount(0) - collections[0],
                 processWideGen1Collections = GC.CollectionCount(1) - collections[1],
-                processWideGen2Collections = GC.CollectionCount(2) - collections[2] });
+                processWideGen2Collections = GC.CollectionCount(2) - collections[2]
+            });
             lock (gate)
             {
                 disposed = true;
@@ -236,11 +246,18 @@ internal static class PhaseMetrics
                     lastEnd = Math.Max(lastEnd, clippedEnd);
                 }
             var unfinished = Volatile.Read(ref activeChildren) != 0;
-            Owner.Write(new { type = "phase", phase = Phase, spanId = id, parentSpanId = isRoot ? (long?)null : parent?.id,
+            Owner.Write(new
+            {
+                type = "phase",
+                phase = Phase,
+                spanId = id,
+                parentSpanId = isRoot ? (long?)null : parent?.id,
                 startedMilliseconds = (start - Owner.StartTicks) * 1000d / Stopwatch.Frequency,
                 inclusiveMilliseconds = elapsed * 1000d / Stopwatch.Frequency,
                 measuredChildExclusiveMilliseconds = unfinished ? (double?)null : (elapsed - union) * 1000d / Stopwatch.Frequency,
-                overlappingChildren = sum > union, unfinishedChildren = unfinished });
+                overlappingChildren = sum > union,
+                unfinishedChildren = unfinished
+            });
         }
     }
 }

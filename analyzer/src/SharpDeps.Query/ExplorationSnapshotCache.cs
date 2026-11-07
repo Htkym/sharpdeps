@@ -298,7 +298,11 @@ internal sealed class ExplorationSnapshotCache
         {
             token.ThrowIfCancellationRequested();
             cached = Volatile.Read(ref latest);
-            if (wanted is { } fingerprint && cached is not null && cached.Key == fingerprint) { PhaseMetrics.Decision("explore.prepare", "payload-cache-hit-after-wait"); return cached.Snapshot; }
+            if (wanted is { } fingerprint && cached is not null && cached.Key == fingerprint)
+            {
+                PhaseMetrics.Decision("explore.prepare", "payload-cache-hit-after-wait");
+                return cached.Snapshot;
+            }
 
             // Only a miss holds clone bytes; the key is computed from those exact bytes.
             using var bytes = new MemoryStream();

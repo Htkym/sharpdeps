@@ -22,8 +22,12 @@ internal sealed class ReplayProcess : IAsyncDisposable
     {
         var start = new ProcessStartInfo(executable)
         {
-            WorkingDirectory = workingDirectory, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
         foreach (var argument in arguments)
         {

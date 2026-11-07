@@ -67,7 +67,11 @@ public sealed class IndexReader : IDisposable
         using var metricsScope = PhaseMetrics.Measure("reader.snapshot");
         ObjectDisposedException.ThrowIf(disposed,this);
         token.ThrowIfCancellationRequested();
-        if(cachedSnapshot is not null) { PhaseMetrics.Decision("reader.snapshot", "cache-hit"); return cachedSnapshot; }
+        if (cachedSnapshot is not null)
+        {
+            PhaseMetrics.Decision("reader.snapshot", "cache-hit");
+            return cachedSnapshot;
+        }
         using var progress=new ReadCancellation(connection,token);
         try
         {

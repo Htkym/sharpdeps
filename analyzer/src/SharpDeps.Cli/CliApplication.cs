@@ -74,8 +74,10 @@ public static class CliApplication
                 ownerToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             var service = new QueryService(pinned, sourceWorkspace, options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
             var reply = service.Execute(request!, token);
-            if (reply.Succeeded) metrics?.Complete();
-            else metrics?.Fail(reply.Envelope.Errors.Any(error => error.Code == "CANCELLED"));
+            if (reply.Succeeded)
+                metrics?.Complete();
+            else
+                metrics?.Fail(reply.Envelope.Errors.Any(error => error.Code == "CANCELLED"));
             await stdout.WriteLineAsync(reply.Json);
             return reply.Succeeded ? 0 : ExitFor(reply.Envelope.Errors[0].Code);
         }
@@ -85,7 +87,10 @@ public static class CliApplication
             metrics?.Fail(failure.Code == "CANCELLED");
             return await Error(stdout, options, failure.Code, failure.ExitCode);
         }
-        finally { metrics?.Dispose(); }
+        finally
+        {
+            metrics?.Dispose();
+        }
     }
 
     /// <summary>Executes saved exploration with a fresh reader and returns text without the CLI transport newline.</summary>
@@ -134,8 +139,10 @@ public static class CliApplication
             token.ThrowIfCancellationRequested();
             if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
             var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
-            if (exit == 0) metrics?.Complete();
-            else metrics?.Fail(explored.Errors.Any(error => error.Code == "CANCELLED"));
+            if (exit == 0)
+                metrics?.Complete();
+            else
+                metrics?.Fail(explored.Errors.Any(error => error.Code == "CANCELLED"));
             return Task.FromResult((explored.Text, exit));
         }
         catch (Exception error)
@@ -147,7 +154,11 @@ public static class CliApplication
                 : null;
             return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode));
         }
-        finally { deadline?.Dispose(); metrics?.Dispose(); }
+        finally
+        {
+            deadline?.Dispose();
+            metrics?.Dispose();
+        }
     }
 
     private static (string Code, int ExitCode) Failure(Exception error, bool timedOut = false) => error switch

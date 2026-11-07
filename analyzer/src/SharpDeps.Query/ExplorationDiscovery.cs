@@ -116,7 +116,9 @@ public sealed partial class ExplorationService
                 // Collection quotas sum to the caller's limits; no group gets a new deadline or reader.
                 var scoped = request with
                 {
-                    ProjectId = scope.Project, VariantId = scope.Variant, ScopePolicy = ExploreScopePolicy.RequireUnique,
+                    ProjectId = scope.Project,
+                    VariantId = scope.Variant,
+                    ScopePolicy = ExploreScopePolicy.RequireUnique,
                     Budget = budget with
                     {
                         MaxNodes = budget.MaxNodes / scopes.Length + (position < budget.MaxNodes % scopes.Length ? 1 : 0),
@@ -218,8 +220,10 @@ public sealed partial class ExplorationService
                         .Concat(groups.Any(group => group.pending.Count > 0) ? ["OMITTED_UNITS"] : Array.Empty<string>())
                         .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
                     return new(text, Errors.ToArray(), returned, omissions, wire.Chars, wire.Bytes)
-                    { Outcome = AggregateDiscoveryOutcome(Errors.Count != 0, returned.Length,
-                        groups.Select(group => group.Outcome(group.Units, group.pending))) };
+                    {
+                        Outcome = AggregateDiscoveryOutcome(Errors.Count != 0, returned.Length,
+                        groups.Select(group => group.Outcome(group.Units, group.pending)))
+                    };
                 }
                 reasons.Add("OUTPUT_LIMIT");
                 var optional = discoveryGroups!.LastOrDefault(group => group.relationDisplayLimit > 0 || group.omissionDisplayLimit > 0);

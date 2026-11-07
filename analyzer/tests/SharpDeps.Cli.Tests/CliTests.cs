@@ -37,7 +37,11 @@ public sealed class CliTests
         Assert.Contains("reader.snapshot", text);
         Assert.Contains(command == "explore" ? "explore.render" : "query.render", text);
         Assert.Contains(command == "explore" ? "explore.derived-index" : "query.derived-index", text);
-        if (command != "search") { Assert.Contains("source.read", text); Assert.Contains("source.hash", text); }
+        if (command != "search")
+        {
+            Assert.Contains("source.read", text);
+            Assert.Contains("source.hash", text);
+        }
         var refused = Path.Combine(fixture.Root, "refused");
         Assert.Equal(expected, await Run([.. args, "--metrics-directory", refused]));
         Assert.False(Directory.Exists(refused));
@@ -62,7 +66,8 @@ public sealed class CliTests
         var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
         var requests = new[] { new[] { "search", "--term", "Service" }, new[] { "symbol", "--id", "missing" } };
         var expected = new List<(int Exit, string Json, string Progress)>();
-        foreach (var request in requests) expected.Add(await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0"]));
+        foreach (var request in requests)
+            expected.Add(await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0"]));
         var actual = await Task.WhenAll(requests.Select(request => Task.Run(async () =>
         {
             var reply = await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0", "--metrics-directory", directory]);
@@ -87,7 +92,11 @@ public sealed class CliTests
                     p => Assert.Contains(p.GetProperty("parentSpanId").GetInt64(), ids));
                 outcomes.Add(events[^1].RootElement.GetProperty("payload").GetProperty("outcome").GetString()!);
             }
-            finally { foreach (var value in events) value.Dispose(); }
+            finally
+            {
+                foreach (var value in events)
+                    value.Dispose();
+            }
         }
         Assert.Equal(new[] { "completed", "failed" }, outcomes.Order());
     }

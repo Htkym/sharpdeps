@@ -110,7 +110,8 @@ public sealed class PinnedQueryIndex : IQueryIndex
                 token.ThrowIfCancellationRequested();
                 Volatile.Write(ref exploration, prepared);
             }
-            else PhaseMetrics.Decision("explore.prepare", "pin-cache-hit-after-wait");
+            else
+                PhaseMetrics.Decision("explore.prepare", "pin-cache-hit-after-wait");
             token.ThrowIfCancellationRequested();
             return prepared;
         }

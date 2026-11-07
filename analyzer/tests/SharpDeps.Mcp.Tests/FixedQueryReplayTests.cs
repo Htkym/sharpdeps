@@ -156,8 +156,12 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var process = new ReplayProcess(fixture.Root, FixedQueryReplay.Dotnet,
             [input.McpDll, "--root", fixture.Root, "--trusted"]);
-        await Send("initialize", new { protocolVersion = "2025-11-25", capabilities = new { },
-            clientInfo = new { name = "replay-cancel", version = "1" } }, 1, "initialize");
+        await Send("initialize", new
+        {
+            protocolVersion = "2025-11-25",
+            capabilities = new { },
+            clientInfo = new { name = "replay-cancel", version = "1" }
+        }, 1, "initialize");
         await Read("initialize");
         await Send("notifications/initialized", new { }, null, "initialized");
         await Send("tools/call", new { name = "explore", arguments = new { query = fixture.Member, format = "audit", maxMilliseconds = 0 } }, 2, "call");
@@ -189,8 +193,12 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         }
         FixedQueryReplay.WriteJson(Path.Combine(directory, "receipt.json"), new
         {
-            notificationSent = true, cancellationAccepted, classification, hostResponsiveToPing = true,
-            limitation = "CLI signal cancellation is not covered. Sending a notification does not prove that cancellation won the race.", finished
+            notificationSent = true,
+            cancellationAccepted,
+            classification,
+            hostResponsiveToPing = true,
+            limitation = "CLI signal cancellation is not covered. Sending a notification does not prove that cancellation won the race.",
+            finished
         });
         FixedQueryReplay.WriteManifest(directory);
         Assert.Equal(0, finished.ExitCode);
@@ -372,8 +380,13 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         }
         FixedQueryReplay.WriteJson(Path.Combine(directory, "receipt.json"), new
         {
-            channel, waitMode, processId, childReclaimed = true, captureLimitBytes = 16 * 1024 * 1024,
-            attemptedBytes = 17 * 1024 * 1024, wallMilliseconds = clock.Elapsed.TotalMilliseconds,
+            channel,
+            waitMode,
+            processId,
+            childReclaimed = true,
+            captureLimitBytes = 16 * 1024 * 1024,
+            attemptedBytes = 17 * 1024 * 1024,
+            wallMilliseconds = clock.Elapsed.TotalMilliseconds,
             outerDeadlineReached = deadline.IsCancellationRequested
         });
         FixedQueryReplay.WriteManifest(directory);
@@ -396,9 +409,11 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         File.WriteAllBytes(Path.Combine(directory, "probe.stdout"), capture.Stdout);
         FixedQueryReplay.WriteJson(Path.Combine(directory, "receipt.json"), new
         {
-            capture.ExitCode, stdoutBytes = capture.Stdout.Length,
+            capture.ExitCode,
+            stdoutBytes = capture.Stdout.Length,
             stdoutSha256 = FixedQueryReplay.Hash(capture.Stdout),
-            capture.WallMilliseconds, capture.CpuMilliseconds,
+            capture.WallMilliseconds,
+            capture.CpuMilliseconds,
             requirement = "A child writing trailing stdout larger than a pipe buffer must exit without waiting for the outer deadline."
         });
         FixedQueryReplay.WriteManifest(directory);

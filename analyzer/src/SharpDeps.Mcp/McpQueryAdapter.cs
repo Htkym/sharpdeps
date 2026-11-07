@@ -78,7 +78,8 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             arguments = [request.Name, "--root", host.Root, "--index", host.Index, "--quiet"];
             if (host.Trusted) arguments.Add("--trusted");
             AddMutationArguments(request, arguments);
-            if (host.MetricsDirectory is { } directory) arguments.AddRange(["--metrics-directory", directory]);
+            if (host.MetricsDirectory is { } directory)
+                arguments.AddRange(["--metrics-directory", directory]);
         }
         else exploration = ParseExploreRequest(request);
         if (!await slots.WaitAsync(0, token))

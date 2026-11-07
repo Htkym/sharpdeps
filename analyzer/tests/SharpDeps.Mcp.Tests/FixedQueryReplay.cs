@@ -125,18 +125,38 @@ internal static class FixedQueryReplay
         var hosts = new[] { input.CliDll, input.McpDll };
         WriteJson(Path.Combine(directory, "identity.json"), new
         {
-            repositoryRoot = input.RepositoryRoot, commitAndTree = Utf8.GetString(git.Stdout).Trim().Split('\n'),
-            dirtyStatusSha256 = Hash(status.Stdout), sourceIsClean = status.Stdout.Length == 0,
-            snapshot = new { snapshot.Graph.WorkspaceId, snapshot.Graph.SnapshotId, snapshot.Graph.Generation,
-                snapshot.Graph.Coverage, canonicalPayloadSha256 = Hash(snapshotBytes), indexPath, databaseSha256 = originalIndexHash },
-            sourceManifest = snapshot.Files, variants = snapshot.Graph.Variants,
+            repositoryRoot = input.RepositoryRoot,
+            commitAndTree = Utf8.GetString(git.Stdout).Trim().Split('\n'),
+            dirtyStatusSha256 = Hash(status.Stdout),
+            sourceIsClean = status.Stdout.Length == 0,
+            snapshot = new
+            {
+                snapshot.Graph.WorkspaceId,
+                snapshot.Graph.SnapshotId,
+                snapshot.Graph.Generation,
+                snapshot.Graph.Coverage,
+                canonicalPayloadSha256 = Hash(snapshotBytes),
+                indexPath,
+                databaseSha256 = originalIndexHash
+            },
+            sourceManifest = snapshot.Files,
+            variants = snapshot.Graph.Variants,
             workspaceStateSha256 = Hash(File.ReadAllBytes(Path.Combine(input.Root, ".sharpdeps", "workspace.json"))),
-            sdk = Utf8.GetString(sdk.Stdout).Trim(), runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+            sdk = Utf8.GetString(sdk.Stdout).Trim(),
+            runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
             operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
             processors = Environment.ProcessorCount,
-            payloads = hosts.Select(path => new { entrypoint = Path.GetFullPath(path), files = Directory.GetFiles(Path.GetDirectoryName(path)!, "*", SearchOption.AllDirectories)
-                .Order(StringComparer.Ordinal).Select(file => new { path = Path.GetRelativePath(Path.GetDirectoryName(path)!, file), bytes = new FileInfo(file).Length,
-                    sha256 = Hash(File.ReadAllBytes(file)) }).ToArray() }).ToArray(),
+            payloads = hosts.Select(path => new
+            {
+                entrypoint = Path.GetFullPath(path),
+                files = Directory.GetFiles(Path.GetDirectoryName(path)!, "*", SearchOption.AllDirectories)
+                .Order(StringComparer.Ordinal).Select(file => new
+                {
+                    path = Path.GetRelativePath(Path.GetDirectoryName(path)!, file),
+                    bytes = new FileInfo(file).Length,
+                    sha256 = Hash(File.ReadAllBytes(file))
+                }).ToArray()
+            }).ToArray(),
             settings = new[] { "global.json", "NuGet.Config", "analyzer/Directory.Build.props", "analyzer/Directory.Packages.props" }
                 .Select(name => Path.Combine(input.RepositoryRoot, name)).Where(File.Exists)
                 .Select(path => new { path, sha256 = Hash(File.ReadAllBytes(path)) }).ToArray(),
@@ -153,8 +173,12 @@ internal static class FixedQueryReplay
         WriteJson(Path.Combine(directory, "mcp-argv.json"), new { executable = Dotnet, arguments = hostArguments });
         await using var mcp = new ReplayProcess(input.Root, Dotnet, hostArguments);
         var sequence = 0;
-        await RpcAsync("initialize", new { protocolVersion = "2025-11-25", capabilities = new { },
-            clientInfo = new { name = "sharpdeps-fixed-query-replay", version = "1" } }, "initialize");
+        await RpcAsync("initialize", new
+        {
+            protocolVersion = "2025-11-25",
+            capabilities = new { },
+            clientInfo = new { name = "sharpdeps-fixed-query-replay", version = "1" }
+        }, "initialize");
         await NotifyAsync("notifications/initialized", new { }, "initialized");
         var listed = await RpcAsync("tools/list", new { }, "tools-list");
         using (var tools = JsonDocument.Parse(listed.Bytes))
@@ -204,37 +228,91 @@ internal static class FixedQueryReplay
             var receiptPath = Path.Combine(caseDirectory, "receipt.json");
             WriteJson(receiptPath, new
             {
-                requested = item, effective = new { item.Format, scopePolicy = item.ScopePolicy ?? (mcpText?.StartsWith("SharpDeps discover ", StringComparison.Ordinal) == true
+                requested = item,
+                effective = new
+                {
+                    item.Format,
+                    scopePolicy = item.ScopePolicy ?? (mcpText?.StartsWith("SharpDeps discover ", StringComparison.Ordinal) == true
                         ? "discover" : mcpText?.StartsWith("SharpDeps explore ", StringComparison.Ordinal) == true ? "unique" : null),
-                    item.ProjectId, item.VariantId, item.PathPrefix, item.Freshness, item.MaxChars, item.MaxBytes, item.MaxMilliseconds,
-                    maxNodes = 60, maxEdges = 120, maxDepth = 2, hostTrusted = input.Trusted },
+                    item.ProjectId,
+                    item.VariantId,
+                    item.PathPrefix,
+                    item.Freshness,
+                    item.MaxChars,
+                    item.MaxBytes,
+                    item.MaxMilliseconds,
+                    maxNodes = 60,
+                    maxEdges = 120,
+                    maxDepth = 2,
+                    hostTrusted = input.Trusted
+                },
                 snapshot = new { snapshot.Graph.SnapshotId, snapshot.Graph.Generation, payloadSha256 = Hash(snapshotBytes) },
-                cli = new { cli.ExitCode, cli.ProcessId, cli.WallMilliseconds, cli.CpuMilliseconds,
-                    stdoutSha256 = Hash(cli.Stdout), stderrSha256 = Hash(cli.Stderr), stdoutBytes = cli.Stdout.Length },
-                mcp = new { processId = mcp.Id, isError, rpcError = root.TryGetProperty("error", out var error) ? error : (JsonElement?)null,
-                    reply.WallMilliseconds, reply.CpuMilliseconds, responseSha256 = Hash(reply.Bytes), responseBytes = reply.Bytes.Length,
-                    toolResultUtf16 = wire?.Length, toolResultUtf8 = wire is null ? (int?)null : Utf8.GetByteCount(wire),
-                    rpcEnvelopeAndLineDelimiterBytes = wire is null ? (int?)null : reply.Bytes.Length - Utf8.GetByteCount(wire) },
-                resolution = new { outcome, equivalent, candidateCount = (int?)null,
-                    publicErrorCodes = PublicErrorCodes(mcpText ?? cliText), cliPublicErrorCodes = PublicErrorCodes(cliText),
+                cli = new
+                {
+                    cli.ExitCode,
+                    cli.ProcessId,
+                    cli.WallMilliseconds,
+                    cli.CpuMilliseconds,
+                    stdoutSha256 = Hash(cli.Stdout),
+                    stderrSha256 = Hash(cli.Stderr),
+                    stdoutBytes = cli.Stdout.Length
+                },
+                mcp = new
+                {
+                    processId = mcp.Id,
+                    isError,
+                    rpcError = root.TryGetProperty("error", out var error) ? error : (JsonElement?)null,
+                    reply.WallMilliseconds,
+                    reply.CpuMilliseconds,
+                    responseSha256 = Hash(reply.Bytes),
+                    responseBytes = reply.Bytes.Length,
+                    toolResultUtf16 = wire?.Length,
+                    toolResultUtf8 = wire is null ? (int?)null : Utf8.GetByteCount(wire),
+                    rpcEnvelopeAndLineDelimiterBytes = wire is null ? (int?)null : reply.Bytes.Length - Utf8.GetByteCount(wire)
+                },
+                resolution = new
+                {
+                    outcome,
+                    equivalent,
+                    candidateCount = (int?)null,
+                    publicErrorCodes = PublicErrorCodes(mcpText ?? cliText),
+                    cliPublicErrorCodes = PublicErrorCodes(cliText),
                     cliDeadlineObserved = item.MaxMilliseconds > 0 ? cliText.Contains("QUERY_TIMEOUT", StringComparison.Ordinal) : (bool?)null,
                     mcpDeadlineObserved = item.MaxMilliseconds > 0 ? mcpText?.Contains("QUERY_TIMEOUT", StringComparison.Ordinal) : null,
                     matchingScopes = CaptureNumber(mcpText, @"\((\d+) matching scopes"),
-                    selectedGroups = CaptureNumber(mcpText, @"\bgroups=(\d+)"), omittedGroups = CaptureNumber(mcpText, @"\bomittedGroups=(\d+)"),
+                    selectedGroups = CaptureNumber(mcpText, @"\bgroups=(\d+)"),
+                    omittedGroups = CaptureNumber(mcpText, @"\bomittedGroups=(\d+)"),
                     scopeDecision = Lines(mcpText, "Scope ", "Scope policy=", "Choose project/variant", "Alternative scope"),
-                    omissionsAndErrors = Lines(mcpText ?? cliText, "Error ", "Limits/status:", "Omitted saved units=", "Omission details", "Unverified:", "Dirty sources=") },
-                source = new { unitCount = units.Count, fileCount = units.Select(unit => unit.SourceId).Distinct().Count(),
+                    omissionsAndErrors = Lines(mcpText ?? cliText, "Error ", "Limits/status:", "Omitted saved units=", "Omission details", "Unverified:", "Dirty sources=")
+                },
+                source = new
+                {
+                    unitCount = units.Count,
+                    fileCount = units.Select(unit => unit.SourceId).Distinct().Count(),
                     completeRangeCount = units.Count(unit => unit.WholeSavedRangeVerified),
                     utf16 = units.All(unit => unit.Span is not null) ? units.Sum(unit => unit.Text.Length) : (int?)null,
-                    utf8 = units.All(unit => unit.Span is not null) ? units.Sum(unit => Utf8.GetByteCount(unit.Text)) : (int?)null, units, cliUnits },
-                displayed = new { utf16 = mcpText?.Length, utf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText),
+                    utf8 = units.All(unit => unit.Span is not null) ? units.Sum(unit => Utf8.GetByteCount(unit.Text)) : (int?)null,
+                    units,
+                    cliUnits
+                },
+                displayed = new
+                {
+                    utf16 = mcpText?.Length,
+                    utf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText),
                     sourceDefinition = "Numbered source body lines exactly as displayed, excluding source headers.",
                     sourceUtf16 = units.Sum(unit => unit.RenderedNumberedText.Length),
                     sourceUtf8 = units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText)),
                     nonSourceUtf16 = mcpText is null ? (int?)null : mcpText.Length - units.Sum(unit => unit.RenderedNumberedText.Length),
-                    nonSourceUtf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText) - units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText)) },
-                phaseMilliseconds = new { readerPreparation = (double?)null, searchAndScope = (double?)null,
-                    sourceVerification = (double?)null, rendering = (double?)null }, modelUsage = (object?)null
+                    nonSourceUtf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText) - units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText))
+                },
+                phaseMilliseconds = new
+                {
+                    readerPreparation = (double?)null,
+                    searchAndScope = (double?)null,
+                    sourceVerification = (double?)null,
+                    rendering = (double?)null
+                },
+                modelUsage = (object?)null
             });
             observations.Add(new(item.Id, cliText, mcpText, cli.ExitCode, isError, outcome, units,
                 equivalent, wire?.Length ?? 0, wire is null ? 0 : Utf8.GetByteCount(wire), receiptPath));
@@ -263,9 +341,14 @@ internal static class FixedQueryReplay
         File.WriteAllBytes(Path.Combine(directory, "mcp.trailing.stdout"), host.Stdout);
         Require(host.ExitCode == 0 && host.Stderr.Length == 0 && host.Stdout.Length == 0, "MCP failed or emitted unexpected trailing output.");
         Require(Hash(File.ReadAllBytes(indexPath)) == originalIndexHash, "Read-only replay changed the index database.");
-        WriteJson(Path.Combine(directory, "summary.json"), new { status = "completed", cases = observations.Select(item => new
+        WriteJson(Path.Combine(directory, "summary.json"), new
+        {
+            status = "completed",
+            cases = observations.Select(item => new
             { item.Id, item.Outcome, item.CliExit, item.McpIsError, item.Equivalent, unitCount = item.Units.Count }),
-            mcpHost = host, indexUnchanged = true });
+            mcpHost = host,
+            indexUnchanged = true
+        });
         WriteManifest(directory);
         return observations;
 
@@ -323,8 +406,12 @@ internal static class FixedQueryReplay
     {
         var args = new Dictionary<string, object>
         {
-            ["query"] = item.Query, ["format"] = item.Format, ["freshness"] = item.Freshness,
-            ["maxChars"] = item.MaxChars, ["maxBytes"] = item.MaxBytes, ["maxMilliseconds"] = item.MaxMilliseconds,
+            ["query"] = item.Query,
+            ["format"] = item.Format,
+            ["freshness"] = item.Freshness,
+            ["maxChars"] = item.MaxChars,
+            ["maxBytes"] = item.MaxBytes,
+            ["maxMilliseconds"] = item.MaxMilliseconds,
             ["ownerStatus"] = item.OwnerStatus
         };
         foreach (var pair in new[] { ("scopePolicy", item.ScopePolicy), ("projectId", item.ProjectId),
@@ -406,9 +493,12 @@ internal static class FixedQueryReplay
                         for (var count = 0; count < snapshot.Graph.Nodes.Count; count++)
                         {
                             var node = snapshot.Graph.Nodes.SingleOrDefault(value => value.Id == nodeId);
-                            if (node is null) return null;
-                            if (node.Kind == HarnessNodeKind.Project) return node.Id;
-                            if (node.ParentId is null) return null;
+                            if (node is null)
+                                return null;
+                            if (node.Kind == HarnessNodeKind.Project)
+                                return node.Id;
+                            if (node.ParentId is null)
+                                return null;
                             nodeId = node.ParentId;
                         }
                         return null;
@@ -419,28 +509,39 @@ internal static class FixedQueryReplay
                     {
                         for (var count = 0; count < snapshot.Graph.Nodes.Count; count++)
                         {
-                            if (node.Kind is HarnessNodeKind.Document or HarnessNodeKind.Section || node.ParentId is null) return node;
+                            if (node.Kind is HarnessNodeKind.Document or HarnessNodeKind.Section || node.ParentId is null)
+                                return node;
                             node = snapshot.Graph.Nodes.Single(value => value.Id == node.ParentId);
                         }
                         throw new InvalidDataException("Saved document ancestry is cyclic.");
                     }
                     bool DocumentAllowed(HarnessNode node)
                     {
-                        if (documentOnlyScope) return true;
-                        if (!savedCodeScope && !savedProjectScope) return false;
+                        if (documentOnlyScope)
+                            return true;
+                        if (!savedCodeScope && !savedProjectScope)
+                            return false;
                         var section = DocumentSection(node).Id;
                         return snapshot.Graph.Edges.Any(edge =>
                         {
-                            if (!savedProjectScope && edge.VariantId is not null && edge.VariantId != variant) return false;
+                            if (!savedProjectScope && edge.VariantId is not null && edge.VariantId != variant)
+                                return false;
                             var from = snapshot.Graph.Nodes.Single(value => value.Id == edge.SourceNodeId);
                             var to = snapshot.Graph.Nodes.Single(value => value.Id == edge.TargetNodeId);
                             HarnessNode code;
                             string? occurrenceId;
                             if (IsDocument(from) && DocumentSection(from).Id == section && !IsDocument(to))
-                            { code = to; occurrenceId = edge.TargetOccurrenceId; }
+                            {
+                                code = to;
+                                occurrenceId = edge.TargetOccurrenceId;
+                            }
                             else if (IsDocument(to) && DocumentSection(to).Id == section && !IsDocument(from))
-                            { code = from; occurrenceId = edge.SourceOccurrenceId; }
-                            else return false;
+                            {
+                                code = from;
+                                occurrenceId = edge.SourceOccurrenceId;
+                            }
+                            else
+                                return false;
                             return ProjectOf(code.Id) == project && (savedProjectScope || edge.VariantId == variant
                                 || occurrenceId is not null && snapshot.Graph.SymbolOccurrences.Any(value => value.Id == occurrenceId && value.VariantId == variant));
                         });
@@ -533,8 +634,12 @@ internal static class FixedQueryReplay
     internal static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     internal static void WriteManifest(string directory) => WriteJson(Path.Combine(directory, "artifact-manifest.json"),
         Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Where(path => Path.GetFileName(path) != "artifact-manifest.json")
-            .Order(StringComparer.Ordinal).Select(path => new { path = Path.GetRelativePath(directory, path), bytes = new FileInfo(path).Length,
-                sha256 = Hash(File.ReadAllBytes(path)) }).ToArray());
+            .Order(StringComparer.Ordinal).Select(path => new
+            {
+                path = Path.GetRelativePath(directory, path),
+                bytes = new FileInfo(path).Length,
+                sha256 = Hash(File.ReadAllBytes(path))
+            }).ToArray());
     private static void Require(bool condition, string message)
     {
         if (!condition)
