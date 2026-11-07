@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Reflection;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -238,6 +240,7 @@ public static class CliApplication
         TextWriter stdout, TextWriter stderr, CancellationToken token)
     {
         var selection = update.Options;
+        using var metrics = PhaseMetrics.TryStart(selection.MetricsDirectory, "index.exclusive", selection.Root);
         using var writer = IndexWriter.Open(selection.Root, selection.IndexPath, selection.WorkspaceUuid, isTrusted: true);
         if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: exclusive extraction started (no deadline; no automatic restore)");
         var built = await new CoordinatorExecutor(writer).BuildExclusiveAsync(update, token);
@@ -245,6 +248,7 @@ public static class CliApplication
         var stage = IndexStage.Create(built.Snapshot);
         token.ThrowIfCancellationRequested();
         writer.Commit(stage, token, built.VerifySelection);
+        metrics?.Complete();
         var snapshot = built.Snapshot;
         var mode = snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.semanticGraphReused" && d.Count == 1) == true
             ? "markdown-incremental" : snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.projectCollectorsReused" && d.Count > 0) == true

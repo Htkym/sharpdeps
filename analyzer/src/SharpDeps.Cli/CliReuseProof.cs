@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections;
@@ -60,6 +62,7 @@ internal static partial class CliReuseProof
     /// <summary>SdkPath may come from a saved proof; it is constrained to the current host's dotnet SDK tree before reading.</summary>
     internal static CliReuseFingerprint? Capture(string root, string? sdkPath, CancellationToken token = default)
     {
+        using var metrics = PhaseMetrics.Measure("reuse.proof-capture");
         token.ThrowIfCancellationRequested();
         try
         {
@@ -68,24 +71,30 @@ internal static partial class CliReuseProof
             var framework = Directory.GetParent(runtime);
             var shared = framework?.Parent;
             var dotnet = shared?.Parent;
-            if (dotnet is null || shared!.Name != "shared" || framework!.Name != "Microsoft.NETCore.App") return null;
+            if (dotnet is null || shared!.Name != "shared" || framework!.Name != "Microsoft.NETCore.App")
+                return NoProof("unsupported-runtime");
             var dotnetRoot = CliPaths.Root(dotnet.FullName);
-            if (string.IsNullOrWhiteSpace(sdkPath) || !Path.IsPathFullyQualified(sdkPath)) return null;
+            if (string.IsNullOrWhiteSpace(sdkPath) || !Path.IsPathFullyQualified(sdkPath))
+                return NoProof("unsupported-sdk-path");
             var sdk = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sdkPath));
             var sdkParent = Path.Combine(dotnetRoot, "sdk");
             // Check containment before following a saved path or examining its ancestors.
             if (!PathComparer.Equals(Path.GetDirectoryName(sdk), sdkParent)
-                || !Path.GetFileName(sdk).StartsWith("10.", StringComparison.Ordinal)) return null;
+                || !Path.GetFileName(sdk).StartsWith("10.", StringComparison.Ordinal))
+                return NoProof("unsupported-sdk");
             _ = CliPaths.InRoot(dotnetRoot, sdk);
-            if (!Directory.Exists(sdk) || !File.Exists(Path.Combine(sdk, "MSBuild.dll"))) return null;
+            if (!Directory.Exists(sdk) || !File.Exists(Path.Combine(sdk, "MSBuild.dll")))
+                return NoProof("sdk-unavailable");
             CliPaths.RejectLinks(Path.Combine(sdk, "MSBuild.dll"));
 
             var budget = new ProofBudget(token);
             var environment = NormalizeEnvironment(Environment.GetEnvironmentVariables(), sdk);
-            if (environment is null || HasUserHooks() || HasAncestorConfiguration(root)) return null;
+            if (environment is null || HasUserHooks() || HasAncestorConfiguration(root))
+                return NoProof("environment-hooks-or-ancestor-configuration");
             var git = CaptureGit(root, sdk, budget);
             if (git is null || !PlainProjects(root, sdk, budget, git.Value.Present, out var localGitScope, out var package)
-                || (git.Value.Present && !localGitScope && !ExternalGitConfigurationAbsent())) return null;
+                || (git.Value.Present && !localGitScope && !ExternalGitConfigurationAbsent()))
+                return NoProof("project-git-or-package-closure");
             var environmentHash = HashEnvironment(environment, token);
             using var dependencies = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             Append(dependencies, OwnerVersion);
@@ -116,18 +125,38 @@ internal static partial class CliReuseProof
             Append(dependencies, payload);
             AddTree(payload, "tool", dependencies, budget);
             token.ThrowIfCancellationRequested();
+            PhaseMetrics.Decision("reuse.proof-capture", "captured");
             return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant(), package?.Root);
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { token.ThrowIfCancellationRequested(); return null; }
+        catch (Exception)
+        {
+            token.ThrowIfCancellationRequested();
+            return NoProof("unavailable-or-invalid-input");
+        }
+    }
+
+    private static CliReuseFingerprint? NoProof(string reason)
+    {
+        PhaseMetrics.Decision("reuse.proof-capture", reason);
+        return null;
     }
 
     internal static bool Matches(IndexReuseProof proof, CliReuseFingerprint? current,
         string optionsHash, string inputHash)
-        => current is not null && proof.OwnerVersion == OwnerVersion
+    {
+        using var metrics = PhaseMetrics.Measure("reuse.proof-match");
+        var matched = current is not null && proof.OwnerVersion == OwnerVersion
             && proof.OptionsHash == optionsHash && proof.InputHash == inputHash
             && proof.EnvironmentHash == current.EnvironmentHash && proof.DependencyHash == current.DependencyHash
             && PathComparer.Equals(proof.SdkPath, current.SdkPath);
+        if (PhaseMetrics.Enabled)
+            PhaseMetrics.Decision("reuse.proof-match", matched ? "matched" : current is null ? "no-current-proof"
+                : proof.OwnerVersion != OwnerVersion ? "owner-version" : proof.OptionsHash != optionsHash ? "selection-changed"
+                : proof.InputHash != inputHash ? "input-changed" : proof.EnvironmentHash != current.EnvironmentHash ? "environment-changed"
+                : proof.DependencyHash != current.DependencyHash ? "dependency-changed" : "sdk-changed");
+        return matched;
+    }
 
     private static bool PlainProjects(string root, string sdk, ProofBudget budget, bool git, out bool localGitScope,
         out (string Root, string Hash)? package)
@@ -369,17 +398,25 @@ internal static partial class CliReuseProof
         };
         foreach (DictionaryEntry entry in environment)
         {
-            if (entry.Key is not string name || entry.Value is not string value) return null;
+            if (entry.Key is not string name || entry.Value is not string value)
+                return UnsupportedEnvironment();
             if (registered.TryGetValue(name, out var expected))
             {
                 if (value.Length != 0 && (!Path.IsPathFullyQualified(value)
-                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expected))) return null;
+                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expected)))
+                    return UnsupportedEnvironment();
                 continue;
             }
             if (name.Equals("MSBUILDDISABLENODEREUSE", StringComparison.OrdinalIgnoreCase))
-            { if (value != "1") return null; }
+            {
+                if (value != "1")
+                    return UnsupportedEnvironment();
+            }
             else if (name.Equals("MSBuildEnableWorkloadResolver", StringComparison.OrdinalIgnoreCase))
-            { if (value != "false") return null; }
+            {
+                if (value != "false")
+                    return UnsupportedEnvironment();
+            }
             else if (name.Equals("DOTNET_ROOT", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("DOTNET_ROOT_X64", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("DOTNET_ROOT_ARM64", StringComparison.OrdinalIgnoreCase)
@@ -389,14 +426,22 @@ internal static partial class CliReuseProof
                 var expectedHost = name.Equals("DOTNET_HOST_PATH", StringComparison.OrdinalIgnoreCase)
                     ? Path.Combine(dotnet!, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet") : dotnet;
                 if (expectedHost is null || !Path.IsPathFullyQualified(value)
-                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expectedHost)) return null;
+                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expectedHost))
+                    return UnsupportedEnvironment();
             }
-            else if (!PlainEnvironment.Contains(name)) return null;
+            else if (!PlainEnvironment.Contains(name))
+                return UnsupportedEnvironment();
             values.Add(name, value);
         }
         // Only these known registration paths are normalized. Every other environment value is hashed verbatim.
         foreach (var (name, value) in registered) values.Add(name, value);
         return values;
+    }
+
+    private static IDictionary? UnsupportedEnvironment()
+    {
+        PhaseMetrics.Decision("reuse.environment", "unsupported");
+        return null;
     }
 
     private static bool HasUserHooks()
@@ -537,6 +582,7 @@ internal static partial class CliReuseProof
         if (read != length || input.Length != length) throw new IOException("Reuse input changed.");
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
+        PhaseMetrics.Count("read.bytes", read);
         return (length, Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant());
     }
 
@@ -560,13 +606,21 @@ internal static partial class CliReuseProof
         internal void Check()
         {
             Token.ThrowIfCancellationRequested();
-            if (git && elapsed.ElapsedMilliseconds >= 5000) throw new IOException("Git proof time budget exceeded.");
+            if (git && elapsed.ElapsedMilliseconds >= 5000)
+            {
+                PhaseMetrics.Decision("reuse.proof-budget", "git-time");
+                throw new IOException("Git proof time budget exceeded.");
+            }
         }
         internal void NextGitPass() { entries = 0; bytes = 0; Check(); }
         internal void Entry()
         {
             Check();
-            if (++entries > (git ? 10_000 : MaximumEntries)) throw new IOException("Reuse proof entry budget exceeded.");
+            if (++entries > (git ? 10_000 : MaximumEntries))
+            {
+                PhaseMetrics.Decision("reuse.proof-budget", "entries");
+                throw new IOException("Reuse proof entry budget exceeded.");
+            }
             parent?.Entry();
         }
         internal void Bytes(long length)
@@ -575,7 +629,11 @@ internal static partial class CliReuseProof
             lock (this)
             {
                 if (length < 0 || length > IndexSnapshotValidator.MaximumInputFileBytes
-                    || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes)) throw new IOException("Reuse proof byte budget exceeded.");
+                    || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes))
+                {
+                    PhaseMetrics.Decision("reuse.proof-budget", "bytes");
+                    throw new IOException("Reuse proof byte budget exceeded.");
+                }
                 parent?.Bytes(length);
             }
         }

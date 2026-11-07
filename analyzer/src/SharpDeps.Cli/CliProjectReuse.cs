@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Roslyn;
@@ -27,18 +29,24 @@ internal static class CliProjectReuse
         IReadOnlyList<CliProjectSelection> selections, IReadOnlyDictionary<string, IndexFile> current,
         CancellationToken token)
     {
+        using var metrics = PhaseMetrics.Measure("reuse.project-select");
         if (proof is null || proof.Version != Version || structureHash is null || proof.StructureHash != structureHash
-            || selections.Count is < 1 or > 64 || proof.Variants.Count != selections.Count) return null;
+            || selections.Count is < 1 or > 64 || proof.Variants.Count != selections.Count)
+            return NoPlan(proof is null ? "no-project-proof" : proof.Version != Version ? "unsupported-proof-version"
+                : structureHash is null ? "structure-proof-unavailable" : proof.StructureHash != structureHash ? "structure-changed"
+                : "selection-changed");
         var old = proof.Variants.ToDictionary(p => p.Key, StringComparer.Ordinal);
         var selected = selections.ToDictionary(p => p.Key, StringComparer.Ordinal);
-        if (!old.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(selected.Keys)) return null;
+        if (!old.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(selected.Keys))
+            return NoPlan("selection-changed");
         var oldFiles = previous.Files.ToDictionary(f => f.SourceId, StringComparer.Ordinal);
         var oldSources = old.Values.SelectMany(p => p.SourceIds).ToHashSet(StringComparer.Ordinal);
         var newSources = selections.SelectMany(p => p.SourceIds).ToHashSet(StringComparer.Ordinal);
         // Together with the complete non-source/directory inventory hash, these sets prove every
         // added path from the new compilation and every deleted path from the old actual owners.
         if (!oldSources.SetEquals(oldFiles.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId))
-            || !newSources.SetEquals(current.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId))) return null;
+            || !newSources.SetEquals(current.Values.Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId)))
+            return NoPlan("source-inventory-incomplete");
         var added = newSources.Except(oldSources, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         var removed = oldSources.Except(newSources, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         // Addition and deletion are independent owner facts; never infer rename history or transfer IDs.
@@ -47,7 +55,8 @@ internal static class CliProjectReuse
         if (oldSources.Intersect(newSources, StringComparer.Ordinal).Any(source =>
                 oldFiles[source].RelativePath != current[source].RelativePath)
             || added.Any(source => oldPaths.Contains(current[source].RelativePath))
-            || removed.Any(source => newPaths.Contains(oldFiles[source].RelativePath))) return null;
+            || removed.Any(source => newPaths.Contains(oldFiles[source].RelativePath)))
+            return NoPlan("source-identity-changed");
         var saved = new Dictionary<string, Extraction>(StringComparer.Ordinal);
         var dirty = new HashSet<string>(StringComparer.Ordinal);
         foreach (var selection in selections)
@@ -55,9 +64,11 @@ internal static class CliProjectReuse
             token.ThrowIfCancellationRequested();
             var prior = old[selection.Key];
             if (prior.VariantId != selection.VariantId || prior.ProjectId != selection.ProjectId
-                || prior.References.Any(key => !selected.ContainsKey(key))) return null;
+                || prior.References.Any(key => !selected.ContainsKey(key)))
+                return NoPlan("variant-or-reference-changed");
             var data = Read(prior, oldFiles);
-            if (data is null) return null;
+            if (data is null)
+                return NoPlan("invalid-saved-extraction");
             saved.Add(selection.Key, data);
             var beforeSources = prior.SourceIds.ToHashSet(StringComparer.Ordinal);
             var afterSources = selection.SourceIds.ToHashSet(StringComparer.Ordinal);
@@ -67,7 +78,8 @@ internal static class CliProjectReuse
             foreach (var source in beforeSources.Union(afterSources, StringComparer.Ordinal))
             {
                 if (added.Contains(source) || removed.Contains(source)) { dirty.Add(selection.Key); continue; }
-                if (!oldFiles.TryGetValue(source, out var before) || !current.TryGetValue(source, out var after)) return null;
+                if (!oldFiles.TryGetValue(source, out var before) || !current.TryGetValue(source, out var after))
+                    return NoPlan("source-inventory-incomplete");
                 if (before.ContentHash != after.ContentHash || before.ByteLength != after.ByteLength
                     || before.Utf16Length != after.Utf16Length) dirty.Add(selection.Key);
             }
@@ -86,34 +98,55 @@ internal static class CliProjectReuse
                 if (dirty.Add(owner)) queue.Enqueue(owner);
         }
         // No extraction saving is reported when every collector must run.
+        PhaseMetrics.Count("projects.selected", selections.Count);
+        PhaseMetrics.Count("projects.dirty", dirty.Count);
+        PhaseMetrics.Count("projects.clean", selections.Count - dirty.Count);
+        PhaseMetrics.Decision("reuse.project-select", dirty.Count == 0 ? "no-dirty-project"
+            : dirty.Count == selections.Count ? "no-clean-project" : "partial-reuse");
         return dirty.Count > 0 && dirty.Count < selections.Count ? new(saved, dirty) : null;
+    }
+
+    private static Plan? NoPlan(string reason)
+    {
+        PhaseMetrics.Decision("reuse.project-select", reason);
+        return null;
     }
 
     internal static IReadOnlyList<CliProjectSelection>? Selections(Guid workspace, IReadOnlyList<HarnessProjectVariant> projects,
         IReadOnlyList<SymbolIndexInput> inputs, IReadOnlyDictionary<string, IReadOnlyList<string>> sourceIds,
         SemanticLoadResult loaded)
     {
+        using var metrics = PhaseMetrics.Measure("reuse.project-selections");
         if (projects.Count is < 1 or > 64 || projects.Any(p => p.TargetFramework != "net10.0")
-            || projects.GroupBy(p => p.ProjectId, StringComparer.Ordinal).Any(g => g.Count() != 1)) return null;
+            || projects.GroupBy(p => p.ProjectId, StringComparer.Ordinal).Any(g => g.Count() != 1))
+            return NoSelections("unsupported-project-or-tfm");
         var keys = projects.Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         if (loaded.Report.References.Any(r => !keys.Contains(r.SourceVariantKey) || r.Resolution != "exact"
-            || r.TargetVariantKey is null || !keys.Contains(r.TargetVariantKey))) return null;
+            || r.TargetVariantKey is null || !keys.Contains(r.TargetVariantKey)))
+            return NoSelections("unresolved-reference-closure");
         var result = new List<CliProjectSelection>();
         foreach (var project in projects)
         {
             if (!loaded.DefiningVariantByAssembly.TryGetValue(project.Key, out var referenceMap)
-                || referenceMap.Values.Any(key => !keys.Contains(key))) return null;
+                || referenceMap.Values.Any(key => !keys.Contains(key)))
+                return NoSelections("unresolved-defining-assembly");
             var input = inputs.Single(i => i.VariantId == project.Key);
             // Verify actual compilation project references also map to a selected defining assembly.
             foreach (var reference in input.Compilation.References.OfType<Microsoft.CodeAnalysis.CompilationReference>())
                 if (!referenceMap.TryGetValue(reference.Compilation.AssemblyName ?? "", out var target) || !keys.Contains(target))
-                    return null;
+                    return NoSelections("unmapped-compilation-reference");
             result.Add(new(project.Key, SharpDeps.Analysis.Core.Identity.HarnessIdentity.VariantId(workspace,
                 project.ProjectId, project.TargetFramework, project.Configuration, project.Platform, project.RuntimeIdentifier),
                 project.ProjectId, sourceIds[project.Key].Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
                 referenceMap.Values.Where(k => k != project.Key).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()));
         }
         return result;
+    }
+
+    private static IReadOnlyList<CliProjectSelection>? NoSelections(string reason)
+    {
+        PhaseMetrics.Decision("reuse.project-selections", reason);
+        return null;
     }
 
     internal static Symbols CaptureSymbols(SymbolIndex symbols) => new(
@@ -135,7 +168,12 @@ internal static class CliProjectReuse
     internal static IndexProjectReuse? Capture(string? structureHash, IReadOnlyList<CliProjectSelection>? selections,
         IReadOnlyDictionary<string, Extraction> extractions, IReadOnlyDictionary<string, IndexFile> files)
     {
-        if (structureHash is null || selections is null) return null;
+        using var metrics = PhaseMetrics.Measure("reuse.project-capture");
+        if (structureHash is null || selections is null)
+        {
+            PhaseMetrics.Decision("reuse.project-capture", "unsupported-closure");
+            return null;
+        }
         var proof = new List<IndexProjectExtraction>();
         long length = 0;
         foreach (var selection in selections)
@@ -144,9 +182,15 @@ internal static class CliProjectReuse
             var item = new IndexProjectExtraction(selection.Key, selection.VariantId, selection.ProjectId,
                 selection.SourceIds, selection.References, data);
             length += data.GetRawText().Length;
-            if (length > IndexSnapshotValidator.MaximumSearchTextUtf16 || Read(item, files) is null) return null;
+            if (length > IndexSnapshotValidator.MaximumSearchTextUtf16 || Read(item, files) is null)
+            {
+                PhaseMetrics.Decision("reuse.project-capture", length > IndexSnapshotValidator.MaximumSearchTextUtf16 ? "budget" : "invalid-extraction");
+                return null;
+            }
             proof.Add(item);
         }
+        PhaseMetrics.Count("proof.utf16-code-units", length);
+        PhaseMetrics.Decision("reuse.project-capture", "captured");
         return new(Version, structureHash, proof);
     }
 
