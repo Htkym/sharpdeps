@@ -142,11 +142,66 @@ internal static class OracleProcess
                 Path.Combine(dotnet, "sdk"), comparison),
             normalizedBefore = sdk is null ? false : Check("NormalizeEnvironment", before, sdk),
             normalizedAfter = sdk is null ? false : Check("NormalizeEnvironment", after, sdk),
+            environmentBefore = DescribeProofEnvironment(before, sdk),
+            environmentAfter = DescribeProofEnvironment(after, sdk),
             userHooks = Check("HasUserHooks"), ancestorConfiguration = Check("HasAncestorConfiguration", root),
             hostEnvironment = new[] { "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_HOST_PATH" }
                 .ToDictionary(name => name, HostState),
             admissions
         }, QueryJson.Options));
+    }
+
+    internal static object DescribeProofEnvironment(System.Collections.IDictionary environment, string? sdk)
+    {
+        const string cf = "__CF_USER_TEXT_ENCODING";
+        var known = new HashSet<string>((HashSet<string>)typeof(CliReuseProof).GetField("PlainEnvironment",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.GetValue(null)!, StringComparer.OrdinalIgnoreCase);
+        var registered = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["MSBUILD_EXE_PATH"] = sdk is null ? null : Path.Combine(sdk, "MSBuild.dll"),
+            ["MSBuildSDKsPath"] = sdk is null ? null : Path.Combine(sdk, "Sdks"),
+            ["MSBuildExtensionsPath"] = sdk
+        };
+        known.UnionWith(registered.Keys);
+        known.UnionWith(["MSBUILDDISABLENODEREUSE", "MSBuildEnableWorkloadResolver", "DOTNET_ROOT",
+            "DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_HOST_PATH"]);
+        var withoutCf = new System.Collections.Hashtable(StringComparer.Ordinal);
+        string? Value(string name) => environment.Cast<System.Collections.DictionaryEntry>()
+            .FirstOrDefault(entry => entry.Key is string key && key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value as string;
+        foreach (System.Collections.DictionaryEntry entry in environment)
+            if (entry.Key is not string name || !name.Equals(cf, StringComparison.OrdinalIgnoreCase)) withoutCf.Add(entry.Key, entry.Value);
+        object Normalize(System.Collections.IDictionary values)
+        {
+            if (sdk is null) return false;
+            try
+            {
+                return typeof(CliReuseProof).GetMethod("NormalizeEnvironment",
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.Invoke(null, [values, sdk]) is not null;
+            }
+            catch (Exception error) { return new { exceptionType = error.GetBaseException().GetType().Name }; }
+        }
+        string RegisteredState(string name, string? expected)
+        {
+            var value = Value(name);
+            if (value is null) return "unset";
+            if (value.Length == 0) return "empty";
+            if (expected is null) return "unregistered";
+            try
+            {
+                return Path.IsPathFullyQualified(value) && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)),
+                    expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ? "expected" : "mismatched";
+            }
+            catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { return "mismatched"; }
+        }
+        return new
+        {
+            coreFoundationPresent = Value(cf) is not null,
+            unknownEnvironmentCount = environment.Keys.Cast<object>().Count(key => key is not string name || !known.Contains(name)),
+            normalized = Normalize(environment), normalizedWithoutCoreFoundation = Normalize(withoutCf),
+            registeredEnvironment = registered.ToDictionary(pair => pair.Key, pair => RegisteredState(pair.Key, pair.Value)),
+            controls = new[] { ("MSBUILDDISABLENODEREUSE", "1"), ("MSBuildEnableWorkloadResolver", "false") }
+                .ToDictionary(pair => pair.Item1, pair => Value(pair.Item1) is not { } value ? "unset" : value == pair.Item2 ? "expected" : "mismatched")
+        };
     }
 
     internal static async Task<OracleObservation> RunAsync(OracleRun run, string directory, string label,
