@@ -34,7 +34,8 @@ internal static class FullBuildOracle
             {
                 Graph = graph with
                 {
-                    SnapshotId = "<run>", Generation = 0,
+                    SnapshotId = "<run>",
+                    Generation = 0,
                     Variants = graph.Variants.OrderBy(v => v.Id, StringComparer.Ordinal).ToArray(),
                     Nodes = graph.Nodes.OrderBy(n => n.Id, StringComparer.Ordinal).ToArray(),
                     SymbolOccurrences = graph.SymbolOccurrences.OrderBy(o => o.Id, StringComparer.Ordinal)

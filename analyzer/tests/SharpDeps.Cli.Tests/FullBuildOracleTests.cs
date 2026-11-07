@@ -156,8 +156,13 @@ public sealed class FullBuildOracleTests(ITestOutputHelper output)
         finally
         {
             stop.Cancel();
-            try { await running; }
-            catch (OperationCanceledException) { }
+            try
+            {
+                await running;
+            }
+            catch (OperationCanceledException)
+            {
+            }
             File.Delete(marker);
         }
     }

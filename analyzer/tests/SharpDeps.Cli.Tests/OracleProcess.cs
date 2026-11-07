@@ -34,7 +34,8 @@ internal static class OracleProcess
         {
             var childStart = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
             {
-                UseShellExecute = false, CreateNoWindow = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
                 // Force explicit standard handles on Windows; stdout/stderr deliberately remain inherited.
                 RedirectStandardInput = true
             };
@@ -122,12 +123,16 @@ internal static class OracleProcess
                 var result = member.Invoke(null, args);
                 return method == "NormalizeEnvironment" ? result is not null : result!;
             }
-            catch (Exception error) { return new { exceptionType = error.GetBaseException().GetType().Name }; }
+            catch (Exception error)
+            {
+                return new { exceptionType = error.GetBaseException().GetType().Name };
+            }
         }
         string HostState(string name)
         {
             var value = Environment.GetEnvironmentVariable(name);
-            if (value is null) return "unset";
+            if (value is null)
+                return "unset";
             var expected = name == "DOTNET_HOST_PATH"
                 ? Path.Combine(dotnet, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet") : dotnet;
             return Path.IsPathFullyQualified(value)
@@ -137,14 +142,16 @@ internal static class OracleProcess
         var after = Environment.GetEnvironmentVariables();
         File.WriteAllText(path, JsonSerializer.Serialize(new
         {
-            sdkPath = sdk, runtimeDirectory = runtime,
+            sdkPath = sdk,
+            runtimeDirectory = runtime,
             sdkInsideRuntimeRoot = sdk is not null && string.Equals(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sdk)),
                 Path.Combine(dotnet, "sdk"), comparison),
             normalizedBefore = sdk is null ? false : Check("NormalizeEnvironment", before, sdk),
             normalizedAfter = sdk is null ? false : Check("NormalizeEnvironment", after, sdk),
             environmentBefore = DescribeProofEnvironment(before, sdk),
             environmentAfter = DescribeProofEnvironment(after, sdk),
-            userHooks = Check("HasUserHooks"), ancestorConfiguration = Check("HasAncestorConfiguration", root),
+            userHooks = Check("HasUserHooks"),
+            ancestorConfiguration = Check("HasAncestorConfiguration", root),
             hostEnvironment = new[] { "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_HOST_PATH" }
                 .ToDictionary(name => name, HostState),
             admissions
@@ -169,35 +176,47 @@ internal static class OracleProcess
         string? Value(string name) => environment.Cast<System.Collections.DictionaryEntry>()
             .FirstOrDefault(entry => entry.Key is string key && key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value as string;
         foreach (System.Collections.DictionaryEntry entry in environment)
-            if (entry.Key is not string name || !name.Equals(cf, StringComparison.OrdinalIgnoreCase)) withoutCf.Add(entry.Key, entry.Value);
+            if (entry.Key is not string name || !name.Equals(cf, StringComparison.OrdinalIgnoreCase))
+                withoutCf.Add(entry.Key, entry.Value);
         object Normalize(System.Collections.IDictionary values)
         {
-            if (sdk is null) return false;
+            if (sdk is null)
+                return false;
             try
             {
                 return typeof(CliReuseProof).GetMethod("NormalizeEnvironment",
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.Invoke(null, [values, sdk]) is not null;
             }
-            catch (Exception error) { return new { exceptionType = error.GetBaseException().GetType().Name }; }
+            catch (Exception error)
+            {
+                return new { exceptionType = error.GetBaseException().GetType().Name };
+            }
         }
         string RegisteredState(string name, string? expected)
         {
             var value = Value(name);
-            if (value is null) return "unset";
-            if (value.Length == 0) return "empty";
-            if (expected is null) return "unregistered";
+            if (value is null)
+                return "unset";
+            if (value.Length == 0)
+                return "empty";
+            if (expected is null)
+                return "unregistered";
             try
             {
                 return Path.IsPathFullyQualified(value) && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)),
                     expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ? "expected" : "mismatched";
             }
-            catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { return "mismatched"; }
+            catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return "mismatched";
+            }
         }
         return new
         {
             coreFoundationPresent = Value(cf) is not null,
             unknownEnvironmentCount = environment.Keys.Cast<object>().Count(key => key is not string name || !known.Contains(name)),
-            normalized = Normalize(environment), normalizedWithoutCoreFoundation = Normalize(withoutCf),
+            normalized = Normalize(environment),
+            normalizedWithoutCoreFoundation = Normalize(withoutCf),
             registeredEnvironment = registered.ToDictionary(pair => pair.Key, pair => RegisteredState(pair.Key, pair.Value)),
             controls = new[] { ("MSBUILDDISABLENODEREUSE", "1"), ("MSBuildEnableWorkloadResolver", "false") }
                 .ToDictionary(pair => pair.Item1, pair => Value(pair.Item1) is not { } value ? "unset" : value == pair.Item2 ? "expected" : "mismatched")
@@ -221,8 +240,11 @@ internal static class OracleProcess
         token.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
-            WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
         // Keep unknown host/MSBuild properties out of the closed-input proof without changing this process.
         var inherited = start.Environment.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
@@ -253,7 +275,10 @@ internal static class OracleProcess
         var stdout = process.StandardOutput.ReadToEndAsync(reads.Token);
         var stderr = process.StandardError.ReadToEndAsync(reads.Token);
         var drain = Task.WhenAll(stdout, stderr);
-        try { await process.WaitForExitAsync(token); }
+        try
+        {
+            await process.WaitForExitAsync(token);
+        }
         finally
         {
             try

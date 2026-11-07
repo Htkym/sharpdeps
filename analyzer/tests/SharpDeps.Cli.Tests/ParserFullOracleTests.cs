@@ -46,20 +46,37 @@ public sealed class ParserFullOracleTests
             Text = root.ToFullString(),
             NodesAndTokens = root.DescendantNodesAndTokensAndSelf(descendIntoTrivia: true).Select(n => new
             {
-                n.RawKind, n.Span, n.FullSpan, n.IsMissing, n.ContainsDiagnostics
+                n.RawKind,
+                n.Span,
+                n.FullSpan,
+                n.IsMissing,
+                n.ContainsDiagnostics
             }),
             Tokens = root.DescendantTokens(descendIntoTrivia: true).Select(t => new
             {
-                t.RawKind, t.Text, t.ValueText, t.Span, t.FullSpan, t.IsMissing
+                t.RawKind,
+                t.Text,
+                t.ValueText,
+                t.Span,
+                t.FullSpan,
+                t.IsMissing
             }),
             Trivia = root.DescendantTrivia(descendIntoTrivia: true).Select(t => new
             {
-                t.RawKind, Text = t.ToFullString(), t.Span, t.FullSpan, t.HasStructure
+                t.RawKind,
+                Text = t.ToFullString(),
+                t.Span,
+                t.FullSpan,
+                t.HasStructure
             }),
             Diagnostics = tree.GetDiagnostics().Select(d => new
             {
-                d.Id, d.Severity, d.WarningLevel, d.IsSuppressed,
-                Message = d.GetMessage(System.Globalization.CultureInfo.InvariantCulture), d.Location.SourceSpan
+                d.Id,
+                d.Severity,
+                d.WarningLevel,
+                d.IsSuppressed,
+                Message = d.GetMessage(System.Globalization.CultureInfo.InvariantCulture),
+                d.Location.SourceSpan
             })
         });
     }
