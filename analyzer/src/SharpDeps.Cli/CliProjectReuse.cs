@@ -144,7 +144,8 @@ internal static class CliProjectReuse
             var item = new IndexProjectExtraction(selection.Key, selection.VariantId, selection.ProjectId,
                 selection.SourceIds, selection.References, data);
             length += data.GetRawText().Length;
-            if (length > IndexSnapshotValidator.MaximumSearchTextUtf16 || Read(item, files) is null) return null;
+            if (length > IndexSnapshotValidator.MaximumProjectProofUtf16 || Read(item, files) is null)
+                return null;
             proof.Add(item);
         }
         return new(Version, structureHash, proof);

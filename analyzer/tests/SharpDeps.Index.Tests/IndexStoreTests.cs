@@ -285,6 +285,71 @@ public sealed class IndexStoreTests
         Assert.Equal(relative, Assert.Single(reader.Snapshot().Files).RelativePath);
     }
 
+    [Theory]
+    [InlineData("search")]
+    [InlineData("catalog")]
+    [InlineData("project-proof")]
+    public void IndependentTextBudgetsAcceptTheirBoundaryAndRejectOverflow(string kind)
+    {
+        using var fixture = new StoreFixture();
+        var original = fixture.Snapshot(1, "Before");
+        var maximum = kind switch
+        {
+            "search" => IndexSnapshotValidator.MaximumSearchTextUtf16,
+            "catalog" => IndexSnapshotValidator.MaximumReuseCatalogUtf16,
+            _ => IndexSnapshotValidator.MaximumProjectProofUtf16
+        };
+        foreach (var delta in new[] { -1, 0, 1 })
+        {
+            var snapshot = original;
+            var length = maximum + delta;
+            if (kind == "search")
+            {
+                var nodes = new List<HarnessNode>();
+                var rows = new List<IndexSearchText>();
+                while (length > 0)
+                {
+                    var id = HarnessIdentity.LogicalSymbolId(fixture.Workspace, fixture.ProjectId, "method", "M:App.Budget" + rows.Count);
+                    nodes.Add(new(id, HarnessNodeKind.Member, "Budget", fixture.ProjectId, null));
+                    var size = Math.Min(length, IndexSnapshotValidator.MaximumSearchFieldUtf16);
+                    rows.Add(new(id, "", "", "", new string('x', size), ""));
+                    length -= size;
+                }
+                snapshot = snapshot with { Graph = snapshot.Graph with { Nodes = [.. snapshot.Graph.Nodes, .. nodes] }, SearchText = rows };
+            }
+            else
+            {
+                var catalog = new List<IndexReuseSymbol>();
+                if (kind == "catalog")
+                {
+                    while (length > 0)
+                    {
+                        var size = Math.Min(length - 1, IndexSnapshotValidator.MaximumSearchFieldUtf16 - 1);
+                        if (length <= IndexSnapshotValidator.MaximumSearchFieldUtf16 + 1)
+                            size = length - 1;
+                        catalog.Add(new(fixture.MemberId, new string('x', size), "x", null, null, null, null, null));
+                        length -= size + 1;
+                    }
+                }
+                var reuse = new IndexReuseProof("test-owner/1", new string('a', 64), new string('b', 64),
+                    new string('c', 64), new string('d', 64), "unused-sdk-path", catalog);
+                if (kind == "project-proof")
+                {
+                    using var document = JsonDocument.Parse("{\"p\":\"" + new string('x', length - 8) + "\"}");
+                    reuse = reuse with { Projects = new("test-projects/1", new string('e', 64),
+                        [new("project-key", snapshot.Graph.Variants[0].Id, fixture.ProjectId,
+                            [fixture.CodeLocation.SourceId], [], document.RootElement.Clone())]) };
+                }
+                snapshot = snapshot with { Files = snapshot.Files.Select((file, i) => i == 0
+                    ? file with { Kind = "source", Reuse = reuse } : file).ToArray() };
+            }
+            if (delta > 0)
+                AssertCode("INDEX_INVALID_SNAPSHOT", () => IndexSnapshotValidator.Validate(snapshot));
+            else
+                IndexSnapshotValidator.Validate(snapshot);
+        }
+    }
+
     [Fact]
     public void FrozenStagingSurvivesProducerMutationReopenAndBackupWithDurableEvidence()
     {

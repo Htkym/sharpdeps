@@ -11,6 +11,8 @@ public static class IndexSnapshotValidator
 {
     public const int MaximumSearchFieldUtf16 = 64 * 1024;
     public const int MaximumSearchTextUtf16 = 32 * 1024 * 1024;
+    public const int MaximumReuseCatalogUtf16 = 32 * 1024 * 1024;
+    public const int MaximumProjectProofUtf16 = 32 * 1024 * 1024;
     public const int MaximumCollectionItems = 1_000_000;
     public const long MaximumInputFileBytes = 64L * 1024 * 1024;
     public const long MaximumInputTotalBytes = 256L * 1024 * 1024;
@@ -202,7 +204,7 @@ public static class IndexSnapshotValidator
                     if (value is null) continue;
                     Text(value, "Reuse catalog field", MaximumSearchFieldUtf16);
                     catalogLength = checked(catalogLength + value.Length);
-                    Require(catalogLength <= MaximumSearchTextUtf16, "Reuse catalog exceeds its text budget.");
+                    Require(catalogLength <= MaximumReuseCatalogUtf16, "Reuse catalog exceeds its text budget.");
                 }
                 Require(!string.IsNullOrWhiteSpace(symbol.FullName) && !string.IsNullOrWhiteSpace(symbol.ShortName),
                     "Reuse catalog needs exact symbol names.");
@@ -246,7 +248,7 @@ public static class IndexSnapshotValidator
                         Require(reference != project.Key && projectProofs.ContainsKey(reference), "Project reference proof is not closed.");
                     Require(project.Data.ValueKind == JsonValueKind.Object, "Project extraction data must be an object.");
                     dataLength = checked(dataLength + project.Data.GetRawText().Length);
-                    Require(dataLength <= MaximumSearchTextUtf16, "Project extraction proof exceeds its bounded text budget.");
+                    Require(dataLength <= MaximumProjectProofUtf16, "Project extraction proof exceeds its bounded text budget.");
                 }
                 Require(sources.SetEquals(Checked(files.Values, token).Where(f => !f.Deleted && f.Kind == "source").Select(f => f.SourceId)),
                     "Project proof must own every captured compiler input; shared inputs may have several owners.");
