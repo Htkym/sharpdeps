@@ -41,11 +41,11 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 | `doctor` | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す |
 | `help` | commandと引数の案内 |
 
-解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定180、最大300で、通常は共有ownerへの応答待ち期限である。短命ownerは期限後も受理済み処理の終了を待つため、process全体の上限ではない。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
+解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定1800、最大3600で、通常は共有ownerへの応答待ち期限である。短命ownerは期限後も受理済み処理の終了を待つため、process全体の上限ではない。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
 
-`index`／`update`の`--timeout-seconds 0`は期限のない専有実行を明示する。既存ownerへの接続や共有ownerの起動は行わず、OS writer leaseを取得できなければ`INDEX_BUSY`で終了する。SDK・入力・公開時の検証は通常と同じで、呼出し側の取消を解析とcommitへ渡す。取消は協調的であり、同期処理の即時停止は保証しない。応答は`coordinatorState: "exclusive"`を返す。`serve --watch`とowner IPCは0を受理せず、共有ownerの300秒期限は変わらない。
+`index`／`update`の`--timeout-seconds 0`は期限のない専有実行を明示する。既存ownerへの接続や共有ownerの起動は行わず、OS writer leaseを取得できなければ`INDEX_BUSY`で終了する。SDK・入力・公開時の検証は通常と同じで、呼出し側の取消を解析とcommitへ渡す。取消は協調的であり、同期処理の即時停止は保証しない。応答は`coordinatorState: "exclusive"`を返す。`serve --watch`とowner IPCは0を受理せず、共有ownerの3600秒期限は変わらない。
 
-watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの300秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
+watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの3600秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
 
 Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids`を同時指定しない。
 
@@ -89,7 +89,7 @@ trusted更新は[coordinator／IPC契約](coordinator-ipc-v1.ja.md)でownerへ�
 
 source snippetはmanifest/evidenceのcontent hashと同じ一回のbounded byte bufferを照合してから、元UTF-16のzero-based半開区間を切る。BOM/CRLFを除去しない。不一致は`SOURCE_CHANGED_SINCE_SNAPSHOT`でsnippetを省略する。unknown/generated spanを実source位置へ推測補完しない。untrusted ReadSavedではsourceを読まない。
 
-index/updateの選択入力はstrict UTF-8とする。C#の実UTF-8 BOMがRoslyn本文で消費された場合は、実bytesとcompilation本文の完全一致を確認して、そのsourceだけUTF-16位置を1つ補正する。SDKが生成する物理fileも同じ検査を通す。UTF-16・binary/NUL、root外のlinked source、物理fileとして照合できないgenerator sourceは明示的に失敗させ、前のcommitted世代を保つ。root内のMarkdown/configurationを選び、`.git`/`.sharpdeps`/`bin`/`obj`/`node_modules`のdirectory walkを除外する。参照された物理compile fileはobj内でも別途照合する。walkは100,000 entries、入力は64 MiB/file・256 MiB合計、保存search textにもIndexの上限を適用する。
+index/updateの選択入力はstrict UTF-8と、BOM付きUTF-16 LE/BEを扱う。BOMを含むdecoded本文を保持し、hashとbyte長はraw bytesから計算する。C#の実BOMがRoslyn本文で消費された場合は、実bytesをdecodeした本文とcompilation本文の完全一致を確認して、そのsourceだけUTF-16位置を1つ補正する。SDKが生成する物理fileも同じ検査を通す。不正encoding・decode後のNUL/binary、root外のlinked source、物理fileとして照合できないgenerator sourceは明示的に失敗させ、前のcommitted世代を保つ。root内のMarkdown/configurationを選び、`.git`/`.sharpdeps`/`bin`/`obj`/`node_modules`のdirectory walkを除外する。参照された物理compile fileはobj内でも別途照合する。walkは100,000 entries、入力は64 MiB/file・256 MiB合計、保存search textにもIndexの上限を適用する。
 
 `--trusted`は利用者が許可した解析/sourceアクセスを明示するflagで、repo本文から権限を得る仕組みではない。MSBuild/project/analyzer/generatorが実行し得るコードのsandboxや通信禁止を保証しない。install/restore、解析・更新、外部送信の許可を分け、無許可の自動update/install・全repo scan・無制限grepを行わない。固定Markdown pairの再pack、同版上書き、sourceの公開送信をCLI/skillから自動実行しない。
 

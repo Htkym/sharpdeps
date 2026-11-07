@@ -194,7 +194,7 @@ public static class CliApplication
     {
         // Validate the entire selection before creating workspace identity or trying IPC.
         var update = CoordinatorUpdate.Parse(options, root, indexPath, Guid.Empty);
-        var timeout = options.Number("timeout-seconds", 180, 0, 300);
+        var timeout = update.Options.TimeoutSeconds;
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
         if (timeout != 0) operation.CancelAfter(TimeSpan.FromSeconds(timeout));
         try
