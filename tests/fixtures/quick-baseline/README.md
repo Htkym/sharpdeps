@@ -1,8 +1,9 @@
 # Quick baseline fixture
 
 Regression fixture for the SDK-free **Quick** analyzer (`analyzer/`), covering the
-behavior that v0.1.0 must not regress. It is intentionally small, fully offline
-(no `PackageReference`), and carries a known-correct expectation.
+behavior established for v0.1.0 and retained by the current Quick analyzer.
+It is intentionally small, fully offline (no `PackageReference`), and carries
+a known-correct expectation.
 
 ## Layout
 
@@ -19,8 +20,8 @@ native/Native.vcxproj         non-C# project (Quick must keep listing it)
 Deliberate properties:
 
 - **Project cycle**: `Core` ↔ `Util`. Quick reports it as a declared
-  `ProjectReference` cycle (v0.1.0 must keep reporting it, but as an inferred
-  relationship rather than a proven one).
+  `ProjectReference` cycle, with an inferred relationship rather than a proven
+  one.
 - **Conditional reference**: `App → Extras` only exists for `Configuration=Release`.
   Quick records the edge and warns that conditions are not evaluated.
 - **Namespace cycle**: `Core` ↔ `Util` via `using`.
@@ -47,14 +48,16 @@ instead of ids, so it is machine independent) produced by
 excluded from Prettier.
 
 The snapshots are compared by `tests/analyzer/quickBaseline.test.ts` (v1) and
-`tests/analyzer/quickV2.test.ts` (v2), which run the published DLL and therefore
-skip when `analyzer/bin/**/code-map.dll` is absent.
+`tests/analyzer/quickV2.test.ts` (v2), which run the locally built/published
+Quick DLL and skip when it is absent. Both check `analyzer/bin/quick/code-map.dll`
+and the legacy `analyzer/bin/code-map.dll`; v2 also accepts
+`SHARPDEPS_QUICK_HOST_OUTPUT` as its first lookup location.
 
 Refresh it only for an intentional analyzer change:
 
 ```powershell
 npm run build:analyzer
-$env:SHARPDEPTS_UPDATE_BASELINE='1'; npm test -- tests/analyzer/quickBaseline.test.ts
+$env:SHARPDEPTS_UPDATE_BASELINE='1'; npm test -- tests/analyzer/quickBaseline.test.ts tests/analyzer/quickV2.test.ts
 ```
 
 A changed snapshot is a behavior change: explain the reason in the commit message.

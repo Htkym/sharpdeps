@@ -1,6 +1,6 @@
 # SharpDeps Query/context契約 v1
 
-SD2-06は`SharpDeps.Query`にsearch、symbol、callers、callees、impact、context、statusを追加する。`QueryService.Execute(QueryRequest)`が共通入口で、host/CLI/provider/coordinatorへの接続は後続taskである。旧report v2、Core/Contracts/Quickの参照、保存schema、固定Markdown packageは変更しない。
+`SharpDeps.Query`はsearch、symbol、callers、callees、impact、context、statusを提供する。`QueryService.Execute(QueryRequest)`が個別Queryの共通入口であり、CLI、保存QueryHost、MCPのtyped `explore`が同じ保存graphを使う。旧report v2とは別の契約で、現在のSQLite schemaと再索引条件は[保存契約](index-storage-v1.ja.md)、各hostの入口は[CLI](cli-skill-v1.ja.md)と[MCP](mcp-stdio-v1.ja.md)を参照する。
 
 `PinnedQueryIndex`は呼出し側が所有する一つの`IndexReader`を使う。graphとFTSは同じcommitted世代に固定される。呼出し側はQueryを終えた後にreaderをdisposeする。QueryServiceはthread-safeではなく、保存graphとrequestの配列を複製・検証して使う。QueryService自体にwriter、解析器、restore、network、processの入口はない。
 
@@ -24,7 +24,9 @@ Resolved、Candidate、Unresolvedはそれぞれ`items`、`candidates`、`unreso
 
 Search/Browseでは分類をページング前に適用する。探索では非表示の文書構造を経由でき、返却時にnode/occurrenceを絞る。返却edgeは両端が表示条件に合う場合だけ残し、非表示区間を短絡する辺は作らない。探索予算、候補leaf、variant/occurrence接続条件は従来どおりで、非表示nodeを含む探索の打切りも記録する。分類集合は重複除去・整列してcursorへ結び付ける。応答のnode/occurrenceにはresultKind、snapshotにはresultFilterVersion=1を付ける。この機能は同markerを持つQueryHostでのみ利用でき、index schemaやsource読取り権限を変更しない。
 
-全応答はapiVersion、requestId、workspace/snapshot/generation/variant/coverage、freshness、budget、truncated/reasons、nextCursor、diagnostics、errorsを持つ。Partial/FailedをCompleteへ補完しない。空結果、coverage不足、打切りを区別する。requireCompleteはcoverage不足やtruncationで`INCOMPLETE_RESULT`となり、QueryReply.Succeededはfalseになる。CLIのexit番号はこのtaskで固定しない。
+全応答はapiVersion、requestId、workspace/snapshot/generation/variant/coverage、freshness、budget、truncated/reasons、nextCursor、diagnostics、errorsを持つ。Partial/FailedをCompleteへ補完しない。空結果、coverage不足、打切りを区別する。requireCompleteはcoverage不足やtruncationで`INCOMPLETE_RESULT`となり、QueryReply.Succeededはfalseになる。CLIのexit番号は[CLI契約](cli-skill-v1.ja.md#jsonと終了コード)に従う。
+
+現行snapshotは`namespaceBrowseVersion=1`と`symbolDeclarationRowsVersion=1`を返す。Browseの`scope.parentId`は選択project内のNamespace直下のTypeを対象とし、Symbolの`includeDeclarationRows=true`はoccurrenceの宣言を一行ずつ返す。後者はSymbol以外で拒否し、各行の位置・occurrence・variantと件数／出力予算を維持する。宣言行のResolvedは宣言の存在を表し、文書からsymbolへのCandidate関係を確定しない。providerは対応markerを確認してから使う。
 
 Cursorはworkspace、snapshot IDのSHA、generation、operation/filter/scope/variant/budget/freshnessと位置へ結び付け、HMACで検査する。process内の既定keyは再起動で変わる。hostは32byteのcursorKeyを明示供給できる。cursorは認証credentialではなく、opaque paging tokenである。別世代は`CURSOR_SNAPSHOT_EXPIRED`、別filterは`CURSOR_FILTER_CHANGED`、改変は`INVALID_CURSOR`を返して再検索を促す。同じreaderを続けて使う場合はその旧世代を表示し、新readerへ黙って接ぎ替えない。
 
@@ -44,6 +46,14 @@ JSON escape、envelope、coverage/診断、error、cursor、使用量fieldを含
 
 usedCharsは最終JSONのUTF-16長、usedBytesはそのUTF-8長である。estimatedTokensは文字数からの推定で、tokenizerの厳密な制限ではない。取消と時間枠は探索、source読取境界、最終wire構築で検査し、CANCELLED/QUERY_TIMEOUTを返す。同期SQLite/serializer/filesystem呼出そのものを強制中断するOS sandboxではない。
 
-## 現在の検証境界
+## Exploreの根拠とprovenance
+
+現行の`explore`は名前・exact ID・source pathを入口に、scope内の保存済み実装と参照根拠をまとめる。曖昧なproject／variantを自動統合せず、明示scopeと`unique`／`prefer-debug`の選択に従う。`http-get-literal`は保存されたHttpGet宣言断片との完全一致であり、実効URLの解決ではない。`pathTo`はexact occurrence間の保存済みcall witnessを扱い、runtime到達性を証明しない。候補、omission、freshness、coverageを保つ。
+
+通常ファイルは現在bytesと保存hashを照合してsnippetを切る。保存済み生成本文は実ファイル位置と区別し、保存snapshot由来のprovenanceを返す。パッケージ本文は明示的な検証を通した保存入力に限定する。生成本文やパッケージ本文を含む索引にはclosed-input reuse proofを発行せず、現在入力と一致する鮮度を推測しない。ReadSaved自体はsource本文を読まず、trustedなsourceアクセスの境界と件数・時間・出力予算を維持する。詳しい返却形式は[Exploreの案内](../mcp.md)を参照する。
+
+## 初期実装時の検証記録
+
+以下はSD2-06と2026-10-10当時の記録であり、後続のhost接続有無や0.4.0候補の検証結果ではない。
 
 9つの限定Factに実SQLite reader/writerを使った世代cursor、scope/exact/Japanese、certainty/cycle/予算、variant別occurrenceの経路整合性、最終wire/strict complete、同size同mtime差替え、untrusted saved read、inventory/config証明、橋渡しspan unionを記録した。occurrence経路修正の独立静的レビューは限定PASS。2026-10-10に返却された検証枠でWindowsのRelease solution build、Index 9/9とQuery 9/9を確認した。xUnit assertの書式警告を修正した後、Queryの限定Release buildは警告0、Query 9/9を再確認した。full suite、CLI/provider/coordinator接続、Unix/macOSのQuery実行、SDK-free Quick、host integrationは未検証である。

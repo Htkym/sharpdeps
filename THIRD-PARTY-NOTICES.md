@@ -1,7 +1,9 @@
 # Third-party notices
 
-SharpDeps ships the following third-party components inside the VSIX. The list is kept
-short on purpose: everything else is a development dependency and is not packaged.
+SharpDeps redistributes third-party components in the VSIX and the separate CLI/MCP
+NuGet tools. The sections below identify the main bundled components and their
+distribution scope. Exact transitive dependencies are recorded in each host's
+dependency manifest and the corresponding NuGet package metadata.
 
 ## elkjs (layout engine)
 
@@ -44,3 +46,24 @@ SDK (Apache-2.0), maintained at https://github.com/modelcontextprotocol/csharp-s
 It is not added to the VSIX or the existing CLI package. Its NuGet dependency
 metadata records the SDK's dependencies and licences. Full Apache licence text
 is linked above.
+
+## Markdown parsing in the CLI and MCP tools
+
+The 0.4.0 CLI/MCP candidate includes Syntamark 1.2.0 (MIT, copyright 2026 Htkym)
+and its pinned YamlDotNet 18.1.0 dependency (MIT). Syntamark's runtime/source pair
+and source commit are recorded in
+[the Markdown runtime pin](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/markdown-runtime-pin.json).
+The source package is retained for provenance; the tools execute the runtime
+assembly. These Markdown dependencies are not bundled into the VSIX's Quick,
+Semantic, or saved-index Query hosts.
+
+Upstream sources and licence information:
+https://github.com/Htkym/syntamark and https://github.com/aaubry/YamlDotNet.
+
+## NuGet package-source inspection
+
+The separate CLI/MCP tools also use NuGet.Packaging and NuGet.Frameworks
+(Apache-2.0) to inspect package-derived source evidence. Their upstream source
+and licence information are at https://github.com/NuGet/NuGet.Client; the full
+Apache licence text is linked above. These dependencies are not part of the
+VSIX's saved-index reader.

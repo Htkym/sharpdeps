@@ -8,15 +8,20 @@ const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..');
 const scenario = process.env.SHARPDEPTS_E2E_SCENARIO;
+const storageSchema = process.env.SHARPDEPTS_E2E_STORAGE_SCHEMA;
+if (scenario === 'schema' && !['1', '3'].includes(storageSchema))
+  throw new Error('The schema scenario requires SHARPDEPTS_E2E_STORAGE_SCHEMA=1 or 3.');
 const reportPath = path.join(
   repoRoot,
   '.local',
   'verification',
-  scenario
-    ? `sd-030-${scenario}.json`
-    : process.env.SHARPDEPTS_E2E_MODE === 'vsix'
-      ? 'sd-027-e2e-vsix.json'
-      : 'sd-027-e2e.json'
+  scenario === 'schema'
+    ? `sd-040-schema-${storageSchema}.json`
+    : scenario
+      ? `sd-030-${scenario}.json`
+      : process.env.SHARPDEPTS_E2E_MODE === 'vsix'
+        ? 'sd-027-e2e-vsix.json'
+        : 'sd-027-e2e.json'
 );
 
 function findInstalledCode() {
@@ -120,11 +125,12 @@ async function main() {
       repoRoot,
       'tests',
       'extension',
-      scenario ? 'acceptance.js' : 'suite.js'
+      scenario === 'schema' ? 'schema.js' : scenario ? 'acceptance.js' : 'suite.js'
     ),
     extensionTestsEnv: {
       SHARPDEPTS_E2E_REPORT: reportPath,
       SHARPDEPTS_E2E_DEBUG_PORT: String(port),
+      SHARPDEPTS_E2E_STORAGE_SCHEMA: storageSchema ?? '',
       SHARPDEPTS_REPO: repoRoot
     },
     launchArgs: [

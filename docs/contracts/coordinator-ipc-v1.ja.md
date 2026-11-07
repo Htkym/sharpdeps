@@ -1,6 +1,6 @@
 # SharpDeps coordinator／local IPC契約 v1
 
-SD2-10は、trusted `index`／`update`と明示起動の`serve`で同じ更新経路を使う。SD2-11の候補では、`serve --watch --target TARGET`が同じownerへ保存入力のwatch/resyncを接続する。既存のQuick／Semantic host、保存Queryのstdio、SQLite schema、固定Markdown runtime/source pairは保持する。MCP adapterは後続のタスクで接続する。
+trusted `index`／`update`と明示起動の`serve`は同じ更新経路を使う。`serve --watch --target TARGET`は同じownerへ保存入力のwatch/resyncを接続する。MCPの明示変更toolもCLI経由でこのownerを使い、別writerを作らない。保存QueryのstdioとQuick／Semanticの実行境界を維持する。現在の索引形式は[保存契約](index-storage-v1.ja.md)、MCPの入口は[MCP契約](mcp-stdio-v1.ja.md)を参照する。
 
 ## 起動と保存読取り
 
@@ -16,7 +16,7 @@ sharpdeps update --root ROOT_ABS --target App.csproj --trusted --timeout-seconds
 
 ownerの`idle`、`dirty`、`updating`、`degraded`、`stopping`は更新処理の状態である。生存やidleだけでlive入力の完全な一致やQuery freshnessを証明しない。statusの`configurationProof`は`unverified`を保持する。trusted `verify-query`だけは保存snapshot ID/generationを照合し、直近の成功したproduction更新が持つclosed-input proofで現在の入力集合・設定/variant/参照/SDKを再評価する。照合の前後でowner revisionが同じidleの場合だけQuery用inventoryを返す。証明なし・不一致・更新中・既存64KiB frame上限超過は成功としない。client切断はその検査だけを取り消す。保存Queryの`refresh`は従来どおり`UPDATE_REQUIRED`であり、自動更新しない。
 
-watchも既存v1のstateへ写像し、wire fieldやstate名を追加しない。native監視が使えない場合は周期resyncを続け、idle相当をdegradedとして表示する。watchの失敗はstatusのerrorCodeへ保持し、次のwatchによるdurable commitが成功したときに消す。入力検査やSDK選択の失敗、停止後も、古いcommitted Queryは読める。extensionのtrust変更とwatch UIは未接続であり、CLIのtrust撤回にはowner processを停止する。
+watchも既存v1のstateへ写像し、wire fieldやstate名を追加しない。native監視が使えない場合は周期resyncを続け、idle相当をdegradedとして表示する。watchの失敗はstatusのerrorCodeへ保持し、次のwatchによるdurable commitが成功したときに消す。入力検査やSDK選択の失敗、停止後も、古いcommitted Queryは読める。拡張機能はopt-inの自動反映で既存ownerのcommitted世代だけを追い、watchを起動しない。CLIのtrust撤回にはowner processを停止する。同hostでの即時trust revokeの制約は[主操作の契約](saved-primary-action-v1.ja.md)を参照する。
 
 ## 所有と回復
 
@@ -48,7 +48,7 @@ SDK登録はprocess全体に固定される。ownerは実SDK path/versionに固�
 
 local .NET named pipeを`CurrentUserOnly`で使用する。Windowsはlocal named pipe、Unixは.NETのlocal pipe実装を使う。TCPやremote shellを開かない。endpointは固定prefixとowner instanceから作り、descriptor中の任意command／URLを実行しない。OSごとの動作確認は各taskの検証証跡で判定する。
 
-一connectionにつき`status`か`update`を一回送る。frameは4-byte little-endian lengthとstrict UTF-8 JSON。protocol、owner instance、workspace UUID、root/index、request IDを照合する。未知field、duplicate key、不正UTF-8、深すぎるJSONを拒否する。updateは解析条件とtrustだけを受け取り、本文やshell commandを受け取らない。client cancelはconnection closeで伝える。
+一connectionにつき`status`、`update`、trustedな`verify-query`のいずれかを一回送る。frameは4-byte little-endian lengthとstrict UTF-8 JSON。protocol、owner instance、workspace UUID、root/index、request IDを照合する。未知field、duplicate key、不正UTF-8、深すぎるJSONを拒否する。updateは解析条件とtrustだけを受け取り、本文やshell commandを受け取らない。client cancelはconnection closeで伝える。
 
 | 上限 | 値 |
 | --- | ---: |

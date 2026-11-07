@@ -2,9 +2,9 @@ name: CodeGraph comparison (explicit only)
 
 # This workflow never runs as part of the normal CI. It starts only when a
 # human dispatches it, or when a push's head commit message carries the
-# explicit [comparison] marker. The comparison itself is a later phase;
-# the stages here are prepare (fixed inputs + tools) and smoke (the
-# collection path on a minimal fixture).
+# explicit [comparison] marker. Stages are prepare (fixed inputs + tools),
+# smoke (the collection path on a minimal fixture), and small-index
+# (fixed-corpus index/query evidence). This does not evaluate final AI answers.
 
 on:
   workflow_dispatch:

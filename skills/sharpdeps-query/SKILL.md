@@ -7,6 +7,8 @@ description: Use an existing SharpDeps CLI or MCP index to investigate .NET impl
 
 Use the already selected tool version and workspace root/index. The CLI package is `SharpDeps.Cli`, with command `sharpdeps`; the MCP host is `sharpdeps-mcp`. Check availability instead of installing tools or changing global settings. Acquisition, restore and first-time dnx execution can access the network or update caches. Local-manifest `dotnet tool run` and `dnx` launchers need an SDK; an installed tool shim or direct saved-query DLL execution needs a .NET 10 runtime. Report missing prerequisites. Do not repack the fixed Markdown runtime/source pair under the same version.
 
+This repository copy describes the unpublished 0.4.0 candidate. The latest published CLI/MCP version is 0.3.0; inspect the selected CLI's help or MCP tool schema before using newer options. A candidate feature does not authorize upgrading a tool or rebuilding its index.
+
 ## Start with explore
 
 For a structural question, start with related names or a saved source path in one bounded request. Replace `ROOT_ABS` with the selected absolute workspace path and example IDs with actual returned values. Retain a selected nondefault `--index` in later CLI calls and MCP startup.
@@ -48,11 +50,11 @@ sharpdeps explore --root ROOT_ABS --term SOURCE_OCCURRENCE_ID --path-to TARGET_O
 
 ## Source, freshness and updates
 
-Add CLI `--trusted` only when workspace source access is authorized. MCP fixes root/index/trust at startup; requests cannot elevate them. Index existence is not trust. Untrusted queries return saved evidence and omissions without source access. Returned ranges are checked against current bytes and saved hash/span evidence; never apply an old span to changed text or bypass hash, span or encoding failures.
+Add CLI `--trusted` only when workspace source access is authorized. MCP fixes root/index/trust at startup; requests cannot elevate them. Index existence is not trust. Untrusted queries return saved evidence and omissions without source access. Physical source ranges are checked against current bytes and saved hash/span evidence. Generated/package source ranges use verified stored index-time bodies, without resolving their virtual paths on disk. Never apply an old span to changed text or bypass hash, span or encoding failures.
 
-`allow-stale` leaves semantic freshness unverified even for hash-matching source. `require-fresh` additionally needs a live trusted coordinator's current inventory/configuration proof. Missing owners or failed proofs are not fresh; optional owner status is advisory. `refresh` returns `UPDATE_REQUIRED`, not permission to update automatically.
+`allow-stale` leaves semantic freshness unverified even for hash-matching source. Stored generated/package bodies prove snapshot integrity, not what would be produced now, and remain unverified. `require-fresh` additionally needs a live trusted coordinator's current inventory/configuration proof; stored bodies cannot satisfy verified-current input checks. Missing owners or failed proofs are not fresh; optional owner status is advisory. `refresh` returns `UPDATE_REQUIRED`, not permission to update automatically.
 
-For a missing index or required update, report the condition. Only after explicit indexing/update authorization, select the actual root-contained project/solution, run trusted `index` or `update`, then query the new generation. These can execute MSBuild/generators and use the existing coordinator/lease. Update permission is separate from read-only investigation and source trust. A query must not start a watcher or silently rebuild a target.
+For a missing index or required update, report the condition. Only after explicit indexing/update authorization, select the actual root-contained project/solution, run trusted `index` or `update`, then query the new generation. These can execute MSBuild/generators and use the existing coordinator/lease. MCP exposes these tools only with host-side trust and mutation opt-in. Update permission is separate from read-only investigation and source trust. A query must not start a watcher or silently rebuild a target.
 
 ## Specialized CLI alternatives
 

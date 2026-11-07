@@ -6,9 +6,11 @@ SharpDeps helps you explore dependencies in a .NET solution from a VS Code edito
 
 ![Project dependencies in SharpDeps](images/overview-en.png)
 
-The screenshots and guide describe the **0.1.0 workbench**. Use a matching VSIX or build this source to follow these instructions.
+The screenshots show the **0.1.0 workbench**. The [user guide](docs/guide.md) covers the current 0.4.0 source candidate and its saved-index compatibility.
 
 ## Install
+
+Version 0.4.0 is an unpublished candidate for the VS Code extension, CLI, and optional MCP tool. The planned release includes Visual Studio Marketplace, NuGet, and GitHub Release downloads. The latest published tools are 0.3.0 and the Marketplace extension is 0.2.1. Open VSX is not listed and is excluded from this release. Check the destination before choosing a version.
 
 Install a `.vsix` with **Extensions: Install from VSIX…** in the Command Palette. Published versions are available from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) and [GitHub Releases](https://github.com/Htkym/sharpdeps/releases); check the version in VS Code's Extensions view.
 
@@ -16,16 +18,18 @@ VS Code 1.90 or later and a trusted workspace are required to run analysis.
 
 | Mode | What it shows | Requirements |
 | --- | --- | --- |
-| Quick | Declared project references and namespace dependencies inferred from `using` directives. | .NET 10 runtime; no SDK or MSBuild evaluation. The .NET Install Tool can acquire the runtime. |
+| Quick | Declared project references, C# type declarations, and syntax references, including namespace dependencies inferred from `using` directives. | .NET 10 runtime; no SDK or MSBuild evaluation. The .NET Install Tool can acquire the runtime. |
 | Semantic | Evaluated C# project references and code references resolved with MSBuild and Roslyn, including types and reference locations. | .NET 10 runtime and an installed SDK compatible with the target and its `global.json`. Restore the target's packages yourself. |
 
 The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) is installed as an extension dependency. SharpDeps does not acquire an SDK or restore project packages automatically.
 
+The 0.4.0 VSIX keeps the 0.2.1 workbench controls and updates the bundled Quick, Semantic, and saved-index Query hosts. Its saved-index reader supports SQLite schemas 1/2/3; the published 0.2.1 extension reads schema 1 only. Installing a newer NuGet CLI does not update that bundled reader. See [saved-index setup and upgrade](docs/guide.md#read-a-saved-index) before using a new index in VS Code.
+
 ## CLI and optional MCP
 
-Version 0.3.0 introduces a breaking MCP interface: one typed `explore` tool replaces the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for trust, scope, freshness, response limits, and upgrading an existing index. Versions through 0.2.3 retain their earlier MCP interface.
+Version 0.3.0 introduced a breaking MCP interface: one typed `explore` tool replaced the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for the 0.4.0 candidate's agent/audit output, scope selection, source provenance, trust, freshness, response limits, and upgrade instructions. Versions through 0.2.3 retain their earlier MCP interface.
 
-The 0.3.0 release targets the NuGet tools and their checksums. The Visual Studio Marketplace extension remains at 0.2.1; no new VSIX or Open VSX publication is included. Check the registry or GitHub Release for package availability.
+The CLI and MCP candidate use the pinned Syntamark 1.2.0 Markdown runtime. This is a dependency of the separate tools; it is not bundled into the VSIX.
 
 Use an available exact package version in place of `<version>`. Both tools require the .NET 10 runtime. Install them from NuGet, or use the nupkg downloads from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) with a local NuGet feed.
 
@@ -65,7 +69,7 @@ An MCP client can launch the optional read-only host with:
 
 You can also use the Command Palette. Quick supports `.csproj`, `.fsproj`, `.vbproj`, and `.vcxproj` targets; Semantic is intended for SDK-style C# projects. A project target follows its transitive project references.
 
-For type-level references, select **Semantic** and choose **Analyze**. See the [user guide](docs/guide.md) for setup, filters, evidence, cycles, exports, and troubleshooting.
+For symbol-resolved type references, select **Semantic** and choose **Analyze**. See the [user guide](docs/guide.md) for setup, filters, evidence, cycles, exports, and troubleshooting.
 
 ## Explore and share
 
@@ -86,7 +90,7 @@ npm ci
 npm run package
 ```
 
-This builds both analyzer hosts and the webview, then creates `sharpdeps-<package.json version>.vsix`. To run a development host, use `npm run build:analyzer` and `npm run build`, then press **F5** in VS Code.
+This builds the Quick, Semantic, and saved-index Query hosts and the webview, then creates `sharpdeps-<package.json version>.vsix`. To run a development host, use `npm run build:analyzer` and `npm run build`, then press **F5** in VS Code. Packaging creates a local candidate; see [release preparation](docs/releasing.md) for channel selection and publication requirements.
 
 ## License
 

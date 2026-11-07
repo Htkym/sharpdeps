@@ -2,9 +2,9 @@
 
 [English](guide.md) · 日本語 · [README](../README.ja.md)
 
-このガイドは `feature/0.2.0` の開発候補を対象とします。正式な公開バージョンや配布先は未確定です。候補を試す場合は、提供された VSIX のコミットとハッシュを確認し、VS Code の拡張機能メニューから **VSIX からのインストール** を選びます。Quick の利用に別途 CLI を導入する必要はありません。
+このガイドは未公開の 0.4.0 候補を対象とします。配布予定は NuGet の CLI／MCP、Visual Studio Marketplace の拡張機能、GitHub Release の VSIX・NuGet パッケージ・チェックサムです。現在の公開版は CLI／MCP が 0.3.0、Marketplace の拡張機能が 0.2.1 です。Open VSX への初回公開は含みません。候補を試す場合は、提供された VSIX のコミットとハッシュを確認し、VS Code の拡張機能メニューから **VSIX からのインストール** を選びます。Quick の利用に別途 CLI を導入する必要はありません。
 
-画像は旧 0.1.0 の画面です。`tests/fixtures/semantic-baseline/SemanticBaseline.sln` の実解析を例に、外部の型を非表示にしています。この候補の初回操作とキーボードだけの操作には、実画面での確認が残っています。
+画像は旧 0.1.0 の画面です。`tests/fixtures/semantic-baseline/SemanticBaseline.sln` の実解析を例に、外部の型を非表示にしています。0.4.0 候補は同梱の解析プログラムと QueryHost を更新するため、画面のソースが同じでも旧 VSIX と同じ読取り互換性とは限りません。過去の実画面確認の範囲は[保存表示の検証記録](contracts/saved-primary-action-v1.ja.md)を参照してください。
 
 ## ソリューションやプロジェクトを開く
 
@@ -44,7 +44,11 @@ SharpDeps が SDK をダウンロードしたり、パッケージを自動で�
 
 ## 保存済み索引を使う
 
-`sharpdeps.resultProvider` を `savedIndex` にすると、既存の `.sharpdeps` 索引を同梱の QueryHost で読みます。Quick／Semantic の選択とは別の設定です。閲覧には既存の .NET 10 ランタイムが必要で、この経路はランタイムを自動取得しません。複数 variant がある場合は `sharpdeps.savedIndexVariant` に表示する ID を指定します。異なる variant を自動で混ぜることはありません。
+`sharpdeps.resultProvider` を `savedIndex` にすると、既存の `.sharpdeps/index.sqlite` を拡張機能に同梱する `analyzer/bin/query/sharpdeps-query-host.dll` で読みます。Quick／Semantic の選択とは別の設定です。閲覧には既存の .NET 10 ランタイムが必要で、この経路はランタイムを自動取得しません。`sharpdeps.savedIndexCliPath` の外部 CLI を替えても、同梱 reader は更新されません。複数 variant がある場合は `sharpdeps.savedIndexVariant` に表示する ID を指定します。異なる variant を自動で混ぜることはありません。
+
+0.4.0 候補の reader は SQLite schema 1／2／3 に対応し、新規索引は schema 3 です。生成ソースの本文保存には schema 2 以降、パッケージソースの本文保存には schema 3 が必要です。0.2.1 の拡張機能は schema 1 のみを読み、新 CLI の schema 3 を読めません。CLI と拡張機能の両方を更新してください。旧索引の自動移行は行いません。旧 CLI／VSIXと旧索引を保持し、CLI／MCP で別パスを使う場合は新 CLI の `--index` に root 内の未使用パスを指定して再索引します。保存表示は既定の `.sharpdeps/index.sqlite` を読み、索引パスの設定はありません。新 VSIX を試す場合は、旧ワークスペースを残し、別のソース作業コピーの既定パスへ新規索引を作成してください。戻す場合は保持した旧環境と旧索引を使います。
+
+索引を退避するときは、owner／watchとほかのwriterを停止し、拡張機能、MCPなどのreaderを閉じてから、`.sharpdeps/workspace.json`、DBと残ったWAL／SHMを一緒に保持します。稼働中のDB本体だけをコピーすると、WAL内の確定済みデータを失うことがあります。旧DBやsidecarを削除して復旧せず、[索引の保存契約](contracts/index-storage-v1.ja.md)と[移行手順](mcp.md#upgrade-from-030)を参照してください。
 
 **Refresh** は保存結果の再読取りです。索引を作成・更新する場合は、互換性のある `SharpDeps.Cli.dll` の絶対パスを `sharpdeps.savedIndexCliPath` に設定し、信頼済み workspace で **SharpDeps: Update Saved Index** を明示実行します。更新には対象に合う SDK と復元済み依存が必要です。CLI 本体の直接起動と保存済み Query は .NET 10 ランタイムで動きますが、local tool の導入・復元・`dotnet tool run` や `dnx` には SDK が必要です。候補の取得条件は [CLI の案内](contracts/cli-skill-v1.ja.md)で確認してください。
 
@@ -65,6 +69,8 @@ dotnet 'D:\tools\SharpDeps.Cli.dll' serve --root 'D:\work\repo' --target 'D:\wor
 **フィルター** では、プロジェクトや型の種類、依存関係の種類と根拠、テスト、外部の型、生成コードなどの表示条件を選択できます。チェックが一つもないカテゴリは、すべての項目が表示対象となります。Escape キーを押すか、パネルの外側をクリックすると閉じられます。フィルターを変更しても再解析は行われません。
 
 **表** に切り替えると、同じ範囲の一覧を並べ替えて確認できます。行を選んで詳細を調べ、接続関係を視覚的に見たいときは **グラフ** に戻してください。
+
+保存済み索引では、対応するQueryHostが返す`namespaceBrowseVersion=1`を確認してから名前空間内の型へ移動します。旧readerや対応外の親scopeではエラーを表示し、別scopeの結果を読んでから見かけ上絞り込むことはありません。保存済みメンバーを型単位の依存へ集約した結果や、循環がないという保証は返しません。
 
 ![同じ依存範囲を一覧で表示した表](../images/table-ja.png)
 
@@ -93,6 +99,8 @@ dotnet 'D:\tools\SharpDeps.Cli.dll' serve --root 'D:\work\repo' --target 'D:\wor
 
 C# のエディター上で **SharpDeps: Show Type Dependencies (cursor)** や **Show Type Dependents (cursor)** を使うと、カーソル位置の型を宣言元から特定し、その依存先や依存元を表示できます。宣言位置を持つ Quick／Semantic の結果で使えます。結果が古い場合や宣言位置がない場合は、案内に従って再解析してください。
 
+保存済み索引の文書から型・メンバーへの候補関係では、対応するQueryHostがある場合に候補の宣言を別途調べられます。宣言が見つかっても、文書とsymbolの関係はCandidateのままです。表示中の世代・variantから返された位置だけを対象とし、現在の原文hashやtrustの検査を通して元コードを開きます。候補に位置がない場合に、別variantの宣言位置を補う操作ではありません。
+
 ## グラフの配置を調整する
 
 レイアウトの操作は **下部のバー** にまとまっています。
@@ -119,13 +127,15 @@ C# のエディター上で **SharpDeps: Show Type Dependencies (cursor)** や *
 
 **出力** から Mermaid、JSON、SVG、PNG を選択して出力できます。テキストと JSON は現在表示されている項目と接続を対象とし、SVG や PNG には表示中の向きがそのまま反映されます。同じメニューの画像設定では、対象と解析設定、表示範囲と省略情報、凡例を含めるかどうかを選択できます。出力ファイルは VS Code のダイアログから保存してください。
 
+この形式一覧はQuick／Semanticの表示に適用されます。保存済み索引の表示ではJSONのコピーとローカル保存を使い、SVG／PNG／Mermaidは提供しません。JSONは表示元のsnapshot、variant、certainty、coverage、返却件数と打切り理由を保持します。source本文・snippet・source位置・page cursorを含めず、表示名などの自由文字列は自動で秘匿化しません。[保存Query出力契約](contracts/saved-query-export-v1.ja.md)を参照してください。
+
 **エージェント用にコピー** を押すと、根拠を含む説明テキストがクリップボードへコピーされます。これには対象、条件、参照の根拠、循環依存、省略情報、判断できる範囲が含まれます。外部サービスへのデータ送信は行いません。なお、名前やコード断片にソースコードの情報が含まれることがあるため、共有する前にコピーした内容を確認してください。
 
 ## 表示言語と状態の保存
 
 上部の **日本語** または **English** で表示言語を切り替えます。選択した言語は保存され、切り替えても再解析は行われません。コードのシンボル名やファイルパス、解析プログラムの診断メッセージは元の文字列のまま表示されます。
 
-対象、表示範囲、選択状態、フィルター、レイアウト、ペイン幅、表示位置、倍率は保存の対象です。元コードから一覧へ戻る限定操作には確認済みの経路がありますが、この候補の再起動・再読込み後の復元には確認が残っています。legacy の結果が古くなった場合は **解析**、savedIndex では明示更新の後に **Refresh** で再読取りします。**停止** は解析を停止する操作で、直前に成功した結果はそのまま残ります。
+対象、表示範囲、選択状態、フィルター、レイアウト、ペイン幅、表示位置、倍率は保存の対象です。元コードから一覧へ戻る操作と、再起動・再読込み後の復元は別の検証対象です。過去の確認だけで 0.4.0 候補のインストール後の復元を保証するものではありません。legacy の結果が古くなった場合は **解析**、savedIndex では明示更新の後に **Refresh** で再読取りします。**停止** は解析を停止する操作で、直前に成功した結果はそのまま残ります。
 
 ## キーボードで操作する
 
@@ -150,6 +160,7 @@ C# のエディター上で **SharpDeps: Show Type Dependencies (cursor)** や *
 | `sharpdeps.resultProvider` | `legacy` | Quick／Semantic、または保存済み索引 `savedIndex` を選びます。 |
 | `sharpdeps.savedIndexAutoRefresh` | `false` | 明示起動した CLI watch の確定済み世代を反映します。 |
 | `sharpdeps.savedIndexCliPath` | `""` | 明示更新と自動反映で使う互換 CLI DLL の絶対パス。 |
+| `sharpdeps.savedIndexVariant` | `""` | 保存索引に複数 variant がある場合に表示する exact ID。 |
 | `sharpdeps.analysisTimeoutSeconds` | `180` | 解析の制限時間（秒）。 |
 | `sharpdeps.maxProjects` | `60` | プロジェクトと名前空間の表示上限。 |
 | `sharpdeps.maxVisibleTypes` | `100` | 型の表示上限。 |
