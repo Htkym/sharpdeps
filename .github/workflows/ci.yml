@@ -125,6 +125,9 @@ jobs:
   macos-smoke:
     runs-on: macos-latest
     timeout-minutes: 20
+    env:
+      # Keep the bounded reuse proof independent of unrelated preinstalled SDKs/runtimes.
+      DOTNET_INSTALL_DIR: ${{ runner.temp }}/sharpdeps-dotnet
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
