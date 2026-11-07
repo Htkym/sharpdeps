@@ -8,9 +8,11 @@ using SharpDeps.Query;
 
 public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/index.sqlite", bool Trusted = false, bool AllowMutations = false)
 {
+    public string? MetricsDirectory { get; init; }
+
     public static McpHostOptions Parse(string[] args)
     {
-        string? root = null, index = null;
+        string? root = null, index = null, metrics = null;
         var trusted = false; var mutations = false;
         for (var i = 0; i < args.Length; i++)
         {
@@ -20,6 +22,7 @@ public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/inde
                 case "--allow-mutations" when !mutations: mutations = true; break;
                 case "--root" when root is null: root = Value(); break;
                 case "--index" when index is null: index = Value(); break;
+                case "--metrics-directory" when metrics is null: metrics = Value(); break;
                 default: throw new ArgumentException("MCP_HOST_ARGUMENT_INVALID");
             }
             string Value()
@@ -31,7 +34,7 @@ public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/inde
         }
         if (root is null || !Path.IsPathFullyQualified(root) || mutations && !trusted)
             throw new ArgumentException("MCP_HOST_ARGUMENT_INVALID");
-        return new(root, index ?? ".sharpdeps/index.sqlite", trusted, mutations);
+        return new(root, index ?? ".sharpdeps/index.sqlite", trusted, mutations) { MetricsDirectory = metrics };
     }
 }
 
@@ -75,6 +78,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             arguments = [request.Name, "--root", host.Root, "--index", host.Index, "--quiet"];
             if (host.Trusted) arguments.Add("--trusted");
             AddMutationArguments(request, arguments);
+            if (host.MetricsDirectory is { } directory) arguments.AddRange(["--metrics-directory", directory]);
         }
         else exploration = ParseExploreRequest(request);
         if (!await slots.WaitAsync(0, token))
@@ -91,7 +95,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                     StructuredContent = document.RootElement.Clone(), IsError = exit != 0
                 };
             }
-            var explored = await CliApplication.ExploreAsync(host.Root, host.Index, host.Trusted, exploration!, token: token);
+            var explored = await CliApplication.ExploreWithMetricsAsync(host.Root, host.Index, host.Trusted, exploration!, host.MetricsDirectory, token: token);
             return new() { Content = [new TextContentBlock { Text = explored.Text }], IsError = explored.ExitCode != 0 };
         }
         finally { slots.Release(); }
@@ -175,7 +179,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             {
                 if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text
                     || text.Length is 0 or > 8192 || text.Any(char.IsControl)
-                    || text is "--root" or "--index" or "--trusted" or "--quiet") throw Invalid();
+                    || text is "--root" or "--index" or "--trusted" or "--quiet" or "--metrics-directory") throw Invalid();
                 arguments.Add(text);
             }
         }

@@ -16,6 +16,38 @@ using Xunit.Abstractions;
 
 public sealed class McpFlowTests(ITestOutputHelper output)
 {
+    [Fact]
+    public async Task MetricsDirectoryIsHostOnlyAndDoesNotChangeMcpText()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var host = McpHostOptions.Parse(["--root", fixture.Root, "--trusted", "--metrics-directory", directory]);
+        Assert.Equal(directory, host.MetricsDirectory);
+        Assert.Equal(new McpHostOptions(fixture.Root, Trusted: true), host with { MetricsDirectory = null });
+        var measured = new McpQueryAdapter(host);
+        Assert.False(Assert.Single(measured.ListTools()).InputSchema.GetProperty("properties").TryGetProperty("metricsDirectory", out _));
+        var request = Explore("Service");
+        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
+        var expected = await new McpQueryAdapter(host with { MetricsDirectory = null }).CallAsync(request);
+        var actual = await measured.CallAsync(request);
+        Assert.Equal(expected.IsError, actual.IsError);
+        Assert.Equal(Assert.IsType<TextContentBlock>(Assert.Single(expected.Content)).Text,
+            Assert.IsType<TextContentBlock>(Assert.Single(actual.Content)).Text);
+        Assert.Single(Directory.GetFiles(directory, "*.jsonl"));
+        request.Arguments["metricsDirectory"] = JsonSerializer.SerializeToElement(directory);
+        var invalid = await Assert.ThrowsAsync<McpProtocolException>(async () => await measured.CallAsync(request));
+        Assert.Equal("MCP_ARGUMENT_INVALID", invalid.Message);
+        var mutable = new McpQueryAdapter(host with { AllowMutations = true });
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await mutable.CallAsync(new()
+        {
+            Name = "index", Arguments = new Dictionary<string, JsonElement>
+            { ["arguments"] = JsonSerializer.SerializeToElement(new[] { "--metrics-directory", directory }) }
+        }));
+        Assert.Single(Directory.GetFiles(directory, "*.jsonl"));
+        Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", fixture.Root, "--metrics-directory", directory, "--metrics-directory", directory]));
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
     [Theory]
     [InlineData("agent", null)]
     [InlineData("audit", null)]

@@ -11,6 +11,37 @@ using Xunit;
 
 public sealed class ExplorationTests
 {
+    [Fact]
+    public void ExplorationMetricsReportExistingCacheBranchesAndPreserveCancellation()
+    {
+        using var fixture = new Fixture();
+        var cache = new ExplorationSnapshotCache();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var engine = fixture.Engine();
+        var request = new ExploreRequest("Pump", Budget: Generous with { MaxMilliseconds = 0 });
+        var expected = engine.Execute(request);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var expectedCancelled = engine.Execute(request, cancelled.Token);
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "fixture")!)
+        {
+            var first = cache.GetOrCreate(fixture.Snapshot, default);
+            Assert.Same(first, cache.GetOrCreate(fixture.Snapshot, default));
+            Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(fixture.Snapshot, cancelled.Token));
+            Assert.Equal(expected.Text, engine.Execute(request).Text);
+            Assert.Equal(expectedCancelled.Text, engine.Execute(request, cancelled.Token).Text);
+            metrics.Complete();
+        }
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        var text = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        Assert.Contains("payload-cache-miss", text);
+        Assert.Contains("payload-cache-hit", text);
+        Assert.Contains("explore.fingerprint", text);
+        Assert.Contains("explore.freeze", text);
+        Assert.Contains("explore.validate", text);
+        Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pump", text, StringComparison.Ordinal);
+    }
     private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
     [Theory]

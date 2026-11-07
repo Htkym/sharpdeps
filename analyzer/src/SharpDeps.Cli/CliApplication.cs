@@ -15,6 +15,7 @@ public static class CliApplication
     public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, CancellationToken token = default)
     {
         CliArguments? options = null;
+        PhaseMetrics.Run? metrics = null;
         try
         {
             options = CliArguments.Parse(args);
@@ -48,8 +49,8 @@ public static class CliApplication
             var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
             if (exploration is not null)
             {
-                var result = await ExploreAsync(options.Get("root") ?? Path.GetFullPath(Environment.CurrentDirectory), options.Get("index") ?? ".sharpdeps/index.sqlite",
-                    options.Has("trusted"), exploration, options.RequestId, token);
+                var result = await ExploreWithMetricsAsync(options.Get("root") ?? Path.GetFullPath(Environment.CurrentDirectory), options.Get("index") ?? ".sharpdeps/index.sqlite",
+                    options.Has("trusted"), exploration, options.Get("metrics-directory"), options.RequestId, token);
                 await stdout.WriteLineAsync(result.Text);
                 return result.ExitCode;
             }
@@ -62,6 +63,7 @@ public static class CliApplication
                 return await IndexAsync(options, root, indexPath, stdout, stderr, token);
             if (options.Command == "serve") return await ServeAsync(options, root, indexPath, stdout, stderr, token);
             if (options.Command == "coordinator-status") return await CoordinatorStatusAsync(options, root, indexPath, stdout, token);
+            metrics = PhaseMetrics.TryStart(options.Get("metrics-directory"), "query", root);
             var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(indexPath)) throw new CliFailure("INDEX_MISSING", 3);
             var queryToken = token;
@@ -72,20 +74,29 @@ public static class CliApplication
                 ownerToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             var service = new QueryService(pinned, sourceWorkspace, options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
             var reply = service.Execute(request!, token);
+            if (reply.Succeeded) metrics?.Complete();
+            else metrics?.Fail(reply.Envelope.Errors.Any(error => error.Code == "CANCELLED"));
             await stdout.WriteLineAsync(reply.Json);
             return reply.Succeeded ? 0 : ExitFor(reply.Envelope.Errors[0].Code);
         }
         catch (Exception error)
         {
             var failure = Failure(error);
+            metrics?.Fail(failure.Code == "CANCELLED");
             return await Error(stdout, options, failure.Code, failure.ExitCode);
         }
+        finally { metrics?.Dispose(); }
     }
 
     /// <summary>Executes saved exploration with a fresh reader and returns text without the CLI transport newline.</summary>
     public static Task<(string Text, int ExitCode)> ExploreAsync(string root, string index, bool trusted,
         ExploreRequest request, string requestId = "cli", CancellationToken token = default)
+        => ExploreWithMetricsAsync(root, index, trusted, request, null, requestId, token);
+
+    internal static Task<(string Text, int ExitCode)> ExploreWithMetricsAsync(string root, string index, bool trusted,
+        ExploreRequest request, string? metricsDirectory, string requestId = "cli", CancellationToken token = default)
     {
+        PhaseMetrics.Run? metrics = null;
         CancellationTokenSource? deadline = null;
         var hostParsed = false;
         try
@@ -102,6 +113,7 @@ public static class CliApplication
             deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             if (budget.MaxMilliseconds != 0) deadline.CancelAfter(budget.MaxMilliseconds);
             root = CliPaths.Root(root);
+            metrics = PhaseMetrics.TryStart(metricsDirectory, "explore", root);
             index = CliPaths.InRoot(root, index);
             foreach (var sidecar in new[] { index + "-wal", index + "-shm", index + ".writer.lock" }) CliPaths.RejectLinks(sidecar);
             if (!File.Exists(index)) throw new CliFailure("INDEX_MISSING", 3);
@@ -122,17 +134,20 @@ public static class CliApplication
             token.ThrowIfCancellationRequested();
             if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
             var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
+            if (exit == 0) metrics?.Complete();
+            else metrics?.Fail(explored.Errors.Any(error => error.Code == "CANCELLED"));
             return Task.FromResult((explored.Text, exit));
         }
         catch (Exception error)
         {
             var failure = Failure(error, deadline?.IsCancellationRequested == true && !token.IsCancellationRequested);
+            metrics?.Fail(failure.Code == "CANCELLED");
             var recovery = failure.Code is "INDEX_MISSING" or "WORKSPACE_STATE_MISSING"
                 ? $"No usable saved index at '{index}' for selected root '{root}'. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command."
                 : null;
             return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode));
         }
-        finally { deadline?.Dispose(); }
+        finally { deadline?.Dispose(); metrics?.Dispose(); }
     }
 
     private static (string Code, int ExitCode) Failure(Exception error, bool timedOut = false) => error switch

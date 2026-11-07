@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts.Harness;
@@ -66,6 +67,7 @@ public sealed partial class ExplorationService
 
         public void Discover()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.discover");
             var matches = OrderMatches(Search());
             if (Errors.Count != 0)
                 return;

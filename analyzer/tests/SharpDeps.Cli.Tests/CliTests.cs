@@ -14,6 +14,89 @@ using Xunit;
 
 public sealed class CliTests
 {
+    [Theory]
+    [InlineData("search")]
+    [InlineData("context")]
+    [InlineData("explore")]
+    public async Task QueryMetricsAreOutOfBandAndCannotChangeSavedResponses(string command)
+    {
+        using var fixture = new Fixture();
+        var args = new[] { command, "--root", fixture.Root, "--trusted", "--term", "Service", "--max-milliseconds", "0" };
+        var expected = await Run(args);
+        Assert.Equal(0, expected.Exit);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var measured = await Run([.. args, "--metrics-directory", directory]);
+        Assert.Equal(expected, measured);
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        var text = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Service", text, StringComparison.Ordinal);
+        using var end = JsonDocument.Parse(text.Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1]);
+        Assert.Equal("completed", end.RootElement.GetProperty("payload").GetProperty("outcome").GetString());
+        Assert.Contains("reader.open", text);
+        Assert.Contains("reader.snapshot", text);
+        Assert.Contains(command == "explore" ? "explore.render" : "query.render", text);
+        Assert.Contains(command == "explore" ? "explore.derived-index" : "query.derived-index", text);
+        if (command != "search") { Assert.Contains("source.read", text); Assert.Contains("source.hash", text); }
+        var refused = Path.Combine(fixture.Root, "refused");
+        Assert.Equal(expected, await Run([.. args, "--metrics-directory", refused]));
+        Assert.False(Directory.Exists(refused));
+        var broken = Path.Combine(fixture.Root, ".sharpdeps", "blocked");
+        File.WriteAllText(broken, "keep");
+        Assert.Equal(expected, await Run([.. args, "--metrics-directory", broken]));
+        Assert.Equal("keep", File.ReadAllText(broken));
+        using (var sink = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("broken-sink", "query", new StreamWriter(new FailedMetricsStream())))
+        {
+            Assert.Equal(expected, await Run(args));
+            sink.Complete();
+        }
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+
+    [Fact]
+    public async Task ParallelQueryMetricsKeepRunScopesAndErrorsSeparate()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var requests = new[] { new[] { "search", "--term", "Service" }, new[] { "symbol", "--id", "missing" } };
+        var expected = new List<(int Exit, string Json, string Progress)>();
+        foreach (var request in requests) expected.Add(await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0"]));
+        var actual = await Task.WhenAll(requests.Select(request => Task.Run(async () =>
+        {
+            var reply = await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0", "--metrics-directory", directory]);
+            Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+            return reply;
+        })));
+        Assert.Equal(expected, actual);
+        var files = Directory.GetFiles(directory, "*.jsonl");
+        Assert.Equal(2, files.Length);
+        var outcomes = new List<string>();
+        foreach (var file in files)
+        {
+            var events = File.ReadLines(file).Select(line => JsonDocument.Parse(line)).ToArray();
+            try
+            {
+                Assert.Single(events.Select(e => e.RootElement.GetProperty("runId").GetString()).Distinct());
+                Assert.Equal(Enumerable.Range(1, events.Length).Select(n => (long)n), events.Select(e => e.RootElement.GetProperty("sequence").GetInt64()));
+                var phases = events.Select(e => e.RootElement.GetProperty("payload")).Where(p => p.GetProperty("type").GetString() == "phase").ToArray();
+                Assert.Single(phases, p => p.GetProperty("phase").GetString() == "run");
+                var ids = phases.Select(p => p.GetProperty("spanId").GetInt64()).ToHashSet();
+                Assert.All(phases.Where(p => p.GetProperty("parentSpanId").ValueKind != JsonValueKind.Null),
+                    p => Assert.Contains(p.GetProperty("parentSpanId").GetInt64(), ids));
+                outcomes.Add(events[^1].RootElement.GetProperty("payload").GetProperty("outcome").GetString()!);
+            }
+            finally { foreach (var value in events) value.Dispose(); }
+        }
+        Assert.Equal(new[] { "completed", "failed" }, outcomes.Order());
+    }
+
+    private sealed class FailedMetricsStream : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count) => throw new IOException("unavailable");
+        public override void Write(ReadOnlySpan<byte> buffer) => throw new IOException("unavailable");
+    }
     [Fact]
     public async Task IndexTimeoutDefaultsAndRangeSupportLargeWorkspaces()
     {

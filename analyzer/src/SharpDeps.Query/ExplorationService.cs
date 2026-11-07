@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
@@ -29,6 +30,7 @@ public sealed partial class ExplorationService
     public ExploreReply Execute(ExploreRequest request, CancellationToken cancellationToken = default,
         CancellationToken deadlineToken = default)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.execute");
         ArgumentNullException.ThrowIfNull(request);
         request = request with { Budget = request.Budget ?? new QueryBudget(MaxChars: 12000, MaxBytes: 48000) };
         Validate(request);
@@ -299,6 +301,7 @@ public sealed partial class ExplorationService
 
         public bool Resolve()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.resolve");
             Check();
             if (project is not null && !owner.saved.Graph.Variants.Any(v => v.ProjectId == project))
             { Error("SCOPE_NOT_FOUND", "The project is not in this selected index."); return false; }
@@ -467,6 +470,7 @@ public sealed partial class ExplorationService
 
         private List<Match> Search()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.search");
             var query = request.Query.Trim();
             var wholeIdentity = owner.occurrences.ContainsKey(query) || owner.nodes.ContainsKey(query);
             var normalized = query.Replace('\\', '/');
@@ -716,6 +720,7 @@ public sealed partial class ExplorationService
 
         public void Expand()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.expand");
             var queue = new Queue<(Selected Item, int Depth, bool Reverse)>();
             foreach (var root in roots) queue.Enqueue((root, 0, true));
             foreach (var root in roots.Where(root => root.Node.Kind == HarnessNodeKind.Type))
@@ -981,6 +986,7 @@ public sealed partial class ExplorationService
 
         public void ReadUnits()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.source");
             PrepareUnits();
             ReadRequested();
             ReadRelated();
@@ -1244,6 +1250,7 @@ public sealed partial class ExplorationService
 
         public ExploreReply Finish()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.render");
             if (discoveryGroups is not null)
                 return FinishDiscovery();
             var relationCount = Math.Min(relationDisplayLimit, relations.Count);

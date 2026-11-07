@@ -1,5 +1,6 @@
 namespace SharpDeps.Index;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
@@ -19,6 +20,7 @@ public sealed class IndexReader : IDisposable
     public string ManifestHash { get; }
     public static IndexReader Open(string indexPath,Guid workspaceUuid,CancellationToken token=default)
     {
+        using var metricsScope = PhaseMetrics.Measure("reader.open");
         token.ThrowIfCancellationRequested();
         var workspace=HarnessIdentity.WorkspaceId(workspaceUuid);var path=IndexPaths.Absolute(indexPath);
         if(!File.Exists(path))throw new IndexStoreException("INDEX_NOT_FOUND", "No saved index exists.");
@@ -62,9 +64,10 @@ public sealed class IndexReader : IDisposable
     }
     public IndexSnapshot Snapshot(CancellationToken token=default)
     {
+        using var metricsScope = PhaseMetrics.Measure("reader.snapshot");
         ObjectDisposedException.ThrowIf(disposed,this);
         token.ThrowIfCancellationRequested();
-        if(cachedSnapshot is not null)return cachedSnapshot;
+        if(cachedSnapshot is not null) { PhaseMetrics.Decision("reader.snapshot", "cache-hit"); return cachedSnapshot; }
         using var progress=new ReadCancellation(connection,token);
         try
         {
@@ -164,6 +167,7 @@ public sealed class IndexReader : IDisposable
     }
     public IReadOnlyList<IndexSearchHit> Search(string term,int limit=100,CancellationToken token=default)
     {
+        using var metricsScope = PhaseMetrics.Measure("reader.search");
         ObjectDisposedException.ThrowIf(disposed,this);
         token.ThrowIfCancellationRequested();
         if(string.IsNullOrWhiteSpace(term)||term.Length>128||term.Any(char.IsControl)||limit<1||limit>500)

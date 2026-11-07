@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using SharpDeps.Analysis.Contracts.Harness;
@@ -87,11 +88,13 @@ public sealed class PinnedQueryIndex : IQueryIndex
 
     internal ExplorationSnapshot PrepareExploration(CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.prepare");
         // Snapshot checks the reader lifetime even when preparation is already cached.
         var saved = reader.Snapshot(token);
         var prepared = Volatile.Read(ref exploration);
         if (prepared is not null)
         {
+            PhaseMetrics.Decision("explore.prepare", "pin-cache-hit");
             token.ThrowIfCancellationRequested();
             return prepared;
         }
@@ -101,11 +104,13 @@ public sealed class PinnedQueryIndex : IQueryIndex
             prepared = exploration;
             if (prepared is null)
             {
+                PhaseMetrics.Decision("explore.prepare", "pin-cache-miss");
                 // IndexReader validated and froze every reachable collection before publication.
                 prepared = new ExplorationSnapshot(saved, token);
                 token.ThrowIfCancellationRequested();
                 Volatile.Write(ref exploration, prepared);
             }
+            else PhaseMetrics.Decision("explore.prepare", "pin-cache-hit-after-wait");
             token.ThrowIfCancellationRequested();
             return prepared;
         }

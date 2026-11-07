@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -28,6 +29,7 @@ internal sealed class ExplorationSnapshot
 
     internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.derived-index");
         saved = frozen;
         nodes = Lookup(frozen.Graph.Nodes, node => node.Id, token);
         occurrences = Lookup(frozen.Graph.SymbolOccurrences, occurrence => occurrence.Id, token);
@@ -80,6 +82,7 @@ internal sealed class ExplorationSnapshot
 
     internal IReadOnlyList<HarnessEdge> GetHttpGetDeclarations(string template, CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.http-declarations");
         ArgumentNullException.ThrowIfNull(template);
         token.ThrowIfCancellationRequested();
         var cached = Volatile.Read(ref httpGetDeclarations);
@@ -272,6 +275,7 @@ internal sealed class ExplorationSnapshotCache
 
     internal ExplorationSnapshot GetOrCreate(IndexSnapshot current, CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.prepare");
         ArgumentNullException.ThrowIfNull(current);
         token.ThrowIfCancellationRequested();
         var cached = Volatile.Read(ref latest);
@@ -285,6 +289,7 @@ internal sealed class ExplorationSnapshotCache
             if (cached.Key == wanted)
             {
                 token.ThrowIfCancellationRequested();
+                PhaseMetrics.Decision("explore.prepare", "payload-cache-hit");
                 return cached.Snapshot;
             }
         }
@@ -293,7 +298,7 @@ internal sealed class ExplorationSnapshotCache
         {
             token.ThrowIfCancellationRequested();
             cached = Volatile.Read(ref latest);
-            if (wanted is { } fingerprint && cached is not null && cached.Key == fingerprint) return cached.Snapshot;
+            if (wanted is { } fingerprint && cached is not null && cached.Key == fingerprint) { PhaseMetrics.Decision("explore.prepare", "payload-cache-hit-after-wait"); return cached.Snapshot; }
 
             // Only a miss holds clone bytes; the key is computed from those exact bytes.
             using var bytes = new MemoryStream();
@@ -302,14 +307,19 @@ internal sealed class ExplorationSnapshotCache
             if (cached is not null && cached.Key == actual)
             {
                 token.ThrowIfCancellationRequested();
+                PhaseMetrics.Decision("explore.prepare", "payload-cache-hit");
                 return cached.Snapshot;
             }
+            PhaseMetrics.Decision("explore.prepare", "payload-cache-miss");
             bytes.Position = 0;
             using var input = new CheckedStream(bytes, token);
-            var frozen = JsonSerializer.Deserialize(input, QuerySnapshotJsonContext.Default.IndexSnapshot)
-                ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data cannot be null.");
+            IndexSnapshot frozen;
+            using (PhaseMetrics.Measure("explore.freeze"))
+                frozen = JsonSerializer.Deserialize(input, QuerySnapshotJsonContext.Default.IndexSnapshot)
+                    ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data cannot be null.");
             token.ThrowIfCancellationRequested();
-            IndexSnapshotValidator.Validate(frozen, token);
+            using (PhaseMetrics.Measure("explore.validate"))
+                IndexSnapshotValidator.Validate(frozen, token);
             var prepared = new ExplorationSnapshot(frozen, token);
             token.ThrowIfCancellationRequested();
             Volatile.Write(ref latest, new Entry(actual, prepared));
@@ -320,6 +330,7 @@ internal sealed class ExplorationSnapshotCache
 
     private static Fingerprint Serialize(IndexSnapshot snapshot, Stream destination, CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.fingerprint");
         token.ThrowIfCancellationRequested();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var output = new CheckedStream(destination, token, hash);

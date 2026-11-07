@@ -18,10 +18,10 @@ internal sealed class CliArguments
     private static readonly HashSet<string> Query = new(StringComparer.Ordinal)
     { "term", "id", "ids", "project-id", "path-prefix", "variant", "node-kind", "edge-kind", "include-candidates",
       "no-documents", "dependencies", "freshness", "require-complete", "page-size", "cursor", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind" };
+      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind", "metrics-directory" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status", "query-kind" };
+      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);

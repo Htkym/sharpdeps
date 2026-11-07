@@ -1,4 +1,4 @@
-# Index phase diagnostics
+# Phase diagnostics
 
 Index, update and watch-update owners can write opt-in JSONL diagnostics with
 `--metrics-directory <absolute-directory>`. Use a directory below the analyzed workspace's `.sharpdeps` directory.
@@ -34,7 +34,7 @@ text, snapshot validation, stage validation/serialization/rehydration, graph ins
 FTS/search insert, publication guard and durable commit. A failed phase records its
 elapsed interval but does not imply successful work. An exclusive run interrupted
 before publication retains `incomplete`; shared-owner failures distinguish failed
-and cancelled. A completed run means durable publication succeeded.
+and cancelled. A completed extraction run means durable publication succeeded.
 
 Reuse decisions are emitted at existing proof capture, environment/budget rejection,
 semantic admission and project selection boundaries. Some legacy compound guards
@@ -43,9 +43,28 @@ Selected, dirty and clean project counts are distinct from the actual extracted 
 reused collector counts. A successful closure proof does not establish edit reuse
 or an end-to-end speed improvement.
 
+## Saved queries
+
+Saved CLI Query commands and `explore` accept the same opt-in option. The MCP host
+accepts `--metrics-directory` at startup; tool arguments and tool schemas cannot set
+or change it. Mutations use that host-selected destination too. Public positional
+constructors and `CliApplication.ExploreAsync` retain their existing signatures.
+
+Each admitted saved request writes its own run, including reader open/snapshot,
+freeze/validation and derived indexes, search/resolve/expand, source read/hash and
+freshness verification, and final rendering where those stages are reached.
+Existing pinned and payload-cache hit/miss decisions are recorded without changing
+cache keys, lifetime or reuse. A completed query run means the saved request
+succeeded, not that freshness was verified. Failed and cancelled requests retain
+their outcome; stages never reached are absent. Setup rejected before admission
+may emit no run. Output failures never change the response or its exit status.
+Query text, source contents, snapshot identities and filesystem paths are omitted.
+Process-wide CPU/allocation/GC deltas can overlap concurrent requests and must not
+be interpreted as exclusive request resource usage.
+
 ## Coverage and compatibility
 
-Query, idle watch scans, setup/restore, per-SDK/Git/package read attribution,
+Idle watch scans, setup/restore, per-SDK/Git/package read attribution,
 separate declaration versus operation time, exact MSBuild evaluation time, process
 peak working set and DB/WAL capacity are not measured yet. Missing stages are absent,
 not zero. Compilation acquisition includes Roslyn lazy work; no syntax retrieval is
@@ -54,8 +73,8 @@ SDK, configuration, restore/cache state and parallelism before comparing runs.
 This instrumentation is not a corpus baseline or a five-run cold benchmark.
 
 All existing public signatures and reuse predicates stay unchanged. The shared sink
-is internal in Core, with friend access restricted to the CLI, Index, Roslyn and
-CLI test assembly built in this solution. No shipped API baseline,
+is internal in Core, with friend access restricted to the CLI, Query, Index, Roslyn and
+CLI/Query test assemblies built in this solution. No shipped API baseline,
 multi-targeted library or generated contract is changed. Full-oracle comparisons
 should compare the unchanged snapshots/queries and assert branches separately from
 this out-of-band stream. Never discard all saved diagnostics as measurement noise.
