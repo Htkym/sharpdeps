@@ -110,12 +110,13 @@ internal static class OracleProcess
         var input = Path.Combine(directory, label + ".request.json");
         var output = Path.Combine(directory, label + ".result.json");
         File.WriteAllText(input, JsonSerializer.Serialize(run, QueryJson.Options));
-        await ExecuteAsync(run.Options.Root, [typeof(OracleProcess).Assembly.Location, "--full-oracle", input, output], token);
+        await ExecuteAsync(run.Options.Root, [typeof(OracleProcess).Assembly.Location, "--full-oracle", input, output], token,
+            packageRoot: Path.Combine(directory, "packages"));
         return JsonSerializer.Deserialize<OracleObservation>(File.ReadAllText(output), QueryJson.Options)
             ?? throw new InvalidDataException("Oracle result is missing.");
     }
 
-    internal static async Task ExecuteAsync(string root, string[] arguments, CancellationToken token)
+    internal static async Task ExecuteAsync(string root, string[] arguments, CancellationToken token, string? packageRoot = null)
     {
         token.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
@@ -132,6 +133,12 @@ internal static class OracleProcess
             "DOTNET_ROOT_ARM64", "DOTNET_HOST_PATH" })
             if (inherited.TryGetValue(name, out var value) && value is not null)
                 start.Environment[name] = value;
+        if (packageRoot is not null)
+        {
+            if (!Path.IsPathFullyQualified(packageRoot))
+                throw new ArgumentException("Oracle package root must be absolute.", nameof(packageRoot));
+            start.Environment["NUGET_PACKAGES"] = packageRoot;
+        }
         start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         start.Environment["MSBuildEnableWorkloadResolver"] = "false";
         start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
