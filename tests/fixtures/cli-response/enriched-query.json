@@ -1,0 +1,190 @@
+{
+  "apiVersion": "1",
+  "requestId": "schema-fixture",
+  "snapshot": {
+    "workspaceId": "hw_00000000000000000000000000000001",
+    "id": "fixture",
+    "generation": 1,
+    "variantIds": ["variant"],
+    "variantCount": 1,
+    "freshness": "unverified",
+    "coverage": "Partial",
+    "dirtyPaths": [],
+    "dirtyPathCount": 0,
+    "unverified": [],
+    "unverifiedCount": 0,
+    "graphSchemaVersion": 1,
+    "identityVersion": "sharpdeps-harness/1",
+    "indexSchemaVersion": 1,
+    "coordinatorState": "not-connected",
+    "resultFilterVersion": 1,
+    "symbolDeclarationRowsVersion": 1,
+    "namespaceBrowseVersion": 1
+  },
+  "items": [
+    {
+      "id": "extension-saved",
+      "kind": "edge",
+      "label": "extension-saved",
+      "reason": "saved-evidence",
+      "certainty": "Resolved",
+      "path": "Source.cs",
+      "evidence": {
+        "sourceId": "source",
+        "sourceVersion": "version",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rawSpan": { "start": 10, "length": 7, "end": 17 }
+      },
+      "viaEdgeIds": [],
+      "edge": {
+        "id": "extension-saved",
+        "sourceNodeId": "caller",
+        "targetNodeId": "callee",
+        "sourceOccurrenceId": "caller-occurrence",
+        "targetOccurrenceId": "callee-occurrence",
+        "variantId": "variant",
+        "kind": "calls",
+        "certainty": "Resolved",
+        "producer": "roslyn-operation",
+        "evidence": {
+          "sourceId": "source",
+          "sourceVersion": "version",
+          "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rawSpan": { "start": 10, "length": 7, "end": 17 }
+        },
+        "extensionBinding": {
+          "state": "Saved",
+          "receiverTypeDisplay": "Receiver",
+          "constructedMethodDisplay": "Receiver.Transform()"
+        }
+      },
+      "resultKind": "Code"
+    },
+    {
+      "id": "extension-omitted",
+      "kind": "edge",
+      "label": "extension-omitted",
+      "reason": "saved-evidence",
+      "certainty": "Resolved",
+      "path": "Source.cs",
+      "evidence": {
+        "sourceId": "source",
+        "sourceVersion": "version",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rawSpan": { "start": 10, "length": 7, "end": 17 }
+      },
+      "viaEdgeIds": [],
+      "edge": {
+        "id": "extension-omitted",
+        "sourceNodeId": "caller",
+        "targetNodeId": "callee",
+        "sourceOccurrenceId": "caller-occurrence",
+        "targetOccurrenceId": "callee-occurrence",
+        "variantId": "variant",
+        "kind": "calls",
+        "certainty": "Resolved",
+        "producer": "roslyn-operation",
+        "evidence": {
+          "sourceId": "source",
+          "sourceVersion": "version",
+          "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rawSpan": { "start": 10, "length": 7, "end": 17 }
+        },
+        "extensionBinding": { "state": "Omitted", "omissionReason": "unsupported-type" }
+      },
+      "resultKind": "Code"
+    },
+    {
+      "id": "http-get-saved",
+      "kind": "edge",
+      "label": "http-get-saved",
+      "reason": "saved-evidence",
+      "certainty": "Resolved",
+      "path": "Source.cs",
+      "evidence": {
+        "sourceId": "source",
+        "sourceVersion": "version",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rawSpan": { "start": 10, "length": 7, "end": 17 }
+      },
+      "viaEdgeIds": [],
+      "edge": {
+        "id": "http-get-saved",
+        "sourceNodeId": "member",
+        "targetNodeId": "attribute",
+        "sourceOccurrenceId": "member-occurrence",
+        "variantId": "variant",
+        "kind": "attribute",
+        "certainty": "Resolved",
+        "producer": "roslyn-declaration",
+        "evidence": {
+          "sourceId": "source",
+          "sourceVersion": "version",
+          "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rawSpan": { "start": 10, "length": 7, "end": 17 }
+        },
+        "httpGetDeclaration": {
+          "state": "Saved",
+          "template": "",
+          "templateSpan": { "start": 18, "length": 2, "end": 20 }
+        }
+      },
+      "resultKind": "Code"
+    },
+    {
+      "id": "http-get-omitted",
+      "kind": "edge",
+      "label": "http-get-omitted",
+      "reason": "saved-evidence",
+      "certainty": "Resolved",
+      "path": "Source.cs",
+      "evidence": {
+        "sourceId": "source",
+        "sourceVersion": "version",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rawSpan": { "start": 10, "length": 7, "end": 17 }
+      },
+      "viaEdgeIds": [],
+      "edge": {
+        "id": "http-get-omitted",
+        "sourceNodeId": "member",
+        "targetNodeId": "attribute",
+        "sourceOccurrenceId": "member-occurrence",
+        "variantId": "variant",
+        "kind": "attribute",
+        "certainty": "Resolved",
+        "producer": "roslyn-declaration",
+        "evidence": {
+          "sourceId": "source",
+          "sourceVersion": "version",
+          "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rawSpan": { "start": 10, "length": 7, "end": 17 }
+        },
+        "httpGetDeclaration": { "state": "Omitted", "omissionReason": "no-template" }
+      },
+      "resultKind": "Code"
+    }
+  ],
+  "candidates": [],
+  "unresolved": [],
+  "budget": {
+    "limits": {
+      "maxNodes": 60,
+      "maxEdges": 120,
+      "maxDepth": 2,
+      "maxMilliseconds": 1000,
+      "maxChars": 18000,
+      "maxBytes": 64000
+    },
+    "usedNodes": 0,
+    "usedEdges": 4,
+    "usedChars": 0,
+    "usedBytes": 0,
+    "estimatedTokens": 0,
+    "tokenCountKind": "estimate"
+  },
+  "truncated": false,
+  "truncationReasons": [],
+  "diagnostics": [],
+  "errors": []
+}

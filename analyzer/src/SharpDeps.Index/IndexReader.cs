@@ -5,16 +5,17 @@ using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 
-/// <summary>One reader transaction pins one committed generation. Dispose promptly; not thread-safe.</summary>
+/// <summary>One reader transaction pins one committed, recursively read-only snapshot. Dispose promptly; not thread-safe.</summary>
 public sealed class IndexReader : IDisposable
 {
     private readonly SqliteConnection connection;
     private readonly SqliteTransaction transaction;
     private readonly HarnessGraphEnvelope header;
+    private readonly int schemaVersion;
     private IndexSnapshot? cachedSnapshot;
     private bool disposed;
-    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash)
-    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash; }
+    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion)
+    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion; }
     public string ManifestHash { get; }
     public static IndexReader Open(string indexPath,Guid workspaceUuid,CancellationToken token=default)
     {
@@ -29,7 +30,7 @@ public sealed class IndexReader : IDisposable
             using var progress=new ReadCancellation(connection,token);
             token.ThrowIfCancellationRequested();
             transaction=connection.BeginTransaction(deferred:true);
-            IndexDatabase.CheckMetadata(connection,transaction,workspace);
+            var schemaVersion=IndexDatabase.CheckMetadata(connection,transaction,workspace);
             token.ThrowIfCancellationRequested();
             // Rows are the validated graph source; project only header fields from legacy full-graph JSON.
             using var command=IndexDatabase.Command(connection,transaction,"""
@@ -52,7 +53,7 @@ public sealed class IndexReader : IDisposable
             token.ThrowIfCancellationRequested();
             if(header.Generation!=row.GetInt64(0)||header.SnapshotId!=row.GetString(1)||header.WorkspaceId!=workspace)
                 throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved generation metadata disagrees with the graph.");
-            var result=new IndexReader(connection,transaction,header,row.GetString(2));row.Close();
+            var result=new IndexReader(connection,transaction,header,row.GetString(2),schemaVersion);row.Close();
             _=result.Snapshot(token);token.ThrowIfCancellationRequested();return result;
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)
@@ -73,18 +74,79 @@ public sealed class IndexReader : IDisposable
             using(var command=IndexDatabase.Command(connection,transaction,"SELECT node_id,name,signature,heading,body,path FROM search_text WHERE generation=$g ORDER BY node_id",("$g",header.Generation)))
             using(var rows=command.ExecuteReader())
                 while(ReadRow(rows,token))search.Add(new IndexSearchText(rows.GetString(0),rows.GetString(1),rows.GetString(2),rows.GetString(3),rows.GetString(4),rows.GetString(5)));
-            var snapshot=new IndexSnapshot(graph,Read<IndexFile>("files",token),Read<IndexDocumentIdentity>("document_identities",token),Read<IndexAlias>("aliases",token),search.AsReadOnly());
+            var bodies = schemaVersion >= 2 ? ReadGeneratedBodies(token) : [];
+            var packages = schemaVersion >= 3 ? ReadPackageBodies(token) : [];
+            var snapshot=new IndexSnapshot(graph,Read<IndexFile>("files",token),Read<IndexDocumentIdentity>("document_identities",token),Read<IndexAlias>("aliases",token),search.AsReadOnly(),bodies,packages);
             IndexSnapshotValidator.Validate(snapshot,token);
             token.ThrowIfCancellationRequested();
             var manifestHash=IndexStage.ComputeManifestHash(snapshot.Files);
             token.ThrowIfCancellationRequested();
             if(manifestHash!=ManifestHash)
                 throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved input manifest hash differs.");
+            snapshot = snapshot with
+            {
+                Graph = graph with
+                {
+                    SymbolOccurrences = Copy(graph.SymbolOccurrences, token, occurrence => occurrence with
+                        { Declarations = occurrence.Declarations is null ? null : Copy(occurrence.Declarations, token) }),
+                    Diagnostics = graph.Diagnostics is null ? null : Copy(graph.Diagnostics, token)
+                },
+                Files = Copy(snapshot.Files, token, file => Freeze(file, token)),
+                Documents = Copy(snapshot.Documents, token, document => document with
+                    { Sections = Copy(document.Sections, token) })
+            };
+            token.ThrowIfCancellationRequested();
             return cachedSnapshot=snapshot;
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)
         {throw new OperationCanceledException("Saved index read was cancelled.",error,token);}
     }
+    private IReadOnlyList<IndexGeneratedBody> ReadGeneratedBodies(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var result=new List<IndexGeneratedBody>();
+        using var command=IndexDatabase.Command(connection,transaction,"SELECT source_id,body FROM generated_bodies WHERE generation=$g ORDER BY source_id",("$g",header.Generation));
+        using var rows=command.ExecuteReader();
+        while(ReadRow(rows,token)) result.Add(new IndexGeneratedBody(rows.GetString(0),rows.GetString(1)));
+        return result.AsReadOnly();
+    }
+    private IReadOnlyList<IndexPackageBody> ReadPackageBodies(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var result=new List<IndexPackageBody>();
+        using var command=IndexDatabase.Command(connection,transaction,"SELECT source_id,body FROM package_bodies WHERE generation=$g ORDER BY source_id",("$g",header.Generation));
+        using var rows=command.ExecuteReader();
+        while(ReadRow(rows,token)) result.Add(new IndexPackageBody(rows.GetString(0),rows.GetString(1)));
+        return result.AsReadOnly();
+    }
+    private static IndexFile Freeze(IndexFile file, CancellationToken token)
+    {
+        if (file.Reuse is not { } reuse) return file;
+        return file with { Reuse = reuse with
+        {
+            Catalog = Copy(reuse.Catalog, token),
+            Projects = reuse.Projects is not { } projects ? null : projects with
+            {
+                Variants = Copy(projects.Variants, token, project => project with
+                {
+                    SourceIds = Copy(project.SourceIds, token),
+                    References = Copy(project.References, token)
+                })
+            }
+        } };
+    }
+
+    private static IReadOnlyList<T> Copy<T>(IReadOnlyList<T> items, CancellationToken token, Func<T,T>? freeze = null)
+    {
+        var copy = new T[items.Count];
+        for (var i = 0; i < copy.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            copy[i] = freeze is null ? items[i] : freeze(items[i]);
+        }
+        return Array.AsReadOnly(copy);
+    }
+
     private IReadOnlyList<T> Read<T>(string table,CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -93,7 +155,7 @@ public sealed class IndexReader : IDisposable
         using var rows=command.ExecuteReader();
         while(ReadRow(rows,token))
         {
-            var item=JsonSerializer.Deserialize<T>(rows.GetString(0),IndexStage.Json)
+            var item=JsonSerializer.Deserialize<T>(rows.GetString(0),IndexReadJsonContext.Default.Options)
                 ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
             token.ThrowIfCancellationRequested();
             result.Add(item);

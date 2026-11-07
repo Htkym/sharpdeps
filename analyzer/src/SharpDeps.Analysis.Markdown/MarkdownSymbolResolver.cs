@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
+using SharpDeps.Analysis.Core.Identity;
 
 /// <summary>The trusted owner supplies aliases from actual nodes/occurrences in Graph; no files are opened.</summary>
 public sealed record MarkdownSymbolCandidate(string NodeId, string FullName, string ShortName,
@@ -14,7 +15,7 @@ public sealed record MarkdownSymbolCandidate(string NodeId, string FullName, str
 public sealed record MarkdownSymbolCatalog(HarnessGraphEnvelope Graph, IReadOnlyList<MarkdownSymbolCandidate> Symbols,
     IReadOnlyDictionary<string, string>? CodeFileAliases = null);
 public sealed record MarkdownSymbolScope(string? Project = null, string? Namespace = null, string? VariantId = null);
-public enum MarkdownMentionOrigin { ExplicitMetadata, CodeFileLink, CodeFence, BodyText }
+public enum MarkdownMentionOrigin { ExplicitMetadata, CodeFileLink, CodeFence, BodyText, InlineCode }
 
 public sealed record MarkdownSymbolMention(string Id, string OwnerNodeId, string Token, string Selector,
     string Relation, MarkdownMentionOrigin Origin, MarkdownSymbolScope Scope, HarnessLocation Location,
@@ -69,6 +70,23 @@ public static class MarkdownSymbolResolver
 
     public static MarkdownSymbolResolution Resolve(MarkdownGraphProjection projection, string rawText,
         MarkdownSymbolCatalog catalog, MarkdownSymbolScope? scope = null, CancellationToken cancellationToken = default)
+        => ResolveCore(projection, rawText, catalog, scope, null, cancellationToken);
+
+    public static MarkdownSymbolResolution ResolvePrepared(MarkdownGraphProjection projection, MarkdownPreparedInput prepared,
+        MarkdownSymbolCatalog catalog, MarkdownSymbolScope? scope = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        ArgumentNullException.ThrowIfNull(prepared);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(projection.Facts, prepared.Facts)
+            || projection.Graph?.WorkspaceId != HarnessIdentity.WorkspaceId(prepared.WorkspaceUuid))
+            throw new ArgumentException("Projection facts and workspace must belong to this prepared input.");
+        return ResolveCore(projection, prepared.RawText, catalog, scope, prepared.SyntaxRoot, cancellationToken);
+    }
+
+    private static MarkdownSymbolResolution ResolveCore(MarkdownGraphProjection projection, string rawText,
+        MarkdownSymbolCatalog catalog, MarkdownSymbolScope? scope, MarkdownSyntaxNode? syntaxRoot,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(projection);
         ArgumentNullException.ThrowIfNull(rawText);
@@ -86,7 +104,28 @@ public static class MarkdownSymbolResolver
             || location.SourceVersion != facts.SourceVersion || location.ContentHash != hash
             || location.RawSpan != new HarnessRawSpan(0, rawText.Length))
             throw new ArgumentException("Raw source and graph binding must match the parser source/version/TextHash.");
-        ValidateCatalog(catalog, projection.Graph.WorkspaceId);
+        ValidateCatalog(catalog, projection.Graph.WorkspaceId, cancellationToken);
+        int[] inlineCodeStarts = [];
+        int[] inlineCodeMaxEnds = [];
+        if (syntaxRoot is not null)
+        {
+            var inlineCodeSpans = new List<RawSpan>();
+            foreach (var node in syntaxRoot.DescendantsAndSelf(cancellationToken))
+                if (node.Kind == MarkdownSyntaxKind.CodeSpan && node.RawSpan is { Length: > 0 } span
+                    && span.End <= rawText.Length)
+                    inlineCodeSpans.Add(span);
+            inlineCodeSpans.Sort(static (left, right) => left.Start.CompareTo(right.Start));
+            inlineCodeStarts = new int[inlineCodeSpans.Count];
+            inlineCodeMaxEnds = new int[inlineCodeSpans.Count];
+            var maxEnd = 0;
+            for (var i = 0; i < inlineCodeSpans.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                inlineCodeStarts[i] = inlineCodeSpans[i].Start;
+                maxEnd = Math.Max(maxEnd, inlineCodeSpans[i].End);
+                inlineCodeMaxEnds[i] = maxEnd;
+            }
+        }
         scope ??= new MarkdownSymbolScope();
         var mentions = new List<MarkdownSymbolMention>();
         var reasons = new List<string>();
@@ -111,6 +150,8 @@ public static class MarkdownSymbolResolver
         cancellationToken.ThrowIfCancellationRequested();
         if (mentions.Any(m => m.Origin == MarkdownMentionOrigin.BodyText))
             reasons.Add("inline-code-kind-unavailable: shared DTO merges inline code into body text; body bindings remain heuristic");
+        if (mentions.Any(m => m.Origin == MarkdownMentionOrigin.InlineCode))
+            reasons.Add("inline-code-symbol-heuristic: shared syntax identifies code spans; symbol bindings remain heuristic");
         if (facts.FrontMatter.State is MarkdownFrontMatterState.Invalid or MarkdownFrontMatterState.Unterminated or MarkdownFrontMatterState.Unknown)
             reasons.Add("front-matter-not-usable: no explicit symbol mapping was inferred from invalid/unknown YAML");
         if (catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope) reasons.Add(CatalogIncomplete);
@@ -187,6 +228,10 @@ public static class MarkdownSymbolResolver
             if (fragments.Any(s => s.End > rawText.Length)) throw new ArgumentException("Parser mapping is outside raw source.");
             HarnessRawSpan? covering = fragments.Length == 0 ? null : new(fragments.Min(s => s.Start),
                 fragments.Max(s => s.End) - fragments.Min(s => s.Start));
+            if (origin == MarkdownMentionOrigin.BodyText && covering is { } span
+                && precision is MarkdownMappingPrecision.Exact or MarkdownMappingPrecision.CoveringTokens
+                && fragments.All(fragment => fragment.Length > 0) && IsInlineCode(span))
+                origin = MarkdownMentionOrigin.InlineCode;
             var snippet = fragments.Length == 0 ? null : string.Concat(fragments.Select(s => rawText.Substring(s.Start, s.Length)));
             var mention = new MarkdownSymbolMention(LocalId(document.Id, hash, "mention", mentions.Count.ToString()),
                 owner, token, selector, origin is MarkdownMentionOrigin.ExplicitMetadata or MarkdownMentionOrigin.CodeFileLink
@@ -194,6 +239,23 @@ public static class MarkdownSymbolResolver
                 origin, selectedScope, new(facts.SourceId, facts.SourceVersion, hash, covering),
                 Array.AsReadOnly(fragments), precision, snippet, HarnessCertainty.Unresolved, null, Array.Empty<string>(), null);
             mentions.Add(Bind(mention, catalog));
+        }
+
+        bool IsInlineCode(HarnessRawSpan span)
+        {
+            var low = 0;
+            var high = inlineCodeStarts.Length;
+            while (low < high)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var middle = low + (high - low) / 2;
+                if (inlineCodeStarts[middle] <= span.Start)
+                    low = middle + 1;
+                else
+                    high = middle;
+            }
+            // A prefix maximum proves one containing span without joining adjacent spans.
+            return low > 0 && inlineCodeMaxEnds[low - 1] >= span.End;
         }
     }
 
@@ -203,7 +265,7 @@ public static class MarkdownSymbolResolver
     {
         ArgumentNullException.ThrowIfNull(previous);
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateCatalog(catalog, previous.WorkspaceId);
+        ValidateCatalog(catalog, previous.WorkspaceId, cancellationToken);
         HashSet<string>? affected = null;
         // Coverage applies to every mention, including confirmed ones outside the selected token changes.
         if (previous.CatalogCoverage == catalog.Graph.Coverage
@@ -293,7 +355,7 @@ public static class MarkdownSymbolResolver
         // Filter occurrences before deduplicating their logical identity; two TFMs are not two symbols.
         var ids = candidates.Select(s => s.NodeId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var incompleteCatalog = catalog.Graph.Coverage != HarnessCoverage.CompleteWithinScope;
-        var uncertain = incompleteCatalog || mention.Origin == MarkdownMentionOrigin.BodyText
+        var uncertain = incompleteCatalog || mention.Origin is MarkdownMentionOrigin.BodyText or MarkdownMentionOrigin.InlineCode
             || mention.Precision is MarkdownMappingPrecision.Unknown or MarkdownMappingPrecision.Partial
             || mention.RawFragments.Count == 0;
         var certainty = ids.Length == 0 ? HarnessCertainty.Unresolved
@@ -310,33 +372,74 @@ public static class MarkdownSymbolResolver
             && (scope.Namespace is null || symbol.Namespace == scope.Namespace
                 || symbol.Namespace?.StartsWith(scope.Namespace + ".", StringComparison.Ordinal) == true);
 
-    private static void ValidateCatalog(MarkdownSymbolCatalog catalog, string workspaceId)
+    private static void ValidateCatalog(MarkdownSymbolCatalog catalog, string workspaceId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(catalog.Symbols);
         HarnessGraphContract.ValidateHeader(catalog.Graph);
         if (catalog.Graph.WorkspaceId != workspaceId) throw new ArgumentException("Symbol catalog belongs to another workspace.");
-        var nodes = catalog.Graph.Nodes.Where(n => n.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol)
-            .Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+        cancellationToken.ThrowIfCancellationRequested();
+        var nodes = new HashSet<string>(StringComparer.Ordinal);
+        var nodeSources = new HashSet<(string NodeId, string? SourceId)>();
+        var aliasSources = new HashSet<string?>(StringComparer.Ordinal);
+        foreach (var node in catalog.Graph.Nodes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (node.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.ExternalSymbol) nodes.Add(node.Id);
+            nodeSources.Add((node.Id, node.Location?.SourceId));
+            if (node.Kind == HarnessNodeKind.SourceFile) aliasSources.Add(node.Location?.SourceId);
+        }
+        var variants = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var variant in catalog.Graph.Variants)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            variants.Add(variant.Id);
+        }
+        var occurrences = new HashSet<(string NodeId, string VariantId)>();
+        var occurrenceSources = new HashSet<(string NodeId, string? SourceId)>();
+        var variantSources = new HashSet<(string NodeId, string VariantId, string? SourceId)>();
+        foreach (var occurrence in catalog.Graph.SymbolOccurrences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            occurrences.Add((occurrence.LogicalSymbolId, occurrence.VariantId));
+            AddSource(occurrence, occurrence.Location?.SourceId);
+            if (occurrence.Declarations is not { } declarations) continue;
+            foreach (var declaration in declarations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                AddSource(occurrence, declaration.SourceId);
+            }
+        }
         foreach (var symbol in catalog.Symbols)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (symbol.NodeId is null || symbol.NodeId.Length != 69 || !symbol.NodeId.StartsWith("hsym_", StringComparison.Ordinal)
                 || symbol.NodeId.AsSpan(5).ContainsAnyExcept("0123456789abcdef") || !nodes.Contains(symbol.NodeId)
                 || string.IsNullOrWhiteSpace(symbol.FullName) || string.IsNullOrWhiteSpace(symbol.ShortName))
                 throw new ArgumentException("Catalog entries must identify real harness symbol nodes and explicit names.");
-            if (symbol.VariantId is not null && (!catalog.Graph.Variants.Any(v => v.Id == symbol.VariantId)
-                || !catalog.Graph.SymbolOccurrences.Any(o => o.LogicalSymbolId == symbol.NodeId && o.VariantId == symbol.VariantId)))
+            if (symbol.VariantId is not null && (!variants.Contains(symbol.VariantId)
+                || !occurrences.Contains((symbol.NodeId, symbol.VariantId))))
                 throw new ArgumentException("Catalog variant must identify an actual symbol occurrence.");
-            if (symbol.SourceId is not null && !catalog.Graph.Nodes.Any(n => n.Id == symbol.NodeId && n.Location?.SourceId == symbol.SourceId)
-                && !catalog.Graph.SymbolOccurrences.Any(o => o.LogicalSymbolId == symbol.NodeId
-                    && (symbol.VariantId is null || symbol.VariantId == o.VariantId)
-                    && (o.Location?.SourceId == symbol.SourceId || o.Declarations?.Any(d => d.SourceId == symbol.SourceId) == true)))
+            if (symbol.SourceId is not null && !nodeSources.Contains((symbol.NodeId, symbol.SourceId))
+                && !(symbol.VariantId is null ? occurrenceSources.Contains((symbol.NodeId, symbol.SourceId))
+                    : variantSources.Contains((symbol.NodeId, symbol.VariantId, symbol.SourceId))))
                 throw new ArgumentException("Catalog source must identify an actual symbol declaration.");
+            aliasSources.Add(symbol.SourceId);
         }
-        if (catalog.CodeFileAliases is not null && catalog.CodeFileAliases.Any(a => string.IsNullOrWhiteSpace(a.Key)
-            || string.IsNullOrWhiteSpace(a.Value) || (!catalog.Symbols.Any(s => s.SourceId == a.Value)
-                && !catalog.Graph.Nodes.Any(n => n.Kind == HarnessNodeKind.SourceFile && n.Location?.SourceId == a.Value))))
-            throw new ArgumentException("Code-file aliases must map exact shared targets to catalogued declaration source IDs.");
+        if (catalog.CodeFileAliases is not null)
+            foreach (var alias in catalog.CodeFileAliases)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(alias.Key) || string.IsNullOrWhiteSpace(alias.Value) || !aliasSources.Contains(alias.Value))
+                    throw new ArgumentException("Code-file aliases must map exact shared targets to catalogued declaration source IDs.");
+            }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        void AddSource(HarnessSymbolOccurrence occurrence, string? sourceId)
+        {
+            occurrenceSources.Add((occurrence.LogicalSymbolId, sourceId));
+            variantSources.Add((occurrence.LogicalSymbolId, occurrence.VariantId, sourceId));
+        }
     }
 
     private static MarkdownSymbolResolution Result(HarnessGraphEnvelope graph, string documentId,

@@ -2,6 +2,7 @@ namespace SharpDeps.Query;
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -13,6 +14,8 @@ public sealed class ExplorationService
     private readonly IQueryIndex index;
     private readonly QueryWorkspace? workspace;
     private readonly bool trusted;
+
+    public Func<CancellationToken, ExploreOwnerObservation>? OwnerStatusProvider { get; init; }
 
     public ExplorationService(IQueryIndex index, QueryWorkspace? workspace = null, bool isTrusted = false)
     {
@@ -30,24 +33,32 @@ public sealed class ExplorationService
         Validate(request);
         var clock = Stopwatch.StartNew();
         using var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
-        timer.CancelAfter(request.Budget!.MaxMilliseconds);
+        if (request.Budget!.MaxMilliseconds != 0) timer.CancelAfter(request.Budget.MaxMilliseconds);
         Run? run = null;
         try
         {
             timer.Token.ThrowIfCancellationRequested();
-            var saved = ExplorationSnapshotCache.Get(index.ReadSnapshot(timer.Token), timer.Token);
+            var saved = index is PinnedQueryIndex pinned ? pinned.PrepareExploration(timer.Token)
+                : ExplorationSnapshotCache.Get(index.ReadSnapshot(timer.Token), timer.Token);
             timer.Token.ThrowIfCancellationRequested();
             if (request.ProjectId is not null && request.VariantId is not null
                 && saved.saved.Graph.Variants.Any(v => v.Id == request.VariantId && v.ProjectId != request.ProjectId))
                 throw new ArgumentException("Project and variant scopes disagree.", nameof(request));
             run = new Run(saved, index, workspace, trusted, request, timer, clock, cancellationToken);
             run.Check();
+            if (request.ObserveOwner)
+            {
+                run.ObserveOwner(OwnerStatusProvider?.Invoke(timer.Token));
+                run.Check();
+            }
             if (request.Freshness == QueryFreshnessPolicy.Refresh)
                 run.Error("UPDATE_REQUIRED", "Request a trusted coordinator update and open a new reader.");
             else if (request.Freshness == QueryFreshnessPolicy.RequireFresh) run.Verify();
-            if (run.Errors.Count == 0 && run.Resolve())
+            if (run.Errors.Count == 0 && run.Resolve() && (request.PathTo is null || run.ResolvePathEndpoints()))
             {
                 run.Expand();
+                if (request.PathTo is not null) run.PrepareRetainedPath();
+                if (request.Format == ExploreFormat.Agent) run.PrepareAgentSummary();
                 run.ReadUnits();
                 if (request.Freshness == QueryFreshnessPolicy.RequireFresh && run.Errors.Count == 0) run.Verify();
             }
@@ -85,11 +96,15 @@ public sealed class ExplorationService
         static bool Text(string? value, int maximum) => value is null
             || value.Length <= maximum && !string.IsNullOrWhiteSpace(value) && !value.Any(char.IsControl);
         var budget = request.Budget!;
-        if (!Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query)
+        var literal = request.QueryKind == ExploreQueryKind.HttpGetLiteral;
+        if ((literal ? !HttpGetLiteral(request.Query) : !Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query))
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
-            || !Enum.IsDefined(request.Freshness) || budget.MaxNodes is < 1 or > 500
+            || request.PathTo is { } target && (literal || !Text(target, 128) || !IsOccurrenceIdentity(target.Trim()) || !IsOccurrenceIdentity(request.Query.Trim()))
+            || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy) || !Enum.IsDefined(request.QueryKind)
+            || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
-            || budget.MaxMilliseconds is < 10 or > 30000 || budget.MaxChars is < 2048 or > 1000000
+            || budget.MaxMilliseconds != 0 && (budget.MaxMilliseconds is < 10 or > 30000)
+            || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
             throw new ArgumentException("Invalid exploration arguments or budgets.", nameof(request));
         if (request.PathPrefix is { } prefix)
@@ -98,6 +113,18 @@ public sealed class ExplorationService
             catch (IndexStoreException error) { throw new ArgumentException("Invalid exploration path scope.", nameof(request), error); }
         }
     }
+
+    private static bool HttpGetLiteral(string? value)
+    {
+        if (value is null || value.Length > 1024 || value.Any(char.IsControl)) return false;
+        for (var index = 0; index < value.Length; index++)
+            if (char.IsSurrogate(value[index]) && (!char.IsHighSurrogate(value[index])
+                || ++index >= value.Length || !char.IsLowSurrogate(value[index]))) return false;
+        return true;
+    }
+
+    private static bool IsOccurrenceIdentity(string value) => value.Length == 69 && value.StartsWith("hocc_", StringComparison.Ordinal)
+        && !value.AsSpan(5).ContainsAnyExcept("0123456789abcdef");
 
     private static bool IsDocument(HarnessNode node) => node.Kind is HarnessNodeKind.Document or HarnessNodeKind.Section
         or HarnessNodeKind.FrontMatter or HarnessNodeKind.CodeFence or HarnessNodeKind.LinkTarget or HarnessNodeKind.SymbolMention;
@@ -110,7 +137,14 @@ public sealed class ExplorationService
     private sealed record Pending(Selected Selection, HarnessLocation Location, string Reason,
         int? RequiredChars = null, int? RequiredBytes = null, int SourcePriority = 4);
     private sealed record Relation(HarnessEdge Edge, Selected From, Selected To, bool OutsideScope);
-    private sealed record Match(HarnessNode Node, int Score, bool Exact, bool Qualified, bool PathMatch = false);
+    private enum MatchTier { Identity, ExactName, ExactPath, NameComponents, SignatureComponents, IndexHit, Substring }
+    private sealed record Match(HarnessNode Node, MatchTier Tier, bool Exact, bool Qualified, bool PathMatch = false,
+        uint MatchedTerms = 0, uint NameTerms = 0);
+    private sealed record AgentDetail(Selected Root, Selected? Member = null, HarnessLocation? Location = null,
+        int? SelectedMembers = null, int? CallerSymbols = null, int? CallerOccurrences = null, int? SavedCallEdges = null);
+    private sealed record AgentSummary(AgentDetail[] Rows, int Roots, int Selected, int Relations,
+        int RelationKinds, int Resolved, int Candidate, int Unresolved);
+    private sealed record RetainedPath(string Status, string Reason, HarnessEdge[] Hops, bool Incomplete);
 
     private sealed class Run
     {
@@ -126,21 +160,32 @@ public sealed class ExplorationService
         private readonly List<Relation> relations = [];
         private readonly List<Selected> roots = [];
         private readonly Dictionary<string, Match> sourceMatches = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, HarnessEdge[]> httpGetMatches = new(StringComparer.Ordinal);
         private readonly HashSet<string> sourcePaths = new(StringComparer.Ordinal);
         private readonly HashSet<string> bodySelections = new(StringComparer.Ordinal);
         private readonly List<Pending> pending = [];
         private readonly List<Pending> allCandidates = [];
         private readonly HashSet<string> reasons = new(StringComparer.Ordinal);
         private readonly List<(string Project, string Variant)> choices = [];
+        private readonly List<(string Project, string Variant)> alternativeScopes = [];
         private readonly List<Match> symbolChoices = [];
+        private string[] searchTerms = [];
+        private string? scopeDecision;
+        private int excludedScopes;
+        private AgentSummary? agentSummary;
+        private HarnessSymbolOccurrence? pathSource;
+        private HarnessSymbolOccurrence? pathTarget;
+        private RetainedPath? retainedPath;
         private string? project;
         private string? variant;
         private int relationDisplayLimit = 8;
         private int omissionDisplayLimit = 8;
         private string? cachedSourceId;
         private string? cachedSourceText;
+        private readonly Dictionary<string, string> storedBodies;
         private bool cancelled;
         private QueryFreshness freshness = new("unverified", null, [], ["complete inventory/configuration not checked"]);
+        private ExploreOwnerObservation? ownerObservation;
         public List<QueryIssue> Errors { get; } = [];
         public List<ExploreUnit> Units { get; } = [];
 
@@ -149,13 +194,17 @@ public sealed class ExplorationService
         {
             this.owner = owner; this.index = index; this.workspace = workspace; this.trusted = trusted;
             this.request = request; originalToken = token; this.timer = timer; this.clock = clock;
+            storedBodies = owner.saved.StoredGeneratedBodies.Select(b => (b.SourceId, b.Body))
+                .Concat(owner.saved.StoredPackageBodies.Select(b => (b.SourceId, b.Body)))
+                .ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
             project = request.ProjectId; variant = request.VariantId;
         }
 
         public void Check()
         {
             timer.Token.ThrowIfCancellationRequested();
-            if (clock.ElapsedMilliseconds > request.Budget!.MaxMilliseconds) throw new OperationCanceledException();
+            if (request.Budget!.MaxMilliseconds != 0 && clock.ElapsedMilliseconds > request.Budget.MaxMilliseconds)
+                throw new OperationCanceledException();
         }
         public void Error(string code, string message, string? path = null)
         {
@@ -179,13 +228,34 @@ public sealed class ExplorationService
                 Error("FRESHNESS_REQUIREMENT_NOT_MET", "Wait for the trusted owner to publish a current generation, then reopen the reader.");
         }
 
+        public void ObserveOwner(ExploreOwnerObservation? observation)
+        {
+            ownerObservation = new("unavailable");
+            if (observation is null || observation.State is not ("absent" or "unavailable" or "idle" or "updating" or "dirty" or "degraded" or "stopping")) return;
+            var noIdentity = observation.WorkspaceId is null && observation.SnapshotId is null && observation.Generation is null;
+            var identity = observation.WorkspaceId is { Length: 35 } workspaceId && workspaceId.StartsWith("hw_", StringComparison.Ordinal)
+                && !workspaceId.AsSpan(3).ContainsAnyExcept("0123456789abcdef")
+                && observation.SnapshotId is { Length: > 0 and <= 2048 } snapshotId && !string.IsNullOrWhiteSpace(snapshotId) && snapshotId == snapshotId.Trim()
+                && !snapshotId.Any(char.IsControl) && observation.Generation is >= 0;
+            var noRevision = observation.Revision is null && observation.DesiredRevision is null;
+            var revision = observation.Revision is { } current && current >= 0
+                && observation.DesiredRevision is { } desired && desired >= current;
+            if ((!noIdentity && !identity) || (!noRevision && !revision)) return;
+            if (observation.State is "absent" or "unavailable")
+            {
+                if (noIdentity && noRevision) ownerObservation = observation;
+                return;
+            }
+            ownerObservation = observation;
+        }
+
         private bool PathAllowed(HarnessLocation location) => request.PathPrefix is not { } prefix
             || owner.files.TryGetValue(location.SourceId, out var file)
                 && (file.RelativePath == prefix || file.RelativePath.StartsWith(prefix.TrimEnd('/') + "/", StringComparison.Ordinal));
 
         private bool NodeAllowed(HarnessNode node, string? selectedVariant = null)
         {
-            if (IsDocument(node) && project is not null && !DocumentScopeProven(node, selectedVariant)) return false;
+            if (IsDocument(node) && project is not null && !DocumentScopeProven(node, selectedVariant, project)) return false;
             if (project is not null && !IsDocument(node) && owner.Project(node) != project) return false;
             if (selectedVariant is not null && !IsDocument(node)
                 && !(owner.bySymbol.GetValueOrDefault(node.Id) ?? []).Any(o => o.VariantId == selectedVariant)) return false;
@@ -199,7 +269,7 @@ public sealed class ExplorationService
             return node;
         }
 
-        private bool DocumentScopeProven(HarnessNode node, string? selectedVariant)
+        private bool DocumentScopeProven(HarnessNode node, string? selectedVariant, string selectedProject)
         {
             var section = DocumentSection(node).Id;
             foreach (var edge in owner.saved.Graph.Edges)
@@ -213,7 +283,7 @@ public sealed class ExplorationService
                 else if (IsDocument(to) && DocumentSection(to).Id == section && !IsDocument(from))
                 { code = from; occurrenceId = edge.SourceOccurrenceId; }
                 else continue;
-                if (owner.Project(code) != project) continue;
+                if (owner.Project(code) != selectedProject) continue;
                 if (selectedVariant is null) return true;
                 if (occurrenceId is not null && owner.occurrences[occurrenceId].VariantId == selectedVariant) return true;
                 if (edge.VariantId == selectedVariant) return true;
@@ -232,8 +302,14 @@ public sealed class ExplorationService
                 if (scope is null) { Error("SCOPE_NOT_FOUND", "The variant is not in this selected index."); return false; }
                 project ??= scope.ProjectId;
             }
+            if (request.QueryKind == ExploreQueryKind.HttpGetLiteral) return ResolveHttpGet();
             var matches = Search();
-            if (Errors.Count != 0 || choices.Count > 1) return false;
+            if (Errors.Count != 0) return false;
+            if (choices.Count > 1)
+            {
+                if (request.ScopePolicy == ExploreScopePolicy.PreferDebug) scopeDecision = "ambiguous-explicit-occurrences";
+                return false;
+            }
             if (matches.Count == 0)
             { Error("SYMBOL_NOT_FOUND", "No match in the selected index; try a qualified name, exact identity or saved file path."); return false; }
             foreach (var match in matches.Where(m => !IsDocument(m.Node)))
@@ -247,9 +323,20 @@ public sealed class ExplorationService
                 }
             var tuples = choices.Distinct().OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Variant, StringComparer.Ordinal).ToArray();
             choices.Clear(); choices.AddRange(tuples);
+            if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && choices.Count > 0 && !TryPreferScope())
+            {
+                if (Errors.Count == 0) reasons.Add("SCOPE_AMBIGUOUS");
+                return false;
+            }
             if (choices.Count > 1) { reasons.Add("SCOPE_AMBIGUOUS"); return false; }
-            if (choices.Count == 1) { project = choices[0].Project; variant = choices[0].Variant; choices.Clear(); }
+            if (choices.Count == 1)
+            {
+                project = choices[0].Project; variant = choices[0].Variant; choices.Clear();
+            }
+            if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && scopeDecision is null && matches.All(match => IsDocument(match.Node)))
+                scopeDecision = "no-code-scope";
             matches = matches.Where(m => NodeAllowed(m.Node, variant)).ToList();
+            matches = OrderMatches(matches);
             if (Terms(request.Query).Length == 1 && matches.Where(m => m.Exact).ToArray() is { Length: > 1 } exact)
             {
                 var families = exact.Select(m => m.Node.Kind == HarnessNodeKind.Member ? m.Node.ParentId
@@ -269,17 +356,104 @@ public sealed class ExplorationService
             return roots.Count != 0;
         }
 
-        private static string ShortName(string name)
+        private bool ResolveHttpGet()
         {
-            var depth = 0; var start = 0;
-            for (var i = 0; i < name.Length; i++)
+            var matches = new Dictionary<string, List<HarnessEdge>>(StringComparer.Ordinal);
+            foreach (var edge in owner.GetHttpGetDeclarations(request.Query, timer.Token))
             {
-                if (name[i] is '<' or '[' or '(') depth++;
-                else if (name[i] is '>' or ']' or ')') depth--;
-                else if (name[i] == '.' && depth == 0) start = i + 1;
+                Check();
+                var occurrence = owner.occurrences[edge.SourceOccurrenceId!];
+                var scope = owner.saved.Graph.Variants.Single(value => value.Id == occurrence.VariantId);
+                if (project is not null && scope.ProjectId != project || variant is not null && scope.Id != variant
+                    || edge.Evidence is not { } evidence || !PathAllowed(evidence)) continue;
+                if (!matches.TryGetValue(occurrence.Id, out var sites)) matches.Add(occurrence.Id, sites = []);
+                sites.Add(edge);
+                if (!choices.Contains((scope.ProjectId, scope.Id))) choices.Add((scope.ProjectId, scope.Id));
             }
-            return name[start..];
+            if (matches.Count == 0)
+            {
+                Error("HTTP_GET_DECLARATION_NOT_FOUND", "No exact captured HttpGet fragment in the selected saved view; missing or omitted metadata is not route absence.");
+                return false;
+            }
+            choices.Sort((left, right) =>
+            {
+                var order = StringComparer.Ordinal.Compare(left.Project, right.Project);
+                return order != 0 ? order : StringComparer.Ordinal.Compare(left.Variant, right.Variant);
+            });
+            if (request.ScopePolicy == ExploreScopePolicy.PreferDebug && !TryPreferScope())
+            { reasons.Add("SCOPE_AMBIGUOUS"); return false; }
+            if (choices.Count > 1) { reasons.Add("SCOPE_AMBIGUOUS"); return false; }
+            if (choices.Count == 1)
+            { project = choices[0].Project; variant = choices[0].Variant; choices.Clear(); }
+            foreach (var (identity, sites) in matches.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                Check();
+                var occurrence = owner.occurrences[identity];
+                if (occurrence.VariantId != variant) continue;
+                var node = owner.nodes[occurrence.LogicalSymbolId];
+                var item = Select(node, occurrence.VariantId, 0, "requested", HarnessCertainty.Resolved, true);
+                if (item is null) continue;
+                roots.Add(item);
+                httpGetMatches.Add(item.Identity, sites.ToArray());
+                sourceMatches[node.Id] = new(node, MatchTier.ExactName, true, true);
+            }
+            return roots.Count != 0;
         }
+
+        private bool TryPreferScope()
+        {
+            if (request.ScopePolicy != ExploreScopePolicy.PreferDebug) return false;
+            var identities = (request.QueryKind == ExploreQueryKind.Symbol ? Terms(request.Query) : Array.Empty<string>()).Select(term => owner.occurrences.TryGetValue(term, out var occurrence)
+                ? owner.nodes[occurrence.LogicalSymbolId] : owner.nodes.GetValueOrDefault(term))
+                .OfType<HarnessNode>().DistinctBy(node => node.Id).ToArray();
+            if (identities.Length > 0)
+            {
+                var count = choices.Count;
+                choices.RemoveAll(choice => identities.Any(node => !IdentityAllowsScope(node, choice)));
+                excludedScopes = count - choices.Count;
+                if (choices.Count == 0)
+                {
+                    scopeDecision = "incompatible-explicit-identities";
+                    Error("SYMBOL_OUTSIDE_SCOPE", "No matching saved scope contains all explicit identities within the supplied path.");
+                    return false;
+                }
+            }
+            if (choices.Count == 1)
+            {
+                project = choices[0].Project; variant = choices[0].Variant; choices.Clear();
+                scopeDecision = request.VariantId is not null ? "explicit-variant"
+                    : request.QueryKind == ExploreQueryKind.Symbol && Terms(request.Query).Any(owner.occurrences.ContainsKey) ? "explicit-occurrence"
+                    : excludedScopes > 0 ? "selected-by-explicit-identities" : "unique-matching-scope";
+                return true;
+            }
+            if (choices.Any(choice => choice.Project != choices[0].Project))
+            { scopeDecision = "ambiguous-multiple-projects"; return false; }
+            var candidateIds = choices.Select(choice => choice.Variant).ToHashSet(StringComparer.Ordinal);
+            HarnessVariant? preferred = null;
+            foreach (var candidate in owner.saved.Graph.Variants)
+            {
+                Check();
+                if (!candidateIds.Contains(candidate.Id) || !candidate.Configuration.Equals("Debug", StringComparison.OrdinalIgnoreCase)) continue;
+                if (preferred is not null) { scopeDecision = "ambiguous-multiple-debug-variants"; return false; }
+                preferred = candidate;
+            }
+            if (preferred is null) { scopeDecision = "ambiguous-no-debug-variant"; return false; }
+            project = preferred.ProjectId; variant = preferred.Id;
+            alternativeScopes.AddRange(choices.Where(choice => choice.Variant != variant));
+            choices.Clear();
+            scopeDecision = "selected-unique-saved-debug";
+            return true;
+        }
+
+        private bool IdentityAllowsScope(HarnessNode node, (string Project, string Variant) choice)
+        {
+            Check();
+            if (IsDocument(node))
+                return DocumentScopeProven(node, choice.Variant, choice.Project)
+                    && (request.PathPrefix is null || owner.Locations(node, choice.Variant).Any(PathAllowed));
+            return owner.Project(node) == choice.Project && NodeAllowed(node, choice.Variant);
+        }
+
         private static string[] Terms(string query) => Regex.Matches(query,
                 @"[\p{L}\p{N}_@][\p{L}\p{N}_@`./\\:+<>,\[\]]*", RegexOptions.CultureInvariant)
             .Select(m => m.Value.Replace('\\', '/').TrimEnd('.', ',', ':')).Where(t => t.Length != 0)
@@ -289,14 +463,24 @@ public sealed class ExplorationService
         {
             var query = request.Query.Trim();
             var wholeIdentity = owner.occurrences.ContainsKey(query) || owner.nodes.ContainsKey(query);
-            string[] terms = wholeIdentity ? [query] : Terms(query);
+            var normalized = query.Replace('\\', '/');
+            var literalStarPath = query.Contains('*') && (owner.savedPaths.Contains(normalized) || PathTerm(normalized));
+            string[] terms = wholeIdentity ? [query] : literalStarPath ? [normalized] : Terms(query);
             if (!wholeIdentity && !terms.Any(term => owner.occurrences.ContainsKey(term) || owner.nodes.ContainsKey(term) || IsSavedIdentity(term)))
             {
-                var literal = owner.saved.Graph.Nodes.Where(n => NodeAllowed(n, variant)
-                    && (n.Name == query || owner.Label(n) == query || n.Signature == query)).Select(n => new Match(n, 10000, true, true)).ToList();
-                if (literal.Count > 0) return literal;
+                var literal = new List<Match>();
+                foreach (var node in owner.names.GetValueOrDefault(query) ?? [])
+                {
+                    Check();
+                    if ((node.Name == query || owner.search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
+                        literal.Add(new(node, MatchTier.ExactName, true, true, MatchedTerms: 1,
+                            NameTerms: node.Name == query || owner.search[node.Id].Label == query ? 1u : 0u));
+                }
+                if (literal.Count > 0) { searchTerms = [query]; return literal; }
             }
+            if (query.Contains('*') && !literalStarPath) return SearchWildcard(query);
             if (terms.Length > 32) throw new ArgumentException("Explore accepts at most thirty-two distinct terms.");
+            searchTerms = terms;
             var occurrenceScopes = new HashSet<(string Project, string Variant)>();
             foreach (var term in terms)
             {
@@ -326,46 +510,62 @@ public sealed class ExplorationService
                 variant = scope.Variant;
             }
             var found = new Dictionary<string, Match>(StringComparer.Ordinal);
-            var pathTerms = terms.Where(term => term.Contains('/') || term.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                || term.EndsWith(".md", StringComparison.OrdinalIgnoreCase)).ToHashSet(StringComparer.Ordinal);
+            var pathTerms = terms.Where(PathTerm).ToHashSet(StringComparer.Ordinal);
             sourcePaths.UnionWith(pathTerms);
-            foreach (var term in terms)
+            for (var termIndex = 0; termIndex < terms.Length; termIndex++)
             {
                 Check();
+                var term = terms[termIndex];
+                var bit = 1u << termIndex;
                 var exactNode = owner.occurrences.TryGetValue(term, out var occurrence)
                     ? owner.nodes[occurrence.LogicalSymbolId] : owner.nodes.GetValueOrDefault(term);
                 if (exactNode is not null)
                 {
                     if (!NodeAllowed(exactNode, variant))
                     { Error("SYMBOL_OUTSIDE_SCOPE", "An explicitly requested identity is outside the supplied project, variant or path scope."); return []; }
-                    found[exactNode.Id] = new(exactNode, 10000, true, true, found.GetValueOrDefault(exactNode.Id)?.PathMatch == true);
+                    AddMatch(found, exactNode, MatchTier.Identity, true, true, false, bit, false);
                     continue;
                 }
-                var hits = term.Length <= 128
+                var hits = term.Length <= 128 && !term.Contains('*')
                     ? index.Search(term, 128, timer.Token).Select(h => h.NodeId).ToHashSet(StringComparer.Ordinal)
                     : new HashSet<string>(StringComparer.Ordinal);
-                foreach (var node in owner.saved.Graph.Nodes)
+                var components = ExplorationSnapshot.Components(term, timer.Token);
+                var candidates = new HashSet<string>(hits, StringComparer.Ordinal);
+                foreach (var node in owner.names.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                foreach (var component in components)
+                    foreach (var node in owner.words.GetValueOrDefault(component) ?? []) { Check(); candidates.Add(node.Id); }
+                if (pathTerms.Contains(term))
+                    foreach (var node in owner.paths.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                foreach (var id in candidates)
                 {
                     Check();
-                    if (node.Kind is not (HarnessNodeKind.Type or HarnessNodeKind.Member or HarnessNodeKind.Section or HarnessNodeKind.Document)
-                        || !NodeAllowed(node, variant)) continue;
-                    var label = owner.Label(node);
-                    var simple = ShortName(node.Name);
-                    var baseName = Regex.Replace(simple, "[<`].*$", "", RegexOptions.CultureInvariant);
-                    var exact = term == node.Name || term == simple || term == baseName || term == label || term == node.Signature;
-                    var qualified = term.Contains('.') && term == label || term == node.Signature;
+                    if (!owner.search.TryGetValue(id, out var metadata) || !Searchable(metadata.Node) || !NodeAllowed(metadata.Node, variant)) continue;
+                    var node = metadata.Node;
+                    var exact = term == node.Name || term == metadata.SimpleName || term == metadata.BaseName || term == metadata.Label || term == node.Signature;
+                    var qualified = term.Contains('.') && term == metadata.Label || term == node.Signature;
                     var path = pathTerms.Contains(term) && owner.Locations(node, variant).Any(l =>
                         owner.files.TryGetValue(l.SourceId, out var file) && (file.RelativePath == term || Path.GetFileName(file.RelativePath) == term));
-                    var score = exact ? 100 : path ? 90 : hits.Contains(node.Id) ? 10 : label.Contains(term, StringComparison.OrdinalIgnoreCase) ? 5 : 0;
-                    if (score == 0) continue;
-                    var previous = found.GetValueOrDefault(node.Id);
-                    if (previous is { Score: >= 10000 })
-                    {
-                        if (path && !previous.PathMatch) found[node.Id] = previous with { PathMatch = true };
-                        continue;
-                    }
-                    found[node.Id] = new(node, score + (previous?.Score ?? 0), exact || previous?.Exact == true,
-                        qualified || previous?.Qualified == true, path || previous?.PathMatch == true);
+                    var name = metadata.Aliases.Any(alias => alias.Equals(term, StringComparison.OrdinalIgnoreCase))
+                        || ContainsWords(metadata.NameWords, components);
+                    var signature = ContainsWords(metadata.SignatureWords, components);
+                    MatchTier? tier = exact ? MatchTier.ExactName : path ? MatchTier.ExactPath : name ? MatchTier.NameComponents
+                        : signature ? MatchTier.SignatureComponents : hits.Contains(id) ? MatchTier.IndexHit : null;
+                    if (tier is { } matched) AddMatch(found, node, matched, exact, qualified, path, bit, name);
+                }
+            }
+            foreach (var metadata in owner.search.Values)
+            {
+                Check();
+                if (!Searchable(metadata.Node)) continue;
+                var allowed = false;
+                for (var termIndex = 0; termIndex < terms.Length; termIndex++)
+                {
+                    var term = terms[termIndex];
+                    if (owner.nodes.ContainsKey(term) || owner.occurrences.ContainsKey(term)
+                        || !metadata.Label.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!allowed && !NodeAllowed(metadata.Node, variant)) break;
+                    allowed = true;
+                    AddMatch(found, metadata.Node, MatchTier.Substring, false, false, false, 1u << termIndex, false);
                 }
             }
             var matches = found.Values.ToList();
@@ -374,10 +574,116 @@ public sealed class ExplorationService
                 matches.RemoveAll(m => m.Node.Kind == HarnessNodeKind.Member && !m.Qualified && m.Node.ParentId is { } parent
                     && !anchors.Contains(parent) && matches.Any(other => other.Node.Kind == HarnessNodeKind.Member && other.Node.Name == m.Node.Name
                         && other.Node.ParentId is { } otherParent && anchors.Contains(otherParent)));
-            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && m.Score < 90);
-            return matches.OrderByDescending(m => m.Score).ThenBy(m => owner.Label(m.Node), StringComparer.Ordinal)
-                .ThenBy(m => m.Node.Id, StringComparer.Ordinal).ToList();
+            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && !m.PathMatch);
+            return matches;
         }
+
+        private static bool Searchable(HarnessNode node) => node.Kind is HarnessNodeKind.Type or HarnessNodeKind.Member
+            or HarnessNodeKind.Section or HarnessNodeKind.Document;
+
+        private static bool PathTerm(string term) => term.Contains('/') || term.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            || term.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+        private bool ContainsWords(string[] source, string[] term)
+        {
+            if (term.Length == 0) return false;
+            for (var start = 0; start <= source.Length - term.Length; start++)
+            {
+                Check();
+                var index = 0;
+                while (index < term.Length && source[start + index].Equals(term[index], StringComparison.OrdinalIgnoreCase)) index++;
+                if (index == term.Length) return true;
+            }
+            return false;
+        }
+
+        private static void AddMatch(Dictionary<string, Match> found, HarnessNode node, MatchTier tier, bool exact,
+            bool qualified, bool path, uint term, bool name)
+        {
+            var previous = found.GetValueOrDefault(node.Id);
+            found[node.Id] = new(node, previous is not null && previous.Tier.CompareTo(tier) < 0 ? previous.Tier : tier,
+                exact || previous?.Exact == true, qualified || previous?.Qualified == true, path || previous?.PathMatch == true,
+                term | (previous?.MatchedTerms ?? 0), (name ? term : 0) | (previous?.NameTerms ?? 0));
+        }
+
+        private List<Match> SearchWildcard(string query)
+        {
+            var prefix = query.EndsWith('*');
+            var literal = prefix ? query[..^1] : query.StartsWith('*') ? query[1..] : "";
+            var identifier = literal.StartsWith('@') ? literal[1..] : literal;
+            if (query.Count(character => character == '*') != 1 || identifier.Length < 2
+                || !(char.IsLetter(identifier[0]) || identifier[0] == '_')
+                || identifier.Any(character => !char.IsLetterOrDigit(character) && character != '_')
+                || IsSavedIdentity(identifier) || owner.nodes.ContainsKey(identifier) || owner.occurrences.ContainsKey(identifier))
+                throw new ArgumentException("Explore name wildcards require one leading or trailing star and at least two identifier characters.");
+            searchTerms = [identifier];
+            var matches = new List<Match>();
+            foreach (var metadata in owner.search.Values)
+            {
+                Check();
+                if (!Searchable(metadata.Node) || !metadata.Aliases.Any(alias => prefix
+                    ? alias.StartsWith(identifier, StringComparison.OrdinalIgnoreCase) : alias.EndsWith(identifier, StringComparison.OrdinalIgnoreCase))
+                    || !NodeAllowed(metadata.Node, variant)) continue;
+                matches.Add(new(metadata.Node, MatchTier.NameComponents, false, false, MatchedTerms: 1, NameTerms: 1));
+            }
+            return matches;
+        }
+
+        private List<Match> OrderMatches(List<Match> matches)
+        {
+            var terms = searchTerms.Select(term => ExplorationSnapshot.Components(term, timer.Token)).ToArray();
+            var ranked = new List<(Match Match, int Context, int Penalty, string Path, int Start)>();
+            foreach (var match in matches)
+            {
+                Check();
+                var metadata = owner.search[match.Node.Id];
+                uint context = 0;
+                for (var index = 0; index < terms.Length; index++)
+                    if (ContainsWords(metadata.ContextWords, terms[index])) context |= 1u << index;
+                var path = ""; var start = int.MaxValue; var known = false; var unknown = false; var deprioritized = true;
+                if (variant is not null)
+                    foreach (var location in owner.Locations(match.Node, variant))
+                    {
+                        Check();
+                        if (!PathAllowed(location)) continue;
+                        if (!owner.files.TryGetValue(location.SourceId, out var file)) { unknown = true; continue; }
+                        known = true;
+                        deprioritized &= DeprioritizedPath(file.RelativePath);
+                        var position = location.RawSpan?.Start ?? int.MaxValue;
+                        if (path.Length == 0 || StringComparer.Ordinal.Compare(file.RelativePath, path) < 0
+                            || file.RelativePath == path && position < start) { path = file.RelativePath; start = position; }
+                        var components = ExplorationSnapshot.Components(file.RelativePath, timer.Token);
+                        for (var index = 0; index < terms.Length; index++)
+                            if (ContainsWords(components, terms[index])) context |= 1u << index;
+                    }
+                ranked.Add((match, BitOperations.PopCount(context),
+                    !match.Exact && !match.PathMatch && known && !unknown && deprioritized ? 1 : 0, path, start));
+            }
+            try
+            {
+                ranked.Sort((left, right) =>
+                {
+                    Check();
+                    var order = left.Match.Tier.CompareTo(right.Match.Tier);
+                    if (order == 0) order = BitOperations.PopCount(right.Match.MatchedTerms).CompareTo(BitOperations.PopCount(left.Match.MatchedTerms));
+                    if (order == 0) order = BitOperations.PopCount(right.Match.NameTerms).CompareTo(BitOperations.PopCount(left.Match.NameTerms));
+                    if (order == 0) order = right.Context.CompareTo(left.Context);
+                    if (order == 0) order = left.Penalty.CompareTo(right.Penalty);
+                    if (order == 0) order = StringComparer.Ordinal.Compare(left.Path, right.Path);
+                    if (order == 0) order = left.Start.CompareTo(right.Start);
+                    if (order == 0) order = StringComparer.Ordinal.Compare(owner.search[left.Match.Node.Id].Label, owner.search[right.Match.Node.Id].Label);
+                    return order != 0 ? order : StringComparer.Ordinal.Compare(left.Match.Node.Id, right.Match.Node.Id);
+                });
+            }
+            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
+            { throw new OperationCanceledException("Search ranking was cancelled.", error, timer.Token); }
+            return ranked.Select(item => item.Match).ToList();
+        }
+
+        private static bool DeprioritizedPath(string path) => path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            || path.Split('/').Any(part => part.Equals("tests", StringComparison.OrdinalIgnoreCase)
+                || part.Equals("samples", StringComparison.OrdinalIgnoreCase) || part.Equals("benchmarks", StringComparison.OrdinalIgnoreCase)
+                || part.Equals("obj", StringComparison.OrdinalIgnoreCase));
 
         private static bool IsSavedIdentity(string value) => value.Length == 69
                 && (value.StartsWith("hsym_", StringComparison.Ordinal) || value.StartsWith("hocc_", StringComparison.Ordinal)
@@ -475,7 +781,185 @@ public sealed class ExplorationService
             }
         }
 
+        public bool ResolvePathEndpoints()
+        {
+            Check();
+            if (!owner.occurrences.TryGetValue(request.Query.Trim(), out var source)
+                || !owner.occurrences.TryGetValue(request.PathTo!.Trim(), out var target))
+            { Error("SYMBOL_NOT_FOUND", "A requested path occurrence is not in the selected snapshot."); return false; }
+            if (!PathOccurrenceAllowed(source) || !PathOccurrenceAllowed(target))
+            { Error("SYMBOL_OUTSIDE_SCOPE", "Path endpoints must share the selected project, variant and path scope."); return false; }
+            pathSource = source; pathTarget = target;
+            return true;
+        }
+
+        private bool PathOccurrenceAllowed(HarnessSymbolOccurrence occurrence)
+        {
+            if (occurrence.VariantId != variant || owner.Project(owner.nodes[occurrence.LogicalSymbolId]) != project) return false;
+            if (request.PathPrefix is null) return true;
+            foreach (var location in occurrence.Declarations ?? (occurrence.Location is { } primary ? [primary] : []))
+            {
+                Check();
+                if (PathAllowed(location)) return true;
+            }
+            return false;
+        }
+
+        private string? PathCollectionCutoff()
+            => owner.saved.Graph.Coverage != HarnessCoverage.CompleteWithinScope ? "coverage"
+                : reasons.Contains("NODE_LIMIT") ? "NODE_LIMIT" : reasons.Contains("EDGE_LIMIT") ? "EDGE_LIMIT"
+                : reasons.Contains("DEPTH_LIMIT") ? "DEPTH_LIMIT" : reasons.Contains("SEARCH_CANDIDATE_LIMIT") ? "SEARCH_CANDIDATE_LIMIT" : null;
+
+        public void PrepareRetainedPath()
+        {
+            Check();
+            var source = pathSource!; var target = pathTarget!;
+            var cutoff = PathCollectionCutoff();
+            retainedPath = new("incomplete", "search-not-complete", [], true);
+            if (source.Id == target.Id)
+            { retainedPath = new("found", cutoff is null ? "retained-witness" : "retained-witness/" + cutoff, [], cutoff is not null); return; }
+            var outgoing = new Dictionary<string, List<HarnessEdge>>(StringComparer.Ordinal);
+            foreach (var relation in relations.OrderBy(relation => relation.Edge.Id, StringComparer.Ordinal))
+            {
+                Check();
+                var edge = relation.Edge;
+                if (edge.Kind is not ("calls" or "constructs") || edge.Certainty != HarnessCertainty.Resolved || relation.OutsideScope
+                    || relation.From.Occurrence is not { } from || relation.To.Occurrence is not { } to
+                    || edge.SourceOccurrenceId != from.Id || edge.TargetOccurrenceId != to.Id
+                    || !PathOccurrenceAllowed(from) || !PathOccurrenceAllowed(to)
+                    || request.PathPrefix is not null && (edge.Evidence is null || !PathAllowed(edge.Evidence))) continue;
+                if (!outgoing.TryGetValue(from.Id, out var steps)) outgoing.Add(from.Id, steps = []);
+                steps.Add(edge);
+            }
+            var visited = new HashSet<string>(StringComparer.Ordinal) { source.Id };
+            var previous = new Dictionary<string, (string From, HarnessEdge Edge)>(StringComparer.Ordinal);
+            var queue = new Queue<(string Id, int Depth)>();
+            queue.Enqueue((source.Id, 0));
+            var inspected = 0;
+            while (queue.TryDequeue(out var current))
+            {
+                Check();
+                if (!outgoing.TryGetValue(current.Id, out var steps)) continue;
+                if (current.Depth >= request.Budget!.MaxDepth)
+                {
+                    if (steps.Any(edge => !visited.Contains(edge.TargetOccurrenceId!)))
+                    { retainedPath = new("incomplete", "depth-budget", [], true); return; }
+                    continue;
+                }
+                foreach (var edge in steps)
+                {
+                    Check();
+                    if (++inspected > request.Budget.MaxEdges)
+                    { retainedPath = new("incomplete", "edge-budget", [], true); return; }
+                    var next = edge.TargetOccurrenceId!;
+                    if (visited.Contains(next)) continue;
+                    if (visited.Count >= request.Budget.MaxNodes)
+                    { retainedPath = new("incomplete", "node-budget", [], true); return; }
+                    visited.Add(next); previous.Add(next, (current.Id, edge));
+                    if (next == target.Id)
+                    {
+                        var hops = new List<HarnessEdge>();
+                        for (var cursor = next; cursor != source.Id; cursor = previous[cursor].From)
+                        { Check(); hops.Add(previous[cursor].Edge); }
+                        hops.Reverse();
+                        retainedPath = new("found", cutoff is null ? "retained-witness" : "retained-witness/" + cutoff, hops.ToArray(), cutoff is not null);
+                        return;
+                    }
+                    queue.Enqueue((next, current.Depth + 1));
+                }
+            }
+            retainedPath = cutoff is null ? new("no-witness", "retained-eligible-exhausted", [], false)
+                : new("incomplete", cutoff, [], true);
+        }
+
         private static bool BodyEdge(string kind) => kind is "calls" or "constructs" or "reads" or "writes" or "references_member";
+
+        private static string RegistrationRoleNote(string kind)
+            => kind is "registers_scoped_service" or "registers_scoped_implementation"
+                ? " declared role only; counterpart may be omitted; no runtime resolution" : "";
+
+        private static string ExtensionBindingNote(HarnessExtensionBinding? binding)
+            => binding is null ? "" : (binding.State == HarnessExtensionBindingState.Saved
+                ? $" extension-binding=Saved receiver-type={JsonSerializer.Serialize(binding.ReceiverTypeDisplay)} constructed-method={JsonSerializer.Serialize(binding.ConstructedMethodDisplay)}"
+                : $" extension-binding=Omitted reason={binding.OmissionReason}")
+                + "; compile-time labels only; not runtime dispatch or type identities";
+
+        private static string HttpGetDeclarationNote(HarnessHttpGetDeclaration? declaration, string source)
+            => declaration is null ? "" : (declaration.State == HarnessHttpGetDeclarationState.Saved
+                ? FormattableString.Invariant($" declared-http-get=Saved template={JsonSerializer.Serialize(declaration.Template)} literal={source} literalSpan={declaration.TemplateSpan!.Value.Start}:{declaration.TemplateSpan!.Value.Length}")
+                : $" declared-http-get=Omitted reason={declaration.OmissionReason}")
+                + "; declaration fragment only; controller prefixes/tokens/conventions/effective routes not evaluated";
+
+        public void PrepareAgentSummary()
+        {
+            var typeRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Type && root.Reason == "requested")
+                .ToDictionary(root => root.Node.Id, StringComparer.Ordinal);
+            var memberRoots = roots.Where(root => root.Node.Kind == HarnessNodeKind.Member && root.Reason == "requested"
+                    && root.Occurrence is not null)
+                .ToDictionary(root => root.Occurrence!.Id, StringComparer.Ordinal);
+            var members = new Dictionary<string, List<Selected>>(StringComparer.Ordinal);
+            foreach (var item in selected.Values)
+            {
+                Check();
+                if (item.Node.Kind != HarnessNodeKind.Member || item.Node.ParentId is not { } parent || !typeRoots.ContainsKey(parent)) continue;
+                if (!members.TryGetValue(parent, out var group)) members.Add(parent, group = []);
+                group.Add(item);
+            }
+            var callers = new Dictionary<string, List<Relation>>(StringComparer.Ordinal);
+            var kinds = new HashSet<string>(StringComparer.Ordinal);
+            var resolved = 0; var candidate = 0; var unresolved = 0;
+            foreach (var relation in relations)
+            {
+                Check();
+                var edge = relation.Edge;
+                kinds.Add(edge.Kind);
+                if (edge.Certainty == HarnessCertainty.Resolved) resolved++;
+                else if (edge.Certainty == HarnessCertainty.Candidate) candidate++;
+                else unresolved++;
+                if (edge.Kind is not ("calls" or "constructs") || edge.Certainty != HarnessCertainty.Resolved || relation.OutsideScope
+                    || relation.From.Occurrence is not { } source || relation.To.Occurrence is not { } target
+                    || !memberRoots.TryGetValue(target.Id, out var root) || root.Node.Id != edge.TargetNodeId
+                    || edge.SourceOccurrenceId != source.Id || edge.TargetOccurrenceId != target.Id
+                    || source.VariantId != variant || target.VariantId != variant || IsDocument(relation.From.Node)
+                    || request.PathPrefix is not null && (edge.Evidence is null || !PathAllowed(edge.Evidence))
+                    || !NodeAllowed(relation.From.Node, variant) || !NodeAllowed(relation.To.Node, variant)) continue;
+                if (!callers.TryGetValue(root.Identity, out var group)) callers.Add(root.Identity, group = []);
+                group.Add(relation);
+            }
+            var rows = new List<AgentDetail>();
+            foreach (var root in roots.OrderBy(root => root.Priority).ThenBy(root => root.Identity, StringComparer.Ordinal))
+            {
+                Check();
+                var children = members.GetValueOrDefault(root.Node.Id) ?? [];
+                var incoming = callers.GetValueOrDefault(root.Identity) ?? [];
+                var countCallers = root.Node.Kind == HarnessNodeKind.Member && root.Reason == "requested" && root.Occurrence is not null;
+                rows.Add(new(root, SelectedMembers: typeRoots.ContainsKey(root.Node.Id) ? children.Count : null,
+                    CallerSymbols: countCallers ? incoming.Select(relation => relation.From.Node.Id).Distinct(StringComparer.Ordinal).Count() : null,
+                    CallerOccurrences: countCallers ? incoming.Select(relation => relation.From.Occurrence!.Id).Distinct(StringComparer.Ordinal).Count() : null,
+                    SavedCallEdges: countCallers ? incoming.Count : null));
+                foreach (var member in children.OrderBy(member => member.Node.Signature, StringComparer.Ordinal)
+                    .ThenBy(member => member.Identity, StringComparer.Ordinal))
+                {
+                    Check();
+                    rows.Add(new(root, member, AgentMemberLocation(member)));
+                }
+            }
+            agentSummary = new(rows.ToArray(), roots.Count, selected.Count, relations.Count, kinds.Count, resolved, candidate, unresolved);
+        }
+
+        private HarnessLocation? AgentMemberLocation(Selected member)
+        {
+            if (member.Occurrence is not { } occurrence)
+                return member.Node.Location is { } saved && PathAllowed(saved) ? saved : null;
+            if (occurrence.Location is { } primary && PathAllowed(primary)) return primary;
+            if (occurrence.Declarations is not { } declarations) return null;
+            for (var index = 0; index < Math.Min(declarations.Count, request.Budget!.MaxNodes); index++)
+            {
+                Check();
+                if (PathAllowed(declarations[index])) return declarations[index];
+            }
+            return null;
+        }
 
         private int SourcePriority(Selected item, HarnessLocation location)
         {
@@ -530,13 +1014,13 @@ public sealed class ExplorationService
                 var baseline = Size(Render(Units, pending, 0, 0));
                 var shareChars = Math.Max(0, request.Budget!.MaxChars - baseline.Chars) / groups.Length;
                 var shareBytes = Math.Max(0, request.Budget.MaxBytes - baseline.Bytes) / groups.Length;
-                foreach (var group in groups)
+                for (var groupIndex = 0; groupIndex < groups.Length; groupIndex++)
                 {
                     Check();
-                    var used = Size(Render(Units, pending, 0, 0));
+                    var used = groupIndex == 0 ? baseline : Size(Render(Units, pending, 0, 0));
                     var ceiling = (Chars: Math.Min(request.Budget.MaxChars, used.Chars + shareChars),
                         Bytes: Math.Min(request.Budget.MaxBytes, used.Bytes + shareBytes));
-                    foreach (var candidate in group) ReadCandidate(candidate, failedFiles, ceiling);
+                    foreach (var candidate in groups[groupIndex]) ReadCandidate(candidate, failedFiles, ceiling);
                 }
                 // Release unused reservations only after every requested file has had its turn.
                 foreach (var candidate in requested) ReadCandidate(candidate, failedFiles);
@@ -574,13 +1058,24 @@ public sealed class ExplorationService
             catch (QuerySourceException error) { Failed(error.Code, candidate, failedFiles); }
         }
 
+        /// <summary>
+        /// The bytes behind one input: the verified file on disk for physical inputs,
+        /// the verified stored body for generated inputs. A virtual generated path is
+        /// never resolved against the filesystem.
+        /// </summary>
+        private byte[] ReadSource(IndexFile file)
+            => QueryWorkspace.IsStored(file)
+                ? workspace!.ReadStored(file, storedBodies.TryGetValue(file.SourceId, out var body)
+                    ? body : throw new QuerySourceException("SOURCE_CHANGED_SINCE_SNAPSHOT", file.RelativePath), timer.Token)
+                : workspace!.Read(file, timer.Token);
+
         private ExploreUnit ReadUnit(IndexFile file, HarnessLocation location, HarnessRawSpan span,
             IReadOnlyList<string> symbols, string role)
         {
             if (cachedSourceId != file.SourceId)
             {
                 cachedSourceText = null; cachedSourceId = null;
-                cachedSourceText = new UTF8Encoding(false, true).GetString(workspace!.Read(file, timer.Token));
+                cachedSourceText = new UTF8Encoding(false, true).GetString(ReadSource(file));
                 cachedSourceId = file.SourceId;
             }
             var text = cachedSourceText!;
@@ -750,18 +1245,26 @@ public sealed class ExplorationService
         }
 
         private string Render(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
+            => request.Format == ExploreFormat.Agent ? RenderAgent(units, omitted, relationCount, detailCount)
+                : RenderAudit(units, omitted, relationCount, detailCount);
+
+        private string RenderAudit(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
         {
             var text = new StringBuilder();
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage}");
             Line($"Freshness={freshness.State}; returned source ranges={units.Count}, hash-verified when returned.");
+            AppendOwnerObservation(text);
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; completeness is the saved span only. Owner context does not select additional semantic targets or prove inactive text active.");
             if (project is not null || variant is not null)
             {
                 var scope = owner.saved.Graph.Variants.FirstOrDefault(v => v.Id == variant);
                 Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
             }
+            AppendScopeDecision(text, detailCount);
+            AppendHttpGetMatches(text);
+            if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
             text.AppendLine("Coverage is the selected index, not proof of runtime consumers or absent unindexed code/tests.");
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
             if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
@@ -774,7 +1277,7 @@ public sealed class ExplorationService
                 foreach (var choice in choices.Take(detailCount))
                 {
                     var scope = graph.Variants.Single(v => v.Id == choice.Variant);
-                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(scope.TargetFramework, 80)} {Safe(scope.Configuration, 80)}");
+                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(scope.TargetFramework, 80)} {Safe(scope.Configuration, 80)}{ScopeChoiceDimensions(scope)}");
                 }
                 if (choices.Count > detailCount) Line($"Scope choices omitted={choices.Count - detailCount}; supply project/variant or a narrower query.");
             }
@@ -824,7 +1327,7 @@ public sealed class ExplorationService
             {
                 var evidence = relation.Edge.Evidence;
                 var source = evidence is null ? "none" : sourceAliases[evidence.SourceId];
-                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}");
+                Line($"{aliases[relation.From.Identity]} --{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}--> {aliases[relation.To.Identity]} proof={proofs[(relation.Edge.Producer, relation.Edge.Origin)]} at={source} span={evidence?.RawSpan?.Start}:{evidence?.RawSpan?.Length}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}{HttpGetDeclarationNote(relation.Edge.HttpGetDeclaration, source)}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact symbol for more evidence.");
             foreach (var unit in units)
@@ -846,6 +1349,230 @@ public sealed class ExplorationService
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
+        {
+            var text = new StringBuilder();
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var graph = owner.saved.Graph;
+            Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
+            AppendOwnerObservation(text);
+            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; hash-verified saved spans only. Owner context adds no semantic targets or proof that inactive text is active.");
+            text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+            var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
+            Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
+            AppendScopeDecision(text, detailCount);
+            AppendHttpGetMatches(text);
+            if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
+            foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
+            if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
+            foreach (var error in Errors.Take(8)) Line($"Error {Safe(error.Code, 80)}: {Safe(error.Message, 240)} {Safe(error.Path, 160)}");
+            if (freshness.DirtyPaths.Count > 0) Line($"Dirty sources={freshness.DirtyPaths.Count}: {string.Join(", ", freshness.DirtyPaths.Take(4).Select(path => Safe(path, 160)))}");
+            if (freshness.Unverified.Count > 0) Line($"Unverified: {string.Join("; ", freshness.Unverified.Take(4).Select(value => Safe(value, 160)))}");
+            if (choices.Count > 0)
+            {
+                Line($"Choose project/variant ({choices.Count} matching scopes; no code scope was inferred):");
+                foreach (var choice in choices.Take(detailCount))
+                {
+                    var choiceScope = graph.Variants.Single(value => value.Id == choice.Variant);
+                    Line($"{Safe(owner.nodes[choice.Project].Name, 100)} project={choice.Project} variant={choice.Variant} {Safe(choiceScope.TargetFramework, 80)} {Safe(choiceScope.Configuration, 80)}{ScopeChoiceDimensions(choiceScope)}");
+                }
+                if (choices.Count > detailCount) Line($"Scope choices omitted={choices.Count - detailCount}; supply project/variant or a narrower query.");
+            }
+            if (symbolChoices.Count > 0)
+            {
+                Line($"Ambiguous symbols={symbolChoices.Count}; re-query an exact selector with its scope:");
+                foreach (var choice in symbolChoices.Take(detailCount))
+                    Line($"{Safe(owner.Label(choice.Node), 160)} selector={choice.Node.Id} signature={Safe(choice.Node.Signature, 240)}");
+                if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
+            }
+            var shownRelations = relations.Take(relationCount).ToArray();
+            var shownOmissions = omitted.Take(detailCount).ToArray();
+            var summaryAllowance = request.PathTo is null ? detailCount : detailCount - PathDetailsShown(detailCount);
+            AgentDetail[] summaryRows = summaryAllowance > 0 && agentSummary is not null ? agentSummary.Rows.Take(summaryAllowance - 1).ToArray() : [];
+            var identities = new Dictionary<string, Selected>(StringComparer.Ordinal);
+            foreach (var item in roots) identities.TryAdd(item.Identity, item);
+            foreach (var unit in units)
+                foreach (var item in selected.Values.Where(selection => unit.SymbolIds.Contains(selection.Node.Id))
+                    .OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal))
+                    identities.TryAdd(item.Identity, item);
+            foreach (var relation in shownRelations)
+            { identities.TryAdd(relation.From.Identity, relation.From); identities.TryAdd(relation.To.Identity, relation.To); }
+            foreach (var omission in shownOmissions) identities.TryAdd(omission.Selection.Identity, omission.Selection);
+            foreach (var row in summaryRows)
+                if (row.Member is { } member) identities.TryAdd(member.Identity, member);
+            var aliases = identities.Values.OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal)
+                .Select((selection, index) => (selection.Identity, Alias: "@" + (index + 1).ToString(CultureInfo.InvariantCulture)))
+                .ToDictionary(pair => pair.Identity, pair => pair.Alias, StringComparer.Ordinal);
+            var selectors = roots.Select(item => item.Identity).Concat(shownOmissions.Select(item => item.Selection.Identity)).ToHashSet(StringComparer.Ordinal);
+            foreach (var row in summaryRows)
+                if (row.Member is { } member) selectors.Add(member.Identity);
+            if (identities.Count > 0) text.AppendLine("Symbols (@n is reply-local; selection=requested certainty=Resolved unless shown):");
+            foreach (var item in identities.Values.OrderBy(selection => aliases[selection.Identity], StringComparer.Ordinal))
+            {
+                var details = selectors.Contains(item.Identity) ? " selector=" + item.Identity : "";
+                details += units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)) ? " source" : " signature=" + Safe(item.Node.Signature, 240);
+                if (item.Reason != "requested") details += " selection=" + Safe(item.Reason, 100);
+                if (item.Certainty != HarnessCertainty.Resolved) details += " certainty=" + item.Certainty;
+                Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)}{details}");
+            }
+            var sourceIds = units.Select(unit => unit.SourceId).Concat(shownOmissions.Select(item => item.Location.SourceId))
+                .Concat(shownRelations.Select(relation => relation.Edge.Evidence?.SourceId).OfType<string>())
+                .Concat(summaryRows.Select(row => row.Location?.SourceId).OfType<string>())
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var sourceAliases = sourceIds.Select((id, index) => (id, Alias: "F" + (index + 1).ToString(CultureInfo.InvariantCulture)))
+                .ToDictionary(pair => pair.id, pair => pair.Alias, StringComparer.Ordinal);
+            foreach (var sourceId in sourceIds)
+                if (owner.files.TryGetValue(sourceId, out var file)) Line($"{sourceAliases[sourceId]} {file.RelativePath}");
+            AppendAgentSummary(text, summaryRows, units, omitted, aliases, sourceAliases, summaryAllowance);
+            if (shownRelations.Length > 0) text.AppendLine("Saved relations (certainty is semantic evidence, not runtime dispatch):");
+            foreach (var relation in shownRelations)
+            {
+                var evidence = relation.Edge.Evidence;
+                var at = evidence is null ? "unknown" : sourceAliases[evidence.SourceId] + ":" + VerifiedLine(evidence, units);
+                Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}{HttpGetDeclarationNote(relation.Edge.HttpGetDeclaration, evidence is null ? "unknown" : sourceAliases[evidence.SourceId])}");
+            }
+            if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact selector for more evidence.");
+            foreach (var unit in units)
+            {
+                var symbols = identities.Values.Where(selection => unit.SymbolIds.Contains(selection.Node.Id))
+                    .OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal).Select(selection => aliases[selection.Identity]);
+                var lastLine = unit.FirstLine + unit.Text.AsSpan().Count('\n') - (unit.Text.EndsWith('\n') ? 1 : 0);
+                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
+                var lines = unit.Text.Split('\n');
+                for (var index = 0; index < lines.Length; index++)
+                {
+                    if (index == lines.Length - 1 && lines[index].Length == 0) break;
+                    text.Append((unit.FirstLine + index).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(lines[index]).Append('\n');
+                }
+            }
+            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry its exact selector with larger maxChars/maxBytes, or read the saved source range in audit.");
+            foreach (var omission in shownOmissions)
+                Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
+            if (omitted.Count > shownOmissions.Length) Line($"Omission details not shown={omitted.Count - shownOmissions.Length}; narrow to requested selectors.");
+            var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
+            return text.ToString();
+        }
+
+        private void AppendHttpGetMatches(StringBuilder text)
+        {
+            if (request.QueryKind != ExploreQueryKind.HttpGetLiteral) return;
+            text.AppendLine("Query kind=http-get-literal; exact captured declaration fragments only; effective routes not evaluated. Missing/omitted metadata does not prove route absence.");
+            foreach (var root in roots)
+            {
+                var sites = httpGetMatches[root.Identity];
+                var first = sites[0];
+                var span = first.HttpGetDeclaration!.TemplateSpan!.Value;
+                var path = owner.files[first.Evidence!.SourceId].RelativePath;
+                text.AppendLine(FormattableString.Invariant($"HttpGet match selector={root.Identity} edge={first.Id} site={JsonSerializer.Serialize(path)} literalSpan={span.Start}:{span.Length} matchingSavedSites={sites.Length} otherSiteDetailsOmitted={sites.Length - 1}"));
+            }
+        }
+
+        private void AppendOwnerObservation(StringBuilder text)
+        {
+            if (!request.ObserveOwner) return;
+            var observation = ownerObservation ?? new("unavailable");
+            var graph = owner.saved.Graph;
+            var pin = observation.WorkspaceId is null ? "unknown"
+                : observation.WorkspaceId == graph.WorkspaceId && observation.SnapshotId == graph.SnapshotId && observation.Generation == graph.Generation
+                    ? "same" : "different";
+            static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+            text.AppendLine(FormattableString.Invariant($"Owner observation state={observation.State} generation={Number(observation.Generation)} pin={pin} revision={Number(observation.Revision)} desired={Number(observation.DesiredRevision)}; status only, not freshness proof."));
+        }
+
+        private int PathDetailsShown(int detailCount)
+            => Errors.Count == 0 && retainedPath is { Status: "found" } path ? Math.Min(detailCount, path.Hops.Length) : 0;
+
+        private void AppendRetainedPath(StringBuilder text, IReadOnlyList<ExploreUnit> units, int detailCount)
+        {
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var error = Errors.Count > 0;
+            var path = retainedPath;
+            var status = error ? "incomplete" : path?.Status ?? "incomplete";
+            var found = status == "found";
+            var total = found ? path!.Hops.Length.ToString(CultureInfo.InvariantCulture) : "unknown";
+            var shown = PathDetailsShown(detailCount);
+            var incomplete = error || path?.Incomplete != false;
+            var reason = error ? "query-error" : path?.Reason ?? "endpoint-unresolved";
+            var details = found ? (shown == path!.Hops.Length ? "complete" : "omitted") : "none";
+            Line($"Retained path status={status} source={request.Query.Trim()} target={request.PathTo!.Trim()} hops={total} shown={shown}/{total} incomplete={incomplete.ToString().ToLowerInvariant()} reason={reason} details={details}; minimum hops in retained eligible evidence only");
+            if (!found) return;
+            for (var index = 0; index < shown; index++)
+            {
+                var edge = path!.Hops[index];
+                var evidence = edge.Evidence;
+                var location = " evidence=unknown";
+                if (evidence is not null)
+                {
+                    var span = evidence.RawSpan is { } raw ? FormattableString.Invariant($"{raw.Start}:{raw.Length}") : "unknown";
+                    location = FormattableString.Invariant($" evidenceSource={Safe(evidence.SourceId, 4096)} path={Safe(owner.files.GetValueOrDefault(evidence.SourceId)?.RelativePath ?? "unknown", 4096)} version={Safe(evidence.SourceVersion ?? "unknown", 128)} saved-sha256={Safe(evidence.ContentHash ?? "unknown", 64)} span={span} line={VerifiedLine(evidence, units)}");
+                }
+                Line($"Path hop {index + 1} edge={edge.Id} from={edge.SourceOccurrenceId} to={edge.TargetOccurrenceId} kind={edge.Kind} certainty={edge.Certainty} logicalFrom={edge.SourceNodeId} logicalTo={edge.TargetNodeId} variant={variant} edgeVariant={edge.VariantId ?? "unknown"} producer={Safe(edge.Producer, 64)} origin={Safe(edge.Origin ?? "unknown", 80)}{location}");
+            }
+        }
+
+        private void AppendAgentSummary(StringBuilder text, IReadOnlyList<AgentDetail> rows, IReadOnlyList<ExploreUnit> units,
+            IReadOnlyList<Pending> omitted, IReadOnlyDictionary<string, string> aliases, IReadOnlyDictionary<string, string> sourceAliases, int detailCount)
+        {
+            if (detailCount == 0 || agentSummary is not { } summary) return;
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var incomplete = owner.saved.Graph.Coverage != HarnessCoverage.CompleteWithinScope || reasons.Count > 0 || Errors.Count > 0;
+            Line($"Retained overview roots={summary.Roots} selected={summary.Selected} relations={summary.Relations} relationKinds={summary.RelationKinds} resolved={summary.Resolved} candidate={summary.Candidate} unresolved={summary.Unresolved} admittedRanges={units.Count} rowsShown={rows.Count}/{summary.Rows.Length} incomplete={incomplete.ToString().ToLowerInvariant()}; callers are resolved bound in-scope saved evidence, not runtime totals");
+            foreach (var row in rows)
+            {
+                if (row.Member is not { } member)
+                {
+                    var counts = row.CallerSymbols is { } symbols
+                        ? FormattableString.Invariant($" callerSymbols={symbols} callerOccurrences={row.CallerOccurrences} savedCallEdges={row.SavedCallEdges}")
+                        : row.SelectedMembers is { } count ? FormattableString.Invariant($" selectedMembers={count}") : "";
+                    Line($"Retained root {aliases[row.Root.Identity]} kind={row.Root.Node.Kind}{counts}");
+                    continue;
+                }
+                var location = row.Location;
+                var covering = location?.RawSpan is { } span ? units.FirstOrDefault(unit => unit.SourceId == location.SourceId
+                    && unit.ContentHash == location.ContentHash && span.Start >= unit.Span.Start && span.End <= unit.Span.End) : null;
+                var covered = covering is not null;
+                var admitted = covering?.SymbolIds.Contains(member.Node.Id) == true;
+                var missing = omitted.Any(item => item.Selection.Identity == member.Identity);
+                var status = covered ? (admitted ? "returned" : "saved-range-covered") + (missing ? "+omitted" : "")
+                    : missing ? "omitted" : member.IncludeSource ? "not-returned" : "not-requested";
+                var at = location is not null ? sourceAliases[location.SourceId] + ":" + VerifiedLine(location, units) : "unknown";
+                Line($"Member {aliases[row.Root.Identity]} -> {aliases[member.Identity]} signature={Safe(member.Node.Signature, 240)} variant={member.Occurrence?.VariantId ?? "unknown"} at={at} source={status}");
+            }
+        }
+
+        private string ScopeChoiceDimensions(HarnessVariant scope)
+            => request.ScopePolicy == ExploreScopePolicy.PreferDebug
+                ? $" platform={Safe(scope.Platform ?? "unspecified", 80)} rid={Safe(scope.RuntimeIdentifier ?? "unspecified", 80)}" : "";
+
+        private void AppendScopeDecision(StringBuilder text, int detailCount)
+        {
+            if (scopeDecision is null) return;
+            void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
+            var selectedScope = owner.saved.Graph.Variants.FirstOrDefault(value => value.Id == variant);
+            var platform = selectedScope is null ? "unknown" : selectedScope.Platform ?? "unspecified";
+            var rid = selectedScope is null ? "unknown" : selectedScope.RuntimeIdentifier ?? "unspecified";
+            Line($"Scope policy=prefer-debug decision={scopeDecision} excludedByIdentity={excludedScopes} platform={Safe(platform, 80)} rid={Safe(rid, 80)}");
+            if (alternativeScopes.Count == 0) return;
+            Line($"Alternative scopes={alternativeScopes.Count}; supply variantId to switch:");
+            foreach (var choice in alternativeScopes.Take(detailCount))
+            {
+                var scope = owner.saved.Graph.Variants.Single(value => value.Id == choice.Variant);
+                Line($"project={choice.Project} variant={choice.Variant} {Safe(scope.TargetFramework, 80)} {Safe(scope.Configuration, 80)}{ScopeChoiceDimensions(scope)}");
+            }
+            if (alternativeScopes.Count > detailCount) Line($"Alternative scopes omitted={alternativeScopes.Count - detailCount}.");
+        }
+
+        private static string VerifiedLine(HarnessLocation location, IReadOnlyList<ExploreUnit> units)
+        {
+            if (location.RawSpan is not { } span) return "unknown";
+            foreach (var unit in units)
+                if (unit.SourceId == location.SourceId && unit.ContentHash == location.ContentHash
+                    && span.Start >= unit.Span.Start && span.End <= unit.Span.End)
+                    return (unit.FirstLine + unit.Text.AsSpan(0, span.Start - unit.Span.Start).Count('\n')).ToString(CultureInfo.InvariantCulture);
+            return "unknown";
         }
 
         private static string Safe(string? value, int maximum)

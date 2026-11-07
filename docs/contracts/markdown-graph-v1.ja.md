@@ -6,7 +6,7 @@ SD2-03はSharpDeps `feature/0.2.0`、基準SHA `fdadba7620f0c22e00690ede73df63a2
 
 ## 固定artifactと起動
 
-`Syntamark [2.0.0-preview.3]` と `YamlDotNet [18.1.0]` をexact参照します。MD-06では共有componentのソースとpackを別のrepoへ移管し、対応するruntime/source候補を新しいimmutable版で作成しました。`markdown-runtime-pin.json` は選択版、移管先source commitと旧commitの対応、canonical hash、parser/contract/profile、依存identity、両nupkgとruntime DLL hashを固定します。MD-05のpreview.1は保持し、再pack・上書きしません。
+`Syntamark [1.2.0]` と `YamlDotNet [18.1.0]` をexact参照します。MD-06では共有componentのソースとpackを別のrepoへ移管し、対応するruntime/source候補を新しいimmutable版で作成しました。`markdown-runtime-pin.json` は選択版、移管先source commitと旧commitの対応、canonical hash、parser/contract/profile、依存identity、両nupkgとruntime DLL hashを固定します。MD-05のpreview.1は保持し、再pack・上書きしません。
 
 restore後に `Verify-ConsumerArtifacts.mjs` で同pair、feedの両artifact、実際のrestored runtime nupkg/DLL、YamlDotNetのexact package versionを確認します。trusted Index入口では、ロード済みruntime DLL hashとYamlDotNet assembly/informational identity、callerが期待したParserVersionを照合し、不一致・確認不能を拒否します。parse後もfactsのparser/contract/profileを確認します。startupのassembly hash読取りはconsumer hostのI/Oで、共有parserのI/Oではありません。assembly version 18.0.0.0をpackage version 18.1.0と混同しません。
 

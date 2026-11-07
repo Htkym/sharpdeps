@@ -8,16 +8,24 @@ using Microsoft.Data.Sqlite;
 internal static class IndexDatabase
 {
     public const int SchemaVersion = 1;
+    /// <summary>
+    /// The schema written for new indexes. Version 2 adds generated_bodies;
+    /// version 3 adds package_bodies. Older indexes are never converted in place.
+    /// </summary>
+    public const int CurrentSchemaVersion = 3;
     private const int ApplicationId = 0x53444831; // SDH1, separate from graph/report versions.
 
-    public static void InspectHeader(string path)
+    public static int InspectHeader(string path)
     {
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         Span<byte> header = stackalloc byte[100];
-        if (file.Read(header) != 100 || !header[..16].SequenceEqual("SQLite format 3\0"u8)
-            || BinaryPrimitives.ReadInt32BigEndian(header[60..64]) != SchemaVersion
+        if (file.Read(header) != 100 || !header[..16].SequenceEqual("SQLite format 3\0"u8))
+            throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "This index schema is not supported; retain it and rebuild into a separate index.");
+        var version = BinaryPrimitives.ReadInt32BigEndian(header[60..64]);
+        if ((version < SchemaVersion || version > CurrentSchemaVersion)
             || BinaryPrimitives.ReadInt32BigEndian(header[68..72]) != ApplicationId)
             throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "This index schema is not supported; retain it and rebuild into a separate index.");
+        return version;
     }
     public static SqliteConnection Open(string path, bool readOnly)
     {
@@ -57,20 +65,24 @@ internal static class IndexDatabase
     public static object? Scalar(SqliteConnection connection, SqliteTransaction? transaction, string sql,
         params (string Name, object? Value)[] values)
     { using var command=Command(connection,transaction,sql,values);return command.ExecuteScalar(); }
-    public static void CheckMetadata(SqliteConnection connection, SqliteTransaction? transaction, string workspace)
+    public static int CheckMetadata(SqliteConnection connection, SqliteTransaction? transaction, string workspace)
     {
-        if (Convert.ToInt32(Scalar(connection,transaction,"PRAGMA user_version;")) != SchemaVersion
+        var version = Convert.ToInt32(Scalar(connection,transaction,"PRAGMA user_version;"));
+        if ((version < SchemaVersion || version > CurrentSchemaVersion)
             || Convert.ToInt32(Scalar(connection,transaction,"PRAGMA application_id;")) != ApplicationId)
             throw new IndexStoreException("INDEX_SCHEMA_UNSUPPORTED", "The index schema is unsupported.");
         if ((string?)Scalar(connection,transaction,"SELECT workspace_id FROM metadata WHERE singleton=1") != workspace)
             throw new IndexStoreException("INDEX_WORKSPACE_MISMATCH", "The persisted workspace UUID differs.");
+        return version;
     }
-    public static void Create(SqliteConnection c, string workspace)
+    public static void Create(SqliteConnection c, string workspace, int schemaVersion)
     {
         using var transaction=c.BeginTransaction();
         Execute(c,transaction,Schema);
+        if (schemaVersion >= 2) Execute(c,transaction,GeneratedBodiesSchema);
+        if (schemaVersion >= 3) Execute(c,transaction,PackageBodiesSchema);
         Execute(c,transaction,"INSERT INTO metadata(singleton,workspace_id,active_generation) VALUES(1,$workspace,NULL)",("$workspace",workspace));
-        Execute(c,transaction,$"PRAGMA user_version={SchemaVersion}; PRAGMA application_id={ApplicationId};");
+        Execute(c,transaction,$"PRAGMA user_version={schemaVersion}; PRAGMA application_id={ApplicationId};");
         transaction.Commit();
         // Publish version header before any readonly schema inspection.
         Execute(c,null,"PRAGMA wal_checkpoint(FULL);");
@@ -91,6 +103,16 @@ internal static class IndexDatabase
               content='{table}_content',content_rowid='rowid',tokenize='unicode61');
             """);
     }
+    private const string GeneratedBodiesSchema = """
+        CREATE TABLE generated_bodies(generation INTEGER NOT NULL REFERENCES generations, source_id TEXT NOT NULL,
+          body TEXT NOT NULL, PRIMARY KEY(generation,source_id),
+          FOREIGN KEY(generation,source_id) REFERENCES files(generation,source_id));
+        """;
+    private const string PackageBodiesSchema = """
+        CREATE TABLE package_bodies(generation INTEGER NOT NULL REFERENCES generations, source_id TEXT NOT NULL,
+          body TEXT NOT NULL, PRIMARY KEY(generation,source_id),
+          FOREIGN KEY(generation,source_id) REFERENCES files(generation,source_id));
+        """;
     private const string Schema = """
         CREATE TABLE generations(generation INTEGER PRIMARY KEY CHECK(generation>=0), snapshot_id TEXT NOT NULL UNIQUE,
           manifest_hash TEXT NOT NULL, coverage TEXT NOT NULL, status TEXT NOT NULL CHECK(status='committed'),

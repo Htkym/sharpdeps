@@ -2,9 +2,40 @@ namespace SharpDeps.Query;
 
 using SharpDeps.Analysis.Contracts.Harness;
 
+public enum ExploreFormat
+{
+    /// <summary>Includes saved identities, hashes, spans, and provenance.</summary>
+    Audit,
+    /// <summary>Compact evidence with exact selectors for follow-up queries.</summary>
+    Agent
+}
+
+public enum ExploreScopePolicy
+{
+    /// <summary>Leaves ambiguous compilation scopes unresolved.</summary>
+    RequireUnique,
+    /// <summary>Uses explicit identities first, then the sole saved Debug variant within one project.</summary>
+    PreferDebug
+}
+
+public enum ExploreQueryKind
+{
+    Symbol,
+    /// <summary>Matches a captured HttpGet declaration fragment exactly, without route interpretation.</summary>
+    HttpGetLiteral
+}
+
 public sealed record ExploreRequest(string Query, string? ProjectId = null, string? VariantId = null,
     string? PathPrefix = null, QueryFreshnessPolicy Freshness = QueryFreshnessPolicy.AllowStale,
-    QueryBudget? Budget = null);
+    QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit,
+    ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique, string? PathTo = null)
+{
+    public bool ObserveOwner { get; init; }
+    public ExploreQueryKind QueryKind { get; init; }
+}
+
+public sealed record ExploreOwnerObservation(string State, string? WorkspaceId = null, string? SnapshotId = null,
+    long? Generation = null, long? Revision = null, long? DesiredRevision = null);
 
 public sealed record ExploreUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan Span,
     string Text, int FirstLine, IReadOnlyList<string> SymbolIds,

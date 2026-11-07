@@ -21,12 +21,28 @@ internal static class IndexPaths
                 throw new IndexStoreException("INDEX_INVALID_PATH", "Symbolic links and reparse points are not accepted by this storage owner.");
         }
     }
-    public static void VerifyInputs(string root, IReadOnlyList<IndexFile> files, CancellationToken token)
+    public static void VerifyInputs(string root, IReadOnlyList<IndexFile> files, CancellationToken token,
+        IReadOnlyDictionary<string, string>? storedBodies = null)
     {
         var rootPrefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
         foreach (var input in files)
         {
             token.ThrowIfCancellationRequested();
+            if (input.Kind is IndexFileKinds.GeneratedSource or IndexFileKinds.PackageSource)
+            {
+                // A retained input has a virtual path: only its stored body can be
+                // verified, and it must never be resolved against the filesystem.
+                if (input.Deleted) continue;
+                if (storedBodies is not null && storedBodies.TryGetValue(input.SourceId, out var body))
+                {
+                    var bytes = new UTF8Encoding(false, true).GetBytes(body);
+                    if (bytes.LongLength != input.ByteLength) Changed();
+                    if (Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() != input.ContentHash) Changed();
+                    if (input.Utf16Length is { } length && body.Length != length) Changed();
+                }
+                else Changed();
+                continue;
+            }
             IndexSnapshotValidator.ValidateRelativePath(input.RelativePath);
             var path = Path.GetFullPath(Path.Combine(root, input.RelativePath));
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;

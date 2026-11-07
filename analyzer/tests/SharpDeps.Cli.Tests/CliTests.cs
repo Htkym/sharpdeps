@@ -1,6 +1,7 @@
 namespace SharpDeps.Cli.Tests;
 
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -163,6 +164,34 @@ public sealed class CliTests
     public async Task TrustAndArgumentFailuresHappenBeforeAnyWorkspaceCreation()
     {
         using var fixture = new Fixture(seed: false);
+        Assert.Equal(ExploreQueryKind.Symbol, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().QueryKind);
+        foreach (var literal in new[] { "", " ", "--trusted", "hocc_" + new string('a', 64), "items/*" })
+        {
+            foreach (var arguments in new[]
+            {
+                new[] { "explore", "--query-kind", "http-get-literal", "--term", literal },
+                new[] { "explore", "--term", literal, "--query-kind", "http-get-literal" }
+            })
+            {
+                var parsed = CliArguments.Parse(arguments);
+                var request = parsed.ExplorationRequest();
+                Assert.Equal(ExploreQueryKind.HttpGetLiteral, request.QueryKind);
+                Assert.Equal(literal, request.Query);
+                Assert.False(parsed.Has("trusted"));
+            }
+        }
+        Assert.True(CliArguments.Parse(["explore", "--term", "--trusted", "--query-kind", "http-get-literal", "--trusted"]).Has("trusted"));
+        Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().Format);
+        Assert.Equal(ExploreFormat.Agent, CliArguments.Parse(["explore", "--term", "Service", "--format", "agent"]).ExplorationRequest().Format);
+        Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service", "--format", "audit"]).ExplorationRequest().Format);
+        Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
+        Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "unique"]).ExplorationRequest().ScopePolicy);
+        Assert.Equal(ExploreScopePolicy.PreferDebug, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "prefer-debug"]).ExplorationRequest().ScopePolicy);
+        Assert.False(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ObserveOwner);
+        Assert.True(CliArguments.Parse(["explore", "--term", "Service", "--owner-status"]).ExplorationRequest().ObserveOwner);
+        Assert.Null(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().PathTo);
+        var occurrence = "hocc_" + new string('a', 64);
+        Assert.Equal(occurrence, CliArguments.Parse(["explore", "--term", occurrence, "--path-to", occurrence]).ExplorationRequest().PathTo);
         var untrusted = await Run("index", "--root", fixture.Root, "--target", "absent.csproj");
         Assert.Equal(5, untrusted.Exit);
         Assert.Equal("WORKSPACE_UNTRUSTED", Code(untrusted.Json));
@@ -170,15 +199,42 @@ public sealed class CliTests
         var missingTerm = await Run("search", "--root", fixture.Root);
         Assert.Equal(2, missingTerm.Exit);
         foreach (var arguments in new[] {
+            new[] { "--term", "" },
+            new[] { "--term", " " },
+            new[] { "--term", "--trusted" },
+            new[] { "--term", "Service", "--query-kind", "other" },
+            new[] { "--term", "Service", "--query-kind", "HttpGetLiteral" },
+            new[] { "--term", "Service", "--query-kind", "1" },
+            new[] { "--term", "items/{id}", "--query-kind", "http-get-literal", "--path-to", occurrence },
+            new[] { "--term", "unsafe\ntext", "--query-kind", "http-get-literal" },
+            new[] { "--term", "\uD800", "--query-kind", "http-get-literal" },
+            new[] { "--term", new string('x', 1025), "--query-kind", "http-get-literal" },
             new[] { "--term", new string('x', 1025) },
             new[] { "--term", "Service", "--variant", "first", "--variant", "second" },
             new[] { "--term", "Service", "--project-id", " " },
             new[] { "--term", "Service", "--max-chars", "2047" },
+            new[] { "--term", "Service", "--format", "verbose" },
+            new[] { "--term", "Service", "--format", "0" },
+            new[] { "--term", "Service", "--format", "Agent" },
+            new[] { "--term", "Service", "--scope-policy", "auto" },
+            new[] { "--term", "Service", "--scope-policy", "PreferDebug" },
+            new[] { "--term", "Service", "--scope-policy", "1" },
+            new[] { "--term", "Service", "--path-to", " " },
+            new[] { "--term", "Service", "--path-to", new string('x', 129) },
             new[] { "--term", "Service", "--include-candidates" } })
         {
             var invalidExplore = await Run(["explore", "--root", fixture.Root, .. arguments]);
             Assert.Equal(2, invalidExplore.Exit);
         }
+        foreach (var (flag, value) in new[] { ("--format", "agent"), ("--scope-policy", "prefer-debug"), ("--path-to", occurrence), ("--query-kind", "http-get-literal") })
+        {
+            var nonExploreOption = await Run("status", "--root", fixture.Root, flag, value);
+            Assert.Equal(2, nonExploreOption.Exit);
+            Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreOption.Json));
+        }
+        var nonExploreOwnerStatus = await Run("status", "--root", fixture.Root, "--owner-status");
+        Assert.Equal(2, nonExploreOwnerStatus.Exit);
+        Assert.Equal("ARGUMENT_UNKNOWN", Code(nonExploreOwnerStatus.Json));
         var unsupported = await Run("query", "--kind", "status", "--root", fixture.Root, "--dependencies");
         Assert.Equal(2, unsupported.Exit);
         var statusScope = await Run("status", "--root", fixture.Root, "--project-id", "ignored-project");
@@ -232,6 +288,126 @@ public sealed class CliTests
         Assert.Equal(3, trusted.Exit);
         Assert.Equal("FRESHNESS_REQUIREMENT_NOT_MET", Code(trusted.Json));
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(fixture.IndexPath)));
+    }
+
+    [Fact]
+    public async Task ExploreUsesFreshOwnerProofAndSourceForEachInvocation()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var sourcePath = Path.Combine(fixture.Root, "Service.cs");
+        var originalText = File.ReadAllText(sourcePath);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var originalGeneration = pinned.Snapshot().Graph.Generation;
+        var proofs = 0;
+        var failProof = 0;
+        var observationArguments = new[] { "explore", "--root", fixture.Root, "--term", "Service",
+            "--owner-status", "--max-milliseconds", "10000" };
+        var absent = await Run(observationArguments);
+        Assert.Equal(0, absent.Exit);
+        Assert.Contains("Owner observation state=absent generation=unknown pin=unknown revision=unknown desired=unknown;", absent.Json);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, (_, token) =>
+        {
+            using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid, token);
+            var previous = current.Snapshot(token);
+            var text = File.ReadAllText(sourcePath);
+            var bytes = new UTF8Encoding(false).GetBytes(text);
+            var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            var generation = previous.Graph.Generation + 1;
+            HarnessLocation? Updated(HarnessLocation? location) => location is null ? null
+                : location with { ContentHash = hash, SourceVersion = "v" + generation };
+            var snapshot = previous with
+            {
+                Files = previous.Files.Select(file => file with { ContentHash = hash, ByteLength = bytes.Length, Utf16Length = text.Length }).ToArray(),
+                Graph = previous.Graph with
+                {
+                    SnapshotId = Guid.NewGuid().ToString("N"), Generation = generation,
+                    Nodes = previous.Graph.Nodes.Select(node => node with { Location = Updated(node.Location) }).ToArray(),
+                    SymbolOccurrences = previous.Graph.SymbolOccurrences.Select(item => item with
+                    { Location = Updated(item.Location), Declarations = item.Declarations?.Select(location => Updated(location)!).ToArray() }).ToArray()
+                }
+            };
+            return Task.FromResult(new CliIndexBuild(snapshot, () => { })
+            {
+                VerifyQueryInputs = proofToken =>
+                {
+                    proofToken.ThrowIfCancellationRequested();
+                    return new(["Service.cs"], Interlocked.Increment(ref proofs) != Volatile.Read(ref failProof));
+                }
+            });
+        });
+        var emptyOwner = await Run(observationArguments);
+        Assert.Equal(0, emptyOwner.Exit);
+        Assert.Contains("Owner observation state=idle generation=unknown pin=unknown revision=0 desired=0;", emptyOwner.Json);
+        Assert.DoesNotContain(originalText.TrimEnd('\r', '\n'), emptyOwner.Json);
+        Assert.Equal(0, Volatile.Read(ref proofs));
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root, "--trusted", "--target", "App.csproj"]),
+            fixture.Root, fixture.IndexPath, fixture.Uuid);
+        var published = await owner.UpdateAsync(update, "publish-proof", deadline.Token);
+        Assert.Null(published.ErrorCode);
+        var arguments = new[] { "explore", "--root", fixture.Root, "--trusted", "--term", "Service",
+            "--freshness", "require-fresh", "--max-milliseconds", "10000" };
+        var first = await Run(arguments);
+        Assert.Equal(0, first.Exit);
+        Assert.Contains("Freshness=verified-current", first.Json);
+        Assert.Contains(originalText.TrimEnd('\r', '\n'), first.Json);
+        Assert.DoesNotContain("Owner observation ", first.Json);
+        Assert.Equal(2, Volatile.Read(ref proofs));
+        var observed = await Run([.. arguments, "--owner-status"]);
+        Assert.Equal(0, observed.Exit);
+        Assert.Contains($"Owner observation state=idle generation={published.Result!.Generation} pin=same revision={published.Revision} desired={published.DesiredRevision};", observed.Json);
+        Assert.Contains("Freshness=verified-current", observed.Json);
+        Assert.Contains(originalText.TrimEnd('\r', '\n'), observed.Json);
+        Assert.Equal(4, Volatile.Read(ref proofs));
+
+        // The second proof can fail after source admission; no body from that reply may escape.
+        Volatile.Write(ref failProof, Volatile.Read(ref proofs) + 2);
+        var invalidated = await Run(arguments);
+        Assert.Equal(3, invalidated.Exit);
+        Assert.Contains("Error FRESHNESS_REQUIREMENT_NOT_MET", invalidated.Json);
+        Assert.Contains("returned source ranges=0", invalidated.Json);
+        Assert.DoesNotContain(originalText.TrimEnd('\r', '\n'), invalidated.Json);
+        Assert.Equal(Volatile.Read(ref failProof), Volatile.Read(ref proofs));
+        Volatile.Write(ref failProof, 0);
+
+        var changedText = originalText.Replace("ServiceExtra {}", "ServiceExtra{ }", StringComparison.Ordinal);
+        Assert.NotEqual(originalText, changedText);
+        File.WriteAllText(sourcePath, changedText, new UTF8Encoding(false));
+        var dirty = await Run(arguments);
+        Assert.Equal(3, dirty.Exit);
+        Assert.Contains("Freshness=dirty", dirty.Json);
+        Assert.Contains("returned source ranges=0", dirty.Json);
+        Assert.DoesNotContain(changedText.TrimEnd('\r', '\n'), dirty.Json);
+
+        var replacement = await owner.UpdateAsync(update, "publish-current", deadline.Token);
+        Assert.Null(replacement.ErrorCode);
+        Assert.Equal(originalGeneration + 2, replacement.Result!.Generation);
+        var currentReply = await Run([.. arguments, "--owner-status"]);
+        Assert.Equal(0, currentReply.Exit);
+        Assert.Contains("generation=" + replacement.Result.Generation, currentReply.Json);
+        Assert.Contains("Freshness=verified-current", currentReply.Json);
+        Assert.Contains(changedText.TrimEnd('\r', '\n'), currentReply.Json);
+        Assert.Contains($"Owner observation state=idle generation={replacement.Result.Generation} pin=same revision={replacement.Revision} desired={replacement.DesiredRevision};", currentReply.Json);
+        Assert.Equal(originalGeneration, pinned.Snapshot().Graph.Generation);
+        await owner.DisposeAsync();
+        var unavailable = await Run(observationArguments);
+        Assert.Equal(0, unavailable.Exit);
+        Assert.Contains("Owner observation state=unavailable generation=unknown pin=unknown", unavailable.Json);
+    }
+
+    [Fact]
+    public async Task ZeroQueryBudgetWorksAtTheCliBoundaryAndRejectsSubMinimumPositiveValues()
+    {
+        using var fixture = new Fixture();
+        foreach (var command in new[] { "search", "explore" })
+        {
+            var arguments = new[] { command, "--root", fixture.Root, "--term", "Service", "--max-milliseconds" };
+            var actual = await Run([.. arguments, "0"]);
+            Assert.Equal(0, actual.Exit);
+            Assert.Equal("ARGUMENT_INVALID", Code((await Run([.. arguments, "1"])).Json));
+        }
     }
 
     [Fact]
@@ -349,9 +525,10 @@ public sealed class CliTests
     }
 
     [Fact]
-    public async Task IpcRejectsUntrustedAndWrongProtocolWithoutPublishingOrStealingTheLease()
+    public async Task IpcRejectsUnsupportedRequestsAndExclusiveIndexCannotJoinItsOwner()
     {
         using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
         await using var owner = new CliCoordinator(writer, (_, _) => throw new InvalidOperationException("Must not extract"));
@@ -361,6 +538,18 @@ public sealed class CliTests
         var mismatch = await CoordinatorProtocol.TrySendAsync(owner.Owner, new(99, owner.Owner.Instance,
             fixture.Uuid, "mismatch", "status", fixture.Root, fixture.IndexPath, false, []), deadline.Token);
         Assert.Equal("COORDINATOR_PROTOCOL_MISMATCH", mismatch!.ErrorCode);
+        foreach (var command in new[] { "index", "update" })
+        {
+            var arguments = new[] { command, "--root", fixture.Root, "--index", fixture.IndexPath,
+                "--trusted", "--target", "App.csproj", "--timeout-seconds", "0" };
+            var remote = await CoordinatorProtocol.TrySendAsync(owner.Owner, new(CoordinatorProtocol.Version,
+                owner.Owner.Instance, fixture.Uuid, "exclusive", "update", fixture.Root, fixture.IndexPath, true,
+                arguments), deadline.Token);
+            Assert.Equal("ARGUMENT_UNSUPPORTED", remote!.ErrorCode);
+            var exclusive = await Run(arguments);
+            Assert.Equal(6, exclusive.Exit);
+            Assert.Equal("INDEX_BUSY", Code(exclusive.Json));
+        }
         Assert.Equal(0, owner.Status("status").DesiredRevision);
         Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
             IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
@@ -568,6 +757,214 @@ public sealed class CliTests
         Assert.Equal(original.Graph.Generation, final.Snapshot().Graph.Generation);
         Assert.Equal(original.Graph.Nodes.Select(node => node.Id), final.Snapshot().Graph.Nodes.Select(node => node.Id));
         Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), final.Search("Service").Select(hit => hit.NodeId));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task GeneratedDomainVariantsSurviveIndexingAndTheStoreRoundTrip()
+    {
+        var (root, target) = SemanticBaselineFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await RestoreAndBuildAsync(root, target, deadline.Token);
+
+        var workspace = Guid.NewGuid();
+        var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
+        var indexPath = Path.Combine(outputDirectory, "index.sqlite");
+        try
+        {
+            using var writer = IndexWriter.Open(root, indexPath, workspace, true);
+            var snapshot = await CliIndexer.BuildAsync(new(root, target, indexPath, workspace), null, deadline.Token);
+            var generated = snapshot.Files.Where(file => file.Kind == IndexFileKinds.GeneratedSource).ToArray();
+            Assert.Equal(2, generated.Length);
+            Assert.Equal(2, generated.Select(file => file.RelativePath).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(2, snapshot.StoredGeneratedBodies.Count);
+            Assert.All(generated, file =>
+            {
+                Assert.StartsWith("generated/Domain", file.RelativePath);
+                Assert.False(Path.IsPathRooted(file.RelativePath));
+                var body = Assert.Single(snapshot.StoredGeneratedBodies, body => body.SourceId == file.SourceId);
+                Assert.Contains("class OrderFactory", body.Body, StringComparison.Ordinal);
+            });
+
+            writer.Commit(IndexStage.Create(snapshot), deadline.Token);
+            using var reader = IndexReader.Open(indexPath, workspace);
+            var saved = reader.Snapshot();
+            Assert.Equal(generated.OrderBy(file => file.SourceId, StringComparer.Ordinal),
+                saved.Files.Where(file => file.Kind == IndexFileKinds.GeneratedSource).OrderBy(file => file.SourceId, StringComparer.Ordinal));
+            Assert.Equal(snapshot.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal),
+                saved.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal));
+        }
+        finally { if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true); }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task OverBudgetGeneratedDocumentFailsTheIndexAndKeepsThePreviousSnapshot()
+    {
+        var (fixtureRoot, _) = SemanticBaselineFixture();
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-overbudget-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // Work on a copy: the marker below changes what the generator emits, and
+            // no other test may observe that state.
+            CopyFixture(fixtureRoot, root);
+            var domainProject = Path.Combine(root, "src", "Domain", "Domain.csproj");
+            File.WriteAllText(domainProject, File.ReadAllText(domainProject).Replace("</Project>",
+                "  <ItemGroup>\n    <AdditionalFiles Include=\"*.overbudget\" />\n  </ItemGroup>\n</Project>",
+                StringComparison.Ordinal));
+            File.WriteAllText(Path.Combine(root, "src", "Generator", "GeneratedOrderFactory.cs"), OverBudgetGeneratorSource);
+
+            var target = Path.Combine(root, "SemanticBaseline.sln");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            await RestoreAndBuildAsync(root, target, deadline.Token);
+
+            var workspace = Guid.NewGuid();
+            var indexPath = Path.Combine(root, ".sharpdeps", "index.sqlite");
+            using var writer = IndexWriter.Open(root, indexPath, workspace, true);
+            var options = new CliIndexOptions(root, target, indexPath, workspace);
+            var first = await CliIndexer.BuildAsync(options, null, deadline.Token);
+            Assert.Equal(2, first.Files.Count(file => file.Kind == IndexFileKinds.GeneratedSource));
+            writer.Commit(IndexStage.Create(first), deadline.Token);
+
+            // The marker makes the generator emit a document over the retained-content
+            // budget, so the build must fail before publishing anything.
+            var marker = Path.Combine(root, "src", "Domain", "boundary.overbudget");
+            File.WriteAllText(marker, "on");
+            CliIndexException failure;
+            try
+            {
+                failure = await Assert.ThrowsAsync<CliIndexException>(
+                    () => CliIndexer.BuildAsync(options, first, deadline.Token));
+            }
+            finally
+            {
+                File.Delete(marker);
+            }
+
+            Assert.Equal("CLI_GENERATED_CONTENT_UNAVAILABLE", failure.Code);
+            Assert.Contains("OverBudget.g.cs", failure.Message, StringComparison.Ordinal);
+
+            using var reader = IndexReader.Open(indexPath, workspace);
+            var saved = reader.Snapshot();
+            Assert.Equal(1, saved.Graph.Generation);
+            Assert.Equal(2, saved.Files.Count(file => file.Kind == IndexFileKinds.GeneratedSource));
+            Assert.Equal(2, saved.StoredGeneratedBodies.Count);
+            Assert.DoesNotContain(saved.Files,
+                file => file.RelativePath.Contains("OverBudget", StringComparison.Ordinal));
+        }
+        finally
+        {
+            // The in-process build host keeps the copied analyzer assembly loaded
+            // until the test process exits, so cleanup is best effort.
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private const string OverBudgetGeneratorSource = """
+        using System;
+        using System.IO;
+        using System.Linq;
+        using System.Text;
+        using Microsoft.CodeAnalysis;
+        using Microsoft.CodeAnalysis.Text;
+
+        namespace SampleGeneration;
+
+        [Generator]
+        public sealed class GeneratedOrderFactory : IIncrementalGenerator
+        {
+            public void Initialize(IncrementalGeneratorInitializationContext context)
+            {
+                context.RegisterPostInitializationOutput(static production =>
+                {
+                    const string source =
+                        "namespace Generated;\n\n" +
+                        "public static class OrderFactory\n" +
+                        "{\n" +
+                        "    public static Domain.Order Create(string id) => new() { Id = id };\n" +
+                        "}\n";
+                    production.AddSource("OrderFactory.g.cs", SourceText.From(source, Encoding.UTF8));
+                });
+
+                var additional = context.AdditionalTextsProvider.Collect();
+                context.RegisterSourceOutput(additional, static (production, files) =>
+                {
+                    if (!files.Any(file => Path.GetFileName(file.Path)
+                            .Equals("boundary.overbudget", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return;
+                    }
+
+                    production.AddSource("OverBudget.g.cs", SourceText.From(
+                        "// " + new string('-', 1_100_000) + "\npublic static class OverBudget { }\n",
+                        Encoding.UTF8));
+                });
+            }
+        }
+        """;
+
+    private static (string Root, string Target) SemanticBaselineFixture()
+    {
+        var repository = Environment.GetEnvironmentVariable("SHARPDEPS_TEST_REPOSITORY_ROOT");
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "tests", "fixtures")))
+                directory = directory.Parent;
+            repository = directory?.FullName ?? throw new InvalidOperationException("Repository root could not be located from the test output directory.");
+        }
+
+        var root = Path.Combine(repository, "tests", "fixtures", "semantic-baseline");
+        return (root, Path.Combine(root, "SemanticBaseline.sln"));
+    }
+
+    private static void CopyFixture(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source))
+        {
+            var name = Path.GetFileName(directory);
+            if (name is "bin" or "obj" or ".sharpdeps") continue;
+            CopyFixture(directory, Path.Combine(destination, name));
+        }
+
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+        }
+    }
+
+    private static async Task RestoreAndBuildAsync(string root, string target, CancellationToken token)
+    {
+        foreach (var command in new[] { "restore", "build" })
+        {
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+            { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true };
+            start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+            start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+            foreach (var argument in new[] { command, target, "--verbosity", "quiet" })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Fixture " + command + " did not start.");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync(token); }
+            finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
+            Assert.True(process.ExitCode == 0, await output + await errors);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // A loaded analyzer assembly can keep a file open; the OS temp directory
+            // owns the remainder.
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> ready, CancellationToken token)

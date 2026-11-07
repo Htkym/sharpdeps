@@ -10,6 +10,26 @@ using Xunit;
 
 public sealed class QueryTests
 {
+    [Fact]
+    public void NoDeadlineQueryPreservesSavedResultsAndCallerCancellation()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1)));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        var request = new QueryRequest("no-deadline", QueryKind.Search, Term: "Service", Budget: Generous);
+        var expected = query.Execute(request);
+        var unbounded = request with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var actual = query.Execute(unbounded);
+        Assert.True(actual.Succeeded);
+        Assert.Equal(expected.Envelope.Items.Select(item => item.Id), actual.Envelope.Items.Select(item => item.Id));
+        Assert.Equal(0, actual.Envelope.Budget.Limits.MaxMilliseconds);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Error(query.Execute(unbounded, cancelled.Token), "CANCELLED");
+    }
+
     private static readonly QueryBudget Generous = new(MaxNodes: 100, MaxEdges: 100, MaxDepth: 8,
         MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
@@ -61,6 +81,42 @@ public sealed class QueryTests
         Assert.Equal("file-config", Assert.Single(other.Envelope.Items).Id);
         var internalCode = query.Execute(FilterRequest(new("internal", QueryKind.Search, Term: "result", Budget: Generous), "Code", false));
         Assert.Equal("file-code", Assert.Single(internalCode.Envelope.Items).Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StoredSourceFilesRemainVisibleToCodeSearchAndBrowse(bool package)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        var file = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        var source = new HarnessNode("stored-file", HarnessNodeKind.SourceFile, "RetainedSource", snapshot.Graph.WorkspaceId,
+            new(file.SourceId, "stored-v1", file.ContentHash, new(0, file.Utf16Length!.Value)));
+        snapshot = snapshot with
+        {
+            Graph = snapshot.Graph with { Nodes = [.. snapshot.Graph.Nodes, source] },
+            SearchText = [new(source.Id, source.Name, "", "", "", file.RelativePath)]
+        };
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        foreach (var kind in new[] { QueryKind.Search, QueryKind.Browse })
+        {
+            var request = new QueryRequest("stored-code", kind, Term: kind == QueryKind.Search ? source.Name : null,
+                Scope: new(Kind: HarnessNodeKind.SourceFile, ResultKinds: [QueryResultKind.Code]), Budget: Generous);
+            var reply = query.Execute(request);
+            Assert.True(reply.Succeeded);
+            var item = Assert.Single(reply.Envelope.Items);
+            Assert.Equal(source.Id, item.Id);
+            Assert.Equal(QueryResultKind.Code, item.ResultKind);
+            using var json = JsonDocument.Parse(reply.Json);
+            Assert.Equal("Code", json.RootElement.GetProperty("items")[0].GetProperty("resultKind").GetString());
+            var other = query.Execute(request with { Scope = request.Scope! with { ResultKinds = [QueryResultKind.Other] } });
+            Assert.True(other.Succeeded);
+            Assert.Empty(other.Envelope.Items);
+        }
     }
 
     [Fact]
@@ -294,6 +350,18 @@ public sealed class QueryTests
             Scope: new(Kind: HarnessNodeKind.Section, PathPrefix: "readme.md"), Budget: Generous));
         Assert.Equal(fixture.SectionId, Assert.Single(japanese.Envelope.Items).Id);
         Assert.Equal("readme.md", japanese.Envelope.Items[0].Path);
+        const string bodyOnlyJapanese = "定の手";
+        Assert.DoesNotContain(reader.Snapshot().Graph.Nodes, node => node.Name.Contains(bodyOnlyJapanese, StringComparison.Ordinal)
+            || node.Signature?.Contains(bodyOnlyJapanese, StringComparison.Ordinal) == true);
+        var nativeHit = Assert.Single(reader.Search(bodyOnlyJapanese));
+        Assert.Equal(fixture.SectionId, nativeHit.NodeId);
+        Assert.Equal("literal-substring", nativeHit.MatchMethod);
+        var explored = new ExplorationService(new PinnedQueryIndex(reader), isTrusted: false)
+            .Execute(new(bodyOnlyJapanese, PathPrefix: "readme.md", Budget: Generous));
+        Assert.True(explored.Succeeded);
+        Assert.Contains("id=" + fixture.SectionId, explored.Text, StringComparison.Ordinal);
+        Assert.Empty(explored.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", explored.OmissionReasons);
         var detail = query.Execute(new("declarations", QueryKind.Symbol, NodeId: fixture.A,
             Scope: new(VariantIds: [fixture.Variant]), Budget: Generous));
         Assert.Equal(fixture.Occurrence(fixture.A), Assert.Single(detail.Envelope.Items, i => i.Occurrence is not null).Id);
@@ -708,6 +776,188 @@ public sealed class QueryTests
         Assert.All(search.Envelope.Items, item => Assert.Equal(fixture.NamespaceId, item.Node!.ParentId));
         Assert.Throws<ArgumentException>(() => query.Execute(request with { Scope = request.Scope! with { VariantIds = [fixture.AlternateVariant] } }));
         Assert.Throws<ArgumentException>(() => query.Execute(request with { Scope = request.Scope! with { ProjectId = fixture.OtherProjectId } }));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifyKeepsStoredInputsUnverified(bool package)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        var generated = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
+
+        var freshness = workspace.Verify(snapshot);
+
+        Assert.Equal("unverified", freshness.State);
+        Assert.Empty(freshness.DirtyPaths);
+        Assert.Contains(freshness.Unverified, entry => entry.StartsWith(
+            (package ? "PACKAGE" : "GENERATED") + "_INPUT_UNVERIFIED:" + generated.RelativePath, StringComparison.Ordinal));
+        Assert.DoesNotContain(freshness.Unverified, entry => entry.StartsWith("GENERATED_BODY_INVALID:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void VerifyUsesStoredBodyIdentitiesForMixedInputs()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package: false);
+        var first = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        var text = snapshot.StoredGeneratedBodies[0].Body + "\n";
+        var second = first with { SourceId = "generated/second.g.cs", RelativePath = "generated/second.g.cs",
+            ContentHash = StoreFixture.Hash(text), ByteLength = StoreFixture.Utf8.GetByteCount(text), Utf16Length = text.Length };
+        var package = second with { SourceId = "package/Source.cs", RelativePath = "package/Source.cs", Kind = IndexFileKinds.PackageSource };
+        snapshot = snapshot with
+        {
+            Files = [.. snapshot.Files, second, package],
+            GeneratedBodies = [new(second.SourceId, text), snapshot.StoredGeneratedBodies[0]],
+            PackageBodies = [new(package.SourceId, "corrupted")]
+        };
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
+
+        var freshness = workspace.Verify(snapshot);
+
+        Assert.Equal("unverified", freshness.State);
+        Assert.Empty(freshness.DirtyPaths);
+        Assert.Equal(new[] { "GENERATED_INPUT_UNVERIFIED:" + first.RelativePath,
+            "GENERATED_INPUT_UNVERIFIED:" + second.RelativePath, "PACKAGE_BODY_INVALID:" + package.RelativePath }
+            .Order(StringComparer.Ordinal), freshness.Unverified);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifyFlagsATamperedStoredBody(bool package)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        var generated = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        snapshot = package
+            ? snapshot with { PackageBodies = [snapshot.StoredPackageBodies[0] with { Body = "corrupted" }] }
+            : snapshot with { GeneratedBodies = [snapshot.StoredGeneratedBodies[0] with { Body = "corrupted" }] };
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
+
+        var freshness = workspace.Verify(snapshot);
+
+        Assert.Equal("unverified", freshness.State);
+        Assert.Empty(freshness.DirtyPaths);
+        Assert.Contains(freshness.Unverified, entry => entry.StartsWith(
+            (package ? "PACKAGE" : "GENERATED") + "_BODY_INVALID:" + generated.RelativePath, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void VerifyRejectsStructuralErrorsAlongsideStoredBodyCorruption(bool package, bool invalidSearchText)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        snapshot = package
+            ? snapshot with { PackageBodies = [snapshot.StoredPackageBodies[0] with { Body = "corrupted" }] }
+            : snapshot with { GeneratedBodies = [snapshot.StoredGeneratedBodies[0] with { Body = "corrupted" }] };
+        snapshot = invalidSearchText
+            ? snapshot with { SearchText = [new("missing-node", "", "", "", "", "")] }
+            : snapshot with { Graph = snapshot.Graph with { Edges = [new("dangling-edge", "missing-node", "missing-node",
+                null, null, null, "calls", HarnessCertainty.Resolved, "fixture", null)] } };
+        var workspace = new QueryWorkspace(fixture.Root);
+
+        Assert.Equal("INDEX_INVALID_SNAPSHOT", Assert.Throws<IndexStoreException>(() =>
+            IndexSnapshotValidator.Validate(snapshot)).Code);
+        Assert.Equal("INDEX_INVALID_SNAPSHOT", Assert.Throws<IndexStoreException>(() => workspace.Verify(snapshot)).Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SnippetsComeFromTheStoredBody(bool package)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package);
+        Assert.Equal(HarnessCoverage.CompleteWithinScope, snapshot.Graph.Coverage);
+        IndexSnapshotValidator.Validate(snapshot);
+        var type = Assert.Single(snapshot.Graph.Nodes, node => node.Kind == HarnessNodeKind.Type);
+        var file = Assert.Single(snapshot.Files, QueryWorkspace.IsStored);
+        Assert.False(File.Exists(Path.Combine(fixture.Root, file.RelativePath)));
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(["src/App.cs"], ConfigurationVerified: true));
+        var query = new QueryService(new FixedIndex(snapshot), workspace, isTrusted: true);
+        var request = new QueryRequest("generated", QueryKind.Context, NodeId: type.Id,
+            Scope: new(VariantIds: [fixture.Variant]), Freshness: QueryFreshnessPolicy.AllowStale,
+            RequireComplete: true, Budget: Generous);
+
+        var reply = query.Execute(request);
+
+        Assert.True(reply.Succeeded);
+        Assert.False(reply.Envelope.Truncated);
+        var snippet = Assert.Single(All(reply), item => item.Snippet is not null).Snippet!;
+        var span = type.Location!.RawSpan!.Value;
+        var body = package ? snapshot.StoredPackageBodies[0].Body : snapshot.StoredGeneratedBodies[0].Body;
+        Assert.Equal(body.Substring(span.Start, span.Length), snippet.Text);
+        Assert.Equal("public class GeneratedType { }", snippet.Text);
+        Assert.Equal(file.SourceId, snippet.SourceId);
+        Assert.Equal(file.ContentHash, snippet.ContentHash);
+        var marker = (package ? "PACKAGE" : "GENERATED") + "_SOURCE_FROM_SNAPSHOT";
+        Assert.Single(reply.Envelope.Diagnostics, diagnostic => diagnostic.Code == marker);
+        Assert.DoesNotContain(marker, reply.Envelope.TruncationReasons);
+        Assert.Equal("unverified", reply.Envelope.Snapshot.Freshness);
+        var fresh = query.Execute(request with { Freshness = QueryFreshnessPolicy.RequireFresh });
+        Error(fresh, "FRESHNESS_REQUIREMENT_NOT_MET");
+        Assert.Empty(All(fresh));
+    }
+
+    [Fact]
+    public void StoredProvenanceDoesNotHideDiagnosticTruncationFromRequireComplete()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = StoredSnapshot(fixture, package: false);
+        snapshot = snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Diagnostics = Enumerable.Range(0, 16)
+                    .Select(index => new HarnessGraphDiagnostic("fixture.saved." + index, 1)).ToArray()
+            }
+        };
+        var type = Assert.Single(snapshot.Graph.Nodes, node => node.Kind == HarnessNodeKind.Type);
+        var query = new QueryService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), isTrusted: true);
+        var reply = query.Execute(new("stored-diagnostics", QueryKind.Context, NodeId: type.Id,
+            Scope: new(VariantIds: [fixture.Variant]), Freshness: QueryFreshnessPolicy.AllowStale,
+            RequireComplete: true, Budget: Generous));
+
+        Error(reply, "INCOMPLETE_RESULT");
+        Assert.True(reply.Envelope.Truncated);
+        Assert.Contains("DIAGNOSTIC_LIMIT", reply.Envelope.TruncationReasons);
+        Assert.Equal(16, reply.Envelope.Diagnostics.Count);
+        Assert.Contains(reply.Envelope.Diagnostics, diagnostic => diagnostic.Code == "GENERATED_SOURCE_FROM_SNAPSHOT");
+    }
+
+    private static IndexSnapshot StoredSnapshot(StoreFixture fixture, bool package)
+    {
+        const string path = "generated/App/net10.0_Debug/Generator/Generated.g.cs";
+        const string text = "// retained café 😀\npublic class GeneratedType { }\n";
+        var baseline = fixture.Snapshot(1, withoutEdges: true);
+        var file = new IndexFile(path, path, package ? IndexFileKinds.PackageSource : IndexFileKinds.GeneratedSource, StoreFixture.Hash(text),
+            StoreFixture.Utf8.GetByteCount(text), text.Length);
+        var location = new HarnessLocation(path, "generated-v1", file.ContentHash,
+            new(text.IndexOf("public", StringComparison.Ordinal), "public class GeneratedType { }".Length));
+        var type = HarnessIdentity.LogicalSymbolId(fixture.Workspace, fixture.ProjectId, "type", "T:GeneratedType");
+        return new(baseline.Graph with
+        {
+            Variants = [baseline.Graph.Variants[0]],
+            Nodes = [baseline.Graph.Nodes.Single(node => node.Kind == HarnessNodeKind.Workspace),
+                baseline.Graph.Nodes.Single(node => node.Id == fixture.ProjectId),
+                new(type, HarnessNodeKind.Type, "GeneratedType", fixture.ProjectId, location)],
+            SymbolOccurrences = [new(fixture.Occurrence(type), type, fixture.Variant, location, [location])],
+            Edges = [], Markdown = null
+        }, [baseline.Files.Single(input => input.RelativePath == "src/App.cs"), file], [], [], [],
+            package ? [] : [new(path, text)], package ? [new(path, text)] : []);
+    }
+
+    private sealed class FixedIndex(IndexSnapshot snapshot) : IQueryIndex
+    {
+        public IndexSnapshot Snapshot => snapshot;
+        public IReadOnlyList<IndexSearchHit> Search(string literal, int limit) => [];
     }
 
     private static QueryItem[] All(QueryReply reply)

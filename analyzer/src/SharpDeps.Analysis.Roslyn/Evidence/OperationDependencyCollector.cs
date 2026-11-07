@@ -14,6 +14,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using SharpDeps.Analysis.Contracts;
+using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn.Symbols;
 
@@ -32,6 +33,8 @@ public sealed record OperationCollectionResult(
 
 public sealed class OperationDependencyCollector
 {
+    private const string DiAssembly = "Microsoft.Extensions.DependencyInjection.Abstractions";
+    private static readonly byte[] DiPublicKeyToken = [0xad, 0xb9, 0x79, 0x38, 0x29, 0xdd, 0xae, 0x60];
     private readonly SymbolResolver _resolver;
     private readonly SourceDocumentRegistry _documents;
     private readonly Dictionary<string, IndexedType> _typesById;
@@ -59,7 +62,9 @@ public sealed class OperationDependencyCollector
         CancellationToken cancellationToken = default)
     {
         var results = new List<CollectedEvidence>();
-        var methodReferences = new List<CollectedEvidence>();
+        var harnessOnlyEvidence = new List<CollectedEvidence>();
+        var extensionBindings = new Dictionary<string, HarnessExtensionBinding>(StringComparer.Ordinal);
+        var extensionDisplayChars = 0;
         var bodies = 0;
         var unresolved = 0;
         var dynamic = 0;
@@ -93,10 +98,13 @@ public sealed class OperationDependencyCollector
                             input,
                             owner,
                             results,
-                            methodReferences,
+                            harnessOnlyEvidence,
+                            extensionBindings,
+                            ref extensionDisplayChars,
                             ref unresolved,
                             ref dynamic,
-                            ref candidateOnly);
+                            ref candidateOnly,
+                            cancellationToken);
                     }
 
                     // These written types have no dedicated operation (for example a
@@ -129,7 +137,10 @@ public sealed class OperationDependencyCollector
         return new OperationCollectionResult(
             results,
             new OperationCollectionStats(bodies, unresolved, dynamic, candidateOnly),
-            methodReferences.Count == 0 ? null : Array.AsReadOnly(results.Concat(methodReferences).ToArray()));
+            harnessOnlyEvidence.Count == 0 && extensionBindings.Count == 0 ? null : Array.AsReadOnly(results
+                .Select(entry => extensionBindings.TryGetValue(entry.Evidence.Id, out var binding)
+                    ? entry with { ExtensionBinding = binding } : entry)
+                .Concat(harnessOnlyEvidence).ToArray()));
     }
 
     /// <summary>
@@ -210,10 +221,13 @@ public sealed class OperationDependencyCollector
         SymbolIndexInput input,
         ISymbol? owner,
         List<CollectedEvidence> results,
-        List<CollectedEvidence> methodReferences,
+        List<CollectedEvidence> harnessOnlyEvidence,
+        Dictionary<string, HarnessExtensionBinding> extensionBindings,
+        ref int extensionDisplayChars,
         ref int unresolved,
         ref int dynamic,
-        ref int candidateOnly)
+        ref int candidateOnly,
+        CancellationToken cancellationToken)
     {
         switch (operation)
         {
@@ -245,6 +259,7 @@ public sealed class OperationDependencyCollector
                     return;
                 }
 
+                var previousCount = results.Count;
                 AddEvidence(
                     input,
                     owner,
@@ -253,6 +268,19 @@ public sealed class OperationDependencyCollector
                     "calls",
                     results,
                     member: target);
+                if (results.Count > previousCount
+                    && ExtensionBinding(model, invocation, cancellationToken) is { } binding)
+                {
+                    if (binding.State == HarnessExtensionBindingState.Saved)
+                    {
+                        var chars = binding.ReceiverTypeDisplay!.Length + binding.ConstructedMethodDisplay!.Length;
+                        if (chars > HarnessExtensionBinding.MaximumSnapshotDisplayUtf16 - extensionDisplayChars)
+                            binding = OmittedBinding("metadata-budget");
+                        else extensionDisplayChars += chars;
+                    }
+                    extensionBindings.Add(results[^1].Evidence.Id, binding);
+                }
+                CollectScopedRegistration(model, invocation, input, owner, harnessOnlyEvidence, cancellationToken);
                 return;
             }
 
@@ -274,7 +302,7 @@ public sealed class OperationDependencyCollector
                 // Taking a delegate/event handler is a reference, not a call to its runtime target.
                 // Keep new occurrences out of report-v2 and its external-type registry.
                 AddEvidence(input, owner, target.ContainingType, methodReference.Syntax,
-                    "memberAccess", methodReferences, member: target, harnessOnly: true);
+                    "memberAccess", harnessOnlyEvidence, member: target, harnessOnly: true);
                 return;
             }
 
@@ -423,6 +451,143 @@ public sealed class OperationDependencyCollector
         }
     }
 
+    private static HarnessExtensionBinding? ExtensionBinding(SemanticModel model, IInvocationOperation invocation,
+        CancellationToken cancellationToken)
+    {
+        if (!invocation.TargetMethod.IsExtensionMethod
+            || invocation.Syntax is not InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax member }
+            || !member.IsKind(SyntaxKind.SimpleMemberAccessExpression)) return null;
+        var info = model.GetSymbolInfo(invocation.Syntax, cancellationToken);
+        if (info.Symbol is not IMethodSymbol { ReducedFrom: not null } reduced
+            || reduced.MethodKind != MethodKind.ReducedExtension || info.CandidateReason != CandidateReason.None
+            || !info.CandidateSymbols.IsEmpty) return null;
+        var definition = (invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod).OriginalDefinition;
+        if (!SymbolEqualityComparer.Default.Equals(reduced.ReducedFrom.OriginalDefinition, definition)
+            || model.GetDiagnostics(invocation.Syntax.Span, cancellationToken).Any(d => d.Severity == DiagnosticSeverity.Error))
+            return OmittedBinding("semantic-unavailable");
+        var constructed = reduced.GetConstructedReducedFrom();
+        if (constructed is null || !constructed.IsStatic || !constructed.IsExtensionMethod || constructed.Parameters.IsEmpty
+            || !SymbolEqualityComparer.Default.Equals(constructed.OriginalDefinition, definition))
+            return OmittedBinding("semantic-unavailable");
+        if (constructed.Arity > 16 || constructed.Parameters.Length > 64) return OmittedBinding("metadata-budget");
+        var receiver = model.GetTypeInfo(member.Expression, cancellationToken).Type;
+        var nodes = 0;
+        if (!ClosedDisplayType(receiver, 0, ref nodes) || !ClosedDisplayType(constructed.ReturnType, 0, ref nodes))
+            return OmittedBinding("unsupported-type");
+        foreach (var type in constructed.TypeArguments)
+            if (!ClosedDisplayType(type, 0, ref nodes)) return OmittedBinding("unsupported-type");
+        foreach (var parameter in constructed.Parameters)
+            if (!ClosedDisplayType(parameter.Type, 0, ref nodes)) return OmittedBinding("unsupported-type");
+
+        var format = SymbolIndexBuilder.DisplayFormat.WithMiscellaneousOptions(
+            SymbolDisplayFormat.FullyQualifiedFormat.MiscellaneousOptions
+                | SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers
+                | SymbolDisplayMiscellaneousOptions.UseSpecialTypes
+                | SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
+        var receiverDisplay = receiver!.ToDisplayString(format);
+        var methodDisplay = constructed.ToDisplayString(format
+            .WithMemberOptions(SymbolDisplayMemberOptions.IncludeContainingType | SymbolDisplayMemberOptions.IncludeType
+                | SymbolDisplayMemberOptions.IncludeParameters | SymbolDisplayMemberOptions.IncludeRef | SymbolDisplayMemberOptions.IncludeModifiers)
+            .WithParameterOptions(SymbolDisplayParameterOptions.IncludeType | SymbolDisplayParameterOptions.IncludeParamsRefOut
+                | SymbolDisplayParameterOptions.IncludeName | SymbolDisplayParameterOptions.IncludeExtensionThis)
+            .WithGenericsOptions(SymbolDisplayGenericsOptions.IncludeTypeParameters));
+        if (receiverDisplay.Length > HarnessExtensionBinding.MaximumReceiverDisplayUtf16
+            || methodDisplay.Length > HarnessExtensionBinding.MaximumMethodDisplayUtf16)
+            return OmittedBinding("metadata-budget");
+        if (string.IsNullOrWhiteSpace(receiverDisplay) || string.IsNullOrWhiteSpace(methodDisplay)
+            || receiverDisplay.Any(char.IsControl) || methodDisplay.Any(char.IsControl))
+            return OmittedBinding("unsupported-type");
+        return new(HarnessExtensionBindingState.Saved, receiverDisplay, methodDisplay);
+    }
+
+    private static bool ClosedDisplayType(ITypeSymbol? type, int depth, ref int nodes)
+    {
+        if (type is null || depth >= 16 || ++nodes > 256) return false;
+        if (type is IArrayTypeSymbol array)
+            return array.Rank is > 0 and <= 32 && ClosedDisplayType(array.ElementType, depth + 1, ref nodes);
+        if (type is not INamedTypeSymbol named || named.IsAnonymousType || named.IsUnboundGenericType
+            || named.TypeKind is TypeKind.Error or TypeKind.Dynamic) return false;
+        if (named.ContainingType is not null && !ClosedDisplayType(named.ContainingType, depth + 1, ref nodes)) return false;
+        foreach (var argument in named.TypeArguments)
+            if (!ClosedDisplayType(argument, depth + 1, ref nodes)) return false;
+        return true;
+    }
+
+    private static HarnessExtensionBinding OmittedBinding(string reason)
+        => new(HarnessExtensionBindingState.Omitted, OmissionReason: reason);
+
+    private void CollectScopedRegistration(SemanticModel model, IInvocationOperation invocation,
+        SymbolIndexInput input, ISymbol? owner, List<CollectedEvidence> results, CancellationToken cancellationToken)
+    {
+        if (invocation.TargetMethod.Name != "AddScoped") return;
+        var info = model.GetSymbolInfo(invocation.Syntax, cancellationToken);
+        if (info.Symbol is not IMethodSymbol bound || info.CandidateReason != CandidateReason.None
+            || !info.CandidateSymbols.IsEmpty || bound.TypeArguments.Length != 2) return;
+        var definition = (bound.ReducedFrom ?? bound).OriginalDefinition;
+        var assembly = definition.ContainingAssembly;
+        if (definition.Name != "AddScoped" || !definition.IsStatic || !definition.IsExtensionMethod
+            || definition.MethodKind != MethodKind.Ordinary || definition.Arity != 2
+            || definition.DeclaredAccessibility != Accessibility.Public || definition.Locations.IsEmpty
+            || definition.Locations.Any(location => !location.IsInMetadata || location.IsInSource)
+            || definition.Parameters.Length != 1 || definition.Parameters[0].RefKind != RefKind.None
+            || definition.ContainingType is not { } declaringType
+            || declaringType.DeclaredAccessibility != Accessibility.Public
+            || declaringType.MetadataName != "ServiceCollectionServiceExtensions"
+            || declaringType.ContainingType is not null
+            || definition.ContainingNamespace.ToDisplayString() != "Microsoft.Extensions.DependencyInjection"
+            || assembly is null || assembly.Name != DiAssembly || !assembly.Identity.PublicKeyToken.SequenceEqual(DiPublicKeyToken)
+            || !SymbolEqualityComparer.Default.Equals(definition,
+                (invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod).OriginalDefinition)
+            || definition.Parameters[0].Type is not INamedTypeSymbol collection
+            || collection.MetadataName != "IServiceCollection" || collection.Arity != 0
+            || collection.ContainingType is not null
+            || collection.ContainingNamespace.ToDisplayString() != "Microsoft.Extensions.DependencyInjection"
+            || !SymbolEqualityComparer.Default.Equals(collection.ContainingAssembly, assembly)
+            || !SymbolEqualityComparer.Default.Equals(definition.ReturnType, collection)
+            || _resolver.ResolveCanonicalMemberId(owner, input.VariantId) is null) return;
+
+        if (!ConcreteNamedType(bound.TypeArguments[0], out var service)
+            || !ConcreteNamedType(bound.TypeArguments[1], out var implementation)
+            || _resolver.ResolveTypeId(service, input.VariantId) is null
+            || _resolver.ResolveTypeId(implementation, input.VariantId) is null
+            || _resolver.DescribeHarnessTarget(service, null, input.VariantId) is not { } serviceTarget
+            || _resolver.DescribeHarnessTarget(implementation, null, input.VariantId) is not { } implementationTarget
+            || model.GetDiagnostics(invocation.Syntax.Span, cancellationToken).Any(d => d.Severity == DiagnosticSeverity.Error))
+            return;
+
+        var pair = new List<CollectedEvidence>(2);
+        AddEvidence(input, owner, service, invocation.Syntax, "registers_scoped_service", pair, harnessOnly: true);
+        AddEvidence(input, owner, implementation, invocation.Syntax, "registers_scoped_implementation", pair, harnessOnly: true);
+        if (pair.Count != 2)
+        {
+            foreach (var entry in pair) _seen.Remove(entry.Evidence.Id);
+            return;
+        }
+        results.Add(pair[0] with
+        {
+            TargetIsExternal = _resolver.IsExternal(service, input.VariantId),
+            TargetSymbol = _resolver.IsExternal(service, input.VariantId) ? serviceTarget : null,
+            Producer = "roslyn-di-registration"
+        });
+        results.Add(pair[1] with
+        {
+            TargetIsExternal = _resolver.IsExternal(implementation, input.VariantId),
+            TargetSymbol = _resolver.IsExternal(implementation, input.VariantId) ? implementationTarget : null,
+            Producer = "roslyn-di-registration"
+        });
+    }
+
+    private static bool ConcreteNamedType(ITypeSymbol type, out INamedTypeSymbol named)
+    {
+        named = null!;
+        if (type is not INamedTypeSymbol candidate || !candidate.IsReferenceType
+            || candidate.TypeKind is TypeKind.Error or TypeKind.Dynamic || candidate.IsAnonymousType) return false;
+        for (INamedTypeSymbol? current = candidate; current is not null; current = current.ContainingType)
+            if (current.Arity != 0 || current.IsUnboundGenericType) return false;
+        named = candidate;
+        return true;
+    }
+
     /// <summary>Classifies the referenced storage, not its receiver or an index argument.</summary>
     private static string? AccessOf(IOperation reference)
     {
@@ -522,7 +687,8 @@ public sealed class OperationDependencyCollector
             return;
         }
 
-        var document = _documents.Register(tree.FilePath);
+        var document = _documents.ResolveTreeDocument(input.VariantId, tree)
+            ?? throw new InvalidOperationException("An evidence tree with a file path must resolve to a document.");
         var span = tree.GetLineSpan(syntax.Span);
         var physicalSpan = new PhysicalSpan(
             syntax.Span.Start,

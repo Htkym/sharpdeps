@@ -11,6 +11,7 @@
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" />
     <None Include="..\..\..\resources\icon.png" Pack="true" PackagePath="/" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <ProjectReference Include="..\SharpDeps.Cli\SharpDeps.Cli.csproj" />

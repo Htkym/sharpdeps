@@ -17,6 +17,10 @@ public sealed class McpTests
         Assert.Equal("explore", tool.Name);
         Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
         Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal("agent", tool.InputSchema.GetProperty("properties").GetProperty("format").GetProperty("default").GetString());
+        Assert.Equal("unique", tool.InputSchema.GetProperty("properties").GetProperty("scopePolicy").GetProperty("default").GetString());
+        Assert.Equal("boolean", tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("type").GetString());
+        Assert.False(tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("default").GetBoolean());
         Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", root, "--allow-mutations"]));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "index" }));
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
@@ -37,18 +41,87 @@ public sealed class McpTests
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
         var adapter = new McpQueryAdapter(new(root));
+        var schema = Assert.Single(adapter.ListTools()).InputSchema;
+        var kind = schema.GetProperty("properties").GetProperty("queryKind");
+        Assert.Equal("symbol", kind.GetProperty("default").GetString());
+        Assert.Equal(new[] { "symbol", "http-get-literal" }, kind.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.False(schema.GetProperty("properties").GetProperty("query").TryGetProperty("minLength", out _));
+        var branches = schema.GetProperty("anyOf").EnumerateArray().ToArray();
+        var literal = Assert.Single(branches, branch => branch.GetProperty("properties").TryGetProperty("queryKind", out var property)
+            && property.TryGetProperty("const", out var value) && value.GetString() == "http-get-literal");
+        Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("pathTo", literal.GetProperty("not").GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+        var symbol = Assert.Single(branches, branch => branch.GetProperty("properties").TryGetProperty("query", out _));
+        Assert.Equal(1, symbol.GetProperty("properties").GetProperty("query").GetProperty("minLength").GetInt32());
         foreach (var json in new[] {
-            "{}", "{\"query\":\"\"}", "{\"query\":\"--trusted\"}",
+            "{}", "{\"query\":\"\"}", "{\"query\":null}", "{\"query\":\"--trusted\"}",
+            "{\"query\":\" \"}",
+            "{\"query\":\"\",\"queryKind\":\"symbol\"}",
+            "{\"query\":\"Service\",\"queryKind\":\"literal\"}",
+            "{\"query\":\"Service\",\"queryKind\":\"Symbol\"}",
+            "{\"query\":\"Service\",\"queryKind\":1}",
+            "{\"query\":\"Service\",\"queryKind\":null}",
+            "{\"query\":\"Service\",\"QueryKind\":\"symbol\"}",
+            "{\"queryKind\":\"http-get-literal\"}",
+            "{\"queryKind\":\"http-get-literal\",\"query\":null}",
+            "{\"queryKind\":\"http-get-literal\",\"query\":\"bad\\nvalue\"}",
+            JsonSerializer.Serialize(new { queryKind = "http-get-literal", query = new string('x', 1025) }),
+            JsonSerializer.Serialize(new { query = "", pathTo = "hocc_" + new string('a', 64), queryKind = "http-get-literal" }),
+            "{\"query\":\"Service\\n\"}",
             "{\"query\":\"Service\",\"root\":\"elsewhere\"}",
+            "{\"query\":\"Service\",\"Format\":\"agent\"}",
             "{\"query\":\"Service\",\"maxChars\":2047}",
+            "{\"query\":\"Service\",\"maxChars\":2048.5}",
+            "{\"query\":\"Service\",\"maxChars\":null}",
             "{\"query\":\"Service\",\"maxBytes\":4000001}",
+            "{\"query\":\"Service\",\"maxBytes\":null}",
             "{\"query\":\"Service\",\"maxMilliseconds\":\"1000\"}",
-            "{\"query\":\"Service\",\"freshness\":\"current\"}" })
+            "{\"query\":\"Service\",\"maxMilliseconds\":null}",
+            "{\"query\":\"Service\",\"maxNodes\":1}",
+            "{\"query\":\"Service\",\"freshness\":\"current\"}",
+            "{\"query\":\"Service\",\"format\":\"verbose\"}",
+            "{\"query\":\"Service\",\"format\":\"Agent\"}",
+            "{\"query\":\"Service\",\"format\":1}",
+            "{\"query\":\"Service\",\"format\":null}",
+            "{\"query\":\"Service\",\"scopePolicy\":\"auto\"}",
+            "{\"query\":\"Service\",\"scopePolicy\":\"PreferDebug\"}",
+            "{\"query\":\"Service\",\"scopePolicy\":true}",
+            "{\"query\":\"Service\",\"scopePolicy\":null}",
+            "{\"query\":\"Service\",\"ownerStatus\":null}",
+            "{\"query\":\"Service\",\"ownerStatus\":\"true\"}",
+            "{\"query\":\"Service\",\"ownerStatus\":1}",
+            "{\"query\":\"Service\",\"pathTo\":true}",
+            "{\"query\":\"Service\",\"pathTo\":null}",
+            "{\"query\":\"Service\",\"pathTo\":\" \"}",
+            JsonSerializer.Serialize(new { query = "Service", pathTo = new string('x', 129) }) })
         {
             var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
-            await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+            var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
             { Name = "explore", Arguments = properties }));
+            Assert.Equal("MCP_ARGUMENT_INVALID", error.Message);
         }
+        using var malformed = JsonDocument.Parse("\"\\uD800\"");
+        var unicodeError = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+        {
+            Name = "explore", Arguments = new Dictionary<string, JsonElement>
+            {
+                ["queryKind"] = JsonSerializer.SerializeToElement("http-get-literal"),
+                ["query"] = malformed.RootElement.Clone()
+            }
+        }));
+        Assert.Equal("MCP_ARGUMENT_INVALID", unicodeError.Message);
+        var maximum = string.Concat(Enumerable.Repeat("😀", 512));
+        var accepted = await adapter.CallAsync(new()
+        {
+            Name = "explore", Arguments = new Dictionary<string, JsonElement>
+            {
+                ["query"] = JsonSerializer.SerializeToElement(maximum),
+                ["queryKind"] = JsonSerializer.SerializeToElement("http-get-literal")
+            }
+        });
+        Assert.True(accepted.IsError);
+        using var hostError = JsonDocument.Parse(Assert.IsType<TextContentBlock>(Assert.Single(accepted.Content)).Text);
+        Assert.Equal("ROOT_INVALID", hostError.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
         await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new() { Name = "search" }));
         Assert.False(Directory.Exists(root));
     }

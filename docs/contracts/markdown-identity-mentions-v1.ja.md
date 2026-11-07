@@ -24,7 +24,7 @@ tokenは空値・前後空白・過去tokenとの重複を拒否する。採番�
 
 コードファイルの明示linkは、共有factsの`Target`とownerが検証済みの`CodeFileAliases`を完全一致で照合する。catalogの`SourceId`には実際のnode/occurrenceの宣言位置を要求する。URLや相対pathを別parserで解釈せず、alias未登録のlinkは未解決のまま保持する。共有factsに`TargetRawSpan`がないlinkは未知位置の候補として扱う。aliasの追加・変更・削除も再解決を要し、対象linkのTargetを変更tokenとして通知するか、全件再解決を選ぶ。
 
-variantを絞ってから同じlogical symbol IDをまとめる。候補が一つでも本文の推測や未知・部分的な位置は`Candidate`にする。複数候補はすべて保持し、`TargetNodeId`を確定しない。候補がない場合は`Unresolved`を保持する。Syntamarkの現行公開DTOにはinline code専用kindがなく、paragraph/tableCellのdecoded textに混在するため、本文は推測として扱い、この制約を結果にも記録する。
+variantを絞ってから同じlogical symbol IDをまとめる。候補が一つでも本文・inline codeの推測や未知・部分的な位置は`Candidate`にする。複数候補はすべて保持し、`TargetNodeId`を確定しない。候補がない場合は`Unresolved`を保持する。準備済み入力を使う経路で、Syntamark 1.1の構文木に既知の範囲を持つ一つの`CodeSpan`があり、既存の`Map`が`Exact`または`CoveringTokens`で返したraw fragmentが空でなく、すべてその`CodeSpan`の範囲に収まる場合だけ、`InlineCode`に分類する。構文木がない場合、`CodeSpan`の範囲が未知の場合、または`Map`の位置が未知・部分的な場合は本文として扱い、本文が推測である制約を結果にも記録する。
 
 symbol catalogのcoverageはMarkdownのcoverageと別に検査し、結果の`CatalogCoverage`へ保持する。catalogが`Partial`または`Failed`の場合は、明示metadataやFQNでも一候補の一意性を確定せず、`Candidate`と`catalog-incomplete`を残す。mentionが0件でも不足理由を保持し、完全なMarkdown graphへ投影した際に`Partial`を伝播する。catalogのcoverageが変わった場合は、変更token一覧が空でも全mentionを再解決する。`CompleteWithinScope`へ戻った際は不足理由を除去し、完全なcatalogと原文根拠から再確定する。
 

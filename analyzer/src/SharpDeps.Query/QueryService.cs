@@ -16,6 +16,7 @@ public sealed class QueryService
     private readonly Dictionary<string, HarnessNode> nodes;
     private readonly Dictionary<string, HarnessSymbolOccurrence> occurrences;
     private readonly Dictionary<string, IndexFile> files;
+    private readonly Dictionary<string, string> storedBodies;
     private readonly Dictionary<string, HarnessEdge[]> outgoing;
     private readonly Dictionary<string, HarnessEdge[]> incoming;
     private readonly QueryWorkspace? workspace;
@@ -31,6 +32,9 @@ public sealed class QueryService
         nodes = saved.Graph.Nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
         occurrences = saved.Graph.SymbolOccurrences.ToDictionary(o => o.Id, StringComparer.Ordinal);
         files = saved.Files.ToDictionary(f => f.SourceId, StringComparer.Ordinal);
+        storedBodies = saved.StoredGeneratedBodies.Select(b => (b.SourceId, b.Body))
+            .Concat(saved.StoredPackageBodies.Select(b => (b.SourceId, b.Body)))
+            .ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
         outgoing = saved.Graph.Edges.GroupBy(e => e.SourceNodeId, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.OrderBy(e => e.Id, StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
         incoming = saved.Graph.Edges.GroupBy(e => e.TargetNodeId, StringComparer.Ordinal)
@@ -424,7 +428,7 @@ public sealed class QueryService
             return files.GetValueOrDefault(node.Location?.SourceId ?? "")?.Kind switch
             {
                 "markdown" => QueryResultKind.Docs,
-                "source" or "code" => QueryResultKind.Code,
+                "source" or "code" or IndexFileKinds.GeneratedSource or IndexFileKinds.PackageSource => QueryResultKind.Code,
                 _ => QueryResultKind.Other
             };
         return node.Kind is HarnessNodeKind.Project or HarnessNodeKind.Namespace or HarnessNodeKind.Type
@@ -469,6 +473,17 @@ public sealed class QueryService
             PathOf(location), location, via, Node: node with { Location = location });
     }
 
+    /// <summary>
+    /// The bytes behind one input: the verified file on disk for physical inputs, the
+    /// verified stored body for generated/package inputs. A virtual path is never
+    /// resolved against the filesystem.
+    /// </summary>
+    private byte[] ReadSource(IndexFile file, CancellationToken token)
+        => QueryWorkspace.IsStored(file)
+            ? workspace!.ReadStored(file, storedBodies.TryGetValue(file.SourceId, out var body)
+                ? body : throw new QuerySourceException("SOURCE_CHANGED_SINCE_SNAPSHOT", file.RelativePath), token)
+            : workspace!.Read(file, token);
+
     private void AddSnippets(Work work, List<QueryItem> page, ref QueryFreshness freshness)
     {
         var changed = new HashSet<string>(StringComparer.Ordinal);
@@ -481,7 +496,13 @@ public sealed class QueryService
             if (!files.TryGetValue(group.Key, out var file)) continue;
             try
             {
-                var text = new UTF8Encoding(false, true).GetString(workspace!.Read(file, work.Token));
+                var text = new UTF8Encoding(false, true).GetString(ReadSource(file, work.Token));
+                if (QueryWorkspace.IsStored(file))
+                {
+                    var marker = QueryWorkspace.IsPackage(file) ? "PACKAGE_SOURCE_FROM_SNAPSHOT" : "GENERATED_SOURCE_FROM_SNAPSHOT";
+                    if (!work.Diagnostics.Any(diagnostic => diagnostic.Code == marker))
+                        work.Diagnostics.Add(new(marker, "Source text comes from a verified saved body; current source is unverified."));
+                }
                 var sorted = group.Select(p => (p.index, Location: p.item.Evidence!, Span: p.item.Evidence!.RawSpan!.Value))
                     .OrderBy(p => p.Span.Start).ThenBy(p => p.Span.End).ToArray();
                 if (sorted.Any(p => p.Location.ContentHash != file.ContentHash || p.Span.End > text.Length))
@@ -541,7 +562,8 @@ public sealed class QueryService
             work.Reasons.Add("FRESHNESS_METADATA_LIMIT");
         foreach (var diagnostic in (saved.Graph.Diagnostics ?? []).Take(16))
             work.Diagnostics.Add(new(diagnostic.Code.Length <= 64 ? diagnostic.Code : "GRAPH_DIAGNOSTIC", "Saved graph diagnostic count: " + diagnostic.Count));
-        if ((saved.Graph.Diagnostics?.Count ?? 0) > 16) work.Reasons.Add("DIAGNOSTIC_LIMIT");
+        if ((saved.Graph.Diagnostics?.Count ?? 0) > 16 || work.Diagnostics.Count > 16)
+            work.Reasons.Add("DIAGNOSTIC_LIMIT");
         var budget = work.Request.Budget!;
         var minimalError = false;
         while (true)
@@ -607,7 +629,7 @@ public sealed class QueryService
         static bool Short(string? s, int max) => s is null || (s.Length <= max && !s.Any(char.IsControl));
         if (string.IsNullOrWhiteSpace(r.RequestId) || !Short(r.RequestId, 64) || !Enum.IsDefined(r.Kind) || !Enum.IsDefined(r.Freshness)
             || r.PageSize is < 1 or > 500 || b.MaxNodes is < 1 or > 500 || b.MaxEdges is < 1 or > 1000
-            || b.MaxDepth is < 1 or > 8 || b.MaxMilliseconds is < 10 or > 30000
+            || b.MaxDepth is < 1 or > 8 || b.MaxMilliseconds != 0 && (b.MaxMilliseconds is < 10 or > 30000)
             || b.MaxChars is < 2048 or > 1000000 || b.MaxBytes is < 2048 or > 4000000
             || !Short(r.Term, 128) || !Short(r.NodeId, 128) || !Short(r.Scope?.ProjectId, 128) || !Short(r.Scope?.PathPrefix, 512)
             || !Short(r.Scope?.ParentId, 128)
@@ -634,7 +656,7 @@ public sealed class QueryService
         public Work(QueryRequest request, CancellationToken token)
         {
             Request = request; Timer = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Timer.CancelAfter(request.Budget!.MaxMilliseconds);
+            if (request.Budget!.MaxMilliseconds != 0) Timer.CancelAfter(request.Budget.MaxMilliseconds);
         }
         public QueryRequest Request { get; }
         public CancellationTokenSource Timer { get; }
@@ -644,7 +666,12 @@ public sealed class QueryService
         public List<QueryIssue> Diagnostics { get; } = [];
         public List<QueryIssue> Errors { get; } = [];
         public HashSet<string> Reasons { get; } = new(StringComparer.Ordinal);
-        public void Check() { Token.ThrowIfCancellationRequested(); if (clock.ElapsedMilliseconds > Request.Budget!.MaxMilliseconds) throw new OperationCanceledException(); }
+        public void Check()
+        {
+            Token.ThrowIfCancellationRequested();
+            if (Request.Budget!.MaxMilliseconds != 0 && clock.ElapsedMilliseconds > Request.Budget.MaxMilliseconds)
+                throw new OperationCanceledException();
+        }
         public bool CanNode(string id) => nodeIds.Contains(id) || nodeIds.Count < Request.Budget!.MaxNodes;
         public bool Add(QueryItem item)
         {

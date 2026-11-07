@@ -142,6 +142,83 @@ public sealed class MarkdownSymbolResolverTests
     }
 
     [Fact]
+    public void PreparedCodeSpansRetainMentionEvidenceOrderAndConservativeBindings()
+    {
+        const string raw = "\uFEFF# Guide\r\n\r\n😀 `Service` and &#65;pp.Service\r\n\r\n```csharp\r\nApp.Service\r\n```\r\n";
+        var request = new MarkdownGraphRequest(raw, Workspace, Document, "scope", "readme.md", "version-a", "snapshot-a", 1);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var prepared = adapter.Prepare(request, true);
+        var projection = adapter.Project(request, prepared, true);
+        var first = Symbol("App.Service", "Service", "T:App.Service", "App", Net10);
+        var second = Symbol("Other.Service", "Service", "T:Other.Service", "Other", Net9);
+        var catalog = Catalog(projection, first, second);
+        var legacy = MarkdownSymbolResolver.Resolve(projection, raw, catalog);
+        var result = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog);
+        Assert.Equal(legacy.Mentions.Select(m => (m.Id, m.OwnerNodeId, m.Token, m.Selector, m.Relation, m.Scope,
+                m.Location, m.Precision, m.Snippet, m.Certainty, m.TargetNodeId, m.Reason)),
+            result.Mentions.Select(m => (m.Id, m.OwnerNodeId, m.Token, m.Selector, m.Relation, m.Scope,
+                m.Location, m.Precision, m.Snippet, m.Certainty, m.TargetNodeId, m.Reason)));
+        for (var i = 0; i < legacy.Mentions.Count; i++)
+        {
+            Assert.Equal(legacy.Mentions[i].RawFragments, result.Mentions[i].RawFragments);
+            Assert.Equal(legacy.Mentions[i].CandidateNodeIds, result.Mentions[i].CandidateNodeIds);
+        }
+        var inline = Assert.Single(result.Mentions, m => m.Origin == MarkdownMentionOrigin.InlineCode);
+        Assert.Equal("Service", inline.Token);
+        Assert.Equal(2, inline.CandidateNodeIds.Count);
+        Assert.Equal(HarnessCertainty.Candidate, inline.Certainty);
+        Assert.Null(inline.TargetNodeId);
+        Assert.Equal(MarkdownMentionOrigin.BodyText, legacy.Mentions.Single(m => m.Id == inline.Id).Origin);
+        Assert.Contains(result.Mentions, m => m.Origin == MarkdownMentionOrigin.BodyText && m.Snippet!.Contains("&#65;", StringComparison.Ordinal));
+        Assert.Equal(HarnessCertainty.Resolved, Assert.Single(result.Mentions, m => m.Origin == MarkdownMentionOrigin.CodeFence).Certainty);
+        Assert.Contains(result.Reasons, reason => reason.StartsWith("inline-code-kind-unavailable", StringComparison.Ordinal));
+        Assert.Contains(result.Reasons, reason => reason.StartsWith("inline-code-symbol-heuristic", StringComparison.Ordinal));
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.ResolvePrepared(Parse(raw), prepared, catalog));
+        var otherWorkspace = HarnessIdentity.WorkspaceId(Guid.Parse("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.ResolvePrepared(
+            projection with { Graph = projection.Graph with { WorkspaceId = otherWorkspace } }, prepared,
+            catalog with { Graph = catalog.Graph with { WorkspaceId = otherWorkspace } }));
+        Assert.Throws<OperationCanceledException>(() => MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog,
+            cancellationToken: new CancellationToken(true)));
+
+        var scoped = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog, new(VariantId: Net10));
+        var rebound = MarkdownSymbolResolver.ReResolve(scoped, catalog);
+        var scopedInline = Assert.Single(rebound.Mentions, m => m.Origin == MarkdownMentionOrigin.InlineCode);
+        Assert.Equal(new[] { first.NodeId }, scopedInline.CandidateNodeIds);
+        Assert.Equal(HarnessCertainty.Candidate, scopedInline.Certainty);
+        Assert.Null(scopedInline.TargetNodeId);
+    }
+
+    [Fact]
+    public void PreparedInlineOnlyEvidenceKeepsItsHeuristicReasonAndPartialGraph()
+    {
+        const string raw = "`App.Service`";
+        var request = new MarkdownGraphRequest(raw, Workspace, Document, "scope", "readme.md", "version-a", "snapshot-a", 1);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var prepared = adapter.Prepare(request, true);
+        var projection = adapter.Project(request with
+        {
+            SectionTokens = prepared.Facts.Sections.ToDictionary(section => section.LocalKey, section => "inline-only-" + section.LocalKey),
+            SectionIdentityTextHash = prepared.Facts.TextHash
+        }, prepared, true);
+        Assert.Equal(HarnessCoverage.CompleteWithinScope, projection.Graph.Coverage);
+        var symbol = Symbol("App.Service", "Service", "T:App.Service", "App");
+        var catalog = Catalog(projection, symbol);
+        var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, catalog);
+        var mention = Assert.Single(resolution.Mentions);
+        Assert.Equal(MarkdownMentionOrigin.InlineCode, mention.Origin);
+        Assert.Equal(HarnessCertainty.Candidate, mention.Certainty);
+        Assert.Contains(resolution.Reasons, reason => reason.StartsWith("inline-code-symbol-heuristic", StringComparison.Ordinal));
+        Assert.DoesNotContain(resolution.Reasons, reason => reason.StartsWith("inline-code-kind-unavailable", StringComparison.Ordinal));
+        var merged = projection.Graph with { Nodes = projection.Graph.Nodes.Concat(catalog.Graph.Nodes).ToArray() };
+        var graph = MarkdownSymbolResolver.ProjectGraph(merged, resolution);
+        Assert.Equal(HarnessCoverage.Partial, graph.Coverage);
+        Assert.Contains(graph.Edges, edge => edge.SourceNodeId == mention.Id && edge.Kind == "mentions_symbol"
+            && edge.Origin == "InlineCode" && edge.Certainty == HarnessCertainty.Candidate);
+        Assert.DoesNotContain(graph.Edges, edge => edge.Kind is "calls" or "conforms_to");
+    }
+
+    [Fact]
     public void ExplicitCodeFileLinksUseOwnerAliasesAndParserTargetEvidenceWithoutUrlGuessing()
     {
         var raw = "[source][code]\n[unknown](../unknown.cs)\n[remote](https://example.invalid/App.cs)\n\n[code]: src/App.cs\n";
@@ -173,6 +250,15 @@ public sealed class MarkdownSymbolResolverTests
         var rebound = MarkdownSymbolResolver.ReResolve(result, catalog with { CodeFileAliases = null });
         Assert.Equal(HarnessCertainty.Unresolved, rebound.Mentions.Single(m => m.Id == source.Id).Certainty);
         Assert.Null(rebound.Mentions.Single(m => m.Id == source.Id).TargetNodeId);
+        var withoutCatalogSource = catalog with { Symbols = new[] { symbol with { SourceId = null } } };
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(projection, raw, withoutCatalogSource));
+        var fileOnlyAlias = withoutCatalogSource with { Graph = catalog.Graph with
+        {
+            Nodes = catalog.Graph.Nodes.Append(new HarnessNode("source-file", HarnessNodeKind.SourceFile,
+                "src/App.cs", null, new("src/App.cs", "code-version", "code-hash", new(0, 1)))).ToArray()
+        } };
+        Assert.Equal(HarnessCertainty.Unresolved, MarkdownSymbolResolver.Resolve(projection, raw, fileOnlyAlias)
+            .Mentions.Single(m => m.Token == "src/App.cs").Certainty);
         const string unusedDefinitionRaw = "[code]: src/App.cs\n";
         var unusedDefinition = Parse(unusedDefinitionRaw);
         var unusedResult = MarkdownSymbolResolver.Resolve(unusedDefinition, unusedDefinitionRaw,
@@ -184,6 +270,79 @@ public sealed class MarkdownSymbolResolverTests
         var rejectedMapping = MarkdownSymbolResolver.Resolve(duplicate, duplicateRaw, Catalog(duplicate, symbol));
         Assert.DoesNotContain(rejectedMapping.Mentions, m => m.Origin == MarkdownMentionOrigin.ExplicitMetadata);
         Assert.Contains(rejectedMapping.Reasons, r => r.StartsWith("front-matter-not-usable", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CatalogSourceChecksPreserveVariantAndDuplicateExistentialSemantics()
+    {
+        const string raw = "```csharp\nService\n```\n";
+        var projection = Parse(raw);
+        var symbol = Symbol("App.Service", "Service", "T:App.Service", "App", Net10) with { SourceId = "src/Service.cs" };
+        var catalog = Catalog(projection, symbol, symbol with { VariantId = Net9, SourceId = null });
+        var net10 = catalog.Graph.SymbolOccurrences.Single(o => o.VariantId == Net10);
+        var net9 = catalog.Graph.SymbolOccurrences.Single(o => o.VariantId == Net9);
+        var location = new HarnessLocation("src/Service.cs", "code-version", "code-hash", new(0, 1));
+        var graph = catalog.Graph with
+        {
+            Nodes = catalog.Graph.Nodes.Select(node => node with { Location = null }).ToArray(),
+            SymbolOccurrences = new[] { net10, net9 with { Location = location } }
+        };
+        catalog = catalog with { Graph = graph, Symbols = new[] { symbol } };
+        Assert.Equal("Catalog source must identify an actual symbol declaration.",
+            Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(projection, raw, catalog)).Message);
+        Assert.Equal(symbol.NodeId, Assert.Single(MarkdownSymbolResolver.Resolve(projection, raw,
+            catalog with { Symbols = new[] { symbol with { VariantId = null } } }).Mentions).TargetNodeId);
+
+        var declarationOnly = graph with { SymbolOccurrences = new[] { net10, net9 with { Declarations = new[] { location } } } };
+        Assert.Throws<ArgumentException>(() => MarkdownSymbolResolver.Resolve(projection, raw, catalog with { Graph = declarationOnly }));
+        Assert.Equal(symbol.NodeId, Assert.Single(MarkdownSymbolResolver.Resolve(projection, raw,
+            catalog with { Graph = declarationOnly, Symbols = new[] { symbol with { VariantId = null } } }).Mentions).TargetNodeId);
+
+        var occurrences = new[] { net10, net10 with { Declarations = new[] { location } }, net9 };
+        foreach (var ordered in new[] { occurrences, occurrences.Reverse().ToArray() })
+        {
+            var duplicates = graph with
+            {
+                Nodes = graph.Nodes.Append(graph.Nodes[0]).ToArray(),
+                Variants = graph.Variants.Append(graph.Variants[0]).ToArray(),
+                SymbolOccurrences = ordered
+            };
+            Assert.Equal(symbol.NodeId, Assert.Single(MarkdownSymbolResolver.Resolve(projection, raw,
+                catalog with { Graph = duplicates }).Mentions).TargetNodeId);
+        }
+        // Membership and source may be supplied by different same-ID nodes, regardless of kind or variant.
+        var nodeSource = graph with { Nodes = graph.Nodes.Append(graph.Nodes[0] with
+            { Kind = HarnessNodeKind.SourceFile, Location = location }).ToArray() };
+        Assert.Equal(symbol.NodeId, Assert.Single(MarkdownSymbolResolver.Resolve(projection, raw,
+            catalog with { Graph = nodeSource }).Mentions).TargetNodeId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CatalogCancellationStopsDuringDeclarationTraversal(bool reResolve)
+    {
+        var projection = Parse("");
+        var symbol = Symbol("App.Service", "Service", "T:App.Service", "App", Net10);
+        var catalog = Catalog(projection, symbol);
+        var previous = MarkdownSymbolResolver.Resolve(projection, "", catalog);
+        using var cancellation = new CancellationTokenSource();
+        var declarations = new CancelingDeclarations(new[]
+        {
+            new HarnessLocation("other.cs", "v", "h", new(0, 1)),
+            new HarnessLocation("wanted.cs", "v", "h", new(0, 1))
+        }, cancellation);
+        catalog = catalog with
+        {
+            Symbols = new[] { symbol with { SourceId = "wanted.cs" } },
+            Graph = catalog.Graph with { SymbolOccurrences = new[] { catalog.Graph.SymbolOccurrences[0] with { Declarations = declarations } } }
+        };
+        Assert.Throws<OperationCanceledException>(() =>
+        {
+            if (reResolve) MarkdownSymbolResolver.ReResolve(previous, catalog, cancellationToken: cancellation.Token);
+            else MarkdownSymbolResolver.Resolve(projection, "", catalog, cancellationToken: cancellation.Token);
+        });
+        Assert.Equal(1, declarations.ReadCount);
     }
 
     [Fact]
@@ -388,5 +547,23 @@ public sealed class MarkdownSymbolResolverTests
         // The symbol producer's coverage is independent of the Markdown document's pending section identities.
         return new(projection.Graph with { Coverage = HarnessCoverage.CompleteWithinScope,
             Nodes = nodes, SymbolOccurrences = occurrences, Variants = variants }, Array.AsReadOnly(symbols));
+    }
+
+    private sealed class CancelingDeclarations(IReadOnlyList<HarnessLocation> items, CancellationTokenSource cancellation)
+        : IReadOnlyList<HarnessLocation>
+    {
+        public int ReadCount { get; private set; }
+        public int Count => items.Count;
+        public HarnessLocation this[int index] => items[index];
+        public IEnumerator<HarnessLocation> GetEnumerator()
+        {
+            foreach (var item in items)
+            {
+                ReadCount++;
+                cancellation.Cancel();
+                yield return item;
+            }
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

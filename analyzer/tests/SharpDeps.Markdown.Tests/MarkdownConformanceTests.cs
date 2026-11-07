@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Syntamark;
 using SharpDeps.Analysis.Markdown;
 using Xunit;
 
@@ -24,8 +25,12 @@ public sealed class MarkdownConformanceTests
         var projection = new LithoSharpMarkdownAdapter().Analyze(request, true);
         Assert.Equal(fixture.GetProperty("utf16Length").GetInt32(), raw.Length);
         Assert.Equal(MarkdownRuntimePin.ParserVersion, projection.Facts.ParserVersion);
+        Assert.Equal(MarkdownRuntimePin.ContractVersion, projection.Facts.ContractVersion);
+        Assert.Equal(MarkdownRuntimePin.ProfileId, projection.Facts.ProfileId);
+        Assert.Null(projection.Facts.FrontMatter.FailureSpan);
+        Assert.Null(projection.Facts.FrontMatter.FailureLine);
         var golden = (Dictionary<string, object?>)Normalize(projection.Facts)!;
-        // The old immutable oracle includes its stamp; only this root field changes with a rename.
+        // The old immutable oracle includes its stamp; only this root field changes with the selected parser.
         golden[nameof(projection.Facts.ParserVersion)] = fixtureFile.RootElement.GetProperty("parserVersion").GetString();
         var json = JsonSerializer.Serialize(golden);
         var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
@@ -38,7 +43,8 @@ public sealed class MarkdownConformanceTests
     }
 
     // The same normalized property selection/order as the accepted MD-05 artifact comparison,
-    // including every nested span, source segment, diagnostic and coverage fact.
+    // including every original nested span, source segment, diagnostic and coverage fact.
+    // The two additive 1.2 frontmatter failure fields are checked separately above.
     private static object? Normalize(object? value)
     {
         if (value is null || value is string || value.GetType().IsPrimitive || value is decimal) return value;
@@ -46,7 +52,8 @@ public sealed class MarkdownConformanceTests
         if (value is IEnumerable sequence) return sequence.Cast<object?>().Select(Normalize).ToArray();
         var properties = value.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(p => p.GetMethod is not null && p.GetIndexParameters().Length == 0
-                && p.Name is not ("RawText" or "ContractVersion" or "ProfileId"))
+                && p.Name is not ("RawText" or "ContractVersion" or "ProfileId")
+                && (value is not MarkdownFrontMatter || p.Name is not ("FailureSpan" or "FailureLine")))
             .OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
         Assert.NotEmpty(properties);
         return properties.ToDictionary(p => p.Name, p => Normalize(p.GetValue(value)), StringComparer.Ordinal);

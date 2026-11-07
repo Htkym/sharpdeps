@@ -15,6 +15,276 @@ public sealed class ExplorationPublicationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task ExclusiveIndexAndUpdatePublishWithoutStartingAnOwner()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(cancellation.Token);
+        long generation = 0;
+        foreach (var command in new[] { "index", "update" })
+        {
+            var output = new StringWriter();
+            var arguments = new[] { command, "--root", fixture.Root, "--target", "App.csproj",
+                "--trusted", "--timeout-seconds", "0", "--quiet" };
+            Assert.Equal(0, await CliApplication.RunAsync(arguments, output, new StringWriter(), cancellation.Token));
+            using var response = System.Text.Json.JsonDocument.Parse(output.ToString());
+            var result = response.RootElement.GetProperty("result");
+            Assert.Equal("exclusive", result.GetProperty("coordinatorState").GetString());
+            using var reader = fixture.Open();
+            Assert.Equal(++generation, reader.Snapshot().Graph.Generation);
+            Assert.Equal(generation, result.GetProperty("generation").GetInt64());
+            Assert.Null(CoordinatorProtocol.Discover(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid));
+            using var cancelled = new CancellationTokenSource();
+            var progress = new CancelOnExtractionWriter(cancelled);
+            Assert.Equal(130, await CliApplication.RunAsync(arguments.Where(argument => argument != "--quiet").ToArray(),
+                new StringWriter(), progress, cancelled.Token));
+            Assert.True(progress.Started);
+            using var afterCancellation = fixture.Open();
+            Assert.Equal(generation, afterCancellation.Snapshot().Graph.Generation);
+        }
+    }
+
+    private sealed class CancelOnExtractionWriter(CancellationTokenSource cancellation) : StringWriter
+    {
+        internal bool Started { get; private set; }
+        public override Task WriteLineAsync(string? value)
+        {
+            if (value?.StartsWith("sharpdeps: exclusive extraction started", StringComparison.Ordinal) == true)
+            {
+                Started = true;
+                cancellation.Cancel();
+            }
+            return base.WriteLineAsync(value);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task HttpGetLiteralSurvivesPublicationWithItsOwnSpanAndDeclaringMethod()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
+            + "<ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup></Project>", Fixture.Utf8);
+        const string source = """
+            using Microsoft.AspNetCore.Mvc;
+            public sealed class Api
+            {
+                // 😀 The declaration does not prove that MVC exposes this method.
+                [HttpGet("items/{id}")]
+                public string Read(int id) => id.ToString();
+            }
+            """;
+        File.WriteAllText(fixture.SourcePath, source, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var edge = Assert.Single(saved.Graph.Edges, edge => edge.HttpGetDeclaration is not null);
+        Assert.Equal("attribute", edge.Kind);
+        Assert.Equal("roslyn-declaration", edge.Producer);
+        Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+        Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+        var owner = Assert.Single(saved.Graph.Nodes, node => node.Id == edge.SourceNodeId);
+        Assert.Equal(HarnessNodeKind.Member, owner.Kind);
+        Assert.Equal("Read", owner.Name);
+        Assert.Equal(edge.VariantId, Assert.Single(saved.Graph.SymbolOccurrences,
+            occurrence => occurrence.Id == edge.SourceOccurrenceId).VariantId);
+        var declaration = edge.HttpGetDeclaration!;
+        Assert.Equal(HarnessHttpGetDeclarationState.Saved, declaration.State);
+        Assert.Equal("items/{id}", declaration.Template);
+        var span = Assert.IsType<HarnessRawSpan>(declaration.TemplateSpan);
+        Assert.Equal("\"items/{id}\"", source.Substring(span.Start, span.Length));
+        Assert.Equal("HttpGet", source.Substring(edge.Evidence!.RawSpan!.Value.Start, edge.Evidence.RawSpan.Value.Length));
+        Assert.True(span.Start >= edge.Evidence.RawSpan.Value.End);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(fixture.SourcePath))).ToLowerInvariant(),
+            edge.Evidence.ContentHash);
+        foreach (var format in new[] { ExploreFormat.Audit, ExploreFormat.Agent })
+        {
+            var reply = fixture.Engine(reader).Execute(new(edge.SourceOccurrenceId!, Format: format, Budget: Budget));
+            Assert.True(reply.Succeeded);
+            Assert.Contains("declared-http-get=Saved", reply.Text);
+            Assert.Contains("declaration fragment", reply.Text);
+            var literal = fixture.Engine(reader).Execute(new("items/{id}", Format: format, Budget: Budget)
+                { QueryKind = ExploreQueryKind.HttpGetLiteral });
+            Assert.True(literal.Succeeded);
+            Assert.Contains("HttpGet match selector=" + edge.SourceOccurrenceId, literal.Text);
+        }
+        var callers = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callers", QueryKind.Callers,
+            NodeId: edge.SourceNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));
+        Assert.DoesNotContain(callers.Envelope.Items, item => item.Edge?.Id == edge.Id);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ExtensionBindingSurvivesPublicationAsMetadataOnTheSameCall()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(fixture.SourcePath, """
+            using System.Collections.Generic;
+            public static class Extensions
+            {
+                public static R Convert<T, R>(this IEnumerable<T> items, R result) => result;
+            }
+            public class Service
+            {
+                public string Run(List<int> items) => items.Convert("saved"); // 😀
+            }
+            """, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var edge = Assert.Single(saved.Graph.Edges, edge => edge.ExtensionBinding is not null);
+        Assert.Equal("calls", edge.Kind);
+        Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+        Assert.Equal(HarnessExtensionBindingState.Saved, edge.ExtensionBinding!.State);
+        Assert.Contains("List<int>", edge.ExtensionBinding.ReceiverTypeDisplay!, StringComparison.Ordinal);
+        Assert.Contains("Convert<int, string>", edge.ExtensionBinding.ConstructedMethodDisplay!, StringComparison.Ordinal);
+        var source = saved.Files.Single(file => file.SourceId == edge.Evidence!.SourceId);
+        var bytes = File.ReadAllBytes(Path.Combine(fixture.Root, source.RelativePath));
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), edge.Evidence!.ContentHash);
+        Assert.Equal("items.Convert(\"saved\")", Fixture.Utf8.GetString(bytes).Substring(edge.Evidence.RawSpan!.Value.Start, edge.Evidence.RawSpan.Value.Length));
+        foreach (var format in new[] { ExploreFormat.Audit, ExploreFormat.Agent })
+        {
+            var reply = fixture.Engine(reader).Execute(new(edge.SourceOccurrenceId!, Format: format, Budget: Budget));
+            Assert.True(reply.Succeeded);
+            Assert.Contains("extension-binding=Saved", reply.Text);
+            Assert.Contains("compile-time labels only", reply.Text);
+            Assert.Contains("List<int>", reply.Text.Replace("\\u003C", "<", StringComparison.Ordinal).Replace("\\u003E", ">", StringComparison.Ordinal));
+        }
+        var callees = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callees", QueryKind.Callees,
+            NodeId: edge.SourceNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));
+        Assert.Contains(callees.Envelope.Items, item => item.Edge?.Id == edge.Id && item.Edge.ExtensionBinding == edge.ExtensionBinding);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ScopedRegistrationRolesSurvivePublicationWithoutBecomingCalls()
+    {
+        using var fixture = new Fixture();
+        var dependency = System.Security.SecurityElement.Escape(
+            typeof(Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions).Assembly.Location);
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
+            + "<ItemGroup><Reference Include=\"Microsoft.Extensions.DependencyInjection.Abstractions\"><HintPath>"
+            + dependency + "</HintPath></Reference></ItemGroup></Project>", Fixture.Utf8);
+        const string site = "services.AddScoped<IWork, Worker>()";
+        File.WriteAllText(fixture.SourcePath, """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IWork { }
+            public sealed class Worker : IWork { }
+            public sealed class Startup
+            {
+                public void Configure(IServiceCollection services) { services.AddScoped<IWork, Worker>(); } // 😀
+            }
+            """, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var roles = saved.Graph.Edges.Where(edge => edge.Producer == "roslyn-di-registration").ToArray();
+        Assert.Equal(2, roles.Length);
+        foreach (var edge in roles)
+        {
+            Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+            Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+            var file = Assert.Single(saved.Files, file => file.SourceId == edge.Evidence!.SourceId);
+            var bytes = File.ReadAllBytes(Path.Combine(fixture.Root, file.RelativePath));
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), edge.Evidence!.ContentHash);
+            var span = edge.Evidence.RawSpan!.Value;
+            Assert.Equal(site, Fixture.Utf8.GetString(bytes).Substring(span.Start, span.Length));
+            Assert.Equal(edge.VariantId, saved.Graph.SymbolOccurrences.Single(o => o.Id == edge.TargetOccurrenceId).VariantId);
+            var callers = new QueryService(new PinnedQueryIndex(reader)).Execute(new("callers", QueryKind.Callers,
+                NodeId: edge.TargetNodeId, Scope: new(VariantIds: [edge.VariantId!]), Budget: Budget));
+            Assert.DoesNotContain(callers.Envelope.Items, item => item.Edge?.Producer == "roslyn-di-registration");
+        }
+        foreach (var format in new[] { ExploreFormat.Audit, ExploreFormat.Agent })
+        {
+            var reply = fixture.Engine(reader).Execute(new(roles[0].SourceOccurrenceId!, Format: format, Budget: Budget));
+            Assert.True(reply.Succeeded);
+            Assert.Contains("registers_scoped_service", reply.Text);
+            Assert.Contains("registers_scoped_implementation", reply.Text);
+            Assert.All(reply.Units, unit => Assert.Contains(roles[0].SourceNodeId, unit.SymbolIds));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task DeclarationMemberFactsSurvivePublicationAndRemainSeparateFromCalls()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(fixture.SourcePath, """
+            namespace Demo;
+            public interface IWork { int Run(); }
+            public abstract class Base { public abstract int Run(); }
+            public sealed class Cell : Base, IWork
+            {
+                public override int Run() => 1; // 😀
+                int IWork.Run() => 2;
+            }
+            """, Fixture.Utf8);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(deadline.Token);
+        var built = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        writer.Commit(IndexStage.Create(built.Snapshot), deadline.Token, built.VerifySelection);
+        using var reader = fixture.Open();
+        var saved = reader.Snapshot();
+        var overridden = Assert.Single(saved.Graph.Edges, edge => edge.Kind == "overrides");
+        var implemented = Assert.Single(saved.Graph.Edges, edge => edge.Kind == "implements_explicitly");
+        foreach (var edge in new[] { overridden, implemented })
+        {
+            Assert.Equal(Assert.Single(built.Snapshot.Graph.Edges, before => before.Id == edge.Id), edge);
+            Assert.Equal(HarnessCertainty.Resolved, edge.Certainty);
+            Assert.Equal("roslyn-declaration", edge.Producer);
+            Assert.Equal("userSource", edge.Origin);
+            Assert.Equal(edge.VariantId, Assert.Single(saved.Graph.SymbolOccurrences,
+                occurrence => occurrence.Id == edge.SourceOccurrenceId).VariantId);
+            Assert.Equal(edge.VariantId, Assert.Single(saved.Graph.SymbolOccurrences,
+                occurrence => occurrence.Id == edge.TargetOccurrenceId).VariantId);
+            var source = Assert.Single(saved.Files, file => file.SourceId == edge.Evidence!.SourceId);
+            var bytes = File.ReadAllBytes(Path.Combine(fixture.Root, source.RelativePath));
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), edge.Evidence!.ContentHash);
+            var span = edge.Evidence.RawSpan!.Value;
+            Assert.Equal(edge.Kind == "overrides" ? "Run" : "IWork.",
+                Fixture.Utf8.GetString(bytes).Substring(span.Start, span.Length));
+            Assert.Equal(HarnessNodeKind.Member, Assert.Single(saved.Graph.Nodes, node => node.Id == edge.TargetNodeId).Kind);
+        }
+        var pinned = new PinnedQueryIndex(reader);
+        var query = new QueryService(pinned);
+        var scope = new QueryScope(VariantIds: [overridden.VariantId!]);
+        var context = query.Execute(new("declaration", QueryKind.Context, NodeId: overridden.SourceNodeId,
+            Scope: scope, EdgeKinds: ["overrides"], Budget: Budget));
+        Assert.Contains(context.Envelope.Items, item => item.Edge?.Id == overridden.Id);
+        var callers = query.Execute(new("callers", QueryKind.Callers, NodeId: overridden.TargetNodeId,
+            Scope: scope, Budget: Budget));
+        Assert.DoesNotContain(callers.Envelope.Items, item => item.Edge?.Kind is "overrides" or "implements_explicitly");
+
+        var reply = fixture.Engine(reader).Execute(new(overridden.SourceOccurrenceId!, Budget: Budget));
+        Assert.True(reply.Succeeded);
+        Assert.Contains("overrides", reply.Text);
+        Assert.All(reply.Units, unit => Assert.Contains(overridden.SourceNodeId, unit.SymbolIds));
+        Assert.NotEmpty(reply.Units);
+        var output = new StringWriter();
+        var exit = await CliApplication.RunAsync(["explore", "--root", fixture.Root, "--trusted",
+            "--term", overridden.SourceOccurrenceId!, "--format", "audit", "--max-milliseconds", "10000",
+            "--max-chars", "100000", "--max-bytes", "400000"], output, TextWriter.Null, deadline.Token);
+        Assert.Equal(0, exit);
+        Assert.Equal(reply.Text.TrimEnd('\r', '\n'), output.ToString().TrimEnd('\r', '\n'));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task RoslynPublicationAndSavedSearchFollowTypedStateThroughEditRenameAndDelete()
     {
         using var fixture = new Fixture();

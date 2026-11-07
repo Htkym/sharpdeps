@@ -5,6 +5,7 @@ using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Roslyn.Evidence;
 using SharpDeps.Analysis.Roslyn.Symbols;
+using System.Text;
 
 /// <summary>Persisted project scope comes from the trusted owner; Key is the loader's variant key.</summary>
 public sealed record HarnessProjectVariant(string Key, string ProjectId, string Name,
@@ -14,6 +15,7 @@ public sealed record HarnessProjectVariant(string Key, string ProjectId, string 
 /// <summary>Pure projection of the existing Roslyn collection; no file reads, UUID allocation or host activation.</summary>
 public static class HarnessGraphProjector
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     public static HarnessGraphEnvelope Project(Guid workspaceUuid, string snapshotId, long generation,
         HarnessCoverage coverage, IReadOnlyList<HarnessProjectVariant> projects,
         SymbolIndex index, IReadOnlyList<CollectedEvidence> evidence, OperationCollectionStats stats,
@@ -36,6 +38,7 @@ public static class HarnessGraphProjector
         var documents = index.Documents.ToDictionary(d => d.Id, StringComparer.Ordinal);
         var typesById = index.Types.ToDictionary(t => t.Id, StringComparer.Ordinal);
         var symbols = new Dictionary<string, HarnessSymbolOccurrence>(StringComparer.Ordinal);
+        var methodSymbols = new HashSet<string>(StringComparer.Ordinal);
         var legacy = new HashSet<HarnessLegacyReference>();
         var edges = new Dictionary<string, HarnessEdge>(StringComparer.Ordinal);
         var diagnostics = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -100,11 +103,40 @@ public static class HarnessGraphProjector
                 member.Kind, signature);
             AddSymbol(member.Id, id, HarnessNodeKind.Member, member.Name, owner.LogicalSymbolId, signature,
                 member.ProjectVariantId, group.SelectMany(m => m.HarnessDeclarations ?? m.Declarations).Distinct().ToArray());
+            if (member.Kind == "method") methodSymbols.Add(member.Id);
+        }
+
+        // A saved registration must retain both roles before external target creation mutates the graph.
+        var retainedRegistrations = new HashSet<CollectedEvidence>();
+        foreach (var group in evidence.Where(IsScopedRegistrationRole).GroupBy(entry =>
+            (entry.SourceVariantId, Owner: entry.CanonicalSourceMemberId ?? entry.Evidence.SourceMemberId ?? entry.Evidence.SourceEntityId,
+                entry.Evidence.SourceEntityId, entry.Evidence.DocumentId, entry.Evidence.SourceContentHash,
+                Start: entry.Evidence.PhysicalSpan?.Start, Length: entry.Evidence.PhysicalSpan?.Length)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pair = group.ToArray();
+            if (pair.Length != 2 || pair.Select(entry => entry.Evidence.Kind).Distinct(StringComparer.Ordinal).Count() != 2
+                || pair.Any(entry => entry.Evidence.Confidence != "resolved" || entry.Access is not null
+                    || entry.HarnessDeclarationOwners is not null || entry.Evidence.PhysicalSpan is null
+                    || string.IsNullOrEmpty(entry.Evidence.SourceContentHash)
+                    || entry.CanonicalTargetMemberId is not null || entry.Evidence.TargetMemberId is not null)
+                || !symbols.TryGetValue(group.Key.Owner, out var registrationOwner)
+                || !variants.TryGetValue(group.Key.SourceVariantId, out var registrationVariant)
+                || registrationOwner.VariantId != registrationVariant.Id
+                || !documents.TryGetValue(group.Key.DocumentId, out var registrationDocument)
+                || registrationDocument.ContentHash != group.Key.SourceContentHash
+                || pair.Any(entry => !RegistrationTargetAvailable(entry)))
+            {
+                Count("roslyn.incompleteDiRegistration", 1);
+                continue;
+            }
+            foreach (var entry in pair) retainedRegistrations.Add(entry);
         }
 
         foreach (var entry in evidence.SelectMany(ExpandDeclarationOwners))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (IsScopedRegistrationRole(entry) && !retainedRegistrations.Contains(entry)) continue;
             var record = entry.Evidence;
             var sourceKey = entry.CanonicalSourceMemberId ?? record.SourceMemberId ?? record.SourceEntityId;
             if (!symbols.TryGetValue(sourceKey, out var source))
@@ -147,19 +179,38 @@ public static class HarnessGraphProjector
                     record.DocumentId, record.SourceContentHash, location.RawSpan, entry.Producer ?? "roslyn");
                 var edge = new HarnessEdge(id, source.LogicalSymbolId, target.LogicalSymbolId,
                     source.Id, target.Id, source.VariantId, kind, certainty,
-                    entry.Producer ?? "roslyn", location, record.Origin);
+                    entry.Producer ?? "roslyn", location, record.Origin,
+                    kind == "calls" && certainty == HarnessCertainty.Resolved && entry.Producer == "roslyn-operation"
+                        && location.RawSpan is not null && !string.IsNullOrEmpty(location.ContentHash)
+                        ? entry.ExtensionBinding : null,
+                    ProjectHttpGetDeclaration(entry, kind, certainty, sourceKey, source, location));
                 // Duplicate evidence keeps the least certain classification.
-                if (edges.TryGetValue(id, out var previous) && (int)previous.Certainty > (int)edge.Certainty) edge = previous;
+                if (edges.TryGetValue(id, out var previous))
+                {
+                    var conflictingBinding = previous.ExtensionBinding != edge.ExtensionBinding;
+                    var conflictingHttpGet = previous.HttpGetDeclaration != edge.HttpGetDeclaration;
+                    if ((int)previous.Certainty > (int)edge.Certainty) edge = previous;
+                    if (edge.Certainty != HarnessCertainty.Resolved) edge = edge with { ExtensionBinding = null, HttpGetDeclaration = null };
+                    else
+                    {
+                        if (conflictingBinding) edge = edge with
+                        { ExtensionBinding = new(HarnessExtensionBindingState.Omitted, OmissionReason: "semantic-unavailable") };
+                        if (conflictingHttpGet) edge = edge with
+                        { HttpGetDeclaration = new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "semantic-unavailable") };
+                    }
+                }
                 edges[id] = edge;
             }
         }
         if (coverage == HarnessCoverage.CompleteWithinScope && diagnostics.Count > 0) coverage = HarnessCoverage.Partial;
+        var bindingDisplayChars = 0;
+        var httpGetTemplateChars = 0;
         var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, HarnessGraphContract.SchemaVersion,
             HarnessGraphContract.IdentityVersion, workspaceId, snapshotId, generation, coverage,
             Freeze(variants.Values.OrderBy(v => v.Id, StringComparer.Ordinal)),
             Freeze(nodes.Values.OrderBy(n => n.Id, StringComparer.Ordinal)),
             Freeze(occurrences.Values.OrderBy(o => o.Id, StringComparer.Ordinal)),
-            Freeze(edges.Values.OrderBy(e => e.Id, StringComparer.Ordinal)),
+            Freeze(edges.Values.OrderBy(e => e.Id, StringComparer.Ordinal).Select(BoundOptionalMetadata)),
             Freeze(legacy.OrderBy(l => l.LegacyId, StringComparer.Ordinal).ThenBy(l => l.OccurrenceId, StringComparer.Ordinal)), null,
             Freeze(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal).Select(d => new HarnessGraphDiagnostic(d.Key, d.Value))));
         HarnessGraphContract.ValidateHeader(graph);
@@ -168,6 +219,55 @@ public static class HarnessGraphProjector
 
         HarnessProjectVariant ProjectFor(string key) => projectByKey.TryGetValue(key, out var p) ? p
             : throw new ArgumentException("Every indexed declaration needs an explicit project variant.", nameof(projects));
+        HarnessEdge BoundOptionalMetadata(HarnessEdge edge)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (edge.ExtensionBinding is { State: HarnessExtensionBindingState.Saved } binding)
+            {
+                var length = (long)(binding.ReceiverTypeDisplay?.Length ?? 0) + (binding.ConstructedMethodDisplay?.Length ?? 0);
+                if (length > HarnessExtensionBinding.MaximumSnapshotDisplayUtf16 - bindingDisplayChars)
+                    edge = edge with { ExtensionBinding = new(HarnessExtensionBindingState.Omitted, OmissionReason: "metadata-budget") };
+                else bindingDisplayChars += (int)length;
+            }
+            if (edge.HttpGetDeclaration is { State: HarnessHttpGetDeclarationState.Saved, Template: { } template })
+            {
+                if (template.Length > HarnessHttpGetDeclaration.MaximumSnapshotTemplateUtf16 - httpGetTemplateChars)
+                    edge = edge with { HttpGetDeclaration = new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "metadata-budget") };
+                else httpGetTemplateChars += template.Length;
+            }
+            return edge;
+        }
+        HarnessHttpGetDeclaration? ProjectHttpGetDeclaration(CollectedEvidence entry, string kind, HarnessCertainty certainty,
+            string sourceKey, HarnessSymbolOccurrence source, HarnessLocation location)
+        {
+            if (entry.HttpGetDeclaration is not { } declaration || kind != "attribute" || certainty != HarnessCertainty.Resolved
+                || entry.Producer != "roslyn-declaration" || !methodSymbols.Contains(sourceKey)
+                || location.RawSpan is not { Length: > 0 } nameSpan || string.IsNullOrEmpty(location.ContentHash)
+                || !documents.TryGetValue(location.SourceId, out var document) || document.ContentHash != location.ContentHash)
+                return null;
+            var locations = source.Declarations ?? (source.Location is { } primary ? new[] { primary } : []);
+            var sameDeclaration = locations.Any(saved => saved.SourceId == location.SourceId
+                && saved.SourceVersion == location.SourceVersion && saved.ContentHash == location.ContentHash
+                && saved.RawSpan is { } range && range.Start <= nameSpan.Start && range.End >= nameSpan.End
+                && (declaration.State != HarnessHttpGetDeclarationState.Saved
+                    || declaration.TemplateSpan is { Length: > 0 } literal && literal.Start >= nameSpan.End && literal.End <= range.End));
+            if (!sameDeclaration) return null;
+            if (declaration.State == HarnessHttpGetDeclarationState.Omitted && declaration.Template is null && declaration.TemplateSpan is null
+                && declaration.OmissionReason is "no-template" or "nonliteral-template" or "metadata-budget" or "semantic-unavailable") return declaration;
+            if (declaration.State != HarnessHttpGetDeclarationState.Saved || declaration.Template is not { } template
+                || declaration.TemplateSpan is not { } span || declaration.OmissionReason is not null)
+                return new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "semantic-unavailable");
+            if (template.Length > HarnessHttpGetDeclaration.MaximumTemplateUtf16 || span.Length > HarnessHttpGetDeclaration.MaximumLiteralSpanUtf16)
+                return new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "metadata-budget");
+            if (template.Any(char.IsControl)) return new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "semantic-unavailable");
+            try { _ = StrictUtf8.GetByteCount(template); }
+            catch (EncoderFallbackException) { return new(HarnessHttpGetDeclarationState.Omitted, OmissionReason: "semantic-unavailable"); }
+            return declaration;
+        }
+        bool RegistrationTargetAvailable(CollectedEvidence entry)
+            => symbols.ContainsKey(entry.Evidence.TargetEntityId)
+                || entry.TargetIsExternal && entry.TargetSymbol is { Kind: "type", LegacyMemberId: null } target
+                    && target.LegacyTypeId == entry.Evidence.TargetEntityId;
         void Count(string code, int count)
         {
             if (count > 0) diagnostics[code] = checked(diagnostics.GetValueOrDefault(code) + count);
@@ -215,6 +315,10 @@ public static class HarnessGraphProjector
             return occurrence;
         }
     }
+
+    private static bool IsScopedRegistrationRole(CollectedEvidence entry)
+        => entry.Producer == "roslyn-di-registration"
+            && entry.Evidence.Kind is "registers_scoped_service" or "registers_scoped_implementation";
 
     private static IEnumerable<CollectedEvidence> ExpandDeclarationOwners(CollectedEvidence entry)
     {

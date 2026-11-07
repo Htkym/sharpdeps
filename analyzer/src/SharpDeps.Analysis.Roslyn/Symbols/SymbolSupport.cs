@@ -4,26 +4,61 @@ using SharpDeps.Analysis.Contracts;
 using SharpDeps.Analysis.Core.Identity;
 
 /// <summary>
+/// A generated document cannot be registered under one stable identity. The code
+/// distinguishes an unidentified generator from an ambiguous identity (and from the
+/// remaining registration conflicts) so a caller can report the cause, not just a
+/// bare failure. It stays an <see cref="InvalidOperationException"/> so existing
+/// callers keep treating it as an unsupported generated input.
+/// </summary>
+public sealed class GeneratedDocumentRegistrationException : InvalidOperationException
+{
+    /// <summary>The generator identity was empty, so the document cannot be keyed.</summary>
+    public const string GeneratorUnidentified = "semantic.generatedDocumentGeneratorUnidentified";
+
+    /// <summary>One workspace tree was claimed by two different generated identities.</summary>
+    public const string IdentityAmbiguous = "semantic.generatedDocumentIdentityAmbiguous";
+
+    /// <summary>One identity was reported with two different bodies.</summary>
+    public const string BodyConflict = "semantic.generatedDocumentBodyConflict";
+
+    /// <summary>Two distinct identities produced the same virtual path.</summary>
+    public const string PathCollision = "semantic.generatedDocumentPathCollision";
+
+    public GeneratedDocumentRegistrationException(string code, string message)
+        : base(message)
+        => Code = code;
+
+    /// <summary>The diagnostic code naming the cause.</summary>
+    public string Code { get; }
+}
+
+/// <summary>
 /// Registers the source documents a symbol index refers to. Document ids match the
 /// Quick analyzer's rule (workspace root + relative path + origin), so a file has one
 /// id whichever analyzer produced it.
 /// </summary>
-public sealed class SourceDocumentRegistry
+public sealed partial class SourceDocumentRegistry
 {
     private readonly string _rootId;
     private readonly string _rootDirectory;
+    private readonly string _packageRootId;
     private readonly Dictionary<string, SourceDocument> _byPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _generatedPaths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<SourceDocument> _unkeyedGenerated = [];
+    private readonly Dictionary<string, SourceDocument> _generatedByIdentity = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SourceDocument> _generatedByTree = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<SourceDocument> _generated = [];
 
-    public SourceDocumentRegistry(string rootId, string rootDirectory)
+    public SourceDocumentRegistry(string rootId, string rootDirectory, string? packageRootId = null)
     {
         _rootId = rootId;
         _rootDirectory = rootDirectory;
+        // CLI package IDs use the persisted workspace identity without changing historical source/SG IDs.
+        _packageRootId = packageRootId ?? rootId;
     }
 
     public IReadOnlyList<SourceDocument> Documents => _byPath.Values
-        .Concat(_unkeyedGenerated)
+        .Concat(_generated)
+        .Concat(_packageByIdentity.Values)
         .OrderBy(document => document.RelativePath, StringComparer.Ordinal)
         .ToArray();
 
@@ -74,28 +109,59 @@ public sealed class SourceDocumentRegistry
     }
 
     /// <summary>
-    /// Registers a source-generated document. The relative path is virtual:
+    /// Registers a source-generated document under a stable identity: project variant,
+    /// generator identity and hint name. The relative path is virtual:
     /// the workspace's obj path never reaches the report, and the generated content is
     /// read from the analysis result, not from the user's repository.
+    /// A document whose generator could not be identified is refused: an empty
+    /// identity would let two generators that share a hint and a body merge.
     /// </summary>
     /// <param name="fullPath">
-    /// The workspace path of the generated document. Evidence from the compilation is
-    /// matched by this path; null means the document is only listed in the manifest.
+    /// The workspace path of the generated document, used only to match compilation
+    /// trees of the same variant to this document; null means the document is only
+    /// listed in the manifest. It never decides identity, so the same hint emitted
+    /// for several variants or by several generators stays a separate document, and
+    /// two different bodies under one identity fail loudly instead of merging.
     /// </param>
     public SourceDocument RegisterGenerated(
-        string? fullPath,
+        string variantKey,
         string projectName,
+        string generatorIdentity,
         string hintName,
+        string? fullPath,
         string contentHash,
         long byteLength)
     {
-        var normalized = string.IsNullOrEmpty(fullPath) ? null : Path.GetFullPath(fullPath);
-        if (normalized is not null && _byPath.TryGetValue(normalized, out var existing))
+        ArgumentNullException.ThrowIfNull(variantKey);
+        ArgumentNullException.ThrowIfNull(projectName);
+        ArgumentNullException.ThrowIfNull(generatorIdentity);
+        ArgumentNullException.ThrowIfNull(hintName);
+        if (string.IsNullOrWhiteSpace(generatorIdentity))
+            throw new GeneratedDocumentRegistrationException(
+                GeneratedDocumentRegistrationException.GeneratorUnidentified,
+                $"The generator of the generated document '{hintName}' in '{projectName}' could not be identified"
+                + (fullPath is null ? string.Empty : $" from its generated file path '{fullPath}'")
+                + "; refusing to index it.");
+        var identityKey = string.Join('\u001f', variantKey, projectName, generatorIdentity, hintName);
+        if (_generatedByIdentity.TryGetValue(identityKey, out var existing))
         {
+            if (existing.ContentHash != contentHash || existing.ByteLength != byteLength)
+                throw new GeneratedDocumentRegistrationException(
+                    GeneratedDocumentRegistrationException.BodyConflict,
+                    $"The generated document '{hintName}' in '{projectName}' was reported with two different bodies under one identity; refusing to merge them.");
             return existing;
         }
 
-        var relativePath = UniqueGeneratedPath(projectName, hintName);
+        // One workspace tree belongs to one generated identity. A second identity
+        // claiming the same tree is ambiguous, so it fails instead of overwriting.
+        var treeKey = string.IsNullOrEmpty(fullPath) ? null : TreeKey(variantKey, fullPath);
+        if (treeKey is not null && _generatedByTree.TryGetValue(treeKey, out var priorTree))
+            throw new GeneratedDocumentRegistrationException(
+                GeneratedDocumentRegistrationException.IdentityAmbiguous,
+                $"The generated tree '{fullPath}' was reported for two different generated identities "
+                + $"('{priorTree.RelativePath}' and '{projectName}/{generatorIdentity}/{hintName}'); refusing to merge them.");
+
+        var relativePath = UniqueGeneratedPath(projectName, variantKey, generatorIdentity, hintName, identityKey);
         var document = new SourceDocument(
             Identity.DocumentId(_rootId, relativePath, "generatedSource"),
             relativePath,
@@ -103,39 +169,87 @@ public sealed class SourceDocumentRegistry
             contentHash,
             byteLength,
             null);
-
-        if (normalized is not null)
+        _generatedByIdentity.Add(identityKey, document);
+        _generated.Add(document);
+        if (treeKey is not null)
         {
-            _byPath[normalized] = document;
-        }
-        else
-        {
-            _unkeyedGenerated.Add(document);
+            _generatedByTree[treeKey] = document;
         }
 
         return document;
     }
 
     /// <summary>
-    /// A virtual path under <c>generated/</c>. Hint names can repeat across projects or
-    /// generators, so a collision gets a suffix instead of silently merging documents.
+    /// Resolves the document a compilation tree belongs to: the pre-registered
+    /// generated document of this variant when the tree is one of its generated
+    /// trees, otherwise the physical file. Null when the tree has no path.
     /// </summary>
-    private string UniqueGeneratedPath(string projectName, string hintName)
+    public SourceDocument? ResolveTreeDocument(string variantKey, Microsoft.CodeAnalysis.SyntaxTree tree)
     {
-        var project = SanitizeSegment(projectName);
-        var hint = SanitizeHint(hintName);
-        var basePath = $"generated/{project}/{hint}";
-        var candidate = basePath;
-        var counter = 1;
-        while (!_generatedPaths.Add(candidate))
+        if (string.IsNullOrEmpty(tree.FilePath))
         {
-            counter++;
-            var extension = Path.GetExtension(basePath);
-            var stem = extension.Length > 0 ? basePath[..^extension.Length] : basePath;
-            candidate = $"{stem}-{counter}{extension}";
+            return null;
         }
 
-        return candidate;
+        var key = TreeKey(variantKey, tree.FilePath);
+        return _generatedByTree.TryGetValue(key, out var generated) ? generated
+            : _packageByTree.TryGetValue(key, out var package) ? package : Register(tree.FilePath);
+    }
+
+    /// <summary>True when the tree is a pre-registered generated tree of this variant.</summary>
+    public bool IsGeneratedTree(string variantKey, Microsoft.CodeAnalysis.SyntaxTree tree)
+        => !string.IsNullOrEmpty(tree.FilePath)
+            && _generatedByTree.ContainsKey(TreeKey(variantKey, tree.FilePath));
+
+    private static string TreeKey(string variantKey, string fullPath)
+        => variantKey + "\u001f" + Path.GetFullPath(fullPath);
+
+    /// <summary>
+    /// A virtual path under <c>generated/</c> built from the identity itself:
+    /// project, variant, generator and hint, plus a discriminator hashed from the
+    /// identity. The discriminator is unconditional, so the path (and the id derived
+    /// from it) is a pure function of the identity: it never depends on registration
+    /// order or on which other documents were registered.
+    /// </summary>
+    private string UniqueGeneratedPath(
+        string projectName,
+        string variantKey,
+        string generatorIdentity,
+        string hintName,
+        string identityKey)
+    {
+        var segments = new List<string>
+        {
+            "generated",
+            SanitizeSegment(projectName),
+            SanitizeVariant(variantKey),
+        };
+        segments.AddRange(generatorIdentity.Split('/').Select(SanitizeSegment));
+
+        var basePath = string.Join('/', segments) + "/" + SanitizeHint(hintName);
+        var extension = Path.GetExtension(basePath);
+        var stem = extension.Length > 0 ? basePath[..^extension.Length] : basePath;
+        var discriminator = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identityKey)))[..8].ToLowerInvariant();
+        var path = $"{stem}-{discriminator}{extension}";
+        if (!_generatedPaths.Add(path))
+        {
+            throw new GeneratedDocumentRegistrationException(
+                GeneratedDocumentRegistrationException.PathCollision,
+                $"Generated document path '{path}' collides for distinct identities.");
+        }
+
+        return path;
+    }
+
+    /// <summary>The variant part of a variant key ("path|tfm|configuration|platform"), path-safe.</summary>
+    private static string SanitizeVariant(string variantKey)
+    {
+        var parts = variantKey.Split('|');
+        var suffix = parts.Length > 1 ? string.Join('_', parts[1..]) : variantKey;
+        var cleaned = new string(suffix.Select(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_' ? character : '_').ToArray()).Trim('_');
+        return cleaned.Length == 0 ? "variant" : cleaned;
     }
 
     private static string SanitizeSegment(string value)

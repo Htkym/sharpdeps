@@ -135,7 +135,15 @@ public static class SymbolIndexBuilder
                 // Implicit types stay out of the model, except the synthesized entry
                 // point that owns top-level statements: those statements are real code
                 // and must not disappear from the graph.
-                if ((typeSymbol.IsImplicitlyDeclared || IsCompilerGenerated(typeSymbol))
+                if (typeSymbol.IsImplicitlyDeclared && !IsTopLevelEntryPoint(typeSymbol))
+                {
+                    continue;
+                }
+
+                // Generator output carries CompilerGenerated/GeneratedCode markers yet
+                // declares real types inside the generated tree: those stay searchable.
+                // Compiler-synthesized types outside generated trees remain excluded.
+                if (IsCompilerGenerated(typeSymbol) && !IsDeclaredInGeneratedTree(typeSymbol, documents, input.VariantId)
                     && !IsTopLevelEntryPoint(typeSymbol))
                 {
                     continue;
@@ -149,7 +157,7 @@ public static class SymbolIndexBuilder
                 var containingTypeId = containingType is null
                     ? null
                     : Identity.TypeId(input.VariantId, TypeKeyOf(containingType));
-                var declarations = CollectDeclarations(typeSymbol, documents, cancellationToken);
+                var declarations = CollectDeclarations(typeSymbol, documents, input.VariantId, cancellationToken);
                 var isFileLocal = typeSymbol.IsFileLocal;
                 var type = new IndexedType(
                     Id: Identity.TypeId(input.VariantId, TypeKeyOf(typeSymbol)),
@@ -187,14 +195,14 @@ public static class SymbolIndexBuilder
                         continue;
                     }
 
-                    var memberDeclarations = CollectDeclarations(member, documents, cancellationToken);
+                    var memberDeclarations = CollectDeclarations(member, documents, input.VariantId, cancellationToken);
                     if (memberDeclarations.Count == 0)
                     {
                         continue;
                     }
 
                     var harnessDeclarations = member is IFieldSymbol or IEventSymbol
-                        ? CollectDeclarations(member, documents, cancellationToken, includeFieldDeclaration: true)
+                        ? CollectDeclarations(member, documents, input.VariantId, cancellationToken, includeFieldDeclaration: true)
                         : memberDeclarations;
 
                     var parameterTypes = member is IMethodSymbol method
@@ -220,7 +228,7 @@ public static class SymbolIndexBuilder
                         Declarations: memberDeclarations,
                         HarnessSignature: SymbolResolver.HarnessSignatureOf(SymbolResolver.NormalizeHarnessMember(member)!),
                         HarnessDeclarations: member is IMethodSymbol { PartialImplementationPart: not null } partial
-                            ? harnessDeclarations.Concat(CollectDeclarations(partial.PartialImplementationPart, documents, cancellationToken))
+                            ? harnessDeclarations.Concat(CollectDeclarations(partial.PartialImplementationPart, documents, input.VariantId, cancellationToken))
                                 .Distinct().OrderBy(location => location.DocumentId, StringComparer.Ordinal).ThenBy(location => location.Start).ToArray()
                             : harnessDeclarations));
                 }
@@ -333,6 +341,7 @@ public static class SymbolIndexBuilder
     private static IReadOnlyList<SymbolDeclarationLocation> CollectDeclarations(
         ISymbol symbol,
         SourceDocumentRegistry documents,
+        string variantId,
         CancellationToken cancellationToken,
         bool includeFieldDeclaration = false)
     {
@@ -341,12 +350,12 @@ public static class SymbolIndexBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
             var tree = reference.SyntaxTree;
-            if (string.IsNullOrEmpty(tree.FilePath))
+            var document = documents.ResolveTreeDocument(variantId, tree);
+            if (document is null)
             {
                 continue;
             }
 
-            var document = documents.Register(tree.FilePath);
             var span = reference.Span;
             if (includeFieldDeclaration && reference.GetSyntax(cancellationToken) is VariableDeclaratorSyntax
                 { Parent: VariableDeclarationSyntax { Parent: BaseFieldDeclarationSyntax field } })
@@ -383,6 +392,9 @@ public static class SymbolIndexBuilder
             || type.Name.Contains("AnonymousType", StringComparison.Ordinal)
             || type.GetAttributes().Any(attribute =>
                 attribute.AttributeClass?.Name is "CompilerGeneratedAttribute" or "GeneratedCodeAttribute");
+
+    private static bool IsDeclaredInGeneratedTree(ISymbol symbol, SourceDocumentRegistry documents, string variantId)
+        => symbol.DeclaringSyntaxReferences.Any(reference => documents.IsGeneratedTree(variantId, reference.SyntaxTree));
 
     /// <summary>Partial declarations merge into one type with several locations.</summary>
     private static bool IsPartial(INamedTypeSymbol type)

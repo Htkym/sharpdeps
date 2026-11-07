@@ -29,9 +29,35 @@ public sealed record IndexDocumentIdentity(Guid DocumentUuid, string RelativePat
 public sealed record IndexAlias(string Kind, string OldId, string NewId, string Reason, HarnessCertainty Certainty);
 /// <summary>Only explicitly selected search text is stored, never unrestricted source blobs.</summary>
 public sealed record IndexSearchText(string NodeId, string Name, string Signature, string Heading, string Body, string Path);
+/// <summary>
+/// The retained body of one source-generated input. A generated document has no file
+/// on disk to re-read, so its body is stored next to the IndexFile entry whose hash,
+/// byte length and UTF-16 length it must match exactly. Retained source bodies are a bounded
+/// exception to the no-source-blobs rule: bodies are capped per file and in total by
+/// the same input limits as physical files. A stored body proves integrity of the
+/// index-time snapshot only, never that the generator would still produce it.
+/// </summary>
+public sealed record IndexGeneratedBody(string SourceId, string Body);
+/// <summary>Retained text of a restore-bound package compilation input.</summary>
+public sealed record IndexPackageBody(string SourceId, string Body);
+/// <summary>Input kinds whose text is retained in the snapshot, not read from disk.</summary>
+public static class IndexFileKinds
+{
+    public const string GeneratedSource = "generatedSource";
+    public const string PackageSource = "packageSource";
+}
 public sealed record IndexSnapshot(HarnessGraphEnvelope Graph, IReadOnlyList<IndexFile> Files,
     IReadOnlyList<IndexDocumentIdentity> Documents, IReadOnlyList<IndexAlias> Aliases,
-    IReadOnlyList<IndexSearchText> SearchText);
+    IReadOnlyList<IndexSearchText> SearchText,
+    IReadOnlyList<IndexGeneratedBody>? GeneratedBodies = null,
+    IReadOnlyList<IndexPackageBody>? PackageBodies = null)
+{
+    /// <summary>Stored generated bodies; empty for snapshots written before generated support.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<IndexGeneratedBody> StoredGeneratedBodies => GeneratedBodies ?? [];
+    [JsonIgnore]
+    public IReadOnlyList<IndexPackageBody> StoredPackageBodies => PackageBodies ?? [];
+}
 public sealed record IndexSearchHit(string NodeId, double Rank, string MatchMethod);
 public sealed record IndexWriterOwner(int ProcessId, string ProcessStartUtc, string CanonicalRoot, string IndexPath,
     int SchemaVersion);

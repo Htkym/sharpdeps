@@ -67,6 +67,50 @@ public static class IndexSnapshotValidator
             }
             Require(filesByPath.TryAdd(file.RelativePath, file), "File paths must be unique, including case aliases.");
         }
+        foreach (var file in files.Values.Where(f => f.Kind == IndexFileKinds.GeneratedSource && !f.Deleted))
+        {
+            token.ThrowIfCancellationRequested();
+            Require(file.Utf16Length is not null, "A generated input must record its UTF-16 length.");
+        }
+        // Classify body integrity only after structural validation has completed.
+        IndexStoreException? bodyIntegrityError = null;
+        var generatedBodies = Unique(snapshot.StoredGeneratedBodies, b => b.SourceId, "Generated body", token);
+        foreach (var body in generatedBodies.Values)
+        {
+            token.ThrowIfCancellationRequested();
+            Require(files.TryGetValue(body.SourceId, out var file) && file.Kind == IndexFileKinds.GeneratedSource
+                && !file.Deleted, "A stored generated body must belong to a live generated input.");
+            Require(body.Body is not null, "A stored generated body cannot be null.");
+            var bytes = StrictUtf8.GetBytes(body.Body);
+            if (bytes.LongLength != file.ByteLength || body.Body.Length != file.Utf16Length!.Value)
+                bodyIntegrityError ??= new IndexStoreException("INDEX_GENERATED_BODY_INVALID", "A stored generated body must match its input byte and UTF-16 lengths.");
+            else if (Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant() != file.ContentHash)
+                bodyIntegrityError ??= new IndexStoreException("INDEX_GENERATED_BODY_INVALID", "A stored generated body must match its input content hash.");
+        }
+        foreach (var file in files.Values.Where(f => f.Kind == IndexFileKinds.GeneratedSource && !f.Deleted))
+        {
+            token.ThrowIfCancellationRequested();
+            Require(generatedBodies.ContainsKey(file.SourceId),
+                "A live generated input must carry its stored body; a hash alone is not a complete index.");
+        }
+        var packageBodies = Unique(snapshot.StoredPackageBodies, b => b.SourceId, "Package body", token);
+        foreach (var body in packageBodies.Values)
+        {
+            token.ThrowIfCancellationRequested();
+            Require(files.TryGetValue(body.SourceId, out var file) && file.Kind == IndexFileKinds.PackageSource
+                && !file.Deleted, "A stored package body must belong to a live package input.");
+            Require(body.Body is not null, "A stored package body cannot be null.");
+            var bytes = StrictUtf8.GetBytes(body.Body);
+            if (bytes.LongLength != file.ByteLength || body.Body.Length != file.Utf16Length
+                || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant() != file.ContentHash)
+                bodyIntegrityError ??= new IndexStoreException("INDEX_PACKAGE_BODY_INVALID", "A stored package body must match its input hash and lengths.");
+        }
+        foreach (var file in files.Values.Where(f => f.Kind == IndexFileKinds.PackageSource && !f.Deleted))
+        {
+            token.ThrowIfCancellationRequested();
+            Require(file.Utf16Length is not null && packageBodies.ContainsKey(file.SourceId),
+                "A live package input must carry its length and stored body; a hash alone is not a complete index.");
+        }
         Require(nodes.TryGetValue(graph.WorkspaceId, out var root) && root.Kind == HarnessNodeKind.Workspace
             && root.ParentId is null && graph.Nodes.Count(n => n.Kind == HarnessNodeKind.Workspace) == 1,
             "The graph needs exactly its declared workspace root.");
@@ -208,6 +252,8 @@ public static class IndexSnapshotValidator
                     "Project proof must own every captured compiler input; shared inputs may have several owners.");
             }
         }
+        long extensionDisplayLength = 0;
+        long httpGetTemplateLength = 0;
         foreach (var edge in graph.Edges)
         {
             token.ThrowIfCancellationRequested();
@@ -233,6 +279,75 @@ public static class IndexSnapshotValidator
                     Require(edge.VariantId == target.VariantId, "Selected target occurrence belongs to another variant.");
             }
             Location(edge.Evidence);
+            if (edge.ExtensionBinding is { } binding)
+            {
+                Require(edge.Kind == "calls" && edge.Certainty == HarnessCertainty.Resolved
+                    && edge.Producer == "roslyn-operation" && edge.SourceOccurrenceId is not null
+                    && edge.TargetOccurrenceId is not null && edge.Evidence is { RawSpan: not null, ContentHash: not null },
+                    "Extension binding metadata needs an occurrence-bound resolved Roslyn call with saved evidence.");
+                Require(Enum.IsDefined(binding.State), "Unknown extension binding state.");
+                if (binding.State == HarnessExtensionBindingState.Saved)
+                {
+                    Require(binding.OmissionReason is null, "Saved extension binding metadata cannot have an omission reason.");
+                    Identifier(binding.ReceiverTypeDisplay!, "Extension receiver display", HarnessExtensionBinding.MaximumReceiverDisplayUtf16);
+                    Identifier(binding.ConstructedMethodDisplay!, "Extension method display", HarnessExtensionBinding.MaximumMethodDisplayUtf16);
+                    extensionDisplayLength = checked(extensionDisplayLength + binding.ReceiverTypeDisplay!.Length
+                        + binding.ConstructedMethodDisplay!.Length);
+                    Require(extensionDisplayLength <= HarnessExtensionBinding.MaximumSnapshotDisplayUtf16,
+                        "Extension binding displays exceed the snapshot text budget.");
+                }
+                else
+                    Require(binding.ReceiverTypeDisplay is null && binding.ConstructedMethodDisplay is null
+                        && binding.OmissionReason is "unsupported-type" or "metadata-budget" or "semantic-unavailable",
+                        "Omitted extension binding metadata needs only a supported omission reason.");
+            }
+            if (edge.HttpGetDeclaration is { } declaration)
+            {
+                Require(edge.Kind == "attribute" && edge.Certainty == HarnessCertainty.Resolved
+                    && edge.Producer == "roslyn-declaration" && edge.SourceOccurrenceId is not null
+                    && nodes[edge.SourceNodeId].Kind == HarnessNodeKind.Member
+                    && nodes[edge.TargetNodeId].Kind is HarnessNodeKind.Type or HarnessNodeKind.ExternalSymbol
+                    && (edge.TargetOccurrenceId is not null || nodes[edge.TargetNodeId].Kind == HarnessNodeKind.ExternalSymbol)
+                    && edge.Evidence is { RawSpan: { Length: > 0 }, ContentHash: not null },
+                    "HttpGet metadata needs a resolved Roslyn member attribute with saved name evidence.");
+                var evidence = edge.Evidence!;
+                var nameSpan = evidence.RawSpan!.Value;
+                var source = occurrences[edge.SourceOccurrenceId!];
+                Require(DeclaredHere(source.Location) || source.Declarations?.Any(location => DeclaredHere(location)) == true,
+                    "HttpGet name evidence must belong to its saved member declaration.");
+                Require(Enum.IsDefined(declaration.State), "Unknown HttpGet declaration state.");
+                if (declaration.State == HarnessHttpGetDeclarationState.Saved)
+                {
+                    Require(declaration.OmissionReason is null && declaration.TemplateSpan is not null,
+                        "Saved HttpGet metadata needs its complete template and literal span only.");
+                    Text(declaration.Template!, "HttpGet template", HarnessHttpGetDeclaration.MaximumTemplateUtf16);
+                    Require(!declaration.Template!.Any(char.IsControl), "HttpGet template cannot contain control characters.");
+                    var literal = declaration.TemplateSpan!.Value;
+                    var end = (long)literal.Start + literal.Length;
+                    var file = files[evidence.SourceId];
+                    Require(literal.Length is > 0 and <= HarnessHttpGetDeclaration.MaximumLiteralSpanUtf16
+                        && literal.Start >= nameSpan.End && end <= int.MaxValue
+                        && (file.Utf16Length is null || end <= file.Utf16Length.Value),
+                        "HttpGet literal range must follow its attribute name within the original UTF-16 source.");
+                    Require(DeclaredHere(source.Location, literal) || source.Declarations?.Any(location => DeclaredHere(location, literal)) == true,
+                        "HttpGet literal evidence must belong to its saved member declaration.");
+                    httpGetTemplateLength = checked(httpGetTemplateLength + declaration.Template!.Length);
+                    Require(httpGetTemplateLength <= HarnessHttpGetDeclaration.MaximumSnapshotTemplateUtf16,
+                        "HttpGet templates exceed the snapshot text budget.");
+                }
+                else
+                    Require(declaration.Template is null && declaration.TemplateSpan is null
+                        && declaration.OmissionReason is "no-template" or "nonliteral-template" or "metadata-budget" or "semantic-unavailable",
+                        "Omitted HttpGet metadata needs only a supported omission reason.");
+
+                bool DeclaredHere(HarnessLocation? location, HarnessRawSpan? literal = null)
+                {
+                    token.ThrowIfCancellationRequested();
+                    return location is { RawSpan: { } range } && location.SourceId == evidence.SourceId
+                        && location.SourceVersion == evidence.SourceVersion && location.ContentHash == evidence.ContentHash
+                        && range.Start <= nameSpan.Start && range.End >= (literal?.End ?? nameSpan.End);
+                }
+            }
         }
         Count(graph.LegacyReferences, "Legacy references");
         var legacy = new HashSet<(int Schema, string Legacy, string Node, string? Occurrence)>();
@@ -337,6 +452,9 @@ public static class IndexSnapshotValidator
             }
             if (row.Path.Length != 0) ValidateRelativePath(row.Path);
         }
+        token.ThrowIfCancellationRequested();
+        if (bodyIntegrityError is not null)
+            throw bodyIntegrityError;
 
         void Location(HarnessLocation? location)
         {

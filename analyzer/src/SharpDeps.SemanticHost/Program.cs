@@ -5,7 +5,8 @@
 //            described by the report's coverage/limitations)
 //   exit 2 : a precondition failed (no MSBuild/SDK); the reason is on stderr and
 //            the caller must not treat this as a Quick failure
-//   exit 1 : unexpected error
+//   exit 1 : the analysis failed; a generated-document registration failure still
+//            writes the probe report with the cause and the diagnostics read before it
 
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts;
@@ -76,30 +77,43 @@ try
     // Generated documents are known before the index and the collectors run, so evidence
     // and declaration locations inside them are marked generatedSource from the start.
     var generatedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
-    foreach (var generated in load.GeneratedDocuments)
+    try
     {
-        var document = documents.RegisterGenerated(
-            generated.FilePath,
-            generated.ProjectName,
-            generated.HintName,
-            generated.ContentHash,
-            generated.ByteLength);
-        if (generated.Text is null)
+        foreach (var generated in load.GeneratedDocuments)
         {
-            continue;
-        }
+            var document = documents.RegisterGenerated(
+                generated.VariantKey,
+                generated.ProjectName,
+                generated.GeneratorIdentity,
+                generated.HintName,
+                generated.FilePath,
+                generated.ContentHash,
+                generated.ByteLength);
+            if (generated.Text is null)
+            {
+                continue;
+            }
 
-        // The content lives with the analysis result. Nothing is written into the user's
-        // repository; the read-only document provider serves these files.
-        var fileName = $"{document.Id}.cs";
-        var filePath = Path.Combine(outputDirectory, "generated", fileName);
-        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllTextAsync(
-            filePath,
-            generated.Text,
-            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            CancellationToken.None);
-        generatedFiles[document.Id] = fileName;
+            // The content lives with the analysis result. Nothing is written into the user's
+            // repository; the read-only document provider serves these files.
+            var fileName = $"{document.Id}.cs";
+            var filePath = Path.Combine(outputDirectory, "generated", fileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            await File.WriteAllTextAsync(
+                filePath,
+                generated.Text,
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                CancellationToken.None);
+            generatedFiles[document.Id] = fileName;
+        }
+    }
+    catch (GeneratedDocumentRegistrationException error)
+    {
+        // The loader already read diagnostics before this failure; they must survive it.
+        // No successful graph is written, so the caller cannot mistake this for a result.
+        await WriteFailureReportAsync(report, error.Code, error.Message);
+        Console.Error.WriteLine(error.ToString());
+        return 1;
     }
 
     var inputs = report.Variants
@@ -212,6 +226,18 @@ void Progress(string stage, object payload)
     });
     Console.Out.WriteLine($"sharpdeps:progress {{\"stage\":\"{stage}\",\"payload\":{body}}}");
     Console.Out.Flush();
+}
+
+// A failure after the load keeps the report and its diagnostics: the caller sees the
+// cause instead of an empty output directory.
+async Task WriteFailureReportAsync(SemanticProbeReport report, string code, string message)
+{
+    var failure = report.WithFailure(code, message);
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+    await File.WriteAllTextAsync(
+        outputPath,
+        JsonSerializer.Serialize(failure, json),
+        CancellationToken.None);
 }
 
 internal sealed record CliArguments(

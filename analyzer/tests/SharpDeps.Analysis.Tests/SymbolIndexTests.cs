@@ -260,6 +260,160 @@ public sealed class SymbolIndexTests : IDisposable
             first.Members.Select(member => member.Id).OrderBy(id => id, StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void GeneratedTreeTypeWithGeneratedCodeAttributeIsIndexed()
+    {
+        var root = CreateTemporaryDirectory();
+        var rootId = SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root);
+        const string variant = "Sample.csproj|net10.0|Debug|AnyCPU";
+        const string source = "[System.CodeDom.Compiler.GeneratedCode(\"Some.Generator\", \"1.0\")] public class GeneratedType { public void Run() { } }";
+        var tree = CSharpSyntaxTree.ParseText(source, path: Path.Combine(root, "obj", "Some.Generator", "Generated.g.cs"));
+        var compilation = CSharpCompilation.Create("Sample", [tree], PlatformReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var errors = compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).ToArray();
+        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
+        var registry = new SourceDocumentRegistry(rootId, root);
+        var bytes = Encoding.UTF8.GetBytes(source);
+        var document = registry.RegisterGenerated(variant, "Sample", "Some.Generator/Generator", "Generated.g.cs",
+            tree.FilePath, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.Length);
+        var inputs = new[] { new SymbolIndexInput(variant, "Sample", compilation) };
+
+        Assert.True(registry.IsGeneratedTree(variant, tree));
+        Assert.Same(document, registry.ResolveTreeDocument(variant, tree));
+        var index = SymbolIndexBuilder.Build(registry, inputs);
+        var type = Assert.Single(index.Types, entry => entry.Name == "GeneratedType");
+        var member = Assert.Single(index.Members, entry => entry.TypeId == type.Id && entry.Name == "Run");
+        foreach (var declaration in new[] { Assert.Single(type.Declarations), Assert.Single(member.Declarations) })
+        {
+            var declaredDocument = Assert.Single(index.Documents, entry => entry.Id == declaration.DocumentId);
+            Assert.Equal(document.Id, declaredDocument.Id);
+            Assert.StartsWith("generated/", declaredDocument.RelativePath);
+            Assert.Contains("/net10.0_Debug_AnyCPU/", declaredDocument.RelativePath, StringComparison.Ordinal);
+        }
+
+        var unregistered = new SourceDocumentRegistry(rootId, root);
+        Assert.False(unregistered.IsGeneratedTree(variant, tree));
+        var excluded = SymbolIndexBuilder.Build(unregistered, inputs);
+        Assert.DoesNotContain(excluded.Types, entry => entry.Name == "GeneratedType");
+        Assert.DoesNotContain(excluded.Members, entry => entry.Name == "Run");
+    }
+
+    [Fact]
+    public void GeneratedDocumentsWithTheSameHintAndTreePathRemainDistinctAcrossVariants()
+    {
+        var root = CreateTemporaryDirectory();
+        var registry = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+        var path = Path.Combine(root, "obj", "Generated.g.cs");
+        var first = registry.RegisterGenerated("Sample.csproj|net10.0|Debug", "Sample", "Some.Generator/Generator",
+            "Generated.g.cs", path, new string('a', 64), 10);
+        var second = registry.RegisterGenerated("Sample.csproj|net8.0|Debug", "Sample", "Some.Generator/Generator",
+            "Generated.g.cs", path, new string('a', 64), 10);
+
+        Assert.Equal(2, registry.Documents.Count);
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.NotEqual(first.RelativePath, second.RelativePath);
+        var tree = CSharpSyntaxTree.ParseText("", path: path);
+        Assert.Same(first, registry.ResolveTreeDocument("Sample.csproj|net10.0|Debug", tree));
+        Assert.Same(second, registry.ResolveTreeDocument("Sample.csproj|net8.0|Debug", tree));
+    }
+
+    [Fact]
+    public void GeneratedDocumentIdentityReusesTheSameBodyAndRejectsAConflictingHash()
+    {
+        var root = CreateTemporaryDirectory();
+        var registry = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+        var path = Path.Combine(root, "obj", "Generated.g.cs");
+        var first = registry.RegisterGenerated("variant", "Sample", "Some.Generator/Generator", "Generated.g.cs",
+            path, new string('a', 64), 10);
+
+        Assert.Same(first, registry.RegisterGenerated("variant", "Sample", "Some.Generator/Generator", "Generated.g.cs",
+            path, new string('a', 64), 10));
+        var conflict = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample",
+            "Some.Generator/Generator", "Generated.g.cs", path, new string('b', 64), 10));
+        Assert.Equal(GeneratedDocumentRegistrationException.BodyConflict, conflict.Code);
+        Assert.Same(first, Assert.Single(registry.Documents));
+    }
+
+    [Fact]
+    public void GeneratedDocumentPathsIncludeTheDistinctGeneratorIdentities()
+    {
+        var root = CreateTemporaryDirectory();
+        var registry = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+        var first = registry.RegisterGenerated("variant", "Sample", "First.Assembly/First.Generator", "Generated.g.cs",
+            null, new string('a', 64), 10);
+        var second = registry.RegisterGenerated("variant", "Sample", "Second.Assembly/Second.Generator", "Generated.g.cs",
+            null, new string('a', 64), 10);
+
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.NotEqual(first.RelativePath, second.RelativePath);
+        Assert.Contains("/First.Assembly/First.Generator/", first.RelativePath, StringComparison.Ordinal);
+        Assert.Contains("/Second.Assembly/Second.Generator/", second.RelativePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GeneratedDocumentPathsAreStableRegardlessOfRegistrationOrder()
+    {
+        var root = CreateTemporaryDirectory();
+        const string project = "Sample";
+        const string generator = "Some.Generator/Generator";
+        const string hint = "Generated.g.cs";
+        // Same project name, TFM, generator and hint: the identities differ only in
+        // the project path inside the variant key, so both sanitize to one base path.
+        const string firstVariant = "C:/work/first/src/Sample.csproj|net10.0|Debug|AnyCPU";
+        const string secondVariant = "C:/work/second/src/Sample.csproj|net10.0|Debug|AnyCPU";
+        var hash = new string('a', 64);
+
+        var forward = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+        var forwardFirst = forward.RegisterGenerated(firstVariant, project, generator, hint, null, hash, 10);
+        var forwardSecond = forward.RegisterGenerated(secondVariant, project, generator, hint, null, hash, 10);
+        var reverse = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+        var reverseSecond = reverse.RegisterGenerated(secondVariant, project, generator, hint, null, hash, 10);
+        var reverseFirst = reverse.RegisterGenerated(firstVariant, project, generator, hint, null, hash, 10);
+
+        Assert.Equal(2, forward.Documents.Count);
+        Assert.Equal(2, reverse.Documents.Count);
+        Assert.Equal(forwardFirst.Id, reverseFirst.Id);
+        Assert.Equal(forwardSecond.Id, reverseSecond.Id);
+        Assert.Equal(forwardFirst.RelativePath, reverseFirst.RelativePath);
+        Assert.Equal(forwardSecond.RelativePath, reverseSecond.RelativePath);
+        // Neither identity may own the shared base path just by being registered first.
+        const string basePath = "generated/Sample/net10.0_Debug_AnyCPU/Some.Generator/Generator/Generated.g.cs";
+        Assert.NotEqual(basePath, forwardFirst.RelativePath);
+        Assert.NotEqual(basePath, forwardSecond.RelativePath);
+        Assert.NotEqual(forwardFirst.RelativePath, forwardSecond.RelativePath);
+    }
+
+    [Fact]
+    public void GeneratedDocumentRegistrationRefusesAnUnidentifiedGenerator()
+    {
+        var root = CreateTemporaryDirectory();
+        var registry = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+
+        var withPath = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample", "",
+            "Generated.g.cs", Path.Combine(root, "obj", "Generated.g.cs"), new string('a', 64), 10));
+        var withoutPath = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample", " ",
+            "Generated.g.cs", null, new string('a', 64), 10));
+        Assert.Equal(GeneratedDocumentRegistrationException.GeneratorUnidentified, withPath.Code);
+        Assert.Equal(GeneratedDocumentRegistrationException.GeneratorUnidentified, withoutPath.Code);
+        Assert.Empty(registry.Documents);
+    }
+
+    [Fact]
+    public void GeneratedDocumentTreePathsRefuseASecondIdentity()
+    {
+        var root = CreateTemporaryDirectory();
+        var registry = new SourceDocumentRegistry(SharpDeps.Analysis.Core.Identity.Identity.WorkspaceRootId(root), root);
+        var path = Path.Combine(root, "obj", "Generated.g.cs");
+        var first = registry.RegisterGenerated("variant", "Sample", "First.Assembly/Generator", "Generated.g.cs",
+            path, new string('a', 64), 10);
+
+        Assert.Same(first, registry.ResolveTreeDocument("variant", CSharpSyntaxTree.ParseText(string.Empty, path: path)));
+        var ambiguous = Assert.Throws<GeneratedDocumentRegistrationException>(() => registry.RegisterGenerated("variant", "Sample",
+            "Second.Assembly/Generator", "Generated.g.cs", path, new string('b', 64), 10));
+        Assert.Equal(GeneratedDocumentRegistrationException.IdentityAmbiguous, ambiguous.Code);
+        Assert.Same(first, Assert.Single(registry.Documents));
+    }
+
     private static MetadataReference[] PlatformReferences()
     {
         var trustedPlatformAssemblies =
