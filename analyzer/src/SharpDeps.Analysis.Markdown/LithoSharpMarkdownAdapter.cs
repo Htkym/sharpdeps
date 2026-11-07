@@ -70,9 +70,8 @@ public sealed class LithoSharpMarkdownAdapter
                 request.SourceVersion, options, cancellationToken);
             facts = syntax.Facts;
             syntaxRoot = syntax.Root;
-            if (facts.Status != MarkdownParseStatus.Complete || facts.Coverage.RawPositions != MarkdownCoverageState.Complete
-                || facts.Coverage.DecodedMapping != MarkdownCoverageState.Complete || facts.Coverage.UnprojectedRegions.Count != 0
-                || facts.Coverage.Reasons.Count != 0 || facts.Diagnostics.Count != 0)
+            // In the pinned runtime only syntax resource exhaustion can change the full canonical facts.
+            if (facts.Diagnostics.Any(diagnostic => diagnostic.Id == "LMD003" && diagnostic.Origin == "resource"))
                 facts = MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken);
         }
         else

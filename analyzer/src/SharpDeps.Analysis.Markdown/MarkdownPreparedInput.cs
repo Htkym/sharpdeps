@@ -40,7 +40,8 @@ public sealed class MarkdownPreparedInput
             || request.ScopeId != Facts.ScopeId || request.SourceId != Facts.SourceId || request.SourceVersion != Facts.SourceVersion
             || requestedOptions.MaxInputUtf16 != options.MaxInputUtf16 || requestedOptions.MaxOutputItems != options.MaxOutputItems
             || requestedOptions.MaxNestingDepth != options.MaxNestingDepth || requestedOptions.MaxScanUnits != options.MaxScanUnits
-            || requestedOptions.ProfileId != options.ProfileId || requestedOptions.OptionsSchemaVersion != options.OptionsSchemaVersion)
+            || requestedOptions.ProfileId != options.ProfileId || requestedOptions.OptionsSchemaVersion != options.OptionsSchemaVersion
+            || requestedOptions.FrontMatterRecovery != options.FrontMatterRecovery || requestedOptions.InputKind != options.InputKind)
             throw new ArgumentException("Prepared Markdown input must match its parsed source and options.", nameof(request));
     }
 }

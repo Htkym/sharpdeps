@@ -1,10 +1,10 @@
 {
   "format": "sharpdeps-markdown-runtime-pin",
   "schemaVersion": 1,
-  "componentVersion": "1.1.0",
-  "sourceCommit": "96d406a4b76f83328a6f558d125ddbf98f031b40",
-  "canonicalSourceHash": "622f375cff4e2997c92e7379873fcab5b8ee6b3928260f74c59be0d97b20e5fe",
-  "parserVersion": "1/622f375cff4e2997c92e7379873fcab5b8ee6b3928260f74c59be0d97b20e5fe",
+  "componentVersion": "1.2.0",
+  "sourceCommit": "a4038bf8156987dd0a00cb7f646a91c62a7c5fb0",
+  "canonicalSourceHash": "17494090defc826957640640ddcdbca4268a9a1011cfe24a0e534247910a7faa",
+  "parserVersion": "1/17494090defc826957640640ddcdbca4268a9a1011cfe24a0e534247910a7faa",
   "contractVersion": "1.0",
   "profileId": "lithosharp-markdown/1",
   "dependencies": [
@@ -20,18 +20,18 @@
   "artifacts": {
     "runtime": {
       "packageId": "Syntamark",
-      "componentVersion": "1.1.0",
-      "fileName": "Syntamark.1.1.0.nupkg",
-      "sha256": "d12463255b496cda469e6a2411281626af220c4e43f054a99437830f099e5ee6",
-      "byteLength": 555557,
-      "assemblySha256": "6347fadec31fcc87796989d499d81ce9aa10df6763e9e1559e8dc1373c7a7bc8"
+      "componentVersion": "1.2.0",
+      "fileName": "Syntamark.1.2.0.nupkg",
+      "sha256": "ea5f4e2afff263bb8ee7d2a3816727f713fa696cdbb9fa757c600099f296c4ef",
+      "byteLength": 563991,
+      "assemblySha256": "fd95fb1010972277f7c6d888aae109f9d293ebc19a74723e5c377f500624f625"
     },
     "source": {
       "packageId": "Syntamark.Source",
-      "componentVersion": "1.1.0",
-      "fileName": "Syntamark.Source.1.1.0.nupkg",
-      "sha256": "5665c656baa5de1ed8608f073c842bd36d9191a28b49cfeaf877afd34eefa860",
-      "byteLength": 519391
+      "componentVersion": "1.2.0",
+      "fileName": "Syntamark.Source.1.2.0.nupkg",
+      "sha256": "f1027d0eab0c1ded4accef832b57bb853c84cdff927f9ee968a7cbe85bfcff71",
+      "byteLength": 526041
     }
   },
   "sourceRepository": {

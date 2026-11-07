@@ -65,11 +65,41 @@ public sealed class MarkdownGraphAdapterTests
         };
         foreach (var mismatch in mismatches)
             Assert.Throws<ArgumentException>(() => adapter.Project(mismatch, prepared, true));
+        foreach (var options in new[] { new MarkdownParseOptions(MarkdownInputKind.Body),
+            new MarkdownParseOptions(MarkdownFrontMatterRecovery.TreatAsBody) })
+        {
+            var changed = request with { Options = options };
+            var changedPrepared = adapter.Prepare(changed, true);
+            Assert.Throws<ArgumentException>(() => adapter.Project(changed, prepared, true));
+            Assert.Throws<ArgumentException>(() => adapter.Project(request, changedPrepared, true));
+        }
         Assert.Throws<InvalidOperationException>(() => adapter.Project(request with { ExpectedParserVersion = "other" }, prepared, true));
         Assert.Throws<UnauthorizedAccessException>(() => adapter.Prepare(request, false));
         Assert.Throws<UnauthorizedAccessException>(() => adapter.Project(request, prepared, false));
         Assert.Throws<OperationCanceledException>(() => adapter.Prepare(request, true, new CancellationToken(true)));
         Assert.Throws<OperationCanceledException>(() => adapter.Project(request, prepared, true, new CancellationToken(true)));
+    }
+
+    [Theory]
+    [InlineData("IReadOnlyState<T>", "LMD006")]
+    [InlineData("---\ntitle: value\n", "LMD004")]
+    public void NonResourcePartialFactsAndDiagnosticsMatchOrdinaryAnalysis(string raw, string diagnosticId)
+    {
+        var request = Request(raw);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var baseline = adapter.Analyze(request, true);
+        var prepared = adapter.Prepare(request, true);
+        var projected = adapter.Project(request, prepared, true);
+
+        Assert.Equal(MarkdownParseStatus.Partial, projected.Facts.Status);
+        Assert.Contains(projected.Facts.Diagnostics, diagnostic => diagnostic.Id == diagnosticId);
+        Assert.DoesNotContain(projected.Facts.Diagnostics, diagnostic => diagnostic.Id == "LMD003");
+        if (projected.Facts.FrontMatter.State == MarkdownFrontMatterState.Unterminated)
+        {
+            Assert.Equal<RawSpan?>(new RawSpan(raw.Length, 0), projected.Facts.FrontMatter.FailureSpan);
+            Assert.Equal<int?>(3, projected.Facts.FrontMatter.FailureLine);
+        }
+        Assert.Equal(JsonSerializer.Serialize(baseline), JsonSerializer.Serialize(projected));
     }
 
     [Fact]
