@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Diagnostics;
 using System.IO.Pipes;
 using SharpDeps.Index;
@@ -181,6 +183,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 }
                 using var operation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                 operation.CancelAfter(TimeSpan.FromSeconds(CliIndexOptions.MaximumTimeoutSeconds));
+                using var metrics = PhaseMetrics.TryStart(batch.Update.Options.MetricsDirectory, batch.VerifyWatchInputs is null ? "index.update" : "index.watch-update", batch.Update.Options.Root);
                 try
                 {
                     var built = await build(batch.Update, operation.Token);
@@ -204,6 +207,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
                                 : snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.projectCollectorsReused" && d.Count > 0) == true
                                     ? "project-incremental" : "full-rebuild",
                             snapshot.Files.Count, snapshot.Graph.Nodes.Count, snapshot.Graph.Edges.Count);
+                        metrics?.Complete();
                         committed = result;
                         verifyQueryInputs = built.VerifyQueryInputs;
                         committedRevision = captured;
@@ -214,6 +218,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 }
                 catch (Exception error)
                 {
+                    metrics?.Fail(error is OperationCanceledException);
                     var code = ErrorCode(error, lifetime.IsCancellationRequested);
                     lock (gate)
                     {

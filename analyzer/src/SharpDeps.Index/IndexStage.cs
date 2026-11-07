@@ -1,5 +1,7 @@
 namespace SharpDeps.Index;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -13,10 +15,19 @@ public sealed class IndexStage
     public string ManifestHash { get; }
     public static IndexStage Create(IndexSnapshot snapshot)
     {
-        IndexSnapshotValidator.Validate(snapshot);
-        var serialized = JsonSerializer.Serialize(snapshot, Json);
-        var frozen = JsonSerializer.Deserialize<IndexSnapshot>(serialized, Json)!;
-        IndexSnapshotValidator.Validate(frozen);
+        using var metrics = PhaseMetrics.Measure("stage.create");
+        using (PhaseMetrics.Measure("stage.validate-input"))
+            IndexSnapshotValidator.Validate(snapshot);
+        string serialized;
+        using (PhaseMetrics.Measure("stage.serialize"))
+            serialized = JsonSerializer.Serialize(snapshot, Json);
+        if (PhaseMetrics.Enabled)
+            PhaseMetrics.Count("serialized.utf8-bytes", Encoding.UTF8.GetByteCount(serialized));
+        IndexSnapshot frozen;
+        using (PhaseMetrics.Measure("stage.deserialize"))
+            frozen = JsonSerializer.Deserialize<IndexSnapshot>(serialized, Json)!;
+        using (PhaseMetrics.Measure("stage.validate-frozen"))
+            IndexSnapshotValidator.Validate(frozen);
         return new IndexStage(serialized, ComputeManifestHash(frozen.Files));
     }
     internal IndexSnapshot Materialize() => JsonSerializer.Deserialize<IndexSnapshot>(serialized, Json)!;

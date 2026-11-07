@@ -26,12 +26,12 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
         if (timeout == 0 && arguments.Command == "serve") throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
         return new(new(root, target, indexPath, uuid, arguments.Get("configuration") ?? "Debug", arguments.Get("platform"),
             projects, arguments.Get("tfm"), timeout,
-            AllowSemanticReuse: arguments.Command == "update"), arguments.Command == "index");
+            AllowSemanticReuse: arguments.Command == "update") { MetricsDirectory = arguments.Get("metrics-directory") }, arguments.Command == "index");
     }
 
     // Client timeout/request ID/quiet do not affect the requested extraction. The owner imposes its own deadline.
     internal string Key => System.Text.Json.JsonSerializer.Serialize(new { Target = KeyPath(Options.Target), Options.Configuration,
-        Options.Platform, Projects = Options.ProjectPaths?.Select(KeyPath).Order(StringComparer.Ordinal).ToArray(), Options.TargetFramework, Full });
+        Options.Platform, Projects = Options.ProjectPaths?.Select(KeyPath).Order(StringComparer.Ordinal).ToArray(), Options.TargetFramework, Full, Options.MetricsDirectory });
 
     private static string KeyPath(string path) => OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
 
@@ -42,6 +42,8 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
         if (Options.Platform is { } platform) args.AddRange(["--platform", platform]);
         foreach (var project in Options.ProjectPaths ?? []) args.AddRange(["--project", project]);
         if (Options.TargetFramework is { } framework) args.AddRange(["--tfm", framework]);
+        if (Options.MetricsDirectory is { } metrics)
+            args.AddRange(["--metrics-directory", metrics]);
         return args.ToArray();
     }
 }

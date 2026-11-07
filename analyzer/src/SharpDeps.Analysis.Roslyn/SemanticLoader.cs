@@ -1,3 +1,4 @@
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -73,6 +74,7 @@ public static class SemanticLoader
         SemanticLoadOptions options,
         CancellationToken cancellationToken = default)
     {
+        using var loadMetrics = PhaseMetrics.Measure("semantic.load");
         if (!Microsoft.Build.Locator.MSBuildLocator.IsRegistered)
         {
             throw new InvalidOperationException(
@@ -104,6 +106,7 @@ public static class SemanticLoader
         Solution solution;
         try
         {
+            using var openMetrics = PhaseMetrics.Measure("semantic.msbuild-open");
             solution = await OpenAsync(workspace, targetPath, cancellationToken);
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -193,6 +196,7 @@ public static class SemanticLoader
             string? generatedError = null;
             try
             {
+                using var generatedMetrics = PhaseMetrics.Measure("semantic.generated-documents");
                 var projectDocuments = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
                 foreach (var generated in projectDocuments.OrderBy(
                              entry => entry.FilePath,
@@ -219,6 +223,7 @@ public static class SemanticLoader
                         1));
             }
 
+            PhaseMetrics.Count("generated.documents", generatedCount);
             var documentPaths = new List<string>();
             foreach (var document in project.Documents.OrderBy(entry => entry.FilePath, StringComparer.Ordinal))
             {
@@ -428,6 +433,7 @@ public static class SemanticLoader
                 Skipped: 0,
                 Unresolved: unresolvedReferences));
 
+        using var referenceMetrics = PhaseMetrics.Measure("semantic.reference-map");
         var referenceMap = Symbols.SemanticReferenceMap.Build(
             solution,
             project => VariantKeyFor(project, options));
@@ -594,7 +600,9 @@ public static class SemanticLoader
 
             try
             {
-                var compilation = await project.GetCompilationAsync(cancellationToken);
+                Compilation? compilation;
+                using (PhaseMetrics.Measure("semantic.compilation-get"))
+                    compilation = await project.GetCompilationAsync(cancellationToken);
                 if (compilation is null)
                 {
                     return null;

@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Security.Cryptography;
 using System.Text;
 using Syntamark;
@@ -17,6 +19,7 @@ public sealed record CliIndexOptions(string Root, string Target, string IndexPat
     string Configuration = "Debug", string? Platform = null, IReadOnlyList<string>? ProjectPaths = null,
     string? TargetFramework = null, int TimeoutSeconds = CliIndexOptions.DefaultTimeoutSeconds, bool AllowSemanticReuse = false)
 {
+    internal string? MetricsDirectory { get; init; }
     internal const int DefaultTimeoutSeconds = 1800;
     internal const int MaximumTimeoutSeconds = 3600;
 }
@@ -57,6 +60,7 @@ public static class CliIndexer
     internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token, Action<int, int>? afterPartialExtraction)
     {
+        using var buildMetrics = PhaseMetrics.Measure("index.build");
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
         if (options.TimeoutSeconds is < 0 or > CliIndexOptions.MaximumTimeoutSeconds
@@ -125,6 +129,7 @@ public static class CliIndexer
                     throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                 manifest[old.RelativePath] = captured with { File = old with { Reuse = null } };
             }
+            PhaseMetrics.Decision("reuse.semantic", "reused");
             graph = SemanticGraph(previous.Graph, snapshotId, generation);
             catalogSymbols = savedProof.Catalog.Select(s => new MarkdownSymbolCandidate(s.NodeId, s.FullName,
                 s.ShortName, s.DocumentationId, s.Project, s.Namespace, s.VariantId, s.SourceId)).ToArray();
@@ -134,6 +139,12 @@ public static class CliIndexer
         }
         else
         {
+            if (PhaseMetrics.Enabled)
+                PhaseMetrics.Decision("reuse.semantic", excludedTarget ? "excluded-target"
+                : !options.AllowSemanticReuse ? "disabled" : previous is null ? "no-previous-snapshot"
+                : previous.Files.Any(QueryWorkspace.IsStored) ? "stored-generated-or-package-input"
+                : savedProof?.Projects?.Version != CliProjectReuse.Version ? "missing-or-unsupported-project-proof"
+                : currentInputHash is null ? "input-inventory-unavailable" : "proof-mismatch");
             if (!SemanticEnvironment.TryRegister(Path.GetDirectoryName(target)!, out var registrationFailure))
                 throw new CliIndexException("CLI_TARGET_SDK_UNAVAILABLE",
                     registrationFailure ?? "No target MSBuild SDK is available.");
@@ -374,6 +385,12 @@ public static class CliIndexer
                 && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
                 && projectSelections is not null
                 ? CliProjectReuse.Select(previous, savedProof.Projects, structureHash, projectSelections, capturedFiles, token) : null;
+            if (projectPlan is null && PhaseMetrics.Enabled)
+                PhaseMetrics.Decision("reuse.project-admission", !options.AllowSemanticReuse ? "disabled"
+                    : previous is null ? "no-previous-snapshot" : savedProof is null ? "no-saved-proof"
+                    : hasGenerated ? "generated-input" : hasPackage ? "package-input"
+                    : previous.Files.Any(QueryWorkspace.IsStored) ? "stored-generated-or-package-input"
+                    : projectSelections is null ? "unsupported-selection" : "no-project-plan");
             var extracted = new HashSet<string>(StringComparer.Ordinal);
             var reused = new HashSet<string>(StringComparer.Ordinal);
             var symbolParts = new Dictionary<string, CliProjectReuse.Symbols>(StringComparer.Ordinal);
@@ -387,6 +404,7 @@ public static class CliIndexer
                 }
                 else
                 {
+                    using var symbolMetrics = PhaseMetrics.Measure("collector.symbol-index");
                     symbolParts.Add(input.VariantId, CliProjectReuse.CaptureSymbols(SymbolIndexBuilder.Build(documents, [input], token)));
                     extracted.Add(input.VariantId);
                 }
@@ -403,6 +421,7 @@ public static class CliIndexer
                     extractions.Add(input.VariantId, projectPlan!.Saved[input.VariantId]);
                     continue;
                 }
+                using var collectorMetrics = PhaseMetrics.Measure("collector.declaration-operation");
                 var external = new ExternalTypeRegistry();
                 var declaration = new DeclarationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
                 var operation = new OperationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
@@ -418,8 +437,9 @@ public static class CliIndexer
                     checked(sum.DynamicReferences + part.Stats.DynamicReferences), checked(sum.CandidateOnlySymbols + part.Stats.CandidateOnlySymbols)));
             // Re-project all retained and fresh facts together. Old dirty symbols, external occurrences,
             // edges, legacy mappings and diagnostics cannot survive by incident-edge filtering.
-            graph = HarnessGraphProjector.Project(options.WorkspaceUuid, snapshotId, generation,
-                HarnessCoverage.Partial, projects, symbols, evidence, stats, token);
+            using (PhaseMetrics.Measure("graph.project"))
+                graph = HarnessGraphProjector.Project(options.WorkspaceUuid, snapshotId, generation,
+                    HarnessCoverage.Partial, projects, symbols, evidence, stats, token);
             graph = AlignCompilationLocations(graph, sourceOffsets);
             diagnostics = (graph.Diagnostics ?? []).ToDictionary(d => d.Code, d => d.Count, StringComparer.Ordinal);
             diagnostics["cli.configurationInventoryUnverified"] = 1;
@@ -439,8 +459,11 @@ public static class CliIndexer
             graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
                 .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
 
-            catalogSymbols = MakeCatalog(graph, symbols, evidence, manifest.Values.Where(i => i.File.Kind == "project")
-                .ToDictionary(i => i.File.SourceId, i => i.File.RelativePath, StringComparer.Ordinal));
+            PhaseMetrics.Count("projects.extracted", extracted.Count);
+            PhaseMetrics.Count("projects.reused", reused.Count);
+            using (PhaseMetrics.Measure("catalog.build"))
+                catalogSymbols = MakeCatalog(graph, symbols, evidence, manifest.Values.Where(i => i.File.Kind == "project")
+                    .ToDictionary(i => i.File.SourceId, i => i.File.RelativePath, StringComparer.Ordinal));
             if (reused.Count > 0) afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
             var afterFingerprint = fullFingerprint is null ? null : CliReuseProof.Capture(root, fullFingerprint.SdkPath, token);
             var stableInputsAfter = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
@@ -476,6 +499,7 @@ public static class CliIndexer
         {
             var request = new MarkdownGraphRequest(input.Text, options.WorkspaceUuid, Guid.NewGuid(), workspaceId,
                 input.File.SourceId, input.File.ContentHash, snapshotId, generation);
+            using var prepareMetrics = PhaseMetrics.Measure("markdown.prepare");
             var prepared = adapter.Prepare(request, isTrusted: true, token);
             RequireIndexableMarkdownFacts(prepared.Facts, input.File.RelativePath);
             var ids = prepared.Attributes.Where(a => a.Key == "sharpdeps.id").ToArray();
@@ -491,6 +515,7 @@ public static class CliIndexer
         var projections = new List<(InputText Input, MarkdownGraphProjection Projection, MarkdownPreparedInput Prepared)>();
         foreach (var item in markdown)
         {
+            using var markdownMetrics = PhaseMetrics.Measure("markdown.identity-project-merge");
             token.ThrowIfCancellationRequested();
             var match = matches.Single(m => m.RelativePath == item.Input.File.RelativePath);
             if (match.Reason == "duplicate-explicit-id") throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
@@ -520,6 +545,7 @@ public static class CliIndexer
         }
         foreach (var (input, projection, prepared) in projections)
         {
+            using var mentionMetrics = PhaseMetrics.Measure("markdown.mentions");
             var aliases = CodeAliases(Path.GetDirectoryName(input.AbsolutePath)!, manifest.Values.Where(i => i.File.Kind == "source"));
             var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, new(codeCatalog, catalogSymbols, aliases),
                 cancellationToken: token);
@@ -529,7 +555,9 @@ public static class CliIndexer
         }
         graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
             .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
-        var search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
+        IReadOnlyList<IndexSearchText> search;
+        using (PhaseMetrics.Measure("search-text.build"))
+            search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
         foreach (var input in manifest.Values)
         {
             if (QueryWorkspace.IsStored(input.File)) VerifyStored(input);
@@ -551,7 +579,12 @@ public static class CliIndexer
             verifyPackage(token);
         var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
             identities.ToArray(), [], search, generatedBodies, packageBodies);
-        IndexSnapshotValidator.Validate(snapshot);
+        using (PhaseMetrics.Measure("snapshot.validate"))
+            IndexSnapshotValidator.Validate(snapshot);
+        PhaseMetrics.Count("files", snapshot.Files.Count);
+        PhaseMetrics.Count("input.bytes", inputBytes);
+        PhaseMetrics.Count("graph.nodes", snapshot.Graph.Nodes.Count);
+        PhaseMetrics.Count("graph.edges", snapshot.Graph.Edges.Count);
         var finalInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
         if (initialInputs != finalInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var publicationInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token)
@@ -580,7 +613,9 @@ public static class CliIndexer
                 if (!PathComparer.Equals(old.AbsolutePath, path)) throw new CliIndexException("CLI_PATH_ALIAS");
                 return old;
             }
+            using var inputMetrics = PhaseMetrics.Measure("input.capture-read-hash");
             var text = await ReadInput(path, token);
+            PhaseMetrics.Count("read.bytes", text.Bytes);
             inputBytes = checked(inputBytes + text.Bytes);
             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
                 throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
@@ -694,6 +729,8 @@ public static class CliIndexer
     private static async Task<string?> FingerprintInputs(string root, string indexPath, bool includeOutputs, CancellationToken token,
         bool includeMarkdown = false, IReadOnlySet<string>? ownedSourcePaths = null)
     {
+        using var fingerprintMetrics = PhaseMetrics.Measure(ownedSourcePaths is not null ? "input.fingerprint-structure"
+            : includeOutputs ? "input.fingerprint-with-outputs" : "input.fingerprint-selected");
         try
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -764,6 +801,7 @@ public static class CliIndexer
                     if (read > expectedLength) return null;
                     content.AppendData(buffer, 0, bytes);
                 }
+                PhaseMetrics.Count("read.bytes", read);
                 if (read != expectedLength || stream.Length != expectedLength) return null;
                 hash.AppendData(content.GetHashAndReset()); RejectLinks(path);
             }

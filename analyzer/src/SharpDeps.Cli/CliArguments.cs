@@ -14,7 +14,7 @@ internal sealed class CliArguments
     private static readonly HashSet<string> Installation = new(StringComparer.Ordinal)
     { "client", "config-file", "instructions-file", "mcp-command", "dry-run" };
     private static readonly HashSet<string> Index = new(StringComparer.Ordinal)
-    { "target", "configuration", "platform", "project", "tfm", "timeout-seconds" };
+    { "target", "configuration", "platform", "project", "tfm", "timeout-seconds", "metrics-directory" };
     private static readonly HashSet<string> Query = new(StringComparer.Ordinal)
     { "term", "id", "ids", "project-id", "path-prefix", "variant", "node-kind", "edge-kind", "include-candidates",
       "no-documents", "dependencies", "freshness", "require-complete", "page-size", "cursor", "max-nodes", "max-edges",
