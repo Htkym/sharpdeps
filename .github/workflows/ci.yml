@@ -133,9 +133,6 @@ jobs:
   macos-smoke:
     runs-on: macos-latest
     timeout-minutes: 20
-    env:
-      # Keep the bounded reuse proof independent of unrelated preinstalled SDKs/runtimes.
-      DOTNET_INSTALL_DIR: ${{ runner.temp }}/sharpdeps-dotnet
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -143,6 +140,9 @@ jobs:
           node-version: 20
           cache: npm
       - uses: actions/setup-dotnet@v6.0.0
+        env:
+          # Keep the bounded reuse proof independent of unrelated preinstalled SDKs/runtimes.
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/sharpdeps-dotnet
         with:
           dotnet-version: 10.0.x
       - name: Record environment
