@@ -7,9 +7,10 @@ using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
+using Xunit.Abstractions;
 
 [Collection("markdown-index")]
-public sealed class FullBuildOracleTests
+public sealed class FullBuildOracleTests(ITestOutputHelper output)
 {
     [Fact]
     [Trait("Category", "Integration")]
@@ -39,12 +40,14 @@ public sealed class FullBuildOracleTests
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         try
         {
-            await OracleProcess.ExecuteAsync(root, ["restore", "Oracle.slnx", "--configfile", Path.Combine(runRoot, "restore.config"), "--verbosity", "quiet"], deadline.Token);
+            await OracleProcess.ExecuteAsync(root, ["restore", "Oracle.slnx", "--configfile", Path.Combine(runRoot, "restore.config"), "--verbosity", "quiet"], deadline.Token,
+                packageRoot: Path.Combine(runRoot, "packages"));
             File.Delete(Path.Combine(root, "global.json"));
             var options = new CliIndexOptions(root, Path.Combine(root, "Oracle.slnx"),
                 Path.Combine(root, ".sharpdeps", "baseline.sqlite"), Guid.Parse("11111111-2222-4333-8444-555555555555"));
             string[] terms = ["Service", "Shared", "Guide", "日本語", "missing-term"];
             var previous = await OracleProcess.RunAsync(new(options, null, terms), runRoot, "baseline", deadline.Token);
+            output.WriteLine($"Full oracle reuse proofs: {previous.Snapshot.Files.Count(f => f.Reuse is not null)}; restore SDK: {sdk}.");
             var proof = Assert.Single(previous.Snapshot.Files, f => f.Reuse is not null).Reuse!;
             Assert.NotNull(proof.Projects);
             Assert.Equal(sdk, Path.GetFileName(proof.SdkPath));
@@ -92,6 +95,9 @@ public sealed class FullBuildOracleTests
                     Assert.False(reply.Truncated);
                     Assert.Null(reply.NextCursor);
                 }
+                output.WriteLine($"Step {step}: extracted={Count(incremental, "cli.projectCollectorsExtracted")}, "
+                    + $"collectorsReused={Count(incremental, "cli.projectCollectorsReused")}, "
+                    + $"semanticReused={Count(incremental, "cli.semanticGraphReused")}.");
                 var differences = FullBuildOracle.Differences(full, incremental);
                 Assert.True(differences.Count == 0, string.Join(Environment.NewLine, differences.Take(30)) + "\nArtifacts: " + runRoot);
                 previous = incremental;
