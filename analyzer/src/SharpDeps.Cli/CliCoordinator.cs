@@ -180,7 +180,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
                     continue;
                 }
                 using var operation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                operation.CancelAfter(TimeSpan.FromSeconds(300));
+                operation.CancelAfter(TimeSpan.FromSeconds(CliIndexOptions.MaximumTimeoutSeconds));
                 try
                 {
                     var built = await build(batch.Update, operation.Token);
@@ -315,7 +315,7 @@ internal sealed class CliCoordinator : IAsyncDisposable
         using (pipe)
         using (var session = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
         {
-            // Includes handshake + queue wait. Client arguments cannot extend this hard owner-side limit.
+            // Status/query sessions keep their deadline; updates get a separate owner-side limit.
             session.CancelAfter(TimeSpan.FromSeconds(305));
             Task? disconnect = null;
             CoordinatorRequest? request = null;
@@ -325,6 +325,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 handshake.CancelAfter(TimeSpan.FromSeconds(3));
                 request = await CoordinatorProtocol.ReadAsync<CoordinatorRequest>(pipe, handshake.Token);
                 Validate(request);
+                if (request.Operation == "update")
+                    session.CancelAfter(TimeSpan.FromSeconds(CliIndexOptions.MaximumTimeoutSeconds + 5));
                 CoordinatorReply reply;
                 if (request.Operation == "status") reply = Status(request.RequestId);
                 else if (request.Operation == "verify-query")

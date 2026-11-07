@@ -38,9 +38,9 @@ watch通知はowner gateを取る前に独立revisionを進める。root内の�
 
 通知とwatch snapshotは.git/.sharpdeps/bin/obj、custom index本体、WAL/SHM/journal、writer lock、owner descriptorとその一時fileを除外する。full抽出の既存publication guardはbin/objの意味入力を引き続き検査する。root外の祖先config、AdditionalFiles、任意PE等は周期fullで再評価する機会を持つが、未知external入力のstage中変更を完全に捕捉する保証はない。Partial/unverifiedを保持し、SDK identity変更はrestart-requiredで止める。large rootやlink、入力budgetを超えるtreeの自動watch成功は主張しない。
 
-各clientの取消はそのwaiterだけを外す。他clientの共有更新tokenへ接続しない。受理済みの共有更新はownerの300秒deadline、owner終了要求、公開guardで中断できる。すべてのclientが取消された未開始batchは抽出しない。短命ownerは自分のclient完了／取消後に新規更新の受理を閉じ、受理済みの処理を終える。
+各clientの取消はそのwaiterだけを外す。他clientの共有更新tokenへ接続しない。受理済みの共有更新はownerの3600秒deadline、owner終了要求、公開guardで中断できる。すべてのclientが取消された未開始batchは抽出しない。短命ownerは自分のclient完了／取消後に新規更新の受理を閉じ、受理済みの処理を終える。
 
-`index`／`update --timeout-seconds 0`は共有ownerを使わない専有実行であり、このIPCへ送ると`ARGUMENT_UNSUPPORTED`となる。専有実行は同じOS writer leaseと公開guardを使い、既存ownerのleaseを奪わない。共有batchのcoalescing key、300秒期限、waiterの取消規則は変更しない。
+`index`／`update --timeout-seconds 0`は共有ownerを使わない専有実行であり、このIPCへ送ると`ARGUMENT_UNSUPPORTED`となる。専有実行は同じOS writer leaseと公開guardを使い、既存ownerのleaseを奪わない。共有batchのcoalescing key、3600秒期限、waiterの取消規則は変更しない。
 
 SDK登録はprocess全体に固定される。ownerは実SDK path/versionに固定し、同じSDKを使う別target directoryの依頼を受ける。各buildではtarget directoryから祖先のglobal.json集合とraw bytes、SDK探索に関係する環境を照合する。登録による環境初期化後のstampを使い、公開直前にも同じtargetのstampを検査する。公開guardは全dotnet設置先の候補を照合し、選択SDKが登録済みSDKと合わない場合やSDKが見つからなくなった場合は`COORDINATOR_SDK_RESTART_REQUIRED`を返す。旧SDKで新設定を公開しない。利用者がownerを停止して新processで起動する。複数のdotnet設置先がある環境では、意図したSDKの設置先を`DOTNET_ROOT`等で明示して起動する必要がある。ownerが任意root／SDKを同じprocessで再登録する機能はない。
 
@@ -59,9 +59,10 @@ local .NET named pipeを`CurrentUserOnly`で使用する。Windowsはlocal named
 | pending batch | 16 |
 | pending waiter | 64 |
 | handshake | 3秒 |
-| ownerの一抽出 | 300秒 |
-| 一connection全体 | 305秒 |
-| client応答待ち | 1〜300秒、既定180秒 |
+| ownerの一抽出 | 3600秒 |
+| 更新connection全体（queue待ちを含む） | handshake後3605秒 |
+| status／verify-query connection全体 | 305秒 |
+| client応答待ち | 1〜3600秒、既定1800秒 |
 
 responseは元request ID、owner instance、captured／desired revision、owner状態、committed結果またはerror codeを返す。ownerが返したrevisionと保存generationは別の値である。
 

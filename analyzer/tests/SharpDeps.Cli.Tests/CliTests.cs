@@ -15,6 +15,27 @@ using Xunit;
 public sealed class CliTests
 {
     [Fact]
+    public async Task IndexTimeoutDefaultsAndRangeSupportLargeWorkspaces()
+    {
+        using var fixture = new Fixture(seed: false);
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        foreach (var command in new[] { "index", "update" })
+        {
+            var arguments = new[] { command, "--root", fixture.Root, "--target", "App.csproj", "--trusted" };
+            CoordinatorUpdate Parse(params string[] extra) => CoordinatorUpdate.Parse(CliArguments.Parse([.. arguments, .. extra]),
+                fixture.Root, fixture.IndexPath, fixture.Uuid);
+            Assert.Equal(1800, Parse().Options.TimeoutSeconds);
+            Assert.Equal(3600, Parse("--timeout-seconds", "3600").Options.TimeoutSeconds);
+            Assert.Equal(0, Parse("--timeout-seconds", "0").Options.TimeoutSeconds);
+            var invalid = await Run([.. arguments, "--timeout-seconds", "3601"]);
+            Assert.Equal(2, invalid.Exit);
+            Assert.Equal("ARGUMENT_INVALID", Code(invalid.Json));
+        }
+        Assert.Equal(1800, new CliIndexOptions(fixture.Root, "App.csproj", fixture.IndexPath, fixture.Uuid).TimeoutSeconds);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".sharpdeps")));
+    }
+
+    [Fact]
     public void ReuseTreePreservesLegacyOrderAndDetectsSameLengthTailChanges()
     {
         using var fixture = new Fixture(seed: false);

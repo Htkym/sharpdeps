@@ -21,7 +21,8 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
         if (projects is not null && (projects.Length > 64 || projects.Distinct(StringComparer.OrdinalIgnoreCase).Count() != projects.Length
             || projects.Any(path => !File.Exists(path) || !path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))))
             throw new CliFailure("PROJECT_SELECTION_INVALID", 2);
-        var timeout = arguments.Number("timeout-seconds", 180, 0, 300);
+        var timeout = arguments.Number("timeout-seconds", CliIndexOptions.DefaultTimeoutSeconds, 0,
+            CliIndexOptions.MaximumTimeoutSeconds);
         if (timeout == 0 && arguments.Command == "serve") throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
         return new(new(root, target, indexPath, uuid, arguments.Get("configuration") ?? "Debug", arguments.Get("platform"),
             projects, arguments.Get("tfm"), timeout,
@@ -51,7 +52,7 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal Task<CliIndexBuild> BuildAsync(CoordinatorUpdate update, CancellationToken token)
-        => BuildCoreAsync(update.Options with { TimeoutSeconds = 300 }, update.Full, token);
+        => BuildCoreAsync(update.Options with { TimeoutSeconds = CliIndexOptions.MaximumTimeoutSeconds }, update.Full, token);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal Task<CliIndexBuild> BuildExclusiveAsync(CoordinatorUpdate update, CancellationToken token)
