@@ -157,6 +157,9 @@ exports.run = async function () {
       });
       await vscode.commands.executeCommand('workbench.action.previousEditor');
       await mapFrame();
+      // At narrow widths the restored inspector can cover the next table row.
+      await frame.locator('#sd-inspector-close').click();
+      await expect(frame.locator('.sd-inspector')).toBeHidden();
     }
   } catch (error) {
     results.push({

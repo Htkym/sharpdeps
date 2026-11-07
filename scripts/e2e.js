@@ -57,9 +57,11 @@ async function main() {
   if (!testElectron) throw new Error('Run npm ci to install the pinned VS Code test runner.');
   const executable = findInstalledCode() ?? (await testElectron.downloadAndUnzipVSCode());
   const vsixMode = process.env.SHARPDEPTS_E2E_MODE === 'vsix';
-  const profile =
+  const profile = path.resolve(
+    repoRoot,
     process.env.SHARPDEPTS_E2E_PROFILE ??
-    path.join(repoRoot, '.local', vsixMode ? 'e2e-vsix-review' : 'e2e-review');
+      path.join(repoRoot, '.local', vsixMode ? 'e2e-vsix-review' : 'e2e-review')
+  );
   const extensions = path.join(profile, 'extensions');
   fs.mkdirSync(extensions, { recursive: true });
   const profileArgs = [`--user-data-dir=${profile}`, `--extensions-dir=${extensions}`];
