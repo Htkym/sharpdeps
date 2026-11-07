@@ -19,11 +19,11 @@ public static class CliApplication
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
                 return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall" },
-                    root = "--root absolute-directory",
+                    root = "--root absolute-directory; optional only for explore, which uses the absolute current directory without ancestor search",
                     index = "--target root-contained.slnx|.sln|.csproj --trusted [--timeout-seconds 0 for exclusive execution without a deadline]",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh; --max-milliseconds 0 disables the computation deadline",
-                    explore = "--term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
+                    explore = "names-or-file-paths | --term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --scope-policy discover|unique|prefer-debug --path-to occurrence-id --owner-status]; ordinary names/paths default to discover unless project or variant is explicit; exact saved IDs, path-to and http-get-literal default to unique and reject discover; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
@@ -46,7 +46,7 @@ public static class CliApplication
             var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
             if (exploration is not null)
             {
-                var result = await ExploreAsync(options.Require("root"), options.Get("index") ?? ".sharpdeps/index.sqlite",
+                var result = await ExploreAsync(options.Get("root") ?? Path.GetFullPath(Environment.CurrentDirectory), options.Get("index") ?? ".sharpdeps/index.sqlite",
                     options.Has("trusted"), exploration, options.RequestId, token);
                 await stdout.WriteLineAsync(result.Text);
                 return result.ExitCode;
@@ -102,8 +102,8 @@ public static class CliApplication
             root = CliPaths.Root(root);
             index = CliPaths.InRoot(root, index);
             foreach (var sidecar in new[] { index + "-wal", index + "-shm", index + ".writer.lock" }) CliPaths.RejectLinks(sidecar);
-            var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(index)) throw new CliFailure("INDEX_MISSING", 3);
+            var state = CliWorkspaceState.Open(root, create: false);
             var queryToken = deadline.Token;
             queryToken.ThrowIfCancellationRequested();
             using var reader = IndexReader.Open(index, state.WorkspaceUuid, queryToken);
@@ -125,7 +125,10 @@ public static class CliApplication
         catch (Exception error)
         {
             var failure = Failure(error, deadline?.IsCancellationRequested == true && !token.IsCancellationRequested);
-            return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code), failure.ExitCode));
+            var recovery = failure.Code is "INDEX_MISSING" or "WORKSPACE_STATE_MISSING"
+                ? $"No usable saved index at '{index}' for selected root '{root}'. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command."
+                : null;
+            return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode));
         }
         finally { deadline?.Dispose(); }
     }
@@ -329,11 +332,11 @@ public static class CliApplication
         return exitCode;
     }
 
-    private static string ErrorText(string command, string requestId, string code)
+    private static string ErrorText(string command, string requestId, string code, string? recovery = null)
     {
-        var message = code == "CLI_MARKDOWN_FACTS_INCOMPLETE"
+        var message = recovery ?? (code == "CLI_MARKDOWN_FACTS_INCOMPLETE"
             ? "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying."
-            : "See CLI contract for the recovery action.";
+            : "See CLI contract for the recovery action.");
         return JsonSerializer.Serialize(new { apiVersion = "1", command,
             requestId, errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options);
     }

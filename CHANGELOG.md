@@ -1,5 +1,11 @@
 # Change Log
 
+## Unreleased
+
+- Discover ordinary unscoped CLI/MCP exploration queries in separate project/variant groups under one snapshot and shared budgets. Explicit scopes and saved identities keep unique selection by default; use `--scope-policy unique` to retain the previous unscoped behavior. The typed Query API default is unchanged.
+- Present verified source before optional metadata, identify source outcomes, and fall back to complete saved member ranges when a type range exceeds the budget.
+- Accept one positional CLI exploration query and the current directory as its omitted root, without ancestor search or automatic index creation. Align CLI, MCP, and agent guidance on omitted ranges and group-local aliases.
+
 ## 0.4.0
 
 - Update the extension's bundled Quick, Semantic, and saved Query hosts, including namespace representative files, generated-document identity and registration diagnostics, and readers for index schemas 1/2/3. The old 0.2.1 extension cannot read schema-3 indexes; updating an external CLI does not replace its bundled reader.

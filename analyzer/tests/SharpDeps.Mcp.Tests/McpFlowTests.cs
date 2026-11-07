@@ -17,6 +17,69 @@ using Xunit.Abstractions;
 public sealed class McpFlowTests(ITestOutputHelper output)
 {
     [Theory]
+    [InlineData("agent", null)]
+    [InlineData("audit", null)]
+    [InlineData("agent", "discover")]
+    [InlineData("audit", "discover")]
+    public async Task UnknownProjectReturnsTheScopeErrorInCliAndMcp(string format, string? policy)
+    {
+        using var fixture = new Fixture();
+        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        var unknown = "hpr_" + new string('f', 64);
+        var request = Explore("Service", format, policy);
+        request.Arguments!["projectId"] = JsonSerializer.SerializeToElement(unknown);
+        request.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+        var arguments = new List<string> { "explore", "--root", fixture.Root, "--trusted", "--format", format,
+            "--max-milliseconds", "10000", "--project-id", unknown, "Service" };
+        if (policy is not null)
+            arguments.AddRange(["--scope-policy", policy]);
+        var (exit, text, result) = await AssertEquivalent(adapter, request, arguments);
+        Assert.NotEqual(0, exit);
+        Assert.Contains("SCOPE_NOT_FOUND", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("INTERNAL_ERROR", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.SavedText, text, StringComparison.Ordinal);
+        AssertWireBudget(result, 12000, 48000);
+    }
+
+    [Fact]
+    public async Task OmittedScopePolicyDiscoversWithoutChangingExplicitOrExactRequests()
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        var arguments = new[] { "explore", "--root", fixture.Root, "--trusted", "--format", "agent", "--max-milliseconds", "10000", "Service" };
+        CallToolRequestParams Request(string query = "Service", string? policy = null)
+        {
+            var request = Explore(query, scopePolicy: policy);
+            request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+            return request;
+        }
+        var (discoveredExit, discovered, result) = await AssertEquivalent(adapter, Request(), arguments);
+        Assert.Equal(0, discoveredExit);
+        Assert.StartsWith("SharpDeps discover ", discovered, StringComparison.Ordinal);
+        Assert.Contains("groups=2 omittedGroups=0", discovered, StringComparison.Ordinal);
+        Assert.Contains(fixture.SavedText, discovered, StringComparison.Ordinal);
+        AssertWireBudget(result, 12000, 48000);
+        var scoped = Request();
+        scoped.Arguments!["projectId"] = JsonSerializer.SerializeToElement(fixture.Project);
+        var (scopedExit, unique, _) = await AssertEquivalent(adapter, scoped, [.. arguments, "--project-id", fixture.Project]);
+        Assert.Equal(0, scopedExit);
+        Assert.DoesNotContain("SharpDeps discover ", unique, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.SavedText, unique, StringComparison.Ordinal);
+        scoped.Arguments["scopePolicy"] = JsonSerializer.SerializeToElement("discover");
+        var (_, explicitDiscovery, _) = await AssertEquivalent(adapter, scoped,
+            [.. arguments, "--project-id", fixture.Project, "--scope-policy", "discover"]);
+        Assert.Contains("groups=2 omittedGroups=0", explicitDiscovery, StringComparison.Ordinal);
+        var exactArguments = arguments.ToArray();
+        exactArguments[^1] = fixture.Occurrence;
+        var (exactExit, exact, _) = await AssertEquivalent(adapter, Request(fixture.Occurrence), exactArguments);
+        Assert.Equal(0, exactExit);
+        Assert.DoesNotContain("SharpDeps discover ", exact, StringComparison.Ordinal);
+        Assert.Contains(fixture.SavedText, exact, StringComparison.Ordinal);
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+
+    [Theory]
     [InlineData(false, null, null)]
     [InlineData(true, null, null)]
     [InlineData(true, "agent", "prefer-debug")]
@@ -107,8 +170,8 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             Assert.Equal("cli", hostError.RootElement.GetProperty("requestId").GetString());
             var hostIssue = Assert.Single(hostError.RootElement.GetProperty("errors").EnumerateArray());
             Assert.Equal("INDEX_MISSING", hostIssue.GetProperty("code").GetString());
-            Assert.Equal("See CLI contract for the recovery action.", hostIssue.GetProperty("message").GetString());
-            Assert.DoesNotContain(fixture.Root, hostText, StringComparison.Ordinal);
+            Assert.Contains(fixture.Root, hostIssue.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains(Path.Combine(fixture.Root, "missing.sqlite"), hostIssue.GetProperty("message").GetString(), StringComparison.Ordinal);
 
             var invalidPathArguments = new List<string>(arguments);
             invalidPathArguments[invalidPathArguments.IndexOf("--term") + 1] = fixture.Occurrence;

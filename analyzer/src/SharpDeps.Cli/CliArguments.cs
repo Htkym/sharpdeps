@@ -77,15 +77,28 @@ internal sealed class CliArguments
         for (var i = 1; i < args.Length; i++)
         {
             var argument = args[i];
-            if (!argument.StartsWith("--", StringComparison.Ordinal)) throw new CliFailure("ARGUMENT_INVALID", 2);
-            var name = argument[2..];
-            if (!allowed.Contains(name)) throw new CliFailure("ARGUMENT_UNKNOWN", 2);
-            var value = "true";
-            if (!Switches.Contains(name))
+            string name, value;
+            if (!argument.StartsWith("--", StringComparison.Ordinal))
             {
-                if (++i >= args.Length) throw new CliFailure("ARGUMENT_REQUIRED", 2);
-                value = args[i];
-                if (parsed.Command != "explore" || name != "term") ValidateValue(value);
+                if (parsed.Command != "explore")
+                    throw new CliFailure("ARGUMENT_INVALID", 2);
+                name = "term";
+                value = argument;
+            }
+            else
+            {
+                name = argument[2..];
+                if (!allowed.Contains(name))
+                    throw new CliFailure("ARGUMENT_UNKNOWN", 2);
+                value = "true";
+                if (!Switches.Contains(name))
+                {
+                    if (++i >= args.Length)
+                        throw new CliFailure("ARGUMENT_REQUIRED", 2);
+                    value = args[i];
+                    if (parsed.Command != "explore" || name != "term")
+                        ValidateValue(value);
+                }
             }
             if (!parsed.values.TryGetValue(name, out var list)) parsed.values.Add(name, list = []);
             else if (!Repeated.Contains(name)) throw new CliFailure("ARGUMENT_DUPLICATE", 2);
@@ -117,14 +130,16 @@ internal sealed class CliArguments
     public ExploreRequest ExplorationRequest()
     {
         var query = Require("term");
+        var queryKind = ExploreRequestFactory.QueryKind(Get("query-kind"));
         if (Many("variant") is { Count: > 1 })
             throw new CliFailure("ARGUMENT_INVALID", 2);
         return ExploreRequestFactory.Validate(new(query, Get("project-id"), Get("variant"), Get("path-prefix"),
             ExploreRequestFactory.Freshness(Get("freshness")),
             ExploreRequestFactory.Budget(OptionalNumber("max-nodes"), OptionalNumber("max-edges"), OptionalNumber("max-depth"),
                 OptionalNumber("max-milliseconds"), OptionalNumber("max-chars"), OptionalNumber("max-bytes")),
-            ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit), ExploreRequestFactory.ScopePolicy(Get("scope-policy")), Get("path-to"))
-            { ObserveOwner = Has("owner-status"), QueryKind = ExploreRequestFactory.QueryKind(Get("query-kind")) });
+            ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit),
+            ExploreRequestFactory.ScopePolicy(Get("scope-policy"), query, Get("project-id"), Get("variant"), Get("path-to"), queryKind), Get("path-to"))
+            { ObserveOwner = Has("owner-status"), QueryKind = queryKind });
     }
 
     public QueryRequest QueryRequest()
