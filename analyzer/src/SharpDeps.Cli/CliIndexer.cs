@@ -34,6 +34,9 @@ public sealed class CliIndexException : Exception
     public int ExitCode { get; }
 }
 
+internal sealed record CliProofAdmission(bool NoGenerated, bool NoPackage, bool ClosedReferences,
+    bool FullFingerprint, bool AfterFingerprint, bool FingerprintEqual, bool StableInputs, bool InputHash);
+
 /// <summary>
 /// Trusted extraction with closed-input Markdown and project collector reuse. The caller validates trust and holds the writer lease from before
 /// this call through commit. No restore, commit, renderer, watch or workspace UUID allocation occurs here.
@@ -58,8 +61,13 @@ public static class CliIndexer
         CancellationToken token, Action<int, int>? afterPartialExtraction)
         => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, null);
 
-    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+    internal static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity)
+        => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, allocateIdentity, null);
+
+    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
+        Action<CliProofAdmission>? observeProof)
     {
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
@@ -453,6 +461,9 @@ public static class CliIndexer
                 reference is Microsoft.CodeAnalysis.CompilationReference
                 || reference is Microsoft.CodeAnalysis.PortableExecutableReference { FilePath: { } path }
                     && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot)));
+            observeProof?.Invoke(new(!hasGenerated, !hasPackage, closedReferences, fullFingerprint is not null,
+                afterFingerprint is not null, fullFingerprint is not null && fullFingerprint == afterFingerprint,
+                initialInputs == stableInputsAfter, inputHash is not null));
             // No reuse proof is issued for a run with generated/package inputs: their currency
             // cannot be proven from fingerprints, so later queries stay unverified.
             if (!hasGenerated && !hasPackage && closedReferences && fullFingerprint is not null && afterFingerprint is not null
