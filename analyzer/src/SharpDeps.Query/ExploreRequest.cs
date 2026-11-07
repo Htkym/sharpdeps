@@ -15,7 +15,9 @@ public enum ExploreScopePolicy
     /// <summary>Leaves ambiguous compilation scopes unresolved.</summary>
     RequireUnique,
     /// <summary>Uses explicit identities first, then the sole saved Debug variant within one project.</summary>
-    PreferDebug
+    PreferDebug,
+    /// <summary>Returns independent project/variant groups for ordinary names and paths.</summary>
+    Discover
 }
 
 public enum ExploreQueryKind
@@ -39,10 +41,15 @@ public sealed record ExploreOwnerObservation(string State, string? WorkspaceId =
 
 public sealed record ExploreUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan Span,
     string Text, int FirstLine, IReadOnlyList<string> SymbolIds,
-    string Role = "saved-declaration", string BodyAvailability = "unknown", bool CompleteSavedRange = true);
+    string Role = "saved-declaration", string BodyAvailability = "unknown", bool CompleteSavedRange = true)
+{
+    public string? ProjectId { get; init; }
+    public string? VariantId { get; init; }
+}
 
 public sealed record ExploreReply(string Text, IReadOnlyList<QueryIssue> Errors,
     IReadOnlyList<ExploreUnit> Units, IReadOnlyList<string> OmissionReasons, int WireChars, int WireBytes)
 {
     public bool Succeeded => Errors.Count == 0;
+    public string Outcome { get; init; } = "source-unavailable";
 }

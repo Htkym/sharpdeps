@@ -205,7 +205,7 @@ public sealed class CliTests
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Agent, CliArguments.Parse(["explore", "--term", "Service", "--format", "agent"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service", "--format", "audit"]).ExplorationRequest().Format);
-        Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
+        Assert.Equal(ExploreScopePolicy.Discover, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "unique"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.PreferDebug, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "prefer-debug"]).ExplorationRequest().ScopePolicy);
         Assert.False(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ObserveOwner);
@@ -282,6 +282,87 @@ public sealed class CliTests
         var selectionWithoutWatch = await Run("serve", "--root", fixture.Root, "--trusted", "--target", "absent.csproj");
         Assert.Equal("ARGUMENT_UNSUPPORTED", Code(selectionWithoutWatch.Json));
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".sharpdeps")));
+    }
+
+    [Fact]
+    public void ExploreDefaultsPreserveExplicitScopeAndExactSelectorIntent()
+    {
+        ExploreRequest Request(params string[] arguments) => CliArguments.Parse(["explore", .. arguments]).ExplorationRequest();
+        Assert.Equal(ExploreScopePolicy.RequireUnique, new ExploreRequest("Service").ScopePolicy);
+        foreach (var query in new[] { "Service", "src/Service.cs" })
+        {
+            Assert.Equal(Request("--term", query), Request(query));
+            Assert.Equal(ExploreScopePolicy.Discover, Request(query).ScopePolicy);
+            foreach (var flag in new[] { "--project-id", "--variant" })
+            {
+                Assert.Equal(ExploreScopePolicy.RequireUnique, Request(query, flag, "saved-scope").ScopePolicy);
+                Assert.Equal(ExploreScopePolicy.Discover, Request(query, flag, "saved-scope", "--scope-policy", "discover").ScopePolicy);
+            }
+        }
+        var occurrence = "hocc_" + new string('a', 64);
+        foreach (var arguments in new[]
+        {
+            new[] { occurrence },
+            new[] { "Service " + occurrence },
+            new[] { occurrence, "--path-to", occurrence },
+            new[] { "--term", "items/{id}", "--query-kind", "http-get-literal" }
+        })
+        {
+            Assert.Equal(ExploreScopePolicy.RequireUnique, Request(arguments).ScopePolicy);
+            Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => Request([.. arguments, "--scope-policy", "discover"])).Code);
+        }
+        foreach (var arguments in new[]
+        {
+            new[] { "Service", "Other" }, new[] { "Service", "--term", "Other" },
+            new[] { "--term", "Service", "Other" }
+        })
+            Assert.Equal("ARGUMENT_DUPLICATE", Assert.Throws<CliFailure>(() => Request(arguments)).Code);
+        Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => CliArguments.Parse(["search", "Service"])).Code);
+    }
+
+    [Fact]
+    public async Task ExploreUsesCurrentDirectoryWithoutSearchingForAnAncestorIndex()
+    {
+        using var fixture = new Fixture();
+        var selectedRoot = Directory.CreateDirectory(Path.Combine(fixture.Root, "nested")).FullName;
+        var testAssembly = typeof(CliTests).Assembly.Location;
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            WorkingDirectory = selectedRoot, UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "exec", "--runtimeconfig", Path.ChangeExtension(testAssembly, ".runtimeconfig.json"),
+            "--depsfile", Path.ChangeExtension(testAssembly, ".deps.json"), typeof(CliApplication).Assembly.Location,
+            "explore", "Service" })
+            start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+        Assert.Equal(3, process.ExitCode);
+        Assert.Empty(await stderr);
+        using var result = JsonDocument.Parse(await stdout);
+        var error = Assert.Single(result.RootElement.GetProperty("errors").EnumerateArray());
+        Assert.Equal("INDEX_MISSING", error.GetProperty("code").GetString());
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains(selectedRoot, message, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFullPath(".sharpdeps/index.sqlite", selectedRoot), message, StringComparison.Ordinal);
+        Assert.Contains("--root/--index", message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(selectedRoot, ".sharpdeps")));
+        Assert.Equal(0, (await Run("explore", "Service", "--root", fixture.Root)).Exit);
+        Assert.Equal("ARGUMENT_REQUIRED", Code((await Run("status")).Json));
     }
 
     [Fact]

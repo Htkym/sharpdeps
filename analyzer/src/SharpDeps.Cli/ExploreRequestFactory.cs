@@ -28,6 +28,9 @@ internal static class ExploreRequestFactory
         var budget = request.Budget ?? Budget();
         if (!Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
             || request.QueryKind == ExploreQueryKind.HttpGetLiteral && request.PathTo is not null
+            || request.ScopePolicy == ExploreScopePolicy.Discover
+                && (request.QueryKind != ExploreQueryKind.Symbol || request.PathTo is not null
+                    || ExplorationService.HasSavedIdentity(request.Query))
             || budget.MaxNodes is < 1 or > 500 || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
             || budget.MaxMilliseconds != 0 && (budget.MaxMilliseconds is < 10 or > 30000)
             || budget.MaxChars is < 2048 or > 1000000
@@ -80,10 +83,15 @@ internal static class ExploreRequestFactory
         _ => throw new CliFailure("ARGUMENT_INVALID", 2)
     };
 
-    internal static ExploreScopePolicy ScopePolicy(string? value) => value switch
+    internal static ExploreScopePolicy ScopePolicy(string? value, string query, string? projectId = null,
+        string? variantId = null, string? pathTo = null, ExploreQueryKind queryKind = ExploreQueryKind.Symbol) => value switch
     {
-        null or "unique" => ExploreScopePolicy.RequireUnique,
+        null => projectId is null && variantId is null && pathTo is null
+            && queryKind == ExploreQueryKind.Symbol && !ExplorationService.HasSavedIdentity(query)
+                ? ExploreScopePolicy.Discover : ExploreScopePolicy.RequireUnique,
+        "unique" => ExploreScopePolicy.RequireUnique,
         "prefer-debug" => ExploreScopePolicy.PreferDebug,
+        "discover" => ExploreScopePolicy.Discover,
         _ => throw new CliFailure("ARGUMENT_INVALID", 2)
     };
 }

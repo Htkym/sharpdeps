@@ -18,7 +18,9 @@ public sealed class McpTests
         Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
         Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal("agent", tool.InputSchema.GetProperty("properties").GetProperty("format").GetProperty("default").GetString());
-        Assert.Equal("unique", tool.InputSchema.GetProperty("properties").GetProperty("scopePolicy").GetProperty("default").GetString());
+        var scopePolicy = tool.InputSchema.GetProperty("properties").GetProperty("scopePolicy");
+        Assert.False(scopePolicy.TryGetProperty("default", out _));
+        Assert.Equal(new[] { "discover", "unique", "prefer-debug" }, scopePolicy.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal("boolean", tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("type").GetString());
         Assert.False(tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("default").GetBoolean());
         Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", root, "--allow-mutations"]));
@@ -87,6 +89,9 @@ public sealed class McpTests
             "{\"query\":\"Service\",\"scopePolicy\":\"PreferDebug\"}",
             "{\"query\":\"Service\",\"scopePolicy\":true}",
             "{\"query\":\"Service\",\"scopePolicy\":null}",
+            JsonSerializer.Serialize(new { query = "Service hocc_" + new string('a', 64), scopePolicy = "discover" }),
+            JsonSerializer.Serialize(new { query = "Service", pathTo = "hocc_" + new string('a', 64), scopePolicy = "discover" }),
+            "{\"query\":\"items/{id}\",\"queryKind\":\"http-get-literal\",\"scopePolicy\":\"discover\"}",
             "{\"query\":\"Service\",\"ownerStatus\":null}",
             "{\"query\":\"Service\",\"ownerStatus\":\"true\"}",
             "{\"query\":\"Service\",\"ownerStatus\":1}",

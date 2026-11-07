@@ -7,18 +7,20 @@ description: Use an existing SharpDeps CLI or MCP index to investigate .NET impl
 
 Use the already selected tool version and workspace root/index. The CLI package is `SharpDeps.Cli`, with command `sharpdeps`; the MCP host is `sharpdeps-mcp`. Check availability instead of installing tools or changing global settings. Acquisition, restore and first-time dnx execution can access the network or update caches. Local-manifest `dotnet tool run` and `dnx` launchers need an SDK; an installed tool shim or direct saved-query DLL execution needs a .NET 10 runtime. Report missing prerequisites. Do not repack the fixed Markdown runtime/source pair under the same version.
 
-This repository copy describes CLI/MCP version 0.4.0. Check the registry or release page for actual availability, and inspect the selected CLI's help or MCP tool schema for the options supported by that installed version. Documentation of a feature does not authorize upgrading a tool or rebuilding its index.
+This repository copy includes unreleased v0.5 development behavior: discovery and omission-sensitive scope defaults, source outcomes, positional CLI queries and explore-only current-directory root selection. These are not claims about published 0.4.0 packages. Check the registry or release page for actual availability, and inspect the selected CLI's help or MCP tool schema for options supported by that installed version. Documentation of a feature does not authorize upgrading a tool or rebuilding its index.
 
 ## Start with explore
 
-For a structural question, start with related names or a saved source path in one bounded request. Replace `ROOT_ABS` with the selected absolute workspace path and example IDs with actual returned values. Retain a selected nondefault `--index` in later CLI calls and MCP startup.
+For a structural question, start with short related names or a saved source path in one bounded request. Replace `ROOT_ABS` with the selected absolute workspace path and example IDs with actual returned values. Retain a selected nondefault `--index` in later CLI calls and MCP startup. The positional examples below require the unreleased development interface; older tools use `--term` with the same query and an explicit root.
 
 ```text
-sharpdeps explore --root ROOT_ABS --term "Parser ParseOptions" --format agent
-sharpdeps explore --root ROOT_ABS --term "src/Parser.cs" --format agent
+sharpdeps explore "Parser ParseOptions" --root ROOT_ABS --format agent
+sharpdeps explore "src/Parser.cs" --root ROOT_ABS --format agent
 ```
 
-MCP uses tool `explore` with `query` instead of `--term`, and defaults to agent format. CLI defaults to audit, so these examples select agent explicitly. Choose audit for full saved identities, hashes, spans and provenance. Format does not grant source access.
+For CLI `explore` only, `--root` can be omitted: the absolute current directory is selected without searching parent directories. The default index remains `.sharpdeps/index.sqlite` under that root. Use either one positional query or `--term`, not both. Missing-index errors report the selected root/index and do not create them.
+
+MCP uses tool `explore` with `query` instead of the CLI query, and defaults to agent format. CLI defaults to audit, so these examples select agent explicitly. Choose audit for full saved identities, hashes, spans and provenance. Format does not grant source access.
 
 For an exact captured MVC HttpGet fragment, select the explicit literal mode instead of a name/path search:
 
@@ -30,13 +32,17 @@ MCP uses `{"queryKind":"http-get-literal","query":"items/{id}"}`; `"query":""` m
 
 Read the snapshot/generation, selected project/variant, coverage, certainty, freshness, errors and omissions. Absence is limited to this index/scope; static binding is not runtime dispatch. Impact results are review candidates, not required changes or proof that other code is safe.
 
-For ambiguous scopes, choose the returned project/variant explicitly. Narrow with `--path-prefix` where appropriate; never combine alternative compilation contexts or fold their edges/source by logical ID. The default policy is unique. When several scopes remain, opt-in prefer-debug chooses only the single saved Debug candidate in one matching project after explicit constraints; the SDK is not a TFM selector.
+Ordinary names/paths without an explicit project or variant default to `discover`. It returns bounded independent saved project/variant groups under one snapshot and shared deadline/output budget. Keep each group separate: never combine compilation contexts or fold edges/source by logical ID. Check `outcome` and group omissions; success alone does not prove source was returned. Narrow with `--path-prefix`, then choose returned project/variant IDs when needed.
+
+An omitted policy with an explicit project or variant uses `unique`. Explicit `discover` remains available with those filters. Exact saved-ID tokens, `pathTo` and HttpGet literal mode default to `unique` and reject explicit `discover`. Explicit `unique` preserves the pre-development scope default. Explicit `prefer-debug` retains its existing behavior: it selects only the single saved Debug candidate in one matching project after explicit constraints; the SDK is not a TFM selector. The typed Query API still defaults to RequireUnique.
 
 ```text
 sharpdeps explore --root ROOT_ABS --term "Parser" --project-id PROJECT_ID --variant VARIANT_ID --path-prefix src/ --format agent
 ```
 
-After an omission, re-query its exact returned `selector` and retain the intended scope. Narrow names/paths before raising only the necessary budget. Reply-local aliases such as `@1` are not durable selectors; qualified names may still be ambiguous between overloads. Each request pins its own generation, so compare snapshots before combining replies.
+A complete saved range already in the current context with the same hash and span need not be reread. This is a context-local decision, not a persistent already-read flag. Use normal read/search for dirty or unindexed files, other spans, documentation not returned, or lost context.
+
+For missing members or omitted source, re-query the exact returned `selector` and retain the intended scope. Narrow names/paths before raising only the necessary budget. Aliases such as `@1` and `F1` are local to one discovery group, or to one reply for a single-scope request, and are not durable selectors. The same alias can recur across groups. Qualified names may still be ambiguous between overloads. Each request pins its own generation, so compare snapshots before combining replies.
 
 ```text
 sharpdeps explore --root ROOT_ABS --term EXACT_SELECTOR --variant VARIANT_ID --format agent --max-chars 12000 --max-bytes 48000

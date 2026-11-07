@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。この文書は0.4.0のCLI契約を記述する。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。基礎契約は0.4.0に対応し、discoveryとその既定値、およびexploreでのroot省略は未公開のv0.5開発版の仕様である。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
 
 候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
 
@@ -49,7 +49,11 @@ watchなしの`serve`には解析選択を付けない。watchの解析期限も
 
 Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids`を同時指定しない。
 
-`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy unique|prefer-debug`を使う。`--query-kind http-get-literal`は保存済みのHttpGet宣言断片との完全一致を調べ、実効URLの一致を保証しない。`--path-to`はsymbol探索で、exactな開始occurrenceから対象occurrenceへの保存済みcall witnessを要求する。`--owner-status`は既存ownerを観測するだけで鮮度の証明ではない。探索形式と根拠の限界は[Exploreの案内](../mcp.md)に従う。
+`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy discover|unique|prefer-debug`を使う。通常の名前／pathでの`--scope-policy`の既定は、project／variantを明示しなければ`discover`、明示した場合は`unique`となる。exactな保存ID、`--path-to`、HttpGet literalでは`unique`を既定とし、`discover`の明示を拒否する。typed Query API自体の既定は`unique`のままである。`explore Service`と`explore --term Service`は同じ入口であり、併用しない。`explore`だけは`--root`を省略でき、その場合は絶対化した現在directoryを使い、祖先directoryを検索しない。indexがなければ選択したroot／indexと回復手順を返し、自動作成しない。
+
+`discover`は同一snapshotからproject／variant別のgroupを最大4件返し、全体で件数・出力・計算の予算を共有する。group間の関係を一つのcall chainへまとめない。aliasはgroup内だけで有効であり、後続要求には対象scopeと保存IDを使う。予算に入らない巨大typeでは、完全に返せる関連memberの保存範囲を候補とし、source返却と省略理由を区別する。
+
+`--query-kind http-get-literal`は保存済みのHttpGet宣言断片との完全一致を調べ、実効URLの一致を保証しない。`--path-to`はsymbol探索で、exactな開始occurrenceから対象occurrenceへの保存済みcall witnessを要求する。`--owner-status`は既存ownerを観測するだけで鮮度の証明ではない。探索形式と根拠の限界は[Exploreの案内](../mcp.md)に従う。
 
 | Query command | 必須selector |
 |---|---|
