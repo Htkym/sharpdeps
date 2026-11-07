@@ -2,6 +2,7 @@ namespace SharpDeps.Index;
 
 using System.Security.Cryptography;
 using System.Text;
+using SharpDeps.Analysis.Core.Text;
 
 internal static class IndexPaths
 {
@@ -58,14 +59,14 @@ internal static class IndexPaths
             {
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
                 if (stream.Length != input.ByteLength) Changed();
-                var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+                var bytes = new byte[checked((int)stream.Length)];
+                stream.ReadExactly(bytes);
+                if (stream.ReadByte() != -1 || stream.Length != input.ByteLength)
+                    Changed();
+                var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                 if (hash != input.ContentHash) Changed();
-                if (input.Utf16Length is { } length)
-                {
-                    stream.Position = 0;
-                    using var reader = new StreamReader(stream, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false);
-                    if (reader.ReadToEnd().Length != length) Changed();
-                }
+                if (input.Utf16Length is { } length && SourceTextEncoding.Decode(bytes).Length != length)
+                    Changed();
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or DecoderFallbackException)
             { throw new IndexStoreException("SOURCE_CHANGED_SINCE_STAGING", "An input cannot be verified against the staged manifest.", error); }

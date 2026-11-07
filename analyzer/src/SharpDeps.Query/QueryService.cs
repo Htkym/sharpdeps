@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts.Harness;
+using SharpDeps.Analysis.Core.Text;
 using SharpDeps.Index;
 
 /// <summary>Read-only queries against one committed generation. Instances are not thread-safe.
@@ -496,7 +497,7 @@ public sealed class QueryService
             if (!files.TryGetValue(group.Key, out var file)) continue;
             try
             {
-                var text = new UTF8Encoding(false, true).GetString(ReadSource(file, work.Token));
+                var text = SourceTextEncoding.Decode(ReadSource(file, work.Token));
                 if (QueryWorkspace.IsStored(file))
                 {
                     var marker = QueryWorkspace.IsPackage(file) ? "PACKAGE_SOURCE_FROM_SNAPSHOT" : "GENERATED_SOURCE_FROM_SNAPSHOT";

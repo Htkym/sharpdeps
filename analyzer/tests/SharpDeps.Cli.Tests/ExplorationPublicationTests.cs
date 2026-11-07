@@ -13,6 +13,56 @@ public sealed class ExplorationPublicationTests
 {
     private static readonly QueryBudget Budget = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
+    [Theory]
+    [InlineData("utf-8", false)]
+    [InlineData("utf-8", true)]
+    [InlineData("utf-16", true)]
+    [InlineData("utf-16BE", true)]
+    [Trait("Category", "Integration")]
+    public async Task EncodedSourcesKeepRawIdentityAndSearchableSourceRanges(string name, bool bom)
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var text = File.ReadAllText(fixture.SourcePath) + "// 日本語 😀\r\n";
+        var encoding = Encoding.GetEncoding(name);
+        var bytes = (bom ? encoding.GetPreamble() : []).Concat(encoding.GetBytes(text)).ToArray();
+        File.WriteAllBytes(fixture.SourcePath, bytes);
+        await fixture.Restore(deadline.Token);
+        var output = new StringWriter();
+        Assert.Equal(0, await CliApplication.RunAsync(["index", "--root", fixture.Root, "--target", "App.csproj", "--trusted"],
+            output, new StringWriter(), deadline.Token));
+        using var reader = fixture.Open();
+        var snapshot = reader.Snapshot();
+        var file = Assert.Single(snapshot.Files, file => file.RelativePath == Fixture.OriginalPath);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), file.ContentHash);
+        Assert.Equal(bytes.LongLength, file.ByteLength);
+        Assert.Equal(text.Length + (bom ? 1 : 0), file.Utf16Length);
+        Assert.Equal(bytes, new QueryWorkspace(fixture.Root).Read(file));
+        var count = Member(snapshot, "count");
+        Assert.Contains(reader.Search("count"), hit => hit.NodeId == count);
+        var explored = fixture.Engine(reader).Execute(new(count, Budget: Budget));
+        Assert.True(explored.Succeeded);
+        Assert.Equal(Fixture.OriginalField, Assert.Single(explored.Units, unit => unit.SymbolIds.Contains(count)).Text);
+        var query = new QueryService(new PinnedQueryIndex(reader), new QueryWorkspace(fixture.Root), true);
+        var context = query.Execute(new("encoded", QueryKind.Context, NodeId: count, Budget: Budget)).Envelope;
+        Assert.DoesNotContain(context.Errors, error => error.Code == "INVALID_SOURCE_ENCODING");
+        Assert.Contains(context.Items, item => item.Snippet?.Text.Contains(Fixture.OriginalField, StringComparison.Ordinal) == true);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BinaryInputsAreRejectedBeforePublication(bool bom)
+    {
+        using var fixture = new Fixture();
+        var bytes = bom ? Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes("binary\0text")).ToArray()
+            : Encoding.UTF8.GetBytes("binary\0text");
+        File.WriteAllBytes(Path.Combine(fixture.Root, "binary.md"), bytes);
+        var failure = await Assert.ThrowsAsync<CliIndexException>(() => CliIndexer.BuildAsync(fixture.Options, null));
+        Assert.Equal("CLI_ENCODING_UNSUPPORTED", failure.Code);
+        Assert.False(File.Exists(fixture.Options.IndexPath));
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task ExclusiveIndexAndUpdatePublishWithoutStartingAnOwner()
