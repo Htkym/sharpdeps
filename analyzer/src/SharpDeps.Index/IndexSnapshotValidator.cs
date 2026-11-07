@@ -10,7 +10,7 @@ using SharpDeps.Analysis.Core.Identity;
 public static class IndexSnapshotValidator
 {
     public const int MaximumSearchFieldUtf16 = 64 * 1024;
-    public const int MaximumSearchTextUtf16 = 16 * 1024 * 1024;
+    public const int MaximumSearchTextUtf16 = 32 * 1024 * 1024;
     public const int MaximumCollectionItems = 1_000_000;
     public const long MaximumInputFileBytes = 64L * 1024 * 1024;
     public const long MaximumInputTotalBytes = 256L * 1024 * 1024;
