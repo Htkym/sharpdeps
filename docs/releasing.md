@@ -1,9 +1,9 @@
 # Release preparation
 
-Version 0.4.0 is an unpublished source candidate. The latest published NuGet tools
-are 0.3.0, and the Visual Studio Marketplace extension is 0.2.1. Earlier changelog
-entries describe those releases and remain historical records. Open VSX is not
-listed and is excluded from the planned 0.4.0 release.
+This document describes the release inputs and procedure for version 0.4.0.
+Check NuGet, Visual Studio Marketplace and GitHub Releases for the versions
+actually available. Earlier changelog entries remain historical records.
+Open VSX is excluded from the 0.4.0 publication target.
 
 ## Choose the outputs
 
@@ -19,7 +19,8 @@ publication channels:
 The 0.4.0 target is `nuget-and-marketplace`. Open VSX requires a separate explicit
 publication decision; its credential being present does not select that channel.
 The workflow requires the credentials for the selected marketplaces before it
-builds or publishes.
+builds or publishes. This preflight checks their presence; publication still
+depends on network access and the credentials' permissions.
 
 Every target creates a GitHub Release containing `SharpDeps.Cli` and
 `SharpDeps.Mcp` nupkgs and their `SHA256SUMS`. Targets that include the extension

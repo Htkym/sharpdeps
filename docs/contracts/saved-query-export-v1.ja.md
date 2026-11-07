@@ -48,4 +48,4 @@ webviewのcopyContext/exportは受信済みprojectionのrequest IDをprojectionR
 
 ## 導入時の検証記録
 
-導入時は実clipboard/file、UIボタン、installed VSIX、trust設定を維持した実操作が未検証だった。host回帰のsave dialog/clipboard/file APIはstubであり、実出力ではない。この記録を0.4.0候補の実操作確認へ転用しない。同hostでのtrust revokeのlistener gapやpublic visibility制約を、この接続から解消したとは扱わない。
+導入時は実clipboard/file、UIボタン、installed VSIX、trust設定を維持した実操作が未検証だった。host回帰のsave dialog/clipboard/file APIはstubであり、実出力ではない。この記録を0.4.0の実操作確認へ転用しない。同hostでのtrust revokeのlistener gapやpublic visibility制約を、この接続から解消したとは扱わない。

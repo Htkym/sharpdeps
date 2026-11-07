@@ -10,7 +10,7 @@ SD2-01では、既存report v2から独立したharnessのidentity、graph envel
 
 既存Identity、TypeScript identity、AnalysisSnapshot、CodeMapJsonContext、report-v2.schema.json、legacyAdapterと旧providerは変更しません。旧wrk/prj/var/ty/mb/docなどの16桁hashは現在の意味を保ちます。新graphのformatはsharpdeps-harness-graph、schemaVersionは1、identityVersionはsharpdeps-harness/1です。旧reportのschemaVersion 2や旧CodeMapReportと同じserializerへ混ぜません。
 
-DTOはContracts/Harness、pure identity helperはCore/Identity/HarnessIdentityに置きます。Contracts/Core/QuickへMarkdown、MSBuild、SQLite、VS CodeやNode依存を追加しません。旧reportの形式とQuick／Semanticの実行境界を維持します。保存とUIの現在の接続は[保存Query provider契約](saved-query-provider-v1.ja.md)に従います。採用時のextension版0.1.0は履歴上の基準であり、現行候補版ではありません。
+DTOはContracts/Harness、pure identity helperはCore/Identity/HarnessIdentityに置きます。Contracts/Core/QuickへMarkdown、MSBuild、SQLite、VS CodeやNode依存を追加しません。旧reportの形式とQuick／Semanticの実行境界を維持します。保存とUIの現在の接続は[保存Query provider契約](saved-query-provider-v1.ja.md)に従います。採用時のextension版0.1.0は履歴上の基準です。
 
 ## durable identity
 
@@ -57,7 +57,7 @@ trust gateはOS sandboxではありません。信頼して実行するMSBuild/a
 
 ## 導入時の確認と引継ぎの履歴
 
-この節のタスク予定、待機条件、成功件数と未実施項目はSD2-01当時の記録です。0.4.0候補の検証結果や現在の作業承認を示しません。
+この節のタスク予定、待機条件、成功件数と未実施項目はSD2-01当時の記録です。0.4.0の検証結果や現在の作業承認を示しません。
 
 新identityのUUID/root移動、同signatureのlogical ID、TFM別occurrence、別workspace、未指定/空の選択値の一致、旧ID goldenを小fixtureへ記録します。new graphのserializer roundtrip、unknown/既知空span、trustのread/writeと未知操作拒否を少数のcheckで確認します。旧report読取は既存QuickV2Mapper/legacyAdapterの小checkを再利用します。
 

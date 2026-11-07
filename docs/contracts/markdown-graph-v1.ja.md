@@ -2,7 +2,7 @@
 
 この契約は、固定Markdown runtimeのfactsからHarness graphを作る現行adapterを記述します。CLIの索引作成は準備済みfactsを文書・節の照合、投影、mention解決へ渡します。利用手順は[CLI契約](cli-skill-v1.ja.md)、永続IDは[Markdown identity契約](markdown-identity-mentions-v1.ja.md)を参照してください。
 
-導入時のSD2-03はSharpDeps `feature/0.2.0`、基準SHA `fdadba7620f0c22e00690ede73df63a2d840aea1`から始めました。当時、SD2-01の全9ファイルと整形修正2ファイルはBocchiが合格とし、修正SHAのCI run 37770408926も成功しました。この履歴を現行候補の検証結果へ転用しません。
+導入時のSD2-03はSharpDeps `feature/0.2.0`、基準SHA `fdadba7620f0c22e00690ede73df63a2d840aea1`から始めました。当時、SD2-01の全9ファイルと整形修正2ファイルはBocchiが合格とし、修正SHAのCI run 37770408926も成功しました。この履歴を0.4.0の検証結果へ転用しません。
 
 新しい `SharpDeps.Analysis.Markdown` はnet10の独立adapterです。Contracts/Coreと固定runtime packageだけを参照し、Quick、既存solution/host/report v2、共通identityを変更しません。parserの手動copy、独立parser、renderer、MSBuild、SQLiteは導入しません。
 
@@ -40,7 +40,7 @@ parse Failedはgraph Failed、Partial/unknown mappingと未完了identity/target
 
 ## 導入時の限定検証の履歴
 
-以下の件数、タスク予定と待機条件はSD2-03当時の記録です。現行pinのartifact照合や0.4.0候補の検証結果は、対応する実行証跡で判断します。
+以下の件数、タスク予定と待機条件はSD2-03当時の記録です。現行pinのartifact照合や0.4.0の検証結果は、対応する実行証跡で判断します。
 
 MD-05でruntime/固定source hostの全factsが一致した3fixtureを、SharpDepsの実adapterでも同じ正規化/hashで照合します。BOM/CRLF/YAML、entity/非BMP、重複heading/未解決referenceを同じ本文で確認します。追加の小checkはwhitelist、fence原文slice/hash、隣接section、TextHashに結び付いたID、trust/cancel、invalid Unicode/limitの保守的coverageです。実Roslyn hostと両repo matrixはIN-01の別ゲートです。
 

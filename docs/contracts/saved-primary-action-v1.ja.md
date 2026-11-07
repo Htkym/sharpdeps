@@ -1,6 +1,6 @@
 # 保存表示の主操作とtrustの検証境界
 
-この文書は現行の主操作と、導入時から残るtrustの制約を記述する。0.4.0候補の利用手順は[操作ガイド](../guide.ja.md)、同梱readerと外部CLIの役割は[保存Query provider契約](saved-query-provider-v1.ja.md)を参照する。過去の実画面観測や未実施項目は、今回の候補を検証した証拠として扱わない。
+この文書は現行の主操作と、導入時から残るtrustの制約を記述する。0.4.0の利用手順は[操作ガイド](../guide.ja.md)、同梱readerと外部CLIの役割は[保存Query provider契約](saved-query-provider-v1.ja.md)を参照する。過去の実画面観測や未実施項目は、0.4.0を検証した証拠として扱わない。
 
 SD2-13の主操作は、表示中のproviderに応じて一つのボタンから操作する。legacyはAnalyze、staleではUpdate analysis、失敗ではRetry analysis、実行中はCancelを示す。Quick/Semanticの選択はlegacyのまま維持する。saved表示はUpdate saved index、更新失敗後はRetry update、選択中・更新中はCancel update、取消を要求してからhelper終了までは操作を無効にしてCancellingを示す。
 

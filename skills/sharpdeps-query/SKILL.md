@@ -7,7 +7,7 @@ description: Use an existing SharpDeps CLI or MCP index to investigate .NET impl
 
 Use the already selected tool version and workspace root/index. The CLI package is `SharpDeps.Cli`, with command `sharpdeps`; the MCP host is `sharpdeps-mcp`. Check availability instead of installing tools or changing global settings. Acquisition, restore and first-time dnx execution can access the network or update caches. Local-manifest `dotnet tool run` and `dnx` launchers need an SDK; an installed tool shim or direct saved-query DLL execution needs a .NET 10 runtime. Report missing prerequisites. Do not repack the fixed Markdown runtime/source pair under the same version.
 
-This repository copy describes the unpublished 0.4.0 candidate. The latest published CLI/MCP version is 0.3.0; inspect the selected CLI's help or MCP tool schema before using newer options. A candidate feature does not authorize upgrading a tool or rebuilding its index.
+This repository copy describes CLI/MCP version 0.4.0. Check the registry or release page for actual availability, and inspect the selected CLI's help or MCP tool schema for the options supported by that installed version. Documentation of a feature does not authorize upgrading a tool or rebuilding its index.
 
 ## Start with explore
 

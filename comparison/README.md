@@ -3,8 +3,8 @@
 This directory holds the reproducible preparation for the fixed Small/Large
 comparison between SharpDeps and CodeGraph. Preparation, smoke checks and
 comparison execution are separate stages; the scripts do not publish results.
-Preparation builds this checkout, including unpublished candidate changes,
-rather than installing a published SharpDeps tool. Interpret each run against
+Preparation builds the selected checkout rather than installing a published
+SharpDeps tool. Interpret each run against
 its recorded source commit, corpus pins and environment.
 
 ## Fixed data

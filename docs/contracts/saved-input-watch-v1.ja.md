@@ -20,7 +20,7 @@ statusはownerのwatch有無を証明しない。watch起動と対象選択は�
 
 ## 部品とCLI接続を導入した当時の記録
 
-以下の候補版、レビュー待ち、タスク予定、測定値と未実施項目はSD2-11当時の記録であり、現在の作業指示や0.4.0候補の検証結果ではない。TS部品は現在もproduction watchの入口として使わない。
+以下の候補版、レビュー待ち、タスク予定、測定値と未実施項目はSD2-11当時の記録であり、現在の作業指示や0.4.0の検証結果ではない。TS部品は現在もproduction watchの入口として使わない。
 
 SD2-11の準備実装として、`src/analyzer/savedInputWatch.ts`にopt-inの
 `SavedInputWatch`を追加します。既存extensionの自動解析、Quick/Semantic、report v2、

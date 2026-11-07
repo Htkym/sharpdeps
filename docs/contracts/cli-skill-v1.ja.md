@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。現行ソースの次版候補は未公開の0.4.0で、公開済みのCLI／MCPは0.3.0である。0.4.0ではCLI／MCPと拡張機能を配布対象とする。配布の有無はレジストリまたはGitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。この文書は0.4.0のCLI契約を記述する。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
 
 候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
 
@@ -8,13 +8,13 @@ CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sh
 
 保存済みindexを読むCLI本体は.NET 10 runtimeを使い、warm queryでSDK探索、restore、build、network取得を行わない。`dotnet exec SharpDeps.Cli.dll`やtool shimの直接起動はruntimeだけで可能だが、local manifestの`dotnet tool run`と`dnx` launcherはSDKを必要とする。toolのinstall/restoreや初回`dnx`はpackage取得とlocal cache更新があり得る。`dnx`は.NET SDK 10.0.100以降が必要で、toolを動かすruntimeと解析targetのSDKも別に確認する。SDK/runtime不足でtool本体が起動できない場合、dotnet hostの出力をCLI JSONとしてparseしない。
 
-公開後に使う予定のexact版指定例は次のとおり。現在の公開状態を確認せず実行しない。
+次はexact版指定の例である。実行前に、指定版の提供状況をレジストリまたはGitHub Releaseで確認する。
 
 ```powershell
 dnx SharpDeps.Cli@0.4.0 -- status --root 'D:\work\repo' --quiet
 ```
 
-ローカル候補の例は、利用者が選んだ新しいtool作業directoryと、正確なnupkg・local-only NuGet.Configを置いたfeedを使う。以下のinstallとmanifest作成は例であり、query依頼から自動実行しない。
+ローカルfeedからの取得例は、利用者が選んだ新しいtool作業directoryと、正確なnupkg・local-only NuGet.Configを置いたfeedを使う。以下のinstallとmanifest作成は例であり、query依頼から自動実行しない。
 
 ```powershell
 Set-Location 'D:\work\sharpdeps-tool'

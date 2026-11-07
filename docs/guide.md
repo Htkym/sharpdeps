@@ -1,8 +1,8 @@
 # SharpDeps user guide
 
-English · [日本語](guide.ja.md) · [README](../README.md)
+English · [日本語](guide.ja.md) · [README](https://github.com/Htkym/sharpdeps/blob/main/README.md)
 
-This guide covers the unpublished 0.4.0 candidate. The planned release includes the VSIX and Visual Studio Marketplace extension, NuGet CLI/MCP tools, and GitHub Release downloads; Open VSX is excluded. The latest published tools are 0.3.0 and the Marketplace extension is 0.2.1. To try a supplied candidate, check its VSIX version, commit, and hash, then choose **Install from VSIX** in the VS Code Extensions menu. Quick does not require a separate CLI installation.
+This guide describes version 0.4.0. Its distribution targets are the VSIX and Visual Studio Marketplace extension, NuGet CLI/MCP tools, and GitHub Release downloads; Open VSX is excluded. Check the registry or release page for actual version availability. To install a supplied VSIX, check its version, commit, and hash, then choose **Install from VSIX** in the VS Code Extensions menu. Quick does not require a separate CLI installation.
 
 The screenshots show the older 0.1.0 workbench analyzing `tests/fixtures/semantic-baseline/SemanticBaseline.sln`; external types are hidden for clarity. They illustrate the workbench controls rather than a new 0.4.0 capture. The controls remain as in 0.2.1; this VSIX updates the bundled analysis and saved-index reader hosts.
 

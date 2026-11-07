@@ -6,11 +6,11 @@ SharpDeps helps you explore dependencies in a .NET solution from a VS Code edito
 
 ![Project dependencies in SharpDeps](images/overview-en.png)
 
-The screenshots show the **0.1.0 workbench**. The [user guide](docs/guide.md) covers the current 0.4.0 source candidate and its saved-index compatibility.
+The screenshots show the **0.1.0 workbench**. The [user guide](docs/guide.md) describes version 0.4.0 and its saved-index compatibility.
 
 ## Install
 
-Version 0.4.0 is an unpublished candidate for the VS Code extension, CLI, and optional MCP tool. The planned release includes Visual Studio Marketplace, NuGet, and GitHub Release downloads. The latest published tools are 0.3.0 and the Marketplace extension is 0.2.1. Open VSX is not listed and is excluded from this release. Check the destination before choosing a version.
+This documentation describes version 0.4.0 of the VS Code extension, CLI, and optional MCP tool. Its distribution targets are Visual Studio Marketplace, NuGet, and GitHub Release downloads; Open VSX is excluded. Check the registry or release page for the versions actually available before choosing one.
 
 Install a `.vsix` with **Extensions: Install from VSIX…** in the Command Palette. Published versions are available from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) and [GitHub Releases](https://github.com/Htkym/sharpdeps/releases); check the version in VS Code's Extensions view.
 
@@ -27,9 +27,9 @@ The 0.4.0 VSIX keeps the 0.2.1 workbench controls and updates the bundled Quick,
 
 ## CLI and optional MCP
 
-Version 0.3.0 introduced a breaking MCP interface: one typed `explore` tool replaced the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for the 0.4.0 candidate's agent/audit output, scope selection, source provenance, trust, freshness, response limits, and upgrade instructions. Versions through 0.2.3 retain their earlier MCP interface.
+Version 0.3.0 introduced a breaking MCP interface: one typed `explore` tool replaced the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for version 0.4.0's agent/audit output, scope selection, source provenance, trust, freshness, response limits, and upgrade instructions. Versions through 0.2.3 retain their earlier MCP interface.
 
-The CLI and MCP candidate use the pinned Syntamark 1.2.0 Markdown runtime. This is a dependency of the separate tools; it is not bundled into the VSIX.
+The 0.4.0 CLI and MCP tools use the pinned Syntamark 1.2.0 Markdown runtime. This is a dependency of the separate tools; it is not bundled into the VSIX.
 
 Use an available exact package version in place of `<version>`. Both tools require the .NET 10 runtime. Install them from NuGet, or use the nupkg downloads from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) with a local NuGet feed.
 
@@ -94,4 +94,4 @@ This builds the Quick, Semantic, and saved-index Query hosts and the webview, th
 
 ## License
 
-[MIT](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for bundled components.
+[MIT](https://github.com/Htkym/sharpdeps/blob/main/LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for bundled components.

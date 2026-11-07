@@ -1,12 +1,12 @@
 # SharpDeps — .NET 依存関係マップ
 
-[English](README.md) · 日本語 · [操作ガイド](docs/guide.ja.md)
+[English](https://github.com/Htkym/sharpdeps/blob/main/README.md) · 日本語 · [操作ガイド](docs/guide.ja.md)
 
 SharpDeps は、.NET ソリューションの依存関係を VS Code のエディタータブで確認できる拡張機能です。プロジェクト全体から名前空間や型へと絞り込め、接続線を選ぶとその依存の根拠となるソースコードを確認できます。
 
 ![SharpDeps でプロジェクトの依存関係を表示した画面](images/overview-ja.png)
 
-画像は **0.1.0 の画面** です。操作ガイドは 0.4.0 候補の実装に合わせています。候補を試す際は、対応する VSIX を使うか、ソースコードからビルドしてください。
+画像は **0.1.0 の画面** です。操作ガイドは 0.4.0 の実装に合わせています。対応する VSIX を使うか、ソースコードからビルドしてください。実際の提供状況は配布先で確認してください。
 
 ## インストール
 
@@ -21,9 +21,9 @@ SharpDeps は、.NET ソリューションの依存関係を VS Code のエデ�
 
 [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) は拡張機能の依存関係としてインストールされます。SharpDeps が SDK を取得したり、対象パッケージを自動で復元したりすることはありません。
 
-次版候補の 0.4.0 は未公開です。NuGet の SharpDeps.Cli と SharpDeps.Mcp、Visual Studio Marketplace の拡張機能、GitHub Release の VSIX・NuGet パッケージ・チェックサムを配布対象とする予定です。Open VSX への初回公開は含みません。現在の公開版は CLI／MCP が 0.3.0、Marketplace の拡張機能が 0.2.1 です。配布の有無はレジストリまたは GitHub Release で確認してください。MCP は 0.3.0 で従来の個別 query tool から typed `explore` へ変更しました。CLI の既存 query command は引き続き利用できます。
+このREADMEは 0.4.0 を対象とします。配布対象は、NuGet の SharpDeps.Cli と SharpDeps.Mcp、Visual Studio Marketplace の拡張機能、GitHub Release の VSIX・NuGet パッケージ・チェックサムです。Open VSX への初回公開は含みません。実際の提供状況はレジストリ、Marketplace、GitHub Release で確認してください。MCP は 0.3.0 で従来の個別 query tool から typed `explore` へ変更しました。CLI の既存 query command は引き続き利用できます。
 
-0.4.0 候補では、拡張機能に同梱する Quick／Semantic と保存索引の QueryHost も更新します。0.2.1 の保存索引 reader は schema 1 のみ、0.4.0 候補は schema 1／2／3 に対応します。新しい CLI が作る schema 3 の索引を使う場合は、拡張機能も更新してください。索引の自動移行は行わず、拡張機能では別作業コピーの既定パスを使うか、停止後に旧索引と sidecar 一式を退避して再作成します。CLI／MCP では未使用の `--index` パスも指定できます。[操作ガイド](docs/guide.ja.md#保存済み索引を使う)と[索引の再作成条件](docs/mcp.md#upgrade-from-030)を確認してください。
+0.4.0 では、拡張機能に同梱する Quick／Semantic と保存索引の QueryHost も更新します。0.2.1 の保存索引 reader は schema 1 のみ、0.4.0 は schema 1／2／3 に対応します。新しい CLI が作る schema 3 の索引を使う場合は、拡張機能も更新してください。索引の自動移行は行わず、拡張機能では別作業コピーの既定パスを使うか、停止後に旧索引と sidecar 一式を退避して再作成します。CLI／MCP では未使用の `--index` パスも指定できます。[操作ガイド](docs/guide.ja.md#保存済み索引を使う)と[索引の再作成条件](docs/mcp.md#upgrade-from-030)を確認してください。
 
 ## 最初のマップを開く
 
@@ -58,4 +58,4 @@ npm run package
 
 ## ライセンス
 
-ライセンスは [MIT](LICENSE) です。同梱ライブラリについては [ライセンス情報](THIRD-PARTY-NOTICES.md) を参照してください。
+ライセンスは [MIT](https://github.com/Htkym/sharpdeps/blob/main/LICENSE) です。同梱ライブラリについては [ライセンス情報](THIRD-PARTY-NOTICES.md) を参照してください。

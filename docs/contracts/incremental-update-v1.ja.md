@@ -40,4 +40,4 @@ HEAD、loose refs、packed-refs、objectsのloose/pack/idxと付随索引、inde
 
 ## 導入時の候補と検証範囲の履歴
 
-差分更新の導入時のCLI候補版は`0.2.0-preview.3`だった。このソース変更だけでpack/install/公開済みとは判断せず、preview.2や固定Markdown pairの同版上書きは行わなかった。当時、新providerのVSCode画面／VSIX install／cross-OS実挙動、watch／coordinator、未変更Markdown parse cacheは別の未実施項目として記録した。現行のwatch接続は[watch契約](saved-input-watch-v1.ja.md)、0.4.0候補の利用方法は[操作ガイド](../guide.ja.md)を参照する。未変更Markdownのparse cacheを実装済みとするものではない。
+差分更新の導入時のCLI候補版は`0.2.0-preview.3`だった。このソース変更だけでpack/install/公開済みとは判断せず、preview.2や固定Markdown pairの同版上書きは行わなかった。当時、新providerのVSCode画面／VSIX install／cross-OS実挙動、watch／coordinator、未変更Markdown parse cacheは別の未実施項目として記録した。現行のwatch接続は[watch契約](saved-input-watch-v1.ja.md)、0.4.0の利用方法は[操作ガイド](../guide.ja.md)を参照する。未変更Markdownのparse cacheを実装済みとするものではない。

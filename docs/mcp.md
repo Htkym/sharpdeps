@@ -1,8 +1,8 @@
 # CLI and MCP exploration
 
-This is the CLI/MCP interface for the 0.4.0 source candidate. The typed `explore` interface was introduced in 0.3.0 as a breaking change from the 0.2.3 MCP tools and supersedes the earlier MCP query-tool contract. Check the package registry or GitHub Release for availability before selecting an exact package version.
+This document describes the CLI/MCP interface for version 0.4.0. The typed `explore` interface was introduced in 0.3.0 as a breaking change from the 0.2.3 MCP tools and supersedes the earlier MCP query-tool contract. Check the package registry or GitHub Release for availability before selecting an exact package version.
 
-The latest published CLI/MCP tools are 0.3.0; 0.4.0 is not yet published. Its planned release also updates the VS Code extension on Visual Studio Marketplace and provides VSIX/tool downloads on GitHub Releases. Open VSX is excluded. Source-candidate capabilities below are not promises about the installed 0.3.0 tools; use the matching package version and its help.
+The 0.4.0 distribution targets also include the VS Code extension on Visual Studio Marketplace and VSIX/tool downloads on GitHub Releases. Open VSX is excluded. The capabilities below describe 0.4.0; an older installed tool may not expose them. Use the matching package version and its help, and check the destination for actual availability.
 
 ## Upgrade from 0.3.0
 
@@ -28,7 +28,7 @@ sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/explore-0.4.sqlite -
 
 Choose an unused index path and your actual root-contained target. Restore the target's packages first and use its required SDK and compilation options. `index` performs full trusted analysis and may run MSBuild or generators; run it only for a workspace you trust. Wait for successful publication before querying the new index. Keep the same index path in subsequent CLI calls and MCP startup. Saved IDs, spans, coverage, and freshness belong to their returned snapshot; do not combine old and new query results.
 
-The 0.4.0 CLI/MCP candidate uses the verified Syntamark 1.2.0 runtime/source pair with the legacy Markdown profile. Syntamark is a dependency of the separate tools, not of the bundled VSIX reader. Exploration preserves explicit uncertainty and omission information; fewer file reads or lower model-context usage are not guaranteed.
+The 0.4.0 CLI/MCP tools use the verified Syntamark 1.2.0 runtime/source pair with the legacy Markdown profile. Syntamark is a dependency of the separate tools, not of the bundled VSIX reader. Exploration preserves explicit uncertainty and omission information; fewer file reads or lower model-context usage are not guaranteed.
 
 ## Read source evidence
 
@@ -126,7 +126,7 @@ This configuration keeps source reads disabled and exposes only `explore`. Add `
 
 ### Dedicated setup files
 
-The 0.4.0 CLI candidate exposes `install` and `uninstall` to create a dedicated Copilot CLI configuration and short instruction file at explicit, unused paths. This installer does not merge or edit an existing config or shared `AGENTS.md`. Use the manual merge example above for those files. The workspace root and both parent directories must already exist, and `--mcp-command` must name the absolute path of your already provisioned tool file. Setup does not execute that command, acquire packages, create an index or change authentication/approval settings.
+The 0.4.0 CLI exposes `install` and `uninstall` to create a dedicated Copilot CLI configuration and short instruction file at explicit, unused paths. This installer does not merge or edit an existing config or shared `AGENTS.md`. Use the manual merge example above for those files. The workspace root and both parent directories must already exist, and `--mcp-command` must name the absolute path of your already provisioned tool file. Setup does not execute that command, acquire packages, create an index or change authentication/approval settings.
 
 Preview the generated files without writing either destination:
 

@@ -10,7 +10,7 @@
 - Add recoverable CLI/MCP setup commands, support explicit zero computation timeouts, and fix Unix IPC listener replacement. Report saved-source provenance without falsely marking complete query results as truncated.
 - Adopt the verified Syntamark 1.2.0 runtime/source pair. Reuse immutable Markdown facts and CodeSpan evidence, bind both new parse options, and retain conservative symbol certainty and the legacy profile.
 - Create new indexes with schema 3 while retaining readers for schemas 1/2/3. Generated bodies require schema 2 or later and package-derived bodies require schema 3; incompatible writes fail without an in-place migration. Keep previous indexes and use a fresh path to collect the new facts. The 0.3.0 tools cannot read schema-3 indexes. See [upgrade instructions](docs/mcp.md#upgrade-from-030).
-- Prepare the extension, SharpDeps.Cli, and SharpDeps.Mcp together as 0.4.0 for Visual Studio Marketplace, NuGet.org, and GitHub Release assets with checksums. These are unpublished candidates; Open VSX first publication is not included. Selected publication channels fail early if required credentials are absent.
+- Package the extension, SharpDeps.Cli, and SharpDeps.Mcp together as 0.4.0 for Visual Studio Marketplace, NuGet.org, and GitHub Release assets with checksums. Open VSX publication is not included. Reject missing required credentials for the selected marketplaces before publication. Check each registry or release page for actual availability.
 
 ## 0.3.0
 

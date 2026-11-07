@@ -54,6 +54,6 @@ usedCharsは最終JSONのUTF-16長、usedBytesはそのUTF-8長である。estim
 
 ## 初期実装時の検証記録
 
-以下はSD2-06と2026-10-10当時の記録であり、後続のhost接続有無や0.4.0候補の検証結果ではない。
+以下はSD2-06と2026-10-10当時の記録であり、後続のhost接続有無や0.4.0の検証結果ではない。
 
 9つの限定Factに実SQLite reader/writerを使った世代cursor、scope/exact/Japanese、certainty/cycle/予算、variant別occurrenceの経路整合性、最終wire/strict complete、同size同mtime差替え、untrusted saved read、inventory/config証明、橋渡しspan unionを記録した。occurrence経路修正の独立静的レビューは限定PASS。2026-10-10に返却された検証枠でWindowsのRelease solution build、Index 9/9とQuery 9/9を確認した。xUnit assertの書式警告を修正した後、Queryの限定Release buildは警告0、Query 9/9を再確認した。full suite、CLI/provider/coordinator接続、Unix/macOSのQuery実行、SDK-free Quick、host integrationは未検証である。

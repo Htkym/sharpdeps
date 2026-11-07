@@ -1,6 +1,6 @@
 # Index storage v1
 
-`SharpDeps.Index`はContracts/Coreを参照する独立したnet10 projectである。SQLite依存はこのprojectに閉じ、旧report v2とreportStoreを別の保存形式として維持する。現行のCLI、QueryHost、MCPとcoordinatorがこの保存層を使う。0.4.0候補の利用手順は[操作ガイド](../guide.ja.md#保存済み索引を使う)、CLIの境界は[CLI契約](cli-skill-v1.ja.md)を参照する。
+`SharpDeps.Index`はContracts/Coreを参照する独立したnet10 projectである。SQLite依存はこのprojectに閉じ、旧report v2とreportStoreを別の保存形式として維持する。現行のCLI、QueryHost、MCPとcoordinatorがこの保存層を使う。0.4.0の利用手順は[操作ガイド](../guide.ja.md#保存済み索引を使う)、CLIの境界は[CLI契約](cli-skill-v1.ja.md)を参照する。
 
 ## 所有権と保存範囲
 
@@ -28,10 +28,10 @@ Microsoft.Data.Sqlite 10.0.12を固定し、同梱native SQLiteのFTS5 unicode61
 
 SQLite indexの新規作成は`PRAGMA user_version=3`、application IDは`0x53444831`である。現行reader／writerはschema 1／2／3を受理し、既存DBの版をその場で変更しない。schema 1は基本graph／FTS、schema 2は`generated_bodies`、schema 3はさらに`package_bodies`を持つ。古いschemaへ対応外の本文を保存することは拒否し、旧DBと世代を保持する。graph schema 1、旧report v2、Query応答の版とは別に扱う。
 
-0.2.1のVSIXに同梱するreaderはschema 1のみを読み、新CLIのschema 3は読めない。0.4.0候補のVSIXはschema 1／2／3を読む。外部CLIの設定だけでは同梱readerは更新されない。対応外のDBは`INDEX_SCHEMA_UNSUPPORTED`で拒否し、自動migration、DB・WAL・SHMの削除、旧索引への上書きは行わない。新機能に必要なschemaへ移る場合は、旧DBとsidecar、旧CLI／VSIXを保持し、新しい専用pathへ明示的に再索引する。rollbackには保持した旧環境と旧索引を使う。旧reportのreadonly fallbackは索引不存在のときだけで、schema不一致を隠すためには使わない。`BackupTo`はtrusted writerの所有下でSQLite online backupを行い、存在する宛先を上書きしない。失敗したbackupを正常なsnapshotとは扱わない。
+0.2.1のVSIXに同梱するreaderはschema 1のみを読み、新CLIのschema 3は読めない。0.4.0のVSIXはschema 1／2／3を読む。外部CLIの設定だけでは同梱readerは更新されない。対応外のDBは`INDEX_SCHEMA_UNSUPPORTED`で拒否し、自動migration、DB・WAL・SHMの削除、旧索引への上書きは行わない。新機能に必要なschemaへ移る場合は、旧DBとsidecar、旧CLI／VSIXを保持し、新しい専用pathへ明示的に再索引する。rollbackには保持した旧環境と旧索引を使う。旧reportのreadonly fallbackは索引不存在のときだけで、schema不一致を隠すためには使わない。`BackupTo`はtrusted writerの所有下でSQLite online backupを行い、存在する宛先を上書きしない。失敗したbackupを正常なsnapshotとは扱わない。
 
 ## 初期実装時の履歴
 
-以下はSD2-05当時の記録であり、0.4.0候補の検証結果ではない。未出荷のレビュー版v0と当時の版は`user_version=1`を共用したが、FTS配置が異なるためDBの互換性を主張しない。v0の試用DBはOpenのheader検査を通っても、Searchで世代別tableが存在しない。当時の限定検証は新しい専用pathへ再索引し、v0のDBとsidecarを流用・上書き・削除しなかった。v0からの自動migrationも実装していない。
+以下はSD2-05当時の記録であり、0.4.0の検証結果ではない。未出荷のレビュー版v0と当時の版は`user_version=1`を共用したが、FTS配置が異なるためDBの互換性を主張しない。v0の試用DBはOpenのheader検査を通っても、Searchで世代別tableが存在しない。当時の限定検証は新しい専用pathへ再索引し、v0のDBとsidecarを流用・上書き・削除しなかった。v0からの自動migrationも実装していない。
 
 実装時は[Microsoft.Data.Sqlite transactions](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/transactions)、[connection strings](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/connection-strings)、[SQLite WAL](https://sqlite.org/wal.html)、[FTS5](https://sqlite.org/fts5.html)を確認した。当時の実差分、限定check結果、未実施のhost/Query接続とOS範囲はrun成果物に記録した。現在のschema判定は`analyzer/src/SharpDeps.Index/IndexDatabase.cs`を根拠とする。

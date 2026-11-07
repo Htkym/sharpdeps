@@ -1,6 +1,6 @@
 # 保存済みQuery provider 契約 v1
 
-共通Queryの保存済み索引を既存webviewへつなぐ契約である。全機能・全環境の受入完了を意味しない。旧report v1/v2とprotocol v2のIDを維持する。0.4.0候補は同梱QueryHostを更新し、SQLite schema 1／2／3を読む。現在の利用手順と旧VSIXからの切替は[操作ガイド](../guide.ja.md#保存済み索引を使う)に従う。
+共通Queryの保存済み索引を既存webviewへつなぐ契約である。全機能・全環境の受入完了を意味しない。旧report v1/v2とprotocol v2のIDを維持する。0.4.0は同梱QueryHostを更新し、SQLite schema 1／2／3を読む。現在の利用手順と旧VSIXからの切替は[操作ガイド](../guide.ja.md#保存済み索引を使う)に従う。
 
 ## 選択、世代と実行境界
 
@@ -53,7 +53,7 @@ source/declarationは現在のproviderが発行したIDをhostで解決し、別
 
 ## 初期実装時の検証記録
 
-この節の共有検証枠待ちと未実施項目はSD2-08当時の記録である。現在のhost接続や0.4.0候補の検証完了を示すものではない。
+この節の共有検証枠待ちと未実施項目はSD2-08当時の記録である。現在のhost接続や0.4.0の検証完了を示すものではない。
 
 webviewの変更ではhostMessages/stateの限定ケースを追加し、metadata/世代/variant、元kind/certainty、返却件数、legacyへの復帰を静的に確認する。重いlocal build/testは共有検証枠の返却前には実行しない。QueryHost実接続、VS Code/browser表示、multi-TFM fixture、OS別実行、legacy SDK-free Quickと全受入の結果は、別の実行証跡がある範囲だけで判断する。通信遮断やOS sandboxの保証をこの接続から主張しない。
 

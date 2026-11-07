@@ -34,6 +34,6 @@ Harness DTOのSignature、Declarations、Origin、Diagnosticsは追加の任意�
 
 ## 導入時の確認記録
 
-この節はSD2-02当時の記録です。検証枠待ちや未実施の記述は、その時点の状態を示し、現行の接続有無や0.4.0候補の検証結果ではありません。
+この節はSD2-02当時の記録です。検証枠待ちや未実施の記述は、その時点の状態を示し、現行の接続有無や0.4.0の検証結果ではありません。
 
 実収集からの投影、TFM別occurrence、原文hash、外部assembly、candidate非昇格を確認する小fixtureと、既存collectorのowner/read-write/partialテストを作成しました。検証枠待ちのため、build、テスト実行、serializer生成の型確認、実host/CLIからの保存は未実施です。静的確認と親の実差分レビューを実行結果と区別します。既存corpusのC07とQuick/report-v2互換checkを後続の限定検証で再利用します。
