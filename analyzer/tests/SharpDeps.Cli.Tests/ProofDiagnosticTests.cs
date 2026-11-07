@@ -14,7 +14,8 @@ public sealed class ProofDiagnosticTests
     {
         const string marker = "synthetic-private-value-not-for-diagnostic-output";
         var environment = new Hashtable(StringComparer.OrdinalIgnoreCase) { ["PATH"] = marker, ["__CF_USER_TEXT_ENCODING"] = marker };
-        if (anotherUnknown) environment.Add("UNRECOGNIZED_ORACLE_TEST_PROPERTY", marker);
+        if (anotherUnknown)
+            environment.Add("UNRECOGNIZED_ORACLE_TEST_PROPERTY", marker);
         var before = environment.Count;
         var result = Describe(environment);
         Assert.True(result.GetProperty("coreFoundationPresent").GetBoolean());
