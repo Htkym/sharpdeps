@@ -118,6 +118,14 @@ async function main() {
       server.close(() => resolve(port));
     });
   });
+  const workspace =
+    process.env.SHARPDEPTS_E2E_WORKSPACE ??
+    (scenario === 'saved-source'
+      ? path.join(profile, 'workspace')
+      : path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline'));
+  if (scenario === 'saved-source') {
+    fs.mkdirSync(workspace, { recursive: true });
+  }
   const options = {
     vscodeExecutablePath: executable,
     extensionDevelopmentPath: vsixMode ? harness : repoRoot,
@@ -125,17 +133,41 @@ async function main() {
       repoRoot,
       'tests',
       'extension',
-      scenario === 'schema' ? 'schema.js' : scenario ? 'acceptance.js' : 'suite.js'
+      scenario === 'schema'
+        ? 'schema.js'
+        : scenario === 'saved-source'
+          ? 'saved-source.js'
+          : scenario
+            ? 'acceptance.js'
+            : 'suite.js'
     ),
     extensionTestsEnv: {
       SHARPDEPTS_E2E_REPORT: reportPath,
       SHARPDEPTS_E2E_DEBUG_PORT: String(port),
       SHARPDEPTS_E2E_STORAGE_SCHEMA: storageSchema ?? '',
-      SHARPDEPTS_REPO: repoRoot
+      SHARPDEPTS_REPO: repoRoot,
+      SHARPDEPTS_E2E_CLI:
+        process.env.SHARPDEPTS_E2E_CLI ??
+        path.join(
+          repoRoot,
+          'analyzer',
+          'src',
+          'SharpDeps.Cli',
+          'bin',
+          'Release',
+          'net10.0',
+          'SharpDeps.Cli.dll'
+        ),
+      SHARPDEPTS_E2E_DOTNET:
+        process.env.SHARPDEPTS_E2E_DOTNET ??
+        process.env.DOTNET_HOST_PATH ??
+        path.join(
+          process.env.DOTNET_ROOT ?? '',
+          process.platform === 'win32' ? 'dotnet.exe' : 'dotnet'
+        )
     },
     launchArgs: [
-      process.env.SHARPDEPTS_E2E_WORKSPACE ??
-        path.join(repoRoot, 'tests', 'fixtures', 'quick-baseline'),
+      workspace,
       ...profileArgs,
       `--remote-debugging-port=${port}`,
       '--disable-gpu',
