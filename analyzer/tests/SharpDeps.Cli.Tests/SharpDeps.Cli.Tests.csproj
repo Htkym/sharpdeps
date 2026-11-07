@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
+  <PropertyGroup><IsTestProject>true</IsTestProject><GenerateProgramFile>false</GenerateProgramFile><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

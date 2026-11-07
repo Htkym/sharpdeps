@@ -57,8 +57,12 @@ public static class CliIndexer
         => BuildForPublicationAsync(options, previous, token, null);
 
     // A scoped test observer changes real dependencies after partial extraction; fingerprints are never substituted.
-    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+    internal static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token, Action<int, int>? afterPartialExtraction)
+        => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, null);
+
+    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity)
     {
         using var buildMetrics = PhaseMetrics.Measure("index.build");
         ArgumentNullException.ThrowIfNull(options);
@@ -87,7 +91,7 @@ public static class CliIndexer
         if (options.TimeoutSeconds != 0)
             timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
         token = timeout.Token;
-        var snapshotId = Guid.NewGuid().ToString("N");
+        var snapshotId = (allocateIdentity?.Invoke() ?? Guid.NewGuid()).ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);
         var manifest = new Dictionary<string, InputText>(StringComparer.OrdinalIgnoreCase);
         var packageVerifiers = new List<Action<CancellationToken>>();
@@ -519,7 +523,7 @@ public static class CliIndexer
             token.ThrowIfCancellationRequested();
             var match = matches.Single(m => m.RelativePath == item.Input.File.RelativePath);
             if (match.Reason == "duplicate-explicit-id") throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
-            var uuid = match.DocumentUuid ?? Guid.NewGuid();
+            var uuid = match.DocumentUuid ?? (allocateIdentity?.Invoke() ?? Guid.NewGuid());
             var old = previous?.Documents.SingleOrDefault(d => d.DocumentUuid == uuid);
             var scope = old?.ScopeId ?? workspaceId;
             var request = new MarkdownGraphRequest(item.Input.Text, options.WorkspaceUuid, uuid, scope,
@@ -531,7 +535,7 @@ public static class CliIndexer
                 old.ParserVersion, old.ContractVersion, old.ProfileId, old.OptionsHash,
                 old.Sections.Select(s => new MarkdownSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray());
             var sections = MarkdownIdentityMatcher.MatchSections(options.WorkspaceUuid, uuid, item.Input.Text,
-                facts, oldSections, () => Guid.NewGuid().ToString("N"), token);
+                facts, oldSections, () => (allocateIdentity?.Invoke() ?? Guid.NewGuid()).ToString("N"), token);
             var projection = adapter.Project(request with { SectionTokens = sections.SectionTokens,
                 SectionIdentityTextHash = sections.TextHash }, prepared, true, token);
             identities.Add(new(uuid, item.Input.File.RelativePath, item.ExplicitId, item.Input.File.ContentHash,
