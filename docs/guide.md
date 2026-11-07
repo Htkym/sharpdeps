@@ -153,6 +153,7 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | `sharpdeps.savedIndexVariant` | `""` | Exact saved `hvar_` ID; required when an index has multiple variants. |
 | `sharpdeps.savedIndexAutoRefresh` | `false` | Adopt committed generations from an explicitly started CLI watch. |
 | `sharpdeps.savedIndexCliPath` | `""` | Absolute path to a compatible CLI DLL for explicit updates and owner-status observation; does not replace the bundled reader. |
+| `sharpdeps.savedIndexUpdateTimeoutSeconds` | `1800` | Unreleased: saved-index reply wait in seconds, from 1 to 3600. Cooperative cancellation and owner drain may take longer; separate from Quick/Semantic analysis. |
 | `sharpdeps.analysisTimeoutSeconds` | `180` | Analysis time limit in seconds. |
 | `sharpdeps.maxProjects` | `60` | Project/namespace display limit. |
 | `sharpdeps.maxVisibleTypes` | `100` | Type display limit. |

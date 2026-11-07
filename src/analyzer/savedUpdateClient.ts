@@ -20,7 +20,11 @@ export interface SavedUpdateResult {
 export class SavedUpdateError extends Error {
   constructor(readonly code: string) {
     super(
-      'The saved index update could not be confirmed. Refresh the saved view and check the SharpDeps output.'
+      code === 'SAVED_UPDATE_SELECTION_INVALID'
+        ? 'Check the saved update selection and set savedIndexUpdateTimeoutSeconds to an integer from 1 to 3600.'
+        : code === 'ARGUMENT_INVALID' || code === 'SAVED_UPDATE_REPLY_INVALID'
+          ? 'The selected CLI did not accept or confirm the saved update. Set savedIndexCliPath to a compatible SharpDeps.Cli.dll that supports update timeouts up to 3600 seconds, then refresh the saved view before retrying.'
+          : 'The saved index update could not be confirmed. Refresh the saved view and check the SharpDeps output.'
     );
   }
 }
@@ -41,7 +45,7 @@ export function savedUpdateArguments(selection: SavedUpdateSelection, requestId:
       (!plain(selection.targetFramework) || !selection.project)) ||
     !Number.isInteger(selection.timeoutSeconds) ||
     selection.timeoutSeconds < 1 ||
-    selection.timeoutSeconds > 300
+    selection.timeoutSeconds > 3600
   )
     throw new SavedUpdateError('SAVED_UPDATE_SELECTION_INVALID');
   selectedPath(selection.root, selection.target, ['.csproj', '.sln', '.slnx']);

@@ -173,6 +173,13 @@
           "default": "",
           "markdownDescription": "Absolute path to a compatible installed SharpDeps.Cli.dll for Update Saved Index and watch/owner status. It does not replace the extension's bundled saved-index reader. Updates require workspace trust and a target SDK; refresh remains read-only and no automatic restore is performed."
         },
+        "sharpdeps.savedIndexUpdateTimeoutSeconds": {
+          "type": "integer",
+          "default": 1800,
+          "minimum": 1,
+          "maximum": 3600,
+          "markdownDescription": "How long this client waits for an Update Saved Index reply, in seconds. Requires a compatible installed CLI with the same timeout range. Cancellation and owner drain are cooperative and can finish after this deadline; an accepted shared update may continue for other clients. Quick and Semantic analysis use analysisTimeoutSeconds instead."
+        },
         "sharpdeps.dotnetPath": {
           "type": "string",
           "default": "",
