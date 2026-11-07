@@ -74,6 +74,10 @@ internal static class OracleProcess
         }
         if (args is not ["--full-oracle", var input, var output])
             return 2;
+        // CoreFoundation can add this startup metadata after the parent filters the child environment.
+        // Keep the controlled fixture closed; subsequent production proof checks remain unchanged.
+        if (OperatingSystem.IsMacOS())
+            Environment.SetEnvironmentVariable("__CF_USER_TEXT_ENCODING", null);
         var run = JsonSerializer.Deserialize<OracleRun>(File.ReadAllText(input), QueryJson.Options)
             ?? throw new InvalidDataException("Oracle request is missing.");
         var sequence = 0;
