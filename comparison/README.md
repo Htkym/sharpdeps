@@ -1,8 +1,11 @@
-# SharpDeps / CodeGraph comparison preparation
+# SharpDeps / CodeGraph comparison tooling
 
 This directory holds the reproducible preparation for the fixed Small/Large
-comparison between SharpDeps and CodeGraph. It prepares inputs and entry
-points only; it does not run the comparison and publishes no results.
+comparison between SharpDeps and CodeGraph. Preparation, smoke checks and
+comparison execution are separate stages; the scripts do not publish results.
+Preparation builds the selected checkout rather than installing a published
+SharpDeps tool. Interpret each run against
+its recorded source commit, corpus pins and environment.
 
 ## Fixed data
 
@@ -25,19 +28,28 @@ points only; it does not run the comparison and publishes no results.
 - `smoke.ps1` — builds a minimal two-file C# fixture and runs the real
   runner against it, verifying the collection path, the byte/character
   counting, and the stop conditions (sufficiency and the follow-up cap).
-- `run.ps1` — the comparison runner for a later phase: per corpus it
+- `run.ps1` — the comparison runner: per corpus it
   separates setup (restore/index, CodeGraph init) from query calls,
   runs one initial native call per question and tool, then evidence-gated
-  follow-ups (at most 2 per question, at most 36 calls in total), and
+  follow-ups (by default at most 2 per question and tool, at most 36 calls in
+  total), and
   records raw UTF-8 bytes and decoded UTF-16 code units of non-TTY
   stdout per call. CodeGraph is initialized with a plain `init` — never
   `--yes`, which would auto-install git sync hooks when the file watcher
   is unavailable.
 
+The runner records errors, timeouts, unsupported outcomes and budget stops
+as results. A resume uses `-ResumeFrom`, an evidence-based `-PlanPath` and a
+fresh `-OutputDir`; it validates the preserved pins, builds, captures and
+budgets, and leaves the preserved run unchanged. Neither a smoke check nor
+an index-only run is a query comparison or a performance result.
+
 Local layout under the root (`D:\scg` by default on Windows, or
 `-Root`/`$env:SCG_ROOT`): `i` inputs, `t` tools, `c` caches, `o` outputs.
 
 The GitHub workflow `.github/workflows/codegraph-comparison.yml` exposes
-the same prepare/smoke stages by explicit `workflow_dispatch` or by a
-`[comparison]` marker in a push's head commit message; a normal push
-never starts it.
+the prepare/smoke stages by explicit `workflow_dispatch` or by a
+`[comparison]` marker in a push's head commit message. An explicit
+`small-index` dispatch instead builds and indexes the pinned Small corpus,
+checks retained package/generated source bodies and records no comparison
+query calls. A push without the marker starts neither job.

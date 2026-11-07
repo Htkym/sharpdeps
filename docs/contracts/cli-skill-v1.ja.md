@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、0.3.0のToolCommandNameは`sharpdeps`である。配布の有無はレジストリまたはGitHub Releaseで確認する。0.3.0のExplore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧Quick/Semantic、report v1/v2、extension版、固定Markdown runtime/source pairを変更する契約ではない。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。この文書は0.4.0のCLI契約を記述する。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
 
 候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
 
@@ -8,18 +8,18 @@ CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、0.3.0のToolCommandNa
 
 保存済みindexを読むCLI本体は.NET 10 runtimeを使い、warm queryでSDK探索、restore、build、network取得を行わない。`dotnet exec SharpDeps.Cli.dll`やtool shimの直接起動はruntimeだけで可能だが、local manifestの`dotnet tool run`と`dnx` launcherはSDKを必要とする。toolのinstall/restoreや初回`dnx`はpackage取得とlocal cache更新があり得る。`dnx`は.NET SDK 10.0.100以降が必要で、toolを動かすruntimeと解析targetのSDKも別に確認する。SDK/runtime不足でtool本体が起動できない場合、dotnet hostの出力をCLI JSONとしてparseしない。
 
-公開後に使う予定のexact版指定例は次のとおり。現在の公開状態を確認せず実行しない。
+次はexact版指定の例である。実行前に、指定版の提供状況をレジストリまたはGitHub Releaseで確認する。
 
 ```powershell
-dnx SharpDeps.Cli@0.3.0 -- status --root 'D:\work\repo' --quiet
+dnx SharpDeps.Cli@0.4.0 -- status --root 'D:\work\repo' --quiet
 ```
 
-ローカル候補の例は、利用者が選んだ新しいtool作業directoryと、正確なnupkg・local-only NuGet.Configを置いたfeedを使う。以下のinstallとmanifest作成は例であり、query依頼から自動実行しない。
+ローカルfeedからの取得例は、利用者が選んだ新しいtool作業directoryと、正確なnupkg・local-only NuGet.Configを置いたfeedを使う。以下のinstallとmanifest作成は例であり、query依頼から自動実行しない。
 
 ```powershell
 Set-Location 'D:\work\sharpdeps-tool'
 dotnet new tool-manifest
-dotnet tool install SharpDeps.Cli --local --version 0.3.0 --configfile 'D:\work\cli-feed\NuGet.Config'
+dotnet tool install SharpDeps.Cli --local --version 0.4.0 --configfile 'D:\work\cli-feed\NuGet.Config'
 dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 ```
 
@@ -36,6 +36,8 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 | `coordinator-status` | ownerの状態を専用IPCで読む。保存Queryのstatusやfreshnessとは別 |
 | `status`, `search`, `symbol`, `callers`, `callees`, `impact`, `context` | committed indexのQuery。untrustedでも保存値の読取りは可能。`--trusted`を指定したcontextだけが検証済みsource snippetを読める |
 | `query --kind search\|symbol\|callers\|callees\|impact\|context\|status` | 同じQueryへのalias |
+| `explore` | `--term`を入口に保存済み実装と参照根拠を予算内でまとめる。既定は`--format audit`で、`agent`も選べる。source本文には`--trusted`が必要 |
+| `install`, `uninstall` | `--client copilot-cli`の明示設定操作。rootと絶対パスの`--config-file`／`--instructions-file`を指定する。installには既存実行ファイルの`--mcp-command`も必要。`--dry-run`で書込み前に確認できる。既存ファイルは所有する未変更の組だけを扱い、uninstallは隣接backupを残す |
 | `doctor` | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す |
 | `help` | commandと引数の案内 |
 
@@ -46,6 +48,8 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの300秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
 
 Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids`を同時指定しない。
+
+`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy unique|prefer-debug`を使う。`--query-kind http-get-literal`は保存済みのHttpGet宣言断片との完全一致を調べ、実効URLの一致を保証しない。`--path-to`はsymbol探索で、exactな開始occurrenceから対象occurrenceへの保存済みcall witnessを要求する。`--owner-status`は既存ownerを観測するだけで鮮度の証明ではない。探索形式と根拠の限界は[Exploreの案内](../mcp.md)に従う。
 
 | Query command | 必須selector |
 |---|---|
@@ -75,7 +79,7 @@ Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま
 
 exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialをResolved/Completeへ補完せず、複数TFMのoccurrenceを混ぜない。truncatedなら返却件数を全件数と呼ばない。errorや打切りを、stdoutにJSONがあることだけで成功扱いしない。
 
-`CLI_MARKDOWN_FACTS_INCOMPLETE` (exit 4) rejects invalid, truncated or unsupported Markdown source structure. Index/update publishes no new generation and retains any previously committed snapshot. Supported opaque/decoded-mapping Partial facts with complete raw structure are indexable and retain Partial coverage; individual heading projections must be reliable before contributing decoded identity keys. The error includes a bounded recovery message without forwarding parser exception text or source contents through IPC. Inputs are not silently omitted. Exact hash, runtime pin and durable section identity checks remain required.
+`CLI_MARKDOWN_FACTS_INCOMPLETE`（exit 4）は、不正、打切り、未対応のMarkdown原文構造を拒否する。index／updateは新世代を公開せず、既存のcommitted snapshotを保持する。原文構造が完全な、対応済みopaque／decoded mappingのPartial factsは索引へ取り込み、Partial coverageを保つ。見出しをdecoded identity keyに使うには、その見出し自体の投影が信頼できる必要がある。errorには長さを制限した復旧案内を含め、parserの例外文字列やsource本文をIPCへ転送しない。入力を黙って除外せず、exact hash、runtime pin、durable section identityの検査を維持する。
 
 [応答schema](../schemas/cli-response-v1.schema.json)はCLI envelopeと実Query DTOのwire構造を記述する。command別result内部は拡張可能なJSON objectで、各commandの成功条件、hash/spanの整合、状態の正しさ、最終JSONのUTF-8 byte予算はschemaだけで証明しない。JSON Schemaの文字長とQueryのUTF-16計測も区別する。
 
@@ -90,3 +94,5 @@ index/updateの選択入力はstrict UTF-8とする。C#の実UTF-8 BOMがRoslyn
 `--trusted`は利用者が許可した解析/sourceアクセスを明示するflagで、repo本文から権限を得る仕組みではない。MSBuild/project/analyzer/generatorが実行し得るコードのsandboxや通信禁止を保証しない。install/restore、解析・更新、外部送信の許可を分け、無許可の自動update/install・全repo scan・無制限grepを行わない。固定Markdown pairの再pack、同版上書き、sourceの公開送信をCLI/skillから自動実行しない。
 
 repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)はstatus→限定search→exact symbol→限定contextから、検証できる根拠に沿って必要なsourceを読む。personal skillへのinstallや設定変更は本taskの一部ではない。
+
+新規索引はSQLite schema 3で、現行readerはschema 1／2／3を受理する。古い索引をその場で変換せず、必要な本文保存機能を使う場合は旧DBとsidecarを保持した別パスへ再作成する。生成本文はschema 2以降、パッケージ本文はschema 3が必要である。VS Codeは同梱QueryHostで読むため、外部CLIの更新だけではreaderの互換性は変わらない。[索引保存契約](index-storage-v1.ja.md)と[操作ガイド](../guide.ja.md#保存済み索引を使う)を参照する。

@@ -1,10 +1,12 @@
 # 保存表示の主操作とtrustの検証境界
 
+この文書は現行の主操作と、導入時から残るtrustの制約を記述する。0.4.0の利用手順は[操作ガイド](../guide.ja.md)、同梱readerと外部CLIの役割は[保存Query provider契約](saved-query-provider-v1.ja.md)を参照する。過去の実画面観測や未実施項目は、0.4.0を検証した証拠として扱わない。
+
 SD2-13の主操作は、表示中のproviderに応じて一つのボタンから操作する。legacyはAnalyze、staleではUpdate analysis、失敗ではRetry analysis、実行中はCancelを示す。Quick/Semanticの選択はlegacyのまま維持する。saved表示はUpdate saved index、更新失敗後はRetry update、選択中・更新中はCancel update、取消を要求してからhelper終了までは操作を無効にしてCancellingを示す。
 
 saved更新はhostの明示target/configuration/platform/project/TFM選択と、既存のCLI callerへ接続する。protocol v2へanalysisId付きupdateSavedIndexとsavedUpdateStateを追加した。主ボタンとcommand paletteは同じhost経路を使う。古いanalysisIdの更新・取消要求は現在のproviderへ適用しない。ホストのworkspace trustと別の実行中saved updateの有無から更新可否を決め、view stateから実行状態・権限を復元しない。
 
-saved表示でQuick/Semanticやlegacy Profileの入力を隠す。保存variantから更新configuration/TFMを推測しない。旧providerへ戻す場合は既存のresultProvider設定でlegacyを選ぶ。Refreshは保存Queryの再読取であり、更新を開始しない。copy/exportは今回の実装に含まれず、未対応のままである。
+saved表示でQuick/Semanticやlegacy Profileの入力を隠す。保存variantから更新configuration/TFMを推測しない。旧providerへ戻す場合は既存のresultProvider設定でlegacyを選ぶ。Refreshは保存Queryの再読取であり、更新を開始しない。context copyとJSON copy／Saveは[保存Query出力契約](saved-query-export-v1.ja.md)で別に扱う。
 
 取消はこのcallerのAbortSignalから既存CLI stdin EOFへ接続する。短命ownerが共有処理をDrainしている間も、現在のpinned reader・projection・stale表示を保持する。root除去・provider交換・panel disposalは既存の解放経路を維持する。取消をrollbackや世代の不変とは扱わない。取消・未確認の更新後はRefreshで保存世代を再確認するよう示す。成功時はhelper終了後のworkspace/snapshot/generationの完全一致を確認した新readerだけを採用する。
 
@@ -16,8 +18,8 @@ saved表示でQuick/Semanticやlegacy Profileの入力を隠す。保存variant�
 
 将来の別gateは、検証専用windowと所有した外部controllerでrevoke→標準Reload→旧host終了/EOF→新hostRestrictedを観測するものとする。controllerが有限MSBuild停止点と別の既受理clientを所有し、旧host終了後も記録を保持する。旧callerのEOF・同ownerの受理済client生存・独立Queryの保存tuple、新hostのpublic trust=falseとwriter/source操作の拒否、旧結果の不採用を確認する。この試験は同host即時revokeの代替PASSにはならない。
 
-trust/security設定操作は親からのユーザー確認待ちとして保留する。利用者の通常windowをreloadせず、自動grantしない。この候補でtrust/security設定・認証・private/proposed APIは変更していない。
+当時の検証では、trust/security設定操作は親からのユーザー確認待ちとして保留した。利用者の通常windowをreloadせず、自動grantしなかった。この履歴は現在の作業承認や設定変更の依頼を意味しない。
 
-## 残る受入gate
+## 導入時に記録した受入gate
 
-主操作の限定検証と、原SD-025/026全体の完了を区別する。saved copy/exportでは保存世代・variant・kind/certainty・returned/truncation・元IDを維持する契約が必要である。installed VSIXのQueryHost/CLI配置・worker/CSP・activation/reopenはdevelopment extensionの成功から推論しない。code/docsの共通操作、狭幅・keyboard/theme/zoom・祖先設定/current-root変更・再起動、性能と利用者のtask acceptanceは個別の結果がある範囲だけを受け入れる。
+主操作の限定検証と、原SD-025/026全体の完了を区別する。当時、saved copy/exportには保存世代・variant・kind/certainty・returned/truncation・元IDを維持する契約が必要と記録した。現行の契約は[保存Query出力](saved-query-export-v1.ja.md)を参照する。installed VSIXのQueryHost/CLI配置・worker/CSP・activation/reopenはdevelopment extensionの成功から推論しない。code/docsの共通操作、狭幅・keyboard/theme/zoom・祖先設定/current-root変更・再起動、性能と利用者のtask acceptanceは個別の結果がある範囲だけを受け入れる。

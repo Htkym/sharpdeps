@@ -1,5 +1,7 @@
 # 保存済み入力のwatch収束部品
 
+現行のproduction watchはCLI owner内のC# FileSystemWatcherを使う。拡張機能は明示起動済みownerの状態を読み、新しいcommitted世代だけを反映する。以下の最初の節が現在の表示接続を記述し、後半は部品導入時の検証履歴を保持する。CLIの現在の起動・取消・予算は[coordinator契約](coordinator-ipc-v1.ja.md)、利用手順は[操作ガイド](../guide.ja.md#保存済み索引を使う)を参照する。
+
 ## 既存watchのcommitted世代をVS Codeで追従する限定接続
 
 `sharpdeps.savedIndexAutoRefresh`は既定falseで、trustedな単一folderのsavedIndex表示だけへ適用する。
@@ -15,6 +17,10 @@ revision/desiredRevision、committed tupleとreaderのtupleが一致する場合
 未保存bufferのstale、Partial/unverifiedと既存source hash/UTF-16検査を維持し、owner idleをfreshness証明とはしない。
 statusはownerのwatch有無を証明しない。watch起動と対象選択は利用者が行い、拡張はownerのcommitted結果だけを追う。
 即時trust revokeの既知の公開API制限、全watch fault matrix、cross-OS/性能、SD2-11/13全体の完了はこの接続に含めない。
+
+## 部品とCLI接続を導入した当時の記録
+
+以下の候補版、レビュー待ち、タスク予定、測定値と未実施項目はSD2-11当時の記録であり、現在の作業指示や0.4.0の検証結果ではない。TS部品は現在もproduction watchの入口として使わない。
 
 SD2-11の準備実装として、`src/analyzer/savedInputWatch.ts`にopt-inの
 `SavedInputWatch`を追加します。既存extensionの自動解析、Quick/Semantic、report v2、

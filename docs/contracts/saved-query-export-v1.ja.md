@@ -1,6 +1,6 @@
 # Saved Query context / JSON export v1
 
-hostのpinned SavedQueryProviderから準備した結果を、context copy・JSON copy・ローカルJSON Saveへ接続する。legacy ContextExportInput/report JSONへ保存結果を詰めず、SVG/PNG/Mermaidはsaved向けに提供しない。実clipboard/file/UIの検証と受入れは、純粋変換・stubbed host検証とは区別する。
+hostのpinned SavedQueryProviderから準備した結果を、context copy・JSON copy・ローカルJSON Saveへ接続する。legacy ContextExportInput/report JSONへ保存結果を詰めず、SVG/PNG/Mermaidはsaved向けに提供しない。現在のproviderは[保存Query契約](saved-query-provider-v1.ja.md)に従う。実clipboard/file/UIの検証と受入れは、純粋変換・stubbed host検証とは区別する。
 
 ## 情報源とsession
 
@@ -34,11 +34,11 @@ kindは`sharpdeps.saved-query-export`、versionは`1`。TypeScript定義は`src/
 
 ## 純粋な文字列変換
 
-`serializeSavedQueryExport`はindent 2のJSONと末尾LFを返す。field値を切り詰めたりcertainty/coverage/freshnessを置き換えたりしない。JSON parseで文字列値が復元できるため、Unicode・astral・引用符・CR/LFを保持する。UTF8 bytes化と実書込みは後続gateで行う。
+`serializeSavedQueryExport`はindent 2のJSONと末尾LFを返す。field値を切り詰めたりcertainty/coverage/freshnessを置き換えたりしない。JSON parseで文字列値が復元できるため、Unicode・astral・引用符・CR/LFを保持する。UTF8 bytes化と実書込みは、次のhost出力経路で行う。
 
 `buildSavedContextExport`は返却subset・Query側のcoverage/freshness・Candidate/Unresolvedの限界を示す固定説明と、同じJSONを文字列として返す。clipboardや外部AIには送らない。SVG/PNG/Mermaid等は追加しない。
 
-## 後続の出力gate
+## hostの出力経路
 
 webviewのcopyContext/exportは受信済みprojectionのrequest IDをprojectionRequestIdとして送る。これはephemeralで永続化しない。新projectionを要求した時点で表示側tokenを消し、到着後だけcopy/JSON操作を有効にする。scope/granularity/filter/search/includeIdsも準備元の要求と照合する。UIではsavedのJSON以外の形式を隠し、hostでも形式・data・includeSnippetsを拒否する。
 
@@ -46,4 +46,6 @@ webviewのcopyContext/exportは受信済みprojectionのrequest IDをprojectionR
 
 照合は出力API呼出し直前までの保証であり、非同期clipboard/file APIの開始後に起きた切替を遡って取消・復元する保証ではない。入力変更理由を保持しても、保存済みsnapshot freshnessを再検証したとは扱わない。clipboard/fileはユーザーのlocal操作としてのみ行い、外部共有やAI送信を行わない。
 
-実clipboard/file、UIボタン、installed VSIX、trust設定を維持した実操作は未検証である。host回帰のsave dialog/clipboard/file APIはstubであり、実出力ではない。同hosttrust revokeのlistener gapやpublic visibility制約を、この接続から解消したとは扱わない。
+## 導入時の検証記録
+
+導入時は実clipboard/file、UIボタン、installed VSIX、trust設定を維持した実操作が未検証だった。host回帰のsave dialog/clipboard/file APIはstubであり、実出力ではない。この記録を0.4.0の実操作確認へ転用しない。同hostでのtrust revokeのlistener gapやpublic visibility制約を、この接続から解消したとは扱わない。

@@ -1,4 +1,8 @@
-# SharpDepsのMarkdown共有契約 v1採用案
+# SharpDepsのMarkdown共有契約 v1採用案の履歴
+
+この文書はJ-01当時の採用案と検証記録です。候補版、未実装項目、レビュー待ち、実行制限は当時の状態を保持しており、現在の作業指示や配布案内ではありません。現行の採用契約は[Markdown graph](markdown-graph-v1.ja.md)、[文書・節IDとmention](markdown-identity-mentions-v1.ja.md)、[索引保存](index-storage-v1.ja.md)を参照してください。
+
+現在の固定版はSyntamark／Syntamark.Source 1.2.0、YamlDotNet 18.1.0です。正確なartifact hashと移管履歴は[markdown-runtime-pin.json](markdown-runtime-pin.json)を根拠とします。SharpDepsのCLI／MCPはruntimeを使い、Syntamark／Syntamark.SourceとYamlDotNetはVSIXへ直接追加する依存ではありません。以下の2.0.0-previewに関する記述は初期案です。
 
 J-01として、[LithoSharpの公開契約案](https://github.com/Htkym/lithosharp/blob/feature/2.0.0/docs/contracts/markdown-v1.ja.md)をSharpDeps 0.2.0候補へ採用する方針を記録します。Bocchiの設計レビュー待ちです。runtime/source package、Markdown harness、graph/SQLite実装が完了したことを示す文書ではありません。
 

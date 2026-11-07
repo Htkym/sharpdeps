@@ -1,5 +1,7 @@
 # 保存済みソースからの復帰
 
+現行の保存Query providerから元コードを開き、同じ保存世代の表示へ戻る契約である。providerの読取り境界は[保存Query契約](saved-query-provider-v1.ja.md)、利用手順は[操作ガイド](../guide.ja.md)を参照する。以下の個別受入項目は、導入時の検証範囲と現在の実装契約を区別して読む。
+
 同じlive analysisの宣言・根拠からeditorを開く直前に、既存の小さいview stateを即時送信する。300msの永続化待ちには依存せず、panel内のsanitize済み状態を切り離して保持する。sourceの入力は引き続きopaque entity/evidence IDであり、表示path、source本文、任意DOM selectorを受け取らない。returnUiは固定したsource-button role/opaque ID、navigation tab、boundedなscroll値と検索の返却件数だけを持つ。
 
 editorのopenは直列に進め、待機中は最新1件へまとめる。新要求で古いticketを失効し、既存openSavedLocationのcurrent条件へticketを合成する。古い要求はawait後に選択を設定せず、新しいopenがその後に進むため、先に開始したshowTextDocumentが新しいopenの後に完了してeditorを上書きする順序を避ける。既に開始したOS/UI操作を巻き戻す保証ではない。trust、root、raw hash、strict UTF-8、dirty、元UTF-16 spanの検査は従来どおりである。

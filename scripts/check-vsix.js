@@ -55,6 +55,8 @@ const REQUIRED = [
   'README.ja.md',
   'docs/guide.md',
   'docs/guide.ja.md',
+  'docs/mcp.md',
+  'docs/releasing.md',
   ...['overview', 'evidence', 'spacing', 'table'].flatMap((name) =>
     ['en', 'ja'].map((language) => `images/${name}-${language}.png`)
   ),
@@ -102,9 +104,15 @@ async function main() {
     });
   });
   const missing = REQUIRED.filter((entry) => !entries.includes(entry));
-  const leaked = FORBIDDEN.filter((entry) =>
-    entries.some((name) => (entry.endsWith('/') ? name.startsWith(entry) : name === entry))
+  const toolOnlyRuntimeEntries = entries.filter((entry) =>
+    /(?:^|\/)(?:Syntamark|YamlDotNet)\.dll$/i.test(entry)
   );
+  const leaked = [
+    ...FORBIDDEN.filter((entry) =>
+      entries.some((name) => (entry.endsWith('/') ? name.startsWith(entry) : name === entry))
+    ),
+    ...toolOnlyRuntimeEntries
+  ];
 
   const identity = await checkVsix(vsixPath);
   const report = {
@@ -117,6 +125,7 @@ async function main() {
       .update(fs.readFileSync(vsixPath))
       .digest('hex'),
     packagedEntries: entries.length,
+    toolOnlyRuntimeEntries,
     required: REQUIRED.map((entry) => ({ entry, present: entries.includes(entry) })),
     forbidden: FORBIDDEN.map((entry) => ({ entry, present: leaked.includes(entry) })),
     ok: missing.length === 0 && leaked.length === 0

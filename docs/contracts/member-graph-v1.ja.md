@@ -1,6 +1,6 @@
 # SharpDeps member graph v1
 
-SD2-02は既存RoslynのSymbolIndexと宣言・IOperation収集結果を、SD2-01のHarnessGraphEnvelopeへ投影します。入口はSharpDeps.Analysis.Roslyn.HarnessGraphProjector.Projectです。UUID、永続project ID、loader variant keyとTFM/Configuration、snapshot ID、世代、loader coverageはownerから明示的に受け取ります。投影自体はファイルを読まず、UUIDを割り当てず、解析hostを起動せず、保存しません。旧Quick/Semantic host、report v2、provider、command/settingsは現在の入口を維持します。新CLI・保存・Query接続は後続のSD2-05以降で扱います。
+既存RoslynのSymbolIndexと宣言・IOperation収集結果をHarnessGraphEnvelopeへ投影します。入口はSharpDeps.Analysis.Roslyn.HarnessGraphProjector.Projectです。UUID、永続project ID、loader variant keyとTFM/Configuration、snapshot ID、世代、loader coverageはownerから明示的に受け取ります。投影自体はファイルを読まず、UUIDを割り当てず、解析hostを起動せず、保存しません。現行CLIの索引作成がこの投影を使い、[索引保存層](index-storage-v1.ja.md)と[共通Query](query-context-v1.ja.md)へ接続します。旧report v2の入口とは分けます。
 
 ## 論理symbolとoccurrence
 
@@ -32,6 +32,8 @@ Resolvedは与えられたcompilationの静的束縛を表します。virtual/in
 
 Harness DTOのSignature、Declarations、Origin、Diagnosticsは追加の任意項目です。null時にはJSONへ出力しないため、既存のSD2-01/03 JSONはこれらを付けずに使えます。旧report v2のDTO/serializer/schemaは変更しません。Graph全体の保存入力検証、source hashの再確認、trust・transaction・Query budgetはSD2-05/06の責務です。
 
-## 確認状態
+## 導入時の確認記録
+
+この節はSD2-02当時の記録です。検証枠待ちや未実施の記述は、その時点の状態を示し、現行の接続有無や0.4.0の検証結果ではありません。
 
 実収集からの投影、TFM別occurrence、原文hash、外部assembly、candidate非昇格を確認する小fixtureと、既存collectorのowner/read-write/partialテストを作成しました。検証枠待ちのため、build、テスト実行、serializer生成の型確認、実host/CLIからの保存は未実施です。静的確認と親の実差分レビューを実行結果と区別します。既存corpusのC07とQuick/report-v2互換checkを後続の限定検証で再利用します。

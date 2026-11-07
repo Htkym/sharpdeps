@@ -27,7 +27,7 @@ public sealed record QuerySnapshot(string WorkspaceId, string Id, long Generatio
 {
     public int GraphSchemaVersion => HarnessGraphContract.SchemaVersion;
     public string IdentityVersion => HarnessGraphContract.IdentityVersion;
-    public int IndexSchemaVersion => 1; // The current storage contract accepted by PinnedQueryIndex.
+    public int IndexSchemaVersion => 1; // Legacy envelope marker; physical SQLite user_version is separate.
     public string CoordinatorState => "not-connected";
     public int ResultFilterVersion => 1;
     public int SymbolDeclarationRowsVersion => 1;

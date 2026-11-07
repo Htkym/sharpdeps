@@ -1,10 +1,10 @@
 # SharpDeps user guide
 
-English · [日本語](guide.ja.md) · [README](../README.md)
+English · [日本語](guide.ja.md) · [README](https://github.com/Htkym/sharpdeps/blob/main/README.md)
 
-This guide covers the development candidate on `feature/0.2.0`. The release version and distribution destinations are not yet final. To try a supplied candidate, check its VSIX commit and hash, then choose **Install from VSIX** in the VS Code Extensions menu. Quick does not require a separate CLI installation.
+This guide describes version 0.4.0. Its distribution targets are the VSIX and Visual Studio Marketplace extension, NuGet CLI/MCP tools, and GitHub Release downloads; Open VSX is excluded. Check the registry or release page for actual version availability. To install a supplied VSIX, check its version, commit, and hash, then choose **Install from VSIX** in the VS Code Extensions menu. Quick does not require a separate CLI installation.
 
-The screenshots show the older 0.1.0 workbench analyzing `tests/fixtures/semantic-baseline/SemanticBaseline.sln`; external types are hidden for clarity. First-use and keyboard-only acceptance remain incomplete for this candidate.
+The screenshots show the older 0.1.0 workbench analyzing `tests/fixtures/semantic-baseline/SemanticBaseline.sln`; external types are hidden for clarity. They illustrate the workbench controls rather than a new 0.4.0 capture. The controls remain as in 0.2.1; this VSIX updates the bundled analysis and saved-index reader hosts.
 
 ## Open a solution or project
 
@@ -44,9 +44,11 @@ If a type is missing, check the target, search conditions, and Analysis limitati
 
 ## Read a saved index
 
-Set `sharpdeps.resultProvider` to `savedIndex` to read an existing `.sharpdeps` index with the bundled QueryHost. This is separate from choosing Quick or Semantic. Reading requires an existing .NET 10 runtime; this path does not acquire one automatically. With multiple variants, set `sharpdeps.savedIndexVariant` to the ID to display. Variants are never merged implicitly.
+Set `sharpdeps.resultProvider` to `savedIndex` to read the workspace's `.sharpdeps/index.sqlite` with the bundled QueryHost. The extension currently uses that default path; it has no custom index-path setting. This is separate from choosing Quick or Semantic. Reading requires an existing .NET 10 runtime; this path does not acquire one automatically. With multiple variants, set `sharpdeps.savedIndexVariant` to the exact `hvar_` ID to display. A blank value selects a variant only when exactly one exists; variants are never merged implicitly.
 
-**Refresh** rereads stored results. To create or update an index, set `sharpdeps.savedIndexCliPath` to the absolute path of a compatible `SharpDeps.Cli.dll`, then explicitly run **SharpDeps: Update Saved Index** in a trusted workspace. Updating requires the target SDK and restored dependencies. Running the CLI DLL directly and querying stored results require a .NET 10 runtime; local tool installation/restore, `dotnet tool run`, and `dnx` require an SDK. See the [CLI instructions](contracts/cli-skill-v1.ja.md) for candidate acquisition requirements.
+The 0.4.0 VSIX bundles a reader for SQLite index schemas 1/2/3. The published 0.2.1 extension reads only schema 1. Upgrading the NuGet CLI or changing `sharpdeps.savedIndexCliPath` does not replace the extension's bundled reader: update the VSIX as well before using schema-2/3 indexes. The 0.4.0 tools create schema-3 indexes and do not convert old indexes in place. See [CLI/MCP upgrade instructions](mcp.md#upgrade-from-030) for compatibility and offline backup requirements. Their separate-path examples are for CLI/MCP; to try a new default index in VS Code while preserving an older workspace and index, use a separate source checkout and create its default index.
+
+**Refresh** rereads stored results. To create or update an index, set `sharpdeps.savedIndexCliPath` to the absolute path of a compatible `SharpDeps.Cli.dll`, then explicitly run **SharpDeps: Update Saved Index** in a trusted workspace. This external CLI supplies explicit writes and owner-status observation; the bundled QueryHost still supplies reads. Updating requires the target SDK and restored dependencies. Running the CLI DLL directly and querying stored results require a .NET 10 runtime; local tool installation/restore, `dotnet tool run`, and `dnx` require an SDK. See the [CLI/MCP guide](mcp.md) for candidate capabilities and the [CLI contract](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/cli-skill-v1.ja.md) for trust and source requirements.
 
 `sharpdeps.savedIndexAutoRefresh` defaults to `false`. To enable it, use savedIndex in one trusted workspace folder, configure the same compatible CLI, and explicitly start its watch with a chosen target. Replace the paths in this PowerShell example with your prepared paths. This starts analysis and index writes.
 
@@ -54,7 +56,7 @@ Set `sharpdeps.resultProvider` to `savedIndex` to read an existing `.sharpdeps` 
 dotnet 'D:\tools\SharpDeps.Cli.dll' serve --root 'D:\work\repo' --target 'D:\work\repo\App.sln' --trusted --watch
 ```
 
-The extension adopts committed generations from the existing owner; it does not start watch or analysis. If watch stops or reading fails, it retains the last view as stale. Unsaved edits are not indexed. `Partial` means coverage is incomplete; `unverified` means correspondence with current inputs and configuration has not been verified. Automatic adoption or a running owner does not turn those states into `Complete` or a freshness guarantee. See [watch scope and limitations](contracts/saved-input-watch-v1.ja.md).
+The extension adopts committed generations from the existing owner; it does not start watch or analysis. If watch stops or reading fails, it retains the last view as stale. Unsaved edits are not indexed. `Partial` means coverage is incomplete; `unverified` means correspondence with current inputs and configuration has not been verified. Automatic adoption or a running owner does not turn those states into `Complete` or a freshness guarantee. See [watch scope and limitations](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/saved-input-watch-v1.ja.md).
 
 ## Find and narrow dependencies
 
@@ -148,8 +150,9 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | --- | --- | --- |
 | `sharpdeps.analysisMode` | `quick` | Initial mode. |
 | `sharpdeps.resultProvider` | `legacy` | Quick/Semantic or stored `savedIndex` results. |
+| `sharpdeps.savedIndexVariant` | `""` | Exact saved `hvar_` ID; required when an index has multiple variants. |
 | `sharpdeps.savedIndexAutoRefresh` | `false` | Adopt committed generations from an explicitly started CLI watch. |
-| `sharpdeps.savedIndexCliPath` | `""` | Absolute path to a compatible CLI DLL for explicit updates and automatic adoption. |
+| `sharpdeps.savedIndexCliPath` | `""` | Absolute path to a compatible CLI DLL for explicit updates and owner-status observation; does not replace the bundled reader. |
 | `sharpdeps.analysisTimeoutSeconds` | `180` | Analysis time limit in seconds. |
 | `sharpdeps.maxProjects` | `60` | Project/namespace display limit. |
 | `sharpdeps.maxVisibleTypes` | `100` | Type display limit. |
@@ -164,4 +167,6 @@ Search and view shortcuts apply when you are not typing into an input; zoom shor
 | Graph layout failed or was cancelled | Use Table to inspect the result; use Spacing → Retry layout to try placement again. |
 | Result is stale | Save intended edits. Analyze again for legacy, or explicitly update then Refresh for savedIndex. |
 | Analysis failed or was stopped | Check Analysis limitations and the **SharpDeps** channel in VS Code's Output panel. The last successful result remains available. |
+| A new saved index cannot be opened | Check the installed extension version, schema, runtime, and exact variant. The 0.2.1 VSIX cannot read schema 2/3; upgrading only the external CLI does not update its reader. |
+| Index/update reports `INDEX_SCHEMA_MIGRATION_REQUIRED` | Retain the old index and rebuild into a new index with compatible tools. No automatic schema conversion occurs. The extension reads only the default index path; use a separate source checkout to try a new default index without replacing the old one. |
 | CLI index/update reports `CLI_MARKDOWN_FACTS_INCOMPLETE` | Markdown facts contain invalid, truncated, or unsupported source structure. No new generation is published; a previous snapshot remains available and may be stale. Review the input and parser limits. Supported opaque/decoded-mapping Partial facts with complete raw structure can be indexed while retaining Partial coverage. Markdown is not silently excluded. |

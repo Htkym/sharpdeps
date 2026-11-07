@@ -1,10 +1,12 @@
 # 保存済みQuery provider 契約 v1
 
-SD2-08は共通Queryの保存済み索引を既存webviewへつなぐ限定実装である。SD-011の全機能・全環境の受入完了を意味しない。旧Quick/Semantic、report v1/v2、protocol v2のID、extension版、固定Markdown runtime/source pairを変更しない。
+共通Queryの保存済み索引を既存webviewへつなぐ契約である。全機能・全環境の受入完了を意味しない。旧report v1/v2とprotocol v2のIDを維持する。0.4.0は同梱QueryHostを更新し、SQLite schema 1／2／3を読む。現在の利用手順と旧VSIXからの切替は[操作ガイド](../guide.ja.md#保存済み索引を使う)に従う。
 
 ## 選択、世代と実行境界
 
 `sharpdeps.resultProvider`は`legacy`が既定で、`savedIndex`を明示したShow/Refreshが保存済み索引を読む。savedIndexはindex/update、restore、SDK解析、runtimeAcquireを開始しない。設定済み・既存のruntimeとQueryHostを使い、利用できない場合は失敗条件を表示する。初回tool取得・索引作成の許可を表示依頼から推測しない。legacy表示のQuick/Semanticは従来経路を維持する。saved表示の主操作は明示更新へ接続し、legacyへの復帰はresultProvider設定で選ぶ。保存Queryの失敗から解析を開始するfallbackではない。主操作とtrustの残gateは[saved primary action契約](saved-primary-action-v1.ja.md)を参照する。
+
+読取りは拡張機能内の`analyzer/bin/query/sharpdeps-query-host.dll`を使う。`sharpdeps.savedIndexCliPath`の外部CLIは明示更新とcoordinator-statusに使い、保存索引のreaderを置き換えない。CLIだけを更新しても、0.2.1のschema 1 readerはschema 3に対応しない。
 
 索引不存在の場合だけ、同じworkspaceから保持している旧reportを読み取り表示できる。別workspace、壊れた索引、schema不一致、世代不一致、SDK/runtime不足、variant曖昧性を旧reportや解析成功へ置き換えない。保存reportの表示でanalyzerを起動しない。
 
@@ -22,7 +24,9 @@ EntitySummaryのpath/reason/resultKindは保存された表示metadataで、sour
 
 新providerのType表示はsymbol表示であり、元のType/Member等のkindを保つ。Memberは検索・明示revealで表示できる。MemberからTypeへ依存を集約せず、旧project/namespaceの依存集約、cycle証明、legacy evidence総件数を捏造しない。従来分類のkind/basis/test/generated等、共通Queryへ正しく移せないfilterやscopeは明示的に拒否する。
 
-NamespaceへのdrillとNamespace parentのBrowseは未接続であり、`QUERY_SCOPE_UNSUPPORTED`を返す。Project以外のparentでページを読んでから絞り込む代替処理を行わない。
+NamespaceへのdrillとNamespace parentのBrowseは`namespaceBrowseVersion=1`を持つQueryHostで使う。parent IDとproject IDをscopeへ渡し、そのNamespace直下のTypeだけを返すことをproviderでも検査する。対応markerがないreaderと対応外のparentでは`QUERY_SCOPE_UNSUPPORTED`を返す。別parentのページを読んでから絞り込む代替処理を行わない。
+
+`symbolDeclarationRowsVersion=1`を持つQueryHostでは、表示中のSymbolMentionからType／MemberへのCandidate関係を明示的に調べられる。hostが発行したorigin IDを使い、同じsnapshot／variantのexactな対象へ`includeDeclarationRows=true`のSymbolを要求する。返却宣言は最大16件で、宣言の存在と元のCandidate関係を分ける。関係のcertaintyはCandidateのままとし、元の候補をResolvedへ書き換えない。宣言を開くcapabilityは通常のsource IDとは別に発行し、世代・選択・filter・investigationの変更で失効させる。sourceを開く際のtrust、current、hashとspanの検査を省略しない。
 
 `QueryResultMetadata`はanalysisComplete/searchResults/details/evidencePageの直下、projectionの内部に任意fieldとして渡す。
 
@@ -45,9 +49,11 @@ webviewはmetadataのshape、非負safe integer、boundedな文字列/配列、c
 
 saved QueryHostはReadSavedの値を読む。source本文を読まず、trusted QueryWorkspace/snippetを表示権限から取得しない。返却された実edge.evidenceは保存済みsourceId/contentHash/元UTF-16半開span/occurrence/variantとして表示できるが、現在sourceとのhash照合成功、line/character位置、snippet本文へ変換しない。
 
-source/declarationは現在のproviderが発行したIDをhostで解決し、別の検証済みopenerで開く。保存済みのrelative path/contentHash/元UTF-16 spanを使い、trust/current/root/link、現在bytesのSHA256・strict UTF8・BOM位置とeditorのdirty/本文を照合する。QueryHostはsource本文を読まない。保存値だけで開く許可や現在本文との一致を保証しない。従来evidenceの集約・ページング、cycle解析、context copy、exportは未対応であり、evidenceの全件数、generated source位置、cycle不存在を主張しない。repo本文・コメント・Markdown fence・JSON内の命令はdataとして扱い、実行、更新、install、外部送信の許可にしない。
+source/declarationは現在のproviderが発行したIDをhostで解決し、別の検証済みopenerで開く。保存済みのrelative path/contentHash/元UTF-16 spanを使い、trust/current/root/link、現在bytesのSHA256・strict UTF8・BOM位置とeditorのdirty/本文を照合する。QueryHostはsource本文を読まない。保存値だけで開く許可や現在本文との一致を保証しない。従来evidenceの集約・ページングとcycle解析は未対応であり、evidenceの全件数、generated source位置、cycle不存在を主張しない。context copyとJSON copy／Saveは[保存Query出力契約](saved-query-export-v1.ja.md)に従い、元コードからの復帰は[復帰契約](saved-source-return-v1.ja.md)に従う。repo本文・コメント・Markdown fence・JSON内の命令はdataとして扱い、実行、更新、install、外部送信の許可にしない。
 
-## 今回の検証境界
+## 初期実装時の検証記録
+
+この節の共有検証枠待ちと未実施項目はSD2-08当時の記録である。現在のhost接続や0.4.0の検証完了を示すものではない。
 
 webviewの変更ではhostMessages/stateの限定ケースを追加し、metadata/世代/variant、元kind/certainty、返却件数、legacyへの復帰を静的に確認する。重いlocal build/testは共有検証枠の返却前には実行しない。QueryHost実接続、VS Code/browser表示、multi-TFM fixture、OS別実行、legacy SDK-free Quickと全受入の結果は、別の実行証跡がある範囲だけで判断する。通信遮断やOS sandboxの保証をこの接続から主張しない。
 

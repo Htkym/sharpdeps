@@ -1,6 +1,6 @@
 # Index storage v1
 
-SD2-05の`SharpDeps.Index`はContracts/Coreを参照する独立したnet10 projectである。SQLite依存はこのprojectに閉じ、既存Quick/Semantic host、report v2、旧reportStore、Markdown parserと固定packageを変更しない。新しいhost/Query/coordinatorへの接続は後続taskで行う。
+`SharpDeps.Index`はContracts/Coreを参照する独立したnet10 projectである。SQLite依存はこのprojectに閉じ、旧report v2とreportStoreを別の保存形式として維持する。現行のCLI、QueryHost、MCPとcoordinatorがこの保存層を使う。0.4.0の利用手順は[操作ガイド](../guide.ja.md#保存済み索引を使う)、CLIの境界は[CLI契約](cli-skill-v1.ja.md)を参照する。
 
 ## 所有権と保存範囲
 
@@ -8,9 +8,9 @@ trusted ownerは解析を始める前に`IndexWriter.Open(root, indexPath, works
 
 workspace UUIDは既に永続化した非empty UUIDをownerが渡す。metadataへworkspace IDを保存し、別UUIDでのread/writeを拒否する。文書UUID、節token、descriptor、parser/contract/profile/options stamp、pathの対応とaliasの根拠・確度を世代ごとに保存する。UUID/tokenをpathやLocalKeyから勝手に再生成せず、ownerがSD2-04の照合結果をstorage DTOへ渡す。任意のmetadata内rename申告を実際のrenameとして検証したことにはしない。
 
-保存先はownerが指定する絶対local pathであり、既定候補はworkspace内`.sharpdeps/index-v1.sqlite`である。symlink/reparse point、path traversal、特殊SQLite URIを拒否する。source rootとDB pathを変更する前にownerが配置を確認する。Unixでは作成したdirectoryとDB/sidecar/lockを利用者だけが読書きできるmodeへ設定する。Windowsでは保存先の継承ACLを使うため、ownerは利用者専用のworkspace/cache領域を指定する。repo設定やACLを無断で書き換えない。network filesystemのWALを対応済みとは扱わない。
+保存先はownerが指定する絶対local pathであり、CLIの既定はworkspace内`.sharpdeps/index.sqlite`である。symlink/reparse point、path traversal、特殊SQLite URIを拒否する。source rootとDB pathを変更する前にownerが配置を確認する。Unixでは作成したdirectoryとDB/sidecar/lockを利用者だけが読書きできるmodeへ設定する。Windowsでは保存先の継承ACLを使うため、ownerは利用者専用のworkspace/cache領域を指定する。repo設定やACLを無断で書き換えない。network filesystemのWALを対応済みとは扱わない。
 
-graph、診断、宣言/evidenceのsource hash・元UTF-16位置、旧ID対応、文書/節対応、alias、入力manifest、ownerが明示的に選んだ検索用name/signature/heading/body/pathを保存する。source全文を無制限に保存しない。検索textは各fieldの上限を検証し、secret/生成物の索引除外と検索本文の選択は抽出ownerが行う。manifestには解析へ影響したproject/config/AdditionalFiles等も含める。生成された仮想sourceは実ファイルのhash検査を捏造せず、この版のlive-file locationとして受け入れない。
+graph、診断、宣言/evidenceのsource hash・元UTF-16位置、旧ID対応、文書/節対応、alias、入力manifest、ownerが明示的に選んだ検索用name/signature/heading/body/pathを保存する。source全文を無制限に保存しない。検索textは各fieldの上限を検証し、secret/生成物の索引除外と検索本文の選択は抽出ownerが行う。manifestには解析へ影響したproject/config/AdditionalFiles等も含める。schema 2以降は生成本文、schema 3はパッケージ本文を専用tableへ保存できる。これらを通常のlive-file locationへ置き換えず、source kindと保存本文のhash・長さ・spanを検査する。実ファイルのhash検査を捏造しない。
 
 ## 世代とtransaction
 
@@ -26,8 +26,12 @@ WAL、private cache、synchronous FULL、busy timeout 3秒、connection pooling�
 
 Microsoft.Data.Sqlite 10.0.12を固定し、同梱native SQLiteのFTS5 unicode61を使う。name/signature/heading/body/pathを別fieldに保存し、bm25の重みを10/5/8/1/2として名前と見出しを優先する。FTS tableとexternal-content viewはgenerationごとに作り、その世代の行だけを索引へ入れる。table/viewの作成、search textとFTS行の追加、active generationの切替は同じtransactionに含める。bm25のavgdl・IDFも世代内のcorpusで計算し、過去世代の内容や回数によって同一snapshotの順位・scoreを変えない。external-content viewも同世代に限定し、FTSのrebuildで他世代を取り込まない。過去世代のFTSはreaderとともに保持する。検索入力はFTS式として実行せず、引用したliteralとして扱う。日本語のtoken境界やC#識別子の部分名は追加tokenizerを導入せず、同世代のliteral substringで補完し、`MatchMethod`へ区別を返す。これはstorageの小さい検索primitiveであり、共通Queryのcursor、freshness、context、envelope budgetを代替しない。
 
-index schemaは`PRAGMA user_version=1`、application IDは`0x53444831`で、graph schema/report v2の版と別である。対応外のDBは`INDEX_SCHEMA_UNSUPPORTED`で拒否し、破壊的な自動migrationを行わない。移行対象の旧reportはそのまま保持し、既存providerからreadonly fallbackできる。再索引は別DB pathへ作成し、既存indexを上書きしない。`BackupTo`はtrusted writerの所有下でSQLite online backupを行い、存在する宛先を上書きしない。失敗したbackupを正常なsnapshotとは扱わない。
+SQLite indexの新規作成は`PRAGMA user_version=3`、application IDは`0x53444831`である。現行reader／writerはschema 1／2／3を受理し、既存DBの版をその場で変更しない。schema 1は基本graph／FTS、schema 2は`generated_bodies`、schema 3はさらに`package_bodies`を持つ。古いschemaへ対応外の本文を保存することは拒否し、旧DBと世代を保持する。graph schema 1、旧report v2、Query応答の版とは別に扱う。
 
-未出荷のレビュー版v0と現版は`user_version=1`を共用するが、FTS配置が異なるためDBの互換性を主張しない。v0の試用DBはOpenのheader検査を通っても、Searchで世代別tableが存在しない。今回の限定検証は新しい専用pathへ再索引し、v0のDBとsidecarを流用・上書き・削除しない。v0からの自動migrationも実装していない。
+0.2.1のVSIXに同梱するreaderはschema 1のみを読み、新CLIのschema 3は読めない。0.4.0のVSIXはschema 1／2／3を読む。外部CLIの設定だけでは同梱readerは更新されない。対応外のDBは`INDEX_SCHEMA_UNSUPPORTED`で拒否し、自動migration、DB・WAL・SHMの削除、旧索引への上書きは行わない。新機能に必要なschemaへ移る場合は、旧DBとsidecar、旧CLI／VSIXを保持し、新しい専用pathへ明示的に再索引する。rollbackには保持した旧環境と旧索引を使う。旧reportのreadonly fallbackは索引不存在のときだけで、schema不一致を隠すためには使わない。`BackupTo`はtrusted writerの所有下でSQLite online backupを行い、存在する宛先を上書きしない。失敗したbackupを正常なsnapshotとは扱わない。
 
-実装根拠は[Microsoft.Data.Sqlite transactions](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/transactions)、[connection strings](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/connection-strings)、[SQLite WAL](https://sqlite.org/wal.html)、[FTS5](https://sqlite.org/fts5.html)を確認した。実差分、限定check結果、未実施のhost/Query接続とOS範囲はrun成果物へ記録する。
+## 初期実装時の履歴
+
+以下はSD2-05当時の記録であり、0.4.0の検証結果ではない。未出荷のレビュー版v0と当時の版は`user_version=1`を共用したが、FTS配置が異なるためDBの互換性を主張しない。v0の試用DBはOpenのheader検査を通っても、Searchで世代別tableが存在しない。当時の限定検証は新しい専用pathへ再索引し、v0のDBとsidecarを流用・上書き・削除しなかった。v0からの自動migrationも実装していない。
+
+実装時は[Microsoft.Data.Sqlite transactions](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/transactions)、[connection strings](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/connection-strings)、[SQLite WAL](https://sqlite.org/wal.html)、[FTS5](https://sqlite.org/fts5.html)を確認した。当時の実差分、限定check結果、未実施のhost/Query接続とOS範囲はrun成果物に記録した。現在のschema判定は`analyzer/src/SharpDeps.Index/IndexDatabase.cs`を根拠とする。
