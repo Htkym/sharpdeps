@@ -78,9 +78,11 @@ internal static class OracleProcess
         var sequence = 0;
         Guid Allocate() => new(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{run.Options.WorkspaceUuid:N}:{run.Previous?.Graph.Generation ?? 0}:{++sequence}"))[..16]);
-        var build = run.Previous is null
-            ? await CliIndexer.BuildForPublicationAsync(run.Options, null, default, null)
-            : await CliIndexer.BuildForPublicationAsync(run.Options, run.Previous, default, null, Allocate);
+        var before = Environment.GetEnvironmentVariables();
+        var admissions = new List<CliProofAdmission>();
+        var build = await CliIndexer.BuildForPublicationAsync(run.Options, run.Previous, default, null,
+            run.Previous is null ? null : Allocate, admissions.Add);
+        WriteProofDiagnostic(Path.ChangeExtension(output, "proof-diagnostic.json"), run.Options.Root, before, admissions);
         using (var writer = IndexWriter.Open(run.Options.Root, run.Options.IndexPath, run.Options.WorkspaceUuid, true))
             writer.Commit(IndexStage.Create(build.Snapshot), verifySelection: build.VerifySelection);
         using var reader = IndexReader.Open(run.Options.IndexPath, run.Options.WorkspaceUuid);
@@ -102,6 +104,49 @@ internal static class OracleProcess
         File.WriteAllText(output, JsonSerializer.Serialize(new OracleObservation(reader.Snapshot(), fts,
             queries, Environment.ProcessId), QueryJson.Options));
         return 0;
+    }
+
+    private static void WriteProofDiagnostic(string path, string root, System.Collections.IDictionary before,
+        IReadOnlyList<CliProofAdmission> admissions)
+    {
+        var sdk = SharpDeps.Analysis.Roslyn.SemanticEnvironment.Describe(root).MsBuildPath;
+        var runtime = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        var dotnet = Path.GetFullPath(Path.Combine(runtime, "..", "..", ".."));
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        object Check(string method, params object?[] args)
+        {
+            try
+            {
+                var member = typeof(CliReuseProof).GetMethod(method,
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+                var result = member.Invoke(null, args);
+                return method == "NormalizeEnvironment" ? result is not null : result!;
+            }
+            catch (Exception error) { return new { exceptionType = error.GetBaseException().GetType().Name }; }
+        }
+        string HostState(string name)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (value is null) return "unset";
+            var expected = name == "DOTNET_HOST_PATH"
+                ? Path.Combine(dotnet, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet") : dotnet;
+            return Path.IsPathFullyQualified(value)
+                && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), Path.TrimEndingDirectorySeparator(expected), comparison)
+                ? "expected" : "mismatched";
+        }
+        var after = Environment.GetEnvironmentVariables();
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            sdkPath = sdk, runtimeDirectory = runtime,
+            sdkInsideRuntimeRoot = sdk is not null && string.Equals(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sdk)),
+                Path.Combine(dotnet, "sdk"), comparison),
+            normalizedBefore = sdk is null ? false : Check("NormalizeEnvironment", before, sdk),
+            normalizedAfter = sdk is null ? false : Check("NormalizeEnvironment", after, sdk),
+            userHooks = Check("HasUserHooks"), ancestorConfiguration = Check("HasAncestorConfiguration", root),
+            hostEnvironment = new[] { "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_HOST_PATH" }
+                .ToDictionary(name => name, HostState),
+            admissions
+        }, QueryJson.Options));
     }
 
     internal static async Task<OracleObservation> RunAsync(OracleRun run, string directory, string label,
