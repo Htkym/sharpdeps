@@ -22,7 +22,8 @@ export class SavedSourceError extends Error {
       QUERY_SOURCE_LINK: 'Saved source navigation does not open linked files or linked roots.',
       QUERY_SOURCE_OUTSIDE_ROOT: 'This saved source is outside the selected workspace root.',
       QUERY_SOURCE_LIMIT: 'This saved source exceeds the navigation size limit.',
-      QUERY_SOURCE_ENCODING: 'This saved source requires valid UTF-8 text without NUL characters.',
+      QUERY_SOURCE_ENCODING:
+        'This saved source requires valid UTF-8 or BOM-marked UTF-16 text without NUL characters.',
       QUERY_SOURCE_SPAN: 'The saved source position is unavailable for this file.',
       QUERY_SOURCE_UNAVAILABLE: 'This saved source could not be verified inside the workspace.'
     };
@@ -32,7 +33,7 @@ export class SavedSourceError extends Error {
 
 const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
 
-/** Verifies physical, bounded, strict UTF-8 source; never follows a saved mapped path. */
+/** Verifies physical, bounded, strict UTF-8/UTF-16 source; never follows a saved mapped path. */
 export async function readSavedSource(location: SavedSourceLocation): Promise<{
   filePath: string;
   text: string;
@@ -98,8 +99,14 @@ export async function readSavedSource(location: SavedSourceLocation): Promise<{
     }
     let text: string;
     try {
+      const encoding =
+        bytes[0] === 0xff && bytes[1] === 0xfe
+          ? 'utf-16le'
+          : bytes[0] === 0xfe && bytes[1] === 0xff
+            ? 'utf-16be'
+            : 'utf-8';
       // Saved raw spans include U+FEFF; ignoreBOM=true retains that code unit.
-      text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      text = new TextDecoder(encoding, { fatal: true, ignoreBOM: true }).decode(bytes);
     } catch {
       throw new SavedSourceError('QUERY_SOURCE_ENCODING');
     }

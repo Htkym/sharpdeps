@@ -104,6 +104,13 @@ jobs:
         env:
           SHARPDEPTS_E2E_MODE: vsix
 
+      - name: End-to-end (packaged saved-source encodings)
+        run: xvfb-run -a npm run test:e2e
+        env:
+          SHARPDEPTS_E2E_MODE: vsix
+          SHARPDEPTS_E2E_SCENARIO: saved-source
+          SHARPDEPTS_E2E_PROFILE: .local/e2e-vsix-saved-source
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -120,6 +127,7 @@ jobs:
             .local/verification/sd-027-e2e*.json
             .local/verification/sd-028-browser.json
             .local/verification/sd-029-vsix.json
+            .local/verification/sd-030-saved-source.json
             .local/browser-results/
 
   macos-smoke:
