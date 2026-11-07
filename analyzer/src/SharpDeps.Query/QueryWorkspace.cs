@@ -2,6 +2,7 @@ namespace SharpDeps.Query;
 
 using System.Security.Cryptography;
 using System.Text;
+using SharpDeps.Analysis.Core.Text;
 using SharpDeps.Index;
 
 /// <summary>The trusted owner supplies the complete selected input set and verifies analysis configuration.</summary>
@@ -22,7 +23,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
     // Normalization is lexical; source/root attributes are inspected only by Read or Verify.
     private readonly string canonicalRoot = NormalizeRoot(root);
 
-    /// <summary>Returns the exact verified source bytes, decoded with strict UTF-8 before they can be used for snippets.</summary>
+    /// <summary>Returns the exact verified source bytes, validated as BOM-aware text before they can be used for snippets.</summary>
     public byte[] Read(IndexFile input, CancellationToken token = default)
         => ReadInput(input, token, requireText: true);
 
@@ -90,7 +91,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
             if (hash != input.ContentHash) throw Changed(input.RelativePath);
             if (requireText || input.Utf16Length is not null)
             {
-                var length = StrictUtf8.GetCharCount(bytes);
+                var length = SourceTextEncoding.Decode(bytes).Length;
                 if (input.Utf16Length is { } expected && length != expected) throw Changed(input.RelativePath);
             }
             token.ThrowIfCancellationRequested();

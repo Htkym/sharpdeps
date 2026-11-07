@@ -5,6 +5,7 @@ using System.Text;
 using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Core.Text;
 using SharpDeps.Analysis.Markdown;
 using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Analysis.Roslyn.Evidence;
@@ -14,7 +15,11 @@ using SharpDeps.Query;
 
 public sealed record CliIndexOptions(string Root, string Target, string IndexPath, Guid WorkspaceUuid,
     string Configuration = "Debug", string? Platform = null, IReadOnlyList<string>? ProjectPaths = null,
-    string? TargetFramework = null, int TimeoutSeconds = 180, bool AllowSemanticReuse = false);
+    string? TargetFramework = null, int TimeoutSeconds = CliIndexOptions.DefaultTimeoutSeconds, bool AllowSemanticReuse = false)
+{
+    internal const int DefaultTimeoutSeconds = 1800;
+    internal const int MaximumTimeoutSeconds = 3600;
+}
 public sealed record CliIndexBuild(IndexSnapshot Snapshot, Action VerifySelection)
 {
     internal Func<CancellationToken, QueryInputInventory>? VerifyQueryInputs { get; init; }
@@ -54,7 +59,7 @@ public static class CliIndexer
     {
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
-        if (options.TimeoutSeconds is < 0 or > 3600
+        if (options.TimeoutSeconds is < 0 or > CliIndexOptions.MaximumTimeoutSeconds
             || string.IsNullOrWhiteSpace(options.Configuration))
             throw new CliIndexException("CLI_INVALID_INDEX_OPTIONS");
         var workspaceId = HarnessIdentity.WorkspaceId(options.WorkspaceUuid);
@@ -75,7 +80,8 @@ public static class CliIndexer
             throw new CliIndexException("CLI_PROJECT_NOT_FOUND");
         var publicationToken = token;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        if (options.TimeoutSeconds != 0) timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
+        if (options.TimeoutSeconds != 0)
+            timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
         token = timeout.Token;
         var snapshotId = Guid.NewGuid().ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);
@@ -339,7 +345,7 @@ public static class CliIndexer
                     var captured = await Capture(sourcePath, "source");
                     var compilationText = tree.GetText(token).ToString();
                     var offset = compilationText == captured.Text ? 0
-                        : captured.HasUtf8Bom && compilationText == captured.Text[1..] ? 1 : -1;
+                        : captured.HasBom && compilationText == captured.Text[1..] ? 1 : -1;
                     if (offset < 0)
                         throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", "Compilation text differs from the selected live input.");
                     var registered = documents.Register(captured.AbsolutePath);
@@ -579,7 +585,7 @@ public static class CliIndexer
             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
                 throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
             var input = new InputText(path, new("cli-input:" + relative, relative, kind, text.Hash,
-                text.Bytes, text.Text.Length), text.Text, text.HasUtf8Bom);
+                text.Bytes, text.Text.Length), text.Text, text.HasBom);
             manifest.Add(relative, input);
             return input;
         }
@@ -768,7 +774,7 @@ public static class CliIndexer
         { return null; }
     }
 
-    private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasUtf8Bom);
+    private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasBom);
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static IEnumerable<string> WalkInputs(string root, string indexPath, CancellationToken token)
@@ -799,7 +805,7 @@ public static class CliIndexer
         ".csproj" or ".fsproj" or ".vbproj" or ".sln" or ".slnx" or ".props" or ".targets" or ".editorconfig"
         || Path.GetFileName(path).ToLowerInvariant() is "global.json" or "nuget.config" or "packages.lock.json" or ".editorconfig";
 
-    private static async Task<(string Text, string Hash, long Bytes, bool HasUtf8Bom)> ReadInput(string path, CancellationToken token)
+    private static async Task<(string Text, string Hash, long Bytes, bool HasBom)> ReadInput(string path, CancellationToken token)
     {
         RejectLinks(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
@@ -808,14 +814,12 @@ public static class CliIndexer
         var bytes = new byte[checked((int)stream.Length)];
         await stream.ReadExactlyAsync(bytes, token);
         if (await stream.ReadAsync(new byte[1], token) != 0) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
-        var hasUtf8Bom = bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf });
         string text;
-        try { text = StrictUtf8.GetString(bytes); }
+        try { text = SourceTextEncoding.Decode(bytes); }
         catch (DecoderFallbackException error)
-        { throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require strict UTF-8.", inner: error); }
-        if (text.Contains('\0')) throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "NUL/binary and UTF-16 inputs are unsupported.");
+        { throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require UTF-8 or BOM-marked UTF-16 text.", inner: error); }
         RejectLinks(path);
-        return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, hasUtf8Bom);
+        return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, text.StartsWith('\uFEFF'));
     }
 
     private static async Task Verify(InputText input, string root, CancellationToken token)

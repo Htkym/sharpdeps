@@ -986,9 +986,8 @@ public sealed class CliTests
 
     private sealed class Fixture : IDisposable
     {
-        private static readonly string Base = OperatingSystem.IsWindows()
-            ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd207-20261010-01\test-fixtures"
-            : OperatingSystem.IsMacOS() ? "/private/tmp/sharpdeps-sd207-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-sd207-fixtures");
+        private static readonly string Base = OperatingSystem.IsMacOS()
+            ? "/private/tmp/sharpdeps-sd207-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-sd207-fixtures");
         private const string Text = "public class Service {} public class ServiceExtra {}\n";
         private readonly Guid uuid = Guid.NewGuid();
         public Guid Uuid => uuid;

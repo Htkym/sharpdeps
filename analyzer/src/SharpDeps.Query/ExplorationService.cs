@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using SharpDeps.Analysis.Contracts.Harness;
+using SharpDeps.Analysis.Core.Text;
 using SharpDeps.Index;
 
 public sealed class ExplorationService
@@ -1075,7 +1076,7 @@ public sealed class ExplorationService
             if (cachedSourceId != file.SourceId)
             {
                 cachedSourceText = null; cachedSourceId = null;
-                cachedSourceText = new UTF8Encoding(false, true).GetString(ReadSource(file));
+                cachedSourceText = SourceTextEncoding.Decode(ReadSource(file));
                 cachedSourceId = file.SourceId;
             }
             var text = cachedSourceText!;
