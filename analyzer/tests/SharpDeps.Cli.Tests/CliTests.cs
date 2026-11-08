@@ -732,6 +732,64 @@ public sealed class CliTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActualCliDeadlineAndCallerCancellationDoNotCancelSharedOwner(bool cancelCaller)
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        var building = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, async (_, token) =>
+        {
+            building.TrySetResult(token);
+            await release.Task.WaitAsync(token);
+            using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var previous = current.Snapshot();
+            return new(previous with
+            {
+                Graph = previous.Graph with
+                {
+                    Generation = previous.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            }, () => { });
+        });
+        owner.RequestAccepted = id =>
+        {
+            if (id == "deadline-survivor")
+                admitted.TrySetResult();
+        };
+        var arguments = new[] { "update", "--root", fixture.Root, "--index", fixture.IndexPath,
+            "--trusted", "--target", "App.csproj" };
+        var output = new StringWriter();
+        var expired = CliApplication.RunAsync([.. arguments, "--request-id", "deadline-client", "--timeout-seconds",
+            cancelCaller ? "3600" : "1"], output, TextWriter.Null, caller.Token);
+        var sharedToken = await building.Task.WaitAsync(deadline.Token);
+        var survivor = Run([.. arguments, "--request-id", "deadline-survivor", "--timeout-seconds", "1800"]);
+        await admitted.Task.WaitAsync(deadline.Token);
+        if (cancelCaller)
+            caller.Cancel();
+        Assert.Equal(cancelCaller ? 130 : 4, await expired.WaitAsync(deadline.Token));
+        Assert.Equal(cancelCaller ? "CANCELLED" : "TIMEOUT", Code(output.ToString()));
+        Assert.False(sharedToken.IsCancellationRequested);
+        Assert.False(survivor.IsCompleted);
+        Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+            IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+        release.TrySetResult();
+        var completed = await survivor.WaitAsync(deadline.Token);
+        Assert.Equal(0, completed.Exit);
+        using var reply = JsonDocument.Parse(completed.Json);
+        Assert.Equal(2, reply.RootElement.GetProperty("result").GetProperty("generation").GetInt64());
+        Assert.False(sharedToken.IsCancellationRequested);
+        await owner.DrainAsync().WaitAsync(deadline.Token);
+    }
+
     [Fact]
     public async Task PreparedStateIsDiscardedOnRollbackAndAdoptionFailureCannotUndoCommit()
     {
