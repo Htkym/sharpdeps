@@ -60,6 +60,82 @@ public sealed class ReplayPhaseMetricsTests
         Assert.Equal("sidecar-byte-limit", ReplayPhaseMetrics.Parse(oversized, RunId, "completed").Reason);
     }
 
+    [Theory]
+    [InlineData("workspace")]
+    [InlineData("sdk")]
+    [InlineData("git")]
+    [InlineData("package")]
+    [InlineData("tool")]
+    public void ReadAndReportedDurationObservationsDoNotAddToPhaseTotals(string category)
+    {
+        var capture = ReplayPhaseMetrics.Parse(Sidecar(observations: category), RunId, "completed");
+        Assert.Equal("recorded", capture.Status);
+        Assert.Equal(15, capture.PhaseMilliseconds["readerPreparation"]);
+        Assert.Equal(6, capture.PhaseMilliseconds["searchAndScope"]);
+        Assert.Equal(3, capture.PhaseMilliseconds["sourceVerification"]);
+        Assert.Equal(3, capture.PhaseMilliseconds["rendering"]);
+        Assert.Equal(9, capture.Spans.Count);
+    }
+
+    [Theory]
+    [InlineData("stream-position-unavailable")]
+    [InlineData("invalid-stream-position")]
+    public void UnknownReadBytesRetainTheirReasonWithoutInventingZero(string reason)
+    {
+        var text = Encoding.UTF8.GetString(Sidecar(observations: "workspace"))
+            .Replace("\"bytes\":12,\"reason\":null", "\"bytes\":null,\"reason\":\"" + reason + "\"", StringComparison.Ordinal);
+        Assert.Equal("recorded", ReplayPhaseMetrics.Parse(Encoding.UTF8.GetBytes(text), RunId, "completed").Status);
+    }
+
+    [Fact]
+    public void InvalidObservationShapesSpansAndUnknownEventsFailClosed()
+    {
+        var text = Encoding.UTF8.GetString(Sidecar(observations: "workspace"));
+        var invalid = new List<string>();
+        foreach (var value in new[] { "-1", "1.5", "1e999", "\"NaN\"", "NaN", "null" })
+            invalid.Add(text.Replace("\"bytes\":12", "\"bytes\":" + value, StringComparison.Ordinal));
+        foreach (var value in new[] { "-1", "1e999", "\"NaN\"", "null" })
+            invalid.Add(text.Replace("\"elapsedMilliseconds\":123", "\"elapsedMilliseconds\":" + value, StringComparison.Ordinal));
+        foreach (var (before, after) in new[]
+        {
+            ("\"category\":\"workspace\"", "\"category\":\"unknown\""),
+            ("\"bytes\":12,\"reason\":null", "\"bytes\":12,\"reason\":\"stream-position-unavailable\""),
+            ("\"bytes\":12,\"reason\":null", "\"bytes\":null,\"reason\":\"unknown\""),
+            ("\"bytes\":12", "\"bytes\":12,\"path\":\"private\""),
+            ("\"bytes\":12,", ""),
+            ("\"type\":\"read\",\"phase\":\"input.read-workspace\",\"spanId\":9", "\"type\":\"read\",\"phase\":\"input.read-workspace\",\"spanId\":99"),
+            ("\"parentSpanId\":8,\"category\"", "\"parentSpanId\":1,\"category\""),
+            ("\"phase\":\"input.read-workspace\",\"spanId\":9,\"parentSpanId\":8,\"category\"", "\"phase\":\"source.read\",\"spanId\":9,\"parentSpanId\":8,\"category\""),
+            ("\"timing\":\"reported-operation-elapsed\"", "\"timing\":\"inclusive-and-measured-child-exclusive\""),
+            ("\"source\":\"semantic.msbuild-progress\"", "\"source\":\"private/path\""),
+            ("\"operation\":\"evaluate\"", "\"operation\":\"query text\""),
+            ("\"reason\":\"no-progress-event\"", "\"reason\":null"),
+            ("\"elapsedMilliseconds\":123", "\"milliseconds\":123"),
+            ("\"type\":\"reported-duration\"", "\"type\":\"unknown\"")
+        })
+            invalid.Add(text.Replace(before, after, StringComparison.Ordinal));
+        var payloads = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<JsonElement>(line).GetProperty("payload").Clone()).ToList();
+        var read = payloads.FindIndex(payload => payload.GetProperty("type").GetString() == "read");
+        var closedParent = payloads.ToList();
+        var parent = closedParent[read + 2];
+        closedParent.RemoveAt(read + 2);
+        closedParent.Insert(read, parent);
+        invalid.Add(Encoding.UTF8.GetString(Encode(closedParent)));
+        (payloads[read], payloads[read + 1]) = (payloads[read + 1], payloads[read]);
+        invalid.Add(Encoding.UTF8.GetString(Encode(payloads)));
+        (payloads[read], payloads[read + 1]) = (payloads[read + 1], payloads[read]);
+        payloads.Insert(read + 1, payloads[read]);
+        invalid.Add(Encoding.UTF8.GetString(Encode(payloads)));
+        foreach (var value in invalid)
+        {
+            Assert.NotEqual(text, value);
+            var capture = ReplayPhaseMetrics.Parse(Encoding.UTF8.GetBytes(value), RunId, "completed");
+            Assert.Equal("unavailable", capture.Status);
+            Assert.All(capture.PhaseMilliseconds.Values, Assert.Null);
+        }
+    }
+
     [Fact]
     public void SequentialBoundariesRetainRawHashesAndRejectMultipleLateOrModifiedRuns()
     {
@@ -121,7 +197,7 @@ public sealed class ReplayPhaseMetricsTests
         }
     }
 
-    private static byte[] Sidecar(string outcome = "completed")
+    private static byte[] Sidecar(string outcome = "completed", string? observations = null)
     {
         object Phase(long id, long? parent, string name, double start, double duration, double? exclusive = null, bool overlaps = false)
             => new
@@ -136,7 +212,7 @@ public sealed class ReplayPhaseMetricsTests
                 overlappingChildren = overlaps,
                 unfinishedChildren = false
             };
-        object[] payloads =
+        List<object> payloads =
         [
             new { type = "run.start", schema = "sharpdeps-phase-metrics/1", operation = "explore", timing = "inclusive-and-measured-child-exclusive" },
             Phase(3, 2, "reader.snapshot", 2, 4), Phase(2, 1, "reader.open", 1, 10, 6),
@@ -144,7 +220,24 @@ public sealed class ReplayPhaseMetricsTests
             Phase(6, 1, "explore.resolve", 17, 5), Phase(7, 1, "explore.render", 24, 3), Phase(1, null, "run", 0, 30, 6, overlaps: true),
             new { type = "run.end", outcome }
         ];
-        return Encoding.UTF8.GetBytes(string.Join('\n', payloads.Select((payload, index)
-            => JsonSerializer.Serialize(new { runId = RunId, sequence = index + 1, payload }))) + "\n");
+        if (observations is not null)
+            payloads.InsertRange(payloads.Count - 2,
+            [
+                new { type = "read", phase = "input.read-" + observations, spanId = 9, parentSpanId = 8, category = observations, bytes = 12, reason = (string?)null },
+                Phase(9, 8, "input.read-" + observations, 28, 1), Phase(8, 1, "source.read", 27, 3, 2),
+                new { type = "reported-duration", source = "semantic.msbuild-progress", operation = "evaluate", elapsedMilliseconds = (double?)123,
+                    reason = (string?)null, timing = "reported-operation-elapsed" },
+                new { type = "reported-duration", source = "semantic.msbuild-progress", operation = "build", elapsedMilliseconds = (double?)null,
+                    reason = "no-progress-event", timing = "reported-operation-elapsed" },
+                new { type = "reported-duration", source = "semantic.msbuild-progress", operation = "resolve", elapsedMilliseconds = (double?)null,
+                    reason = "invalid-elapsed", timing = "reported-operation-elapsed" },
+                new { type = "reported-duration", source = "semantic.msbuild-progress", operation = "unknown", elapsedMilliseconds = (double?)null,
+                    reason = "unsupported-progress-operation", timing = "reported-operation-elapsed" }
+            ]);
+        return Encode(payloads);
     }
+
+    private static byte[] Encode<T>(IEnumerable<T> payloads)
+        => Encoding.UTF8.GetBytes(string.Join('\n', payloads.Select((payload, index)
+            => JsonSerializer.Serialize(new { runId = RunId, sequence = index + 1, payload }))) + "\n");
 }

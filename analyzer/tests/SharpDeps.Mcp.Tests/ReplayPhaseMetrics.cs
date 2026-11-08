@@ -133,6 +133,8 @@ internal sealed class ReplayPhaseMetrics(string? directory)
             Check(bytes.Length <= MaximumBytes, "sidecar-byte-limit");
             Check(bytes.Length > 0 && bytes[^1] == (byte)'\n', "sidecar-truncated");
             var spans = new List<ReplayPhaseSpan>();
+            var byId = new Dictionary<long, ReplayPhaseSpan>();
+            var reads = new Dictionary<long, (long ParentSpanId, string Phase)>();
             string? runOutcome = null;
             var records = 0;
             for (var offset = 0; offset < bytes.Length;)
@@ -175,13 +177,46 @@ internal sealed class ReplayPhaseMetrics(string? directory)
                             ? double.IsFinite(value) && value >= 0 && value <= span.InclusiveMilliseconds && !span.UnfinishedChildren
                             : span.UnfinishedChildren), "sidecar-span-invalid");
                     _ = payload.GetProperty("overlappingChildren").GetBoolean();
+                    byId.Add(span.SpanId, span);
                     spans.Add(span);
+                }
+                else if (type == "read")
+                {
+                    Properties(payload, "type", "phase", "spanId", "parentSpanId", "category", "bytes", "reason");
+                    var category = payload.GetProperty("category").GetString();
+                    var phase = payload.GetProperty("phase").GetString();
+                    var id = payload.GetProperty("spanId").GetInt64();
+                    var parent = payload.GetProperty("parentSpanId").GetInt64();
+                    var count = payload.GetProperty("bytes");
+                    var reason = payload.GetProperty("reason").GetString();
+                    Check(category is "workspace" or "sdk" or "git" or "package" or "tool"
+                        && phase == "input.read-" + category && id > 0 && parent > 0 && parent < id
+                        && (count.ValueKind == JsonValueKind.Null
+                            ? reason is "stream-position-unavailable" or "invalid-stream-position"
+                            : count.TryGetInt64(out var value) && value >= 0 && reason is null), "sidecar-read-invalid");
+                    Check(!byId.ContainsKey(id) && !byId.ContainsKey(parent) && reads.TryAdd(id, (parent, "input.read-" + category)), "sidecar-read-span-invalid");
+                }
+                else if (type == "reported-duration")
+                {
+                    Properties(payload, "type", "source", "operation", "elapsedMilliseconds", "reason", "timing");
+                    var source = payload.GetProperty("source").GetString();
+                    var operation = payload.GetProperty("operation").GetString();
+                    var elapsed = payload.GetProperty("elapsedMilliseconds");
+                    var reason = payload.GetProperty("reason").GetString();
+                    Check(source is not null && Label(source) && operation is not null && Label(operation)
+                        && payload.GetProperty("timing").GetString() == "reported-operation-elapsed"
+                        && (elapsed.ValueKind == JsonValueKind.Null
+                            ? reason is "no-progress-event" or "invalid-elapsed" or "unsupported-progress-operation"
+                            : double.IsFinite(elapsed.GetDouble()) && elapsed.GetDouble() >= 0 && reason is null),
+                        "sidecar-reported-duration-invalid");
                 }
                 else
                     Check(type is "count" or "decision", "sidecar-event-invalid");
             }
             Check(runOutcome is not null, "sidecar-run-end-missing");
-            var byId = spans.ToDictionary(span => span.SpanId);
+            foreach (var read in reads)
+                Check(byId.TryGetValue(read.Key, out var span) && span.ParentSpanId == read.Value.ParentSpanId
+                    && span.Phase == read.Value.Phase, "sidecar-read-span-invalid");
             var root = spans.Single(span => span.ParentSpanId is null);
             Check(root.Phase == "run", "sidecar-root-invalid");
             foreach (var span in spans.Where(span => span.ParentSpanId is not null))
@@ -221,6 +256,9 @@ internal sealed class ReplayPhaseMetrics(string? directory)
     private static ReplayPhaseCapture Missing(string status, string reason, string outcome, IReadOnlyList<ReplayPhaseArtifact> artifacts)
         => new(status, reason, outcome, null, null, Groups.ToDictionary(group => group.Key, _ => (double?)null),
             Groups.ToDictionary(group => group.Key, _ => (string?)reason), artifacts, []);
+    private static void Properties(JsonElement payload, params string[] names)
+        => Check(payload.EnumerateObject().Select(property => property.Name).ToHashSet(StringComparer.Ordinal).SetEquals(names),
+            "sidecar-event-shape-invalid");
     private static bool Label(string value) => value.Length is > 0 and <= 96
         && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_');
     private static bool CaptureFailure(Exception error) => error is IOException or InvalidDataException or UnauthorizedAccessException

@@ -70,6 +70,11 @@ Query text, source contents, snapshot identities and filesystem paths are omitte
 Process-wide CPU/allocation/GC deltas can overlap concurrent requests and must not
 be interpreted as exclusive request resource usage.
 
+Fixed-query replay accepts validated `read` observations joined to their matching
+`input.read-*` span, and `reported-duration` operation observations. These records
+do not add intervals or durations to the replay phase totals. Unknown or invalid
+events make the phase capture unavailable.
+
 ## Coverage and compatibility
 
 Idle watch scans, setup/restore, per-SDK/Git/package read attribution,
