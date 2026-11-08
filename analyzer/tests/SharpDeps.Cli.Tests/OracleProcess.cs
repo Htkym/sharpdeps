@@ -91,6 +91,8 @@ internal static class OracleProcess
             File.Move(marker + ".tmp", marker);
             await Task.Delay(Timeout.Infinite);
         }
+        if (args is ["--semantic-encoding-oracle", var encodingRoot])
+            return await SemanticEncodingCliTests.RunFixtureAsync(encodingRoot);
         if (args is not ["--full-oracle", var input, var output])
             return 2;
         // CoreFoundation can add this startup metadata after the parent filters the child environment.
@@ -111,12 +113,18 @@ internal static class OracleProcess
             File.WriteAllText(CliPaths.InRoot(run.Options.Root, mutation.RelativePath), mutation.Text, new UTF8Encoding(false, true));
         using (var writer = IndexWriter.Open(run.Options.Root, run.Options.IndexPath, run.Options.WorkspaceUuid, true))
             writer.Commit(IndexStage.Create(build.Snapshot), verifySelection: build.VerifySelection);
-        using var reader = IndexReader.Open(run.Options.IndexPath, run.Options.WorkspaceUuid);
+        File.WriteAllText(output, JsonSerializer.Serialize(Observe(run.Options.IndexPath, run.Options.WorkspaceUuid, run.Terms), QueryJson.Options));
+        return 0;
+    }
+
+    internal static OracleObservation Observe(string indexPath, Guid workspaceUuid, string[] terms)
+    {
+        using var reader = IndexReader.Open(indexPath, workspaceUuid);
         var query = new QueryService(new PinnedQueryIndex(reader));
         var budget = new QueryBudget(500, 1000, 4, 30000, 1_000_000, 4_000_000);
         var fts = new Dictionary<string, IndexSearchHit[]>(StringComparer.Ordinal);
         var queries = new Dictionary<string, QueryEnvelope>(StringComparer.Ordinal);
-        foreach (var term in run.Terms)
+        foreach (var term in terms)
         {
             fts.Add(term, reader.Search(term, 500).ToArray());
             queries.Add("search:" + term, query.Execute(new("oracle", QueryKind.Search, Term: term,
@@ -127,12 +135,10 @@ internal static class OracleProcess
             SharpDeps.Analysis.Contracts.Harness.HarnessNodeKind.Member))
             queries.Add("symbol:" + node.Id, query.Execute(new("oracle", QueryKind.Symbol, NodeId: node.Id,
                 IncludeCandidates: true, PageSize: 500, Budget: budget)).Envelope);
-        File.WriteAllText(output, JsonSerializer.Serialize(new OracleObservation(reader.Snapshot(), fts,
-            queries, Environment.ProcessId), QueryJson.Options));
-        return 0;
+        return new(reader.Snapshot(), fts, queries, Environment.ProcessId);
     }
 
-    private static void WriteProofDiagnostic(string path, string root, System.Collections.IDictionary before,
+    internal static void WriteProofDiagnostic(string path, string root, System.Collections.IDictionary before,
         IReadOnlyList<CliProofAdmission> admissions)
     {
         var sdk = SharpDeps.Analysis.Roslyn.SemanticEnvironment.Describe(root).MsBuildPath;
@@ -302,6 +308,20 @@ internal static class OracleProcess
         var drain = Task.WhenAll(stdout, stderr);
         try
         {
+            var processArtifact = arguments switch
+            {
+                [_, "--semantic-encoding-oracle", var directory] => Path.Combine(directory, "oracle.process.json"),
+                [_, "--full-oracle", _, var processArtifactPath] => Path.ChangeExtension(processArtifactPath, "process.json"),
+                _ => null
+            };
+            if (processArtifact is not null)
+                File.WriteAllText(processArtifact, JsonSerializer.Serialize(new
+                {
+                    processId = process.Id,
+                    startTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                    executable = start.FileName,
+                    arguments
+                }, QueryJson.Options));
             await process.WaitForExitAsync(token);
         }
         finally
@@ -354,6 +374,16 @@ internal static class OracleProcess
                     throw;
                 }
             }
+        }
+        if (arguments is [_, "--full-oracle", _, var artifact])
+        {
+            File.WriteAllText(Path.ChangeExtension(artifact, "stdout.log"), await stdout);
+            File.WriteAllText(Path.ChangeExtension(artifact, "stderr.log"), await stderr);
+        }
+        if (arguments is [_, "--semantic-encoding-oracle", var encodingDirectory])
+        {
+            File.WriteAllText(Path.Combine(encodingDirectory, "process.stdout.log"), await stdout);
+            File.WriteAllText(Path.Combine(encodingDirectory, "process.stderr.log"), await stderr);
         }
         if (process.ExitCode != 0)
         {

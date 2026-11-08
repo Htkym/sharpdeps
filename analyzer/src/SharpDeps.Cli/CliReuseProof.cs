@@ -164,6 +164,7 @@ internal static partial class CliReuseProof
         localGitScope = true;
         package = null;
         var projectPaths = new List<string>();
+        var frameworkFreeProjects = new HashSet<string>(PathComparer);
         var packages = new List<PackageSpec>();
         var imports = new List<string>();
         var importedProps = new HashSet<string>(StringComparer.Ordinal);
@@ -205,8 +206,10 @@ internal static partial class CliReuseProof
                 }
                 if (name == "project.assets.json") assets.Add(entry);
                 if (!Path.GetExtension(entry).Equals(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!PlainProject(entry, root, budget, out var local, out var reference)) return false;
+                if (!PlainProject(entry, root, budget, out var local, out var reference, out var frameworkFree)) return false;
                 projectPaths.Add(entry);
+                if (frameworkFree)
+                    frameworkFreeProjects.Add(Path.GetFullPath(entry));
                 if (reference is not null) packages.Add(reference);
                 localGitScope &= local;
                 projects++;
@@ -214,14 +217,15 @@ internal static partial class CliReuseProof
         }
         if (projects == 0 || imports.Any(path => !importedProps.Contains(path) && !PlainRestoreImport(path, budget)))
             return false;
-        if (packages.Count == 0) return assets.All(path => PlainAssets(path, root, sdk, budget));
+        if (packages.Count == 0) return assets.All(path => PlainAssets(path, root, sdk, budget, projectPaths, frameworkFreeProjects));
         return packages.Count == 1 && CapturePackage(root, sdk, packages[0], projectPaths, imports, assets, budget, out package);
     }
 
-    private static bool PlainProject(string path, string root, ProofBudget budget, out bool localGitScope, out PackageSpec? package)
+    private static bool PlainProject(string path, string root, ProofBudget budget, out bool localGitScope, out PackageSpec? package, out bool frameworkFree)
     {
         localGitScope = false;
         package = null;
+        frameworkFree = false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         budget.Bytes(input.Length);
@@ -235,6 +239,15 @@ internal static partial class CliReuseProof
         var project = document.Root;
         if (project?.Name != "Project" || project.Attributes().Count() != 1
             || (string?)project.Attribute("Sdk") != "Microsoft.NET.Sdk") return false;
+        frameworkFree = new[]
+        {
+            ("DisableImplicitFrameworkReferences", "true"), ("EnableNETAnalyzers", "false"),
+            ("GenerateAssemblyInfo", "false"), ("GenerateTargetFrameworkAttribute", "false")
+        }.All(setting =>
+        {
+            var values = project.Elements("PropertyGroup").Elements(setting.Item1).ToArray();
+            return values.Length == 1 && values[0].Value.Trim().Equals(setting.Item2, StringComparison.OrdinalIgnoreCase);
+        });
         var frameworks = 0;
         foreach (var child in project.Elements())
         {
@@ -243,7 +256,9 @@ internal static partial class CliReuseProof
             {
                 foreach (var property in child.Elements())
                 {
-                    if (property.Name.Namespace != XNamespace.None || !PlainProperties.Contains(property.Name.LocalName)
+                    if (property.Name.Namespace != XNamespace.None
+                        || !(PlainProperties.Contains(property.Name.LocalName) || frameworkFree
+                            && (property.Name.LocalName is "DisableImplicitFrameworkReferences" or "GenerateTargetFrameworkAttribute"))
                         || property.HasAttributes || property.HasElements || !Static(property.Value)) return false;
                     if (property.Name.LocalName == "TargetFramework")
                     {
@@ -332,17 +347,27 @@ internal static partial class CliReuseProof
         return true;
     }
 
-    private static bool PlainAssets(string path, string root, string sdk, ProofBudget budget)
+    private static bool PlainAssets(string path, string root, string sdk, ProofBudget budget, IReadOnlyList<string> projectPaths, IReadOnlySet<string> frameworkFreeProjects)
     {
         if (Path.GetFileName(Path.GetDirectoryName(path)) != "obj") return false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         budget.Bytes(input.Length);
         using var document = JsonDocument.Parse(input, new JsonDocumentOptions { MaxDepth = 64 });
-        return PlainAssetDocument(document.RootElement, path, root, sdk, budget);
+        var assets = document.RootElement;
+        var directory = Directory.GetParent(Path.GetDirectoryName(path)!)!.FullName;
+        var owners = projectPaths.Where(project => PathComparer.Equals(Path.GetDirectoryName(project), directory)).ToArray();
+        var frameworkFree = owners.Any(project => frameworkFreeProjects.Contains(Path.GetFullPath(project)));
+        if (frameworkFree && (owners.Length != 1 || !assets.TryGetProperty("project", out var owner)
+            || !owner.TryGetProperty("restore", out var restore)
+            || !restore.TryGetProperty("projectPath", out var projectPath)
+            || projectPath.GetString() is not { } ownerPath || !Path.IsPathFullyQualified(ownerPath)
+            || !PathComparer.Equals(Path.GetFullPath(ownerPath), Path.GetFullPath(owners[0]))))
+            return false;
+        return PlainAssetDocument(assets, path, root, sdk, budget, frameworkFree);
     }
 
-    private static bool PlainAssetDocument(JsonElement assets, string path, string root, string sdk, ProofBudget budget)
+    private static bool PlainAssetDocument(JsonElement assets, string path, string root, string sdk, ProofBudget budget, bool frameworkFree = false)
     {
         if (!assets.TryGetProperty("libraries", out var libraries) || libraries.ValueKind != JsonValueKind.Object
             || !assets.TryGetProperty("targets", out var targets) || targets.ValueKind != JsonValueKind.Object
@@ -378,8 +403,15 @@ internal static partial class CliReuseProof
             || (framework.TryGetProperty("targetAlias", out var alias) && alias.GetString() != "net10.0")) return false;
         if (framework.TryGetProperty("dependencies", out var dependencies) && dependencies.EnumerateObject().Any()) return false;
         if (framework.TryGetProperty("downloadDependencies", out var downloads) && downloads.EnumerateArray().Any()) return false;
-        if (!framework.TryGetProperty("frameworkReferences", out var references) || references.ValueKind != JsonValueKind.Object
-            || references.EnumerateObject().Count() != 1 || !references.TryGetProperty("Microsoft.NETCore.App", out _)) return false;
+        if (frameworkFree)
+        {
+            if (framework.TryGetProperty("frameworkReferences", out var freeReferences)
+                && (freeReferences.ValueKind != JsonValueKind.Object || freeReferences.EnumerateObject().Any()))
+                return false;
+        }
+        else if (!framework.TryGetProperty("frameworkReferences", out var references) || references.ValueKind != JsonValueKind.Object
+            || references.EnumerateObject().Count() != 1 || !references.TryGetProperty("Microsoft.NETCore.App", out _))
+            return false;
         if (framework.TryGetProperty("runtimeIdentifierGraphPath", out var graphPath))
         {
             if (graphPath.GetString() is not { } value || !Path.IsPathFullyQualified(value)) return false;

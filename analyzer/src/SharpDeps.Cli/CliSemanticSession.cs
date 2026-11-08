@@ -36,15 +36,15 @@ internal sealed class CliSemanticSession : IDisposable
         internal async Task<SemanticLoadResult?> TryUpdateAsync(SemanticSessionProof proof, long generation,
             IReadOnlyDictionary<string, SemanticSourceInput> sources, CancellationToken token)
         {
-            if (sources.Values.Any(s => s.Text.StartsWith('\uFEFF')))
-            {
-                owner.Evict();
-                PhaseMetrics.Decision("semantic.session", "preamble-profile-cold");
-                return null;
-            }
             try
             {
                 candidate = await owner.TryUpdateAsync(proof, generation, sources, token);
+                if (candidate is not null && !await CliSemanticSourceProfile.MatchesAsync(candidate.Solution, sources, token))
+                {
+                    ReleaseCandidate();
+                    owner.Evict();
+                    PhaseMetrics.Decision("semantic.session", "compiler-source-profile-cold");
+                }
                 return candidate?.Result;
             }
             catch (Exception error) when (error is not OperationCanceledException)
@@ -62,9 +62,12 @@ internal sealed class CliSemanticSession : IDisposable
         internal async Task PrepareColdAsync(SemanticColdLoad cold, SemanticSessionProof proof,
             IReadOnlyDictionary<string, SemanticSourceInput> sources, CancellationToken token)
         {
-            // shortcut: CLI BOM warm updates stay cold until the MSBuild source-coordinate profile is verified.
-            if (!sources.Values.Any(s => s.Text.StartsWith('\uFEFF')))
-                candidate = await owner.PrepareColdAsync(cold, proof, sources, token);
+            if (!await CliSemanticSourceProfile.MatchesAsync(cold.Solution, sources, token))
+            {
+                PhaseMetrics.Decision("semantic.session", "compiler-source-profile-cold");
+                return;
+            }
+            candidate = await owner.PrepareColdAsync(cold, proof, sources, token);
         }
 
         internal void Retain(SemanticSessionProof proof, long generation)
