@@ -37,6 +37,9 @@ public sealed class FullBuildOracleTests(ITestOutputHelper output)
         Write("B/Shared.cs", "namespace Demo; public static class Shared { public static int Value() => 1; }");
         Write("C/Independent.cs", "namespace Demo; public class Independent { }");
         Write("guide.md", "# Guide\r\n\r\n`Demo.Service.Run` 日本語😀\r\n");
+        Write("docs/guide.md", "# Nested guide\n[Service](../A/Service.cs)\n[Missing](A/Service.cs)\n");
+        Write("docs/reference.md", "# Reference\n[Service](../A/Service.cs)\n");
+        Write("root-guide.md", "# Root guide\n[Service](A/Service.cs)\n");
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         try
         {
@@ -53,6 +56,7 @@ public sealed class FullBuildOracleTests(ITestOutputHelper output)
             Assert.Equal(sdk, Path.GetFileName(proof.SdkPath));
             Assert.Equal(3, proof.Projects.Variants.Count);
             AssertFull(previous);
+            AssertCodeLinks(previous.Snapshot);
             for (var step = 0; step < 5; step++)
             {
                 if (step == 1)
@@ -77,6 +81,7 @@ public sealed class FullBuildOracleTests(ITestOutputHelper output)
                 Assert.NotEqual(Environment.ProcessId, full.ProcessId);
                 Assert.NotEqual(incremental.ProcessId, full.ProcessId);
                 AssertFull(full);
+                AssertCodeLinks(incremental.Snapshot);
                 Assert.Equal(previous.Snapshot.Graph.Generation + 1, incremental.Snapshot.Graph.Generation);
                 if (step < 2)
                     Assert.Equal(1, Count(incremental, "cli.semanticGraphReused"));
@@ -113,6 +118,27 @@ public sealed class FullBuildOracleTests(ITestOutputHelper output)
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, text, new UTF8Encoding(false, true));
         }
+    }
+
+    private static void AssertCodeLinks(IndexSnapshot snapshot)
+    {
+        var source = snapshot.Files.Single(f => f.RelativePath == "A/Service.cs").SourceId;
+        var targets = snapshot.Graph.SymbolOccurrences.Where(o => o.Declarations?.Any(d => d.SourceId == source)
+            ?? o.Location?.SourceId == source).Select(o => o.LogicalSymbolId).ToHashSet(StringComparer.Ordinal);
+        foreach (var path in new[] { "docs/guide.md", "docs/reference.md", "root-guide.md" })
+        {
+            var document = snapshot.Files.Single(f => f.RelativePath == path).SourceId;
+            var link = path.StartsWith("docs/", StringComparison.Ordinal) ? "../A/Service.cs" : "A/Service.cs";
+            var mention = Assert.Single(snapshot.Graph.Nodes, n => n.Kind == HarnessNodeKind.SymbolMention
+                && n.Name == link && n.Location?.SourceId == document);
+            var edges = snapshot.Graph.Edges.Where(e => e.SourceNodeId == mention.Id && e.Kind == "documents_symbol").ToArray();
+            Assert.NotEmpty(edges);
+            Assert.All(edges, e => Assert.Contains(e.TargetNodeId, targets));
+        }
+        var nestedSource = snapshot.Files.Single(f => f.RelativePath == "docs/guide.md").SourceId;
+        var missing = Assert.Single(snapshot.Graph.Nodes, n => n.Kind == HarnessNodeKind.SymbolMention
+            && n.Name == "A/Service.cs" && n.Location?.SourceId == nestedSource);
+        Assert.DoesNotContain(snapshot.Graph.Edges, e => e.SourceNodeId == missing.Id && e.Kind == "documents_symbol");
     }
 
     private static void AssertFull(OracleObservation observation)

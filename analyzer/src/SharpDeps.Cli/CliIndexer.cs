@@ -526,16 +526,19 @@ public static class CliIndexer
             d.RelativePath, d.ExplicitId, d.ContentHash)).ToArray();
         var matches = MarkdownIdentityMatcher.MatchDocuments(oldDocuments, markdown.Select(m =>
             new MarkdownDocumentMatchInput(m.Input.File.RelativePath, m.ExplicitId, m.Input.File.ContentHash)).ToArray(), token);
+        var matchesByPath = matches.ToDictionary(m => m.RelativePath, StringComparer.Ordinal);
+        var previousByUuid = (previous?.Documents ?? []).ToDictionary(d => d.DocumentUuid);
+        CliGraphAccumulator? accumulator = null;
         var identities = new List<IndexDocumentIdentity>();
         var projections = new List<(InputText Input, MarkdownGraphProjection Projection, MarkdownPreparedInput Prepared)>();
         foreach (var item in markdown)
         {
             using var markdownMetrics = PhaseMetrics.Measure("markdown.identity-project-merge");
             token.ThrowIfCancellationRequested();
-            var match = matches.Single(m => m.RelativePath == item.Input.File.RelativePath);
+            var match = matchesByPath[item.Input.File.RelativePath];
             if (match.Reason == "duplicate-explicit-id") throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
             var uuid = match.DocumentUuid ?? (allocateIdentity?.Invoke() ?? Guid.NewGuid());
-            var old = previous?.Documents.SingleOrDefault(d => d.DocumentUuid == uuid);
+            var old = previousByUuid.GetValueOrDefault(uuid);
             var scope = old?.ScopeId ?? workspaceId;
             var request = new MarkdownGraphRequest(item.Input.Text, options.WorkspaceUuid, uuid, scope,
                 item.Input.File.SourceId, item.Input.File.ContentHash, snapshotId, generation);
@@ -553,15 +556,26 @@ public static class CliIndexer
                 scope, sections.Snapshot.ParserVersion, sections.Snapshot.ContractVersion, sections.Snapshot.ProfileId,
                 sections.Snapshot.OptionsHash, sections.Snapshot.Sections.Select(s =>
                     new IndexSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray()));
-            graph = Merge(graph, projection.Graph);
+            accumulator ??= new CliGraphAccumulator(graph);
+            accumulator.Add(projection.Graph);
             projections.Add((item.Input, projection, prepared));
             if (match.DocumentUuid is null && match.Candidates.Count != 0)
                 diagnostics["cli.documentIdentityAmbiguous"] = diagnostics.GetValueOrDefault("cli.documentIdentityAmbiguous") + 1;
         }
+        using (PhaseMetrics.Measure("markdown.graph-freeze"))
+            graph = accumulator?.Freeze() ?? graph;
+        var sources = projections.Count == 0 ? Array.Empty<InputText>()
+            : manifest.Values.Where(i => i.File.Kind == "source").ToArray();
+        var aliasesByDirectory = new Dictionary<string, IReadOnlyDictionary<string, string>>(PathComparer);
         foreach (var (input, projection, prepared) in projections)
         {
             using var mentionMetrics = PhaseMetrics.Measure("markdown.mentions");
-            var aliases = CodeAliases(Path.GetDirectoryName(input.AbsolutePath)!, manifest.Values.Where(i => i.File.Kind == "source"));
+            var directory = Path.GetDirectoryName(input.AbsolutePath)!;
+            if (!aliasesByDirectory.TryGetValue(directory, out var aliases))
+            {
+                aliases = CodeAliases(directory, sources);
+                aliasesByDirectory.Add(directory, aliases);
+            }
             var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, new(codeCatalog, catalogSymbols, aliases),
                 cancellationToken: token);
             graph = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
@@ -902,21 +916,6 @@ public static class CliIndexer
     private static string InsideRoot(string root, string path) => CliPaths.InRoot(root, path);
     private static void RejectLinks(string path) => CliPaths.RejectLinks(path);
 
-    private static HarnessGraphEnvelope Merge(HarnessGraphEnvelope left, HarnessGraphEnvelope right)
-    {
-        if (left.WorkspaceId != right.WorkspaceId || left.SnapshotId != right.SnapshotId || left.Generation != right.Generation
-            || (left.Markdown is not null && right.Markdown is not null && left.Markdown != right.Markdown))
-            throw new CliIndexException("CLI_GRAPH_MERGE_CONFLICT");
-        return left with { Nodes = MergeById(left.Nodes, right.Nodes, n => n.Id),
-            Variants = MergeById(left.Variants, right.Variants, v => v.Id),
-            SymbolOccurrences = MergeById(left.SymbolOccurrences, right.SymbolOccurrences, o => o.Id),
-            Edges = MergeById(left.Edges, right.Edges, e => e.Id),
-            LegacyReferences = Array.AsReadOnly(left.LegacyReferences.Concat(right.LegacyReferences).Distinct().ToArray()),
-            Markdown = left.Markdown ?? right.Markdown,
-            Coverage = left.Coverage == HarnessCoverage.Failed || right.Coverage == HarnessCoverage.Failed ? HarnessCoverage.Failed
-                : left.Coverage == HarnessCoverage.Partial || right.Coverage == HarnessCoverage.Partial ? HarnessCoverage.Partial : HarnessCoverage.CompleteWithinScope };
-    }
-
     private static HarnessGraphEnvelope AlignCompilationLocations(HarnessGraphEnvelope graph, IReadOnlyDictionary<string, int> offsets)
     {
         // Roslyn may consume a real UTF-8 BOM, whereas the saved-source reader retains U+FEFF.
@@ -946,18 +945,6 @@ public static class CliIndexer
         }
     }
 
-    private static IReadOnlyList<T> MergeById<T>(IEnumerable<T> left, IEnumerable<T> right, Func<T, string> id) where T : notnull
-    {
-        var merged = left.ToDictionary(id, StringComparer.Ordinal);
-        foreach (var item in right)
-        {
-            if (merged.TryGetValue(id(item), out var old) && !EqualityComparer<T>.Default.Equals(old, item))
-                throw new CliIndexException("CLI_GRAPH_MERGE_CONFLICT");
-            merged[id(item)] = item;
-        }
-        return Array.AsReadOnly(merged.Values.OrderBy(id, StringComparer.Ordinal).ToArray());
-    }
-
     private static IReadOnlyList<MarkdownSymbolCandidate> MakeCatalog(HarnessGraphEnvelope graph, SymbolIndex index,
         IReadOnlyList<CollectedEvidence> evidence, IReadOnlyDictionary<string, string> projectPaths)
     {
@@ -967,6 +954,9 @@ public static class CliIndexer
         var projects = graph.Variants.ToDictionary(v => v.Id, v => projectPaths[v.ProjectId], StringComparer.Ordinal);
         var types = index.Types.ToDictionary(t => t.Id, StringComparer.Ordinal);
         var namespaces = index.Namespaces.ToDictionary(n => n.Id, n => n.Name, StringComparer.Ordinal);
+        var externalIds = graph.Nodes.Where(n => n.Kind == HarnessNodeKind.ExternalSymbol)
+            .Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+        var workspaceUuid = Guid.ParseExact(graph.WorkspaceId[3..], "N");
         var result = new List<MarkdownSymbolCandidate>();
         foreach (var type in index.Types)
             Add(type.Id, type.FullName, type.Name, type.DocumentationId, type.NamespaceId is { } ns ? namespaces.GetValueOrDefault(ns) : null);
@@ -981,9 +971,9 @@ public static class CliIndexer
             var typeName = symbol.TypeName.StartsWith("global::", StringComparison.Ordinal) ? symbol.TypeName[8..] : symbol.TypeName;
             var shortName = typeName.Split('.').Last().Split('<')[0];
             // A member call also creates a proven type node, even without its own occurrence/legacy row.
-            var typeId = HarnessIdentity.ExternalSymbolId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
+            var typeId = HarnessIdentity.ExternalSymbolId(workspaceUuid,
                 symbol.AssemblyIdentity, "type", symbol.TypeCanonicalSignature);
-            if (graph.Nodes.Any(n => n.Id == typeId && n.Kind == HarnessNodeKind.ExternalSymbol)
+            if (externalIds.Contains(typeId)
                 && !(legacy.GetValueOrDefault(symbol.LegacyTypeId)?.Length > 0))
                 result.Add(new(typeId, typeName, shortName,
                     symbol.TypeCanonicalSignature.StartsWith("doc:", StringComparison.Ordinal) ? symbol.TypeCanonicalSignature[4..] : null));

@@ -78,6 +78,12 @@ public sealed class CliMarkdownInputTests
         var committed = JsonSerializer.Serialize(current.Snapshot(), QueryJson.Options);
         var unchanged = await CliIndexer.BuildForPublicationAsync(fixture.Options, partial.Snapshot, deadline.Token);
         Assert.Equal(Assert.Single(partial.Snapshot.Documents).Sections, Assert.Single(unchanged.Snapshot.Documents).Sections);
+        const string duplicateId = "---\nsharpdeps:\n  id: duplicate\n---\n# Duplicate\n";
+        File.WriteAllText(fixture.MarkdownPath, duplicateId);
+        File.WriteAllText(Path.Combine(fixture.Root, "duplicate.md"), duplicateId);
+        var duplicate = await Assert.ThrowsAsync<CliIndexException>(() => CliIndexer.BuildForPublicationAsync(
+            fixture.Options, partial.Snapshot, deadline.Token));
+        Assert.Equal("CLI_MARKDOWN_ID_AMBIGUOUS", duplicate.Code);
         File.WriteAllBytes(fixture.MarkdownPath, [0xff]);
         await Assert.ThrowsAsync<CliIndexException>(() => CliIndexer.BuildForPublicationAsync(fixture.Options, partial.Snapshot, deadline.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CliIndexer.BuildForPublicationAsync(
