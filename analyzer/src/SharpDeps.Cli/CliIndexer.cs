@@ -468,8 +468,12 @@ public static class CliIndexer
                 var external = new ExternalTypeRegistry();
                 var declaration = new DeclarationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
                 var operation = new OperationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
-                var collected = operation.Collect([input], token);
-                var declared = declaration.CollectWithHarness([input], token);
+                OperationCollectionResult collected;
+                using (PhaseMetrics.Measure("collector.operation"))
+                    collected = operation.Collect([input], token);
+                DeclarationCollectionResult declared;
+                using (PhaseMetrics.Measure("collector.declaration"))
+                    declared = declaration.CollectWithHarness([input], token);
                 var ownEvidence = (declared.HarnessEvidence ?? declared.Evidence)
                     .Concat(collected.HarnessEvidence ?? collected.Evidence).ToArray();
                 extractions.Add(input.VariantId, new(symbolParts[input.VariantId], ownEvidence, collected.Stats));
@@ -705,7 +709,6 @@ public static class CliIndexer
             }
             using var inputMetrics = PhaseMetrics.Measure("input.capture-read-hash");
             var text = await ReadInput(path, token);
-            PhaseMetrics.Count("read.bytes", text.Bytes);
             inputBytes = checked(inputBytes + text.Bytes);
             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
                 throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
@@ -879,6 +882,7 @@ public static class CliIndexer
                 var pathLength = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
                 hash.AppendData(pathLength); hash.AppendData(pathBytes);
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+                using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
                 if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes) return null;
                 total = checked(total + stream.Length);
                 if (total > IndexSnapshotValidator.MaximumInputTotalBytes) return null;
@@ -891,7 +895,6 @@ public static class CliIndexer
                     if (read > expectedLength) return null;
                     content.AppendData(buffer, 0, bytes);
                 }
-                PhaseMetrics.Count("read.bytes", read);
                 if (read != expectedLength || stream.Length != expectedLength) return null;
                 hash.AppendData(content.GetHashAndReset()); RejectLinks(path);
             }
@@ -937,6 +940,7 @@ public static class CliIndexer
     {
         RejectLinks(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
         if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes)
             throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         var bytes = new byte[checked((int)stream.Length)];

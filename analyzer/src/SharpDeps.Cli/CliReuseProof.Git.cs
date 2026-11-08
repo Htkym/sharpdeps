@@ -1,5 +1,6 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
@@ -9,6 +10,7 @@ internal static partial class CliReuseProof
     // A different provider or an unproven filesystem keeps the full-extraction path.
     private static (bool Present, string Hash)? CaptureGit(string root, string sdk, ProofBudget parent)
     {
+        using var metrics = PhaseMetrics.Measure("reuse.git");
         for (var ancestor = Directory.GetParent(root); ancestor is not null; ancestor = ancestor.Parent)
             if (Exists(Path.Combine(ancestor.FullName, ".git"))) return null;
         var directory = Path.Combine(root, ".git");
@@ -24,7 +26,7 @@ internal static partial class CliReuseProof
         })
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            if (AddFile(Path.Combine(provider, path), path, hash, parent) != expected) return null;
+            if (AddFile(Path.Combine(provider, path), path, hash, parent, PhaseMetrics.ReadCategory.Sdk) != expected) return null;
         }
         var budget = new ProofBudget(parent.Token, parent, git: true);
         var first = GitInventory(directory, budget, validate: true);
@@ -53,7 +55,7 @@ internal static partial class CliReuseProof
                 required.Remove(relative);
                 if ((attributes & FileAttributes.Directory) != 0) { directories.Push(entry); continue; }
                 Append(hash, "file");
-                var digest = AddFile(entry, relative, hash, budget);
+                var digest = AddFile(entry, relative, hash, budget, PhaseMetrics.ReadCategory.Git);
                 if (validate && (relative is "config" or "HEAD" or "packed-refs" || relative.StartsWith("refs/", StringComparison.Ordinal)))
                 {
                     // Validate exactly the bytes included in this inventory, without following their references.
@@ -93,6 +95,7 @@ internal static partial class CliReuseProof
         CliPaths.RejectLinks(path);
         if ((Attributes(path) & (FileAttributes.Directory | FileAttributes.Device)) != 0) return null;
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Git, input);
         if (input.Length > 64 * 1024) return null;
         budget.Bytes(input.Length);
         var bytes = new byte[checked((int)input.Length)];

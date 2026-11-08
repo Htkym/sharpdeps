@@ -115,6 +115,95 @@ internal static class PhaseMetrics
             scope.Owner.Write(new { type = "decision", stage, reason });
     }
 
+    internal enum ReadCategory { Workspace, Sdk, Git, Package, Tool }
+
+    public static ReadObservation? ObserveRead(ReadCategory category, Stream input)
+    {
+        if (Ambient.Value is null)
+            return null;
+        var label = category switch
+        {
+            ReadCategory.Workspace => "workspace",
+            ReadCategory.Sdk => "sdk",
+            ReadCategory.Git => "git",
+            ReadCategory.Package => "package",
+            ReadCategory.Tool => "tool",
+            _ => null
+        };
+        if (label is null)
+            return null;
+        long? position = null;
+        try
+        {
+            position = input.Position;
+        }
+        catch (Exception error) when (IsDiagnosticFailure(error))
+        {
+        }
+        return new ReadObservation(label, input, position);
+    }
+
+    public static DurationReporter? ReportDurations(string source)
+        => Ambient.Value is { } scope && Label(source) ? new(scope.Owner, source) : null;
+
+    public sealed class DurationReporter(Run owner, string source)
+    {
+        public void Record(string operation, double? milliseconds, string? reason = null)
+        {
+            if (!Label(operation) || reason is not null && !Label(reason))
+                return;
+            if (milliseconds is { } value && (!double.IsFinite(value) || value < 0))
+            {
+                milliseconds = null;
+                reason = "invalid-elapsed";
+            }
+            owner.Write(new { type = "reported-duration", source, operation, elapsedMilliseconds = milliseconds,
+                reason, timing = "reported-operation-elapsed" });
+        }
+    }
+
+    public sealed class ReadObservation : IDisposable
+    {
+        private readonly string category;
+        private readonly Stream input;
+        private readonly long? start;
+        private readonly Scope scope;
+        private bool disposed;
+
+        internal ReadObservation(string category, Stream input, long? start)
+        {
+            this.category = category;
+            this.input = input;
+            this.start = start;
+            scope = Measure("input.read-" + category)!;
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+            disposed = true;
+            long? bytes = null;
+            string? reason = null;
+            try
+            {
+                var position = input.Position;
+                if (start is null)
+                    reason = "stream-position-unavailable";
+                else if (position < start.Value)
+                    reason = "invalid-stream-position";
+                else
+                    bytes = position - start.Value;
+            }
+            catch (Exception error) when (IsDiagnosticFailure(error))
+            {
+                reason = "stream-position-unavailable";
+            }
+            scope.Owner.Write(new { type = "read", phase = scope.Phase, spanId = scope.SpanId, parentSpanId = scope.ParentSpanId, category, bytes, reason });
+            scope.Dispose();
+        }
+    }
+
     private static bool Label(string value) => value.Length is > 0 and <= 96
         && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_');
     private static bool IsDiagnosticFailure(Exception error) => error is IOException or UnauthorizedAccessException
@@ -221,6 +310,8 @@ internal static class PhaseMetrics
     {
         internal Run Owner { get; }
         internal string Phase { get; }
+        internal long SpanId => id;
+        internal long? ParentSpanId => isRoot ? null : parent?.id;
         private readonly Scope? parent;
         private readonly long start = Stopwatch.GetTimestamp();
         private readonly bool isRoot;
@@ -268,8 +359,8 @@ internal static class PhaseMetrics
             {
                 type = "phase",
                 phase = Phase,
-                spanId = id,
-                parentSpanId = isRoot ? (long?)null : parent?.id,
+                spanId = SpanId,
+                parentSpanId = ParentSpanId,
                 startedMilliseconds = (start - Owner.StartTicks) * 1000d / Stopwatch.Frequency,
                 inclusiveMilliseconds = elapsed * 1000d / Stopwatch.Frequency,
                 measuredChildExclusiveMilliseconds = unfinished ? (double?)null : (elapsed - union) * 1000d / Stopwatch.Frequency,

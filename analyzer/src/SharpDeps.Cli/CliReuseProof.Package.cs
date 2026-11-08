@@ -1,5 +1,6 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -29,6 +30,7 @@ internal static partial class CliReuseProof
     private static bool CapturePackage(string root, string sdk, PackageSpec package, List<string> projects,
         List<string> imports, List<string> assets, ProofBudget budget, out (string Root, string Hash)? proof)
     {
+        using var metrics = PhaseMetrics.Measure("reuse.package");
         proof = null;
         if (!OperatingSystem.IsWindows() || Path.GetFileName(sdk) != "10.0.402"
             || Environment.GetEnvironmentVariable("NUGET_PACKAGES") is not { Length: > 0 } configured
@@ -38,7 +40,7 @@ internal static partial class CliReuseProof
             ("Sdks/Microsoft.NET.Sdk/tools/net10.0/Microsoft.NET.Build.Tasks.dll", "a673d48e1aa2ede63547cf63cc94d59b90b361512e13210943dc70171e1c1ed1"),
             ("Sdks/Microsoft.NET.Sdk/targets/Microsoft.PackageDependencyResolution.targets", "cb0a2cf6ea590fbd3dfbf333d32fc7ee1db3344908ab04dc31288c5591c5136c")
         })
-            if (Convert.ToHexString(SHA256.HashData(PackageBytes(Path.Combine(sdk, path), budget))).ToLowerInvariant() != expected) return false;
+            if (Convert.ToHexString(SHA256.HashData(PackageBytes(Path.Combine(sdk, path), budget, PhaseMetrics.ReadCategory.Sdk))).ToLowerInvariant() != expected) return false;
         var cache = CliPaths.Root(configured);
         var directory = CliPaths.Root(CliPaths.InRoot(cache, package.Id.ToLowerInvariant() + "/" + package.Version));
         // NuGet SourceRoot must not introduce an untracked Git repository above the cache.
@@ -76,7 +78,7 @@ internal static partial class CliReuseProof
                         directories.Push(path); continue;
                     }
                     if (!PackageFile(relative, package)) return null;
-                    var bytes = PackageBytes(path, budget);
+                    var bytes = PackageBytes(path, budget, PhaseMetrics.ReadCategory.Package);
                     total += bytes.Length;
                     if (total > 64L * 1024 * 1024 || !files.TryAdd(relative, bytes)) return null;
                 }
@@ -152,11 +154,13 @@ internal static partial class CliReuseProof
         }
     }
 
-    private static byte[] PackageBytes(string path, ProofBudget budget)
+    private static byte[] PackageBytes(string path, ProofBudget budget,
+        PhaseMetrics.ReadCategory category = PhaseMetrics.ReadCategory.Workspace)
     {
         CliPaths.RejectLinks(path);
         if ((Attributes(path) & (FileAttributes.Directory | FileAttributes.Device)) != 0) throw new IOException("Package input is not a file.");
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(category, input);
         if (input.Length > 64L * 1024 * 1024) throw new IOException("Package proof byte budget exceeded.");
         budget.Bytes(input.Length);
         var bytes = new byte[checked((int)input.Length)]; input.ReadExactly(bytes);

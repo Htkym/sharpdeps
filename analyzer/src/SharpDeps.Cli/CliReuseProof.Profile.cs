@@ -1,5 +1,6 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Xml;
 using System.Xml.Linq;
 using SharpDeps.Index;
@@ -19,6 +20,7 @@ internal static partial class CliReuseProof
     {
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var reader = XmlReader.Create(input, new XmlReaderSettings
         { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = IndexSnapshotValidator.MaximumInputFileBytes });

@@ -1253,8 +1253,10 @@ public sealed class CliTests
         Assert.Contains("unverified", saved.Json, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task WatchHashGuardRollsBackLostEventAndStoppedStageCannotPublish()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WatchHashGuardRollsBackLostEventAndStoppedStageCannotPublish(bool measured)
     {
         using var fixture = new Fixture();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -1272,8 +1274,11 @@ public sealed class CliTests
             await release.Task.WaitAsync(token);
             return new(original with { Graph = original.Graph with { Generation = 2, SnapshotId = "watch-staged" } }, () => { });
         });
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "watch-metrics");
         var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root,
             "--trusted", "--target", "App.csproj"]), fixture.Root, fixture.IndexPath, fixture.Uuid);
+        if (measured)
+            update = update with { Options = update.Options with { MetricsDirectory = directory } };
         owner.StartWatch(update, TimeSpan.FromSeconds(30));
         await entered.Task.WaitAsync(deadline.Token);
         owner.Watch!.SetNotificationsEnabled(false);
@@ -1300,6 +1305,24 @@ public sealed class CliTests
         Assert.Equal(original.Graph.Generation, final.Snapshot().Graph.Generation);
         Assert.Equal(original.Graph.Nodes.Select(node => node.Id), final.Snapshot().Graph.Nodes.Select(node => node.Id));
         Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), final.Search("Service").Select(hit => hit.NodeId));
+        if (measured)
+        {
+            var records = Directory.GetFiles(directory, "*.jsonl").Select(file => File.ReadAllText(file)).ToArray();
+            Assert.All(records, text => Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal));
+            var cycles = records.Select(text => text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => JsonSerializer.Deserialize<JsonElement>(line).GetProperty("payload")).ToArray())
+                .Where(events => events[0].GetProperty("operation").GetString() == "watch-cycle").ToArray();
+            Assert.Equal(2, cycles.Length);
+            Assert.Contains(cycles, events => events[^1].GetProperty("outcome").GetString() == "failed");
+            Assert.Contains(cycles, events => events[^1].GetProperty("outcome").GetString() == "cancelled");
+            Assert.All(cycles, events => Assert.Contains(events, value => value.GetProperty("type").GetString() == "phase"
+                && value.GetProperty("phase").GetString() == "watch.input-scan"));
+            Assert.Contains(cycles.SelectMany(events => events), value => value.GetProperty("type").GetString() == "phase"
+                && value.GetProperty("phase").GetString() == "watch.idle-wait");
+        }
+        else
+            Assert.False(Directory.Exists(directory));
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 /// <summary>Input hints and periodic reconciliation owned by the existing OS writer lease.</summary>
 internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate selection, TimeSpan resyncPeriod) : IAsyncDisposable
 {
@@ -91,31 +93,70 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
         {
             while (!stopped.IsCancellationRequested)
             {
+                using var metrics = PhaseMetrics.TryStart(selection.Options.MetricsDirectory, "watch-cycle", selection.Options.Root);
                 EnsureNative();
+                PhaseMetrics.Decision("watch.reconciliation", full ? "full-resync" : "notification");
+                PhaseMetrics.Decision("watch.notifications", NativeAvailable ? "available" : "unavailable");
+                var succeeded = false;
                 try
                 {
-                    await Task.Delay(100, stopped.Token); // one bounded settle interval per reconciliation
+                    using (PhaseMetrics.Measure("watch.settle"))
+                        await Task.Delay(100, stopped.Token); // one bounded settle interval per reconciliation
                     var captured = Volatile.Read(ref revision);
-                    var inputs = await CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, stopped.Token)
-                        ?? throw new CliFailure("CLI_INPUT_BUDGET_EXCEEDED", 4);
+                    string inputs;
+                    using (PhaseMetrics.Measure("watch.input-scan"))
+                        inputs = await CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, stopped.Token)
+                            ?? throw new CliFailure("CLI_INPUT_BUDGET_EXCEEDED", 4);
                     VerifyRevision(captured);
                     var update = selection with { Full = full, Options = selection.Options with { AllowSemanticReuse = !full } };
-                    var reply = await owner.UpdateAsync(update, "watch", stopped.Token, operationToken =>
+                    CoordinatorReply reply;
+                    using (PhaseMetrics.Measure("watch.update-wait"))
                     {
-                        VerifyRevision(captured);
-                        var current = CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, operationToken)
-                            .GetAwaiter().GetResult();
-                        if (current != inputs) throw new CliFailure("WATCH_INPUT_CHANGED", 3);
-                        VerifyRevision(captured);
-                    });
-                    if (reply.ErrorCode is { } code) owner.WatchFailed(this, code);
+                        reply = await owner.UpdateAsync(update, "watch", stopped.Token, operationToken =>
+                        {
+                            VerifyRevision(captured);
+                            var current = CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, operationToken)
+                                .GetAwaiter().GetResult();
+                            if (current != inputs)
+                                throw new CliFailure("WATCH_INPUT_CHANGED", 3);
+                            VerifyRevision(captured);
+                        });
+                    }
+                    if (reply.ErrorCode is { } code)
+                    {
+                        metrics?.Fail(code == "CANCELLED");
+                        owner.WatchFailed(this, code);
+                    }
+                    else
+                        succeeded = true;
+                }
+                catch (OperationCanceledException) when (stopped.IsCancellationRequested)
+                {
+                    metrics?.Fail(cancelled: true);
+                    throw;
                 }
                 catch (Exception error) when (error is not OutOfMemoryException
                     && !(error is OperationCanceledException && stopped.IsCancellationRequested))
-                { owner.WatchFailed(this, CliCoordinator.ErrorCode(error)); }
+                {
+                    metrics?.Fail(error is OperationCanceledException);
+                    owner.WatchFailed(this, CliCoordinator.ErrorCode(error));
+                }
 
                 // Even an unchanged root hash needs full extraction: ancestor config, SDK and external inputs may change.
-                full = !await wake.WaitAsync(resyncPeriod, stopped.Token);
+                try
+                {
+                    using (PhaseMetrics.Measure("watch.idle-wait"))
+                        full = !await wake.WaitAsync(resyncPeriod, stopped.Token);
+                    PhaseMetrics.Decision("watch.wakeup", full ? "periodic-resync" : "notification");
+                    if (succeeded)
+                        metrics?.Complete();
+                }
+                catch (OperationCanceledException) when (stopped.IsCancellationRequested)
+                {
+                    if (succeeded)
+                        metrics?.Fail(cancelled: true);
+                    throw;
+                }
                 if (full) owner.WatchDirty(this);
             }
         }

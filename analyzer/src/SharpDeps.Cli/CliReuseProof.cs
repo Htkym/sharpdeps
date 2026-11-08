@@ -102,17 +102,17 @@ internal static partial class CliReuseProof
             Append(dependencies, sdk);
             Append(dependencies, git.Value.Hash);
             if (package is not null) Append(dependencies, package.Value.Hash);
-            AddTree(sdk, "sdk", dependencies, budget);
+            AddTree(sdk, "sdk", dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             if (Environment.GetEnvironmentVariable("MSBuildEnableWorkloadResolver") == "false")
-                AddTree(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"), "dotnet/packs/Microsoft.NETCore.App.Ref", dependencies, budget);
-            else AddTree(Path.Combine(dotnetRoot, "packs"), "dotnet/packs", dependencies, budget);
+                AddTree(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"), "dotnet/packs/Microsoft.NETCore.App.Ref", dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
+            else AddTree(Path.Combine(dotnetRoot, "packs"), "dotnet/packs", dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             foreach (var name in new[] { "shared", "host", "sdk-manifests", "metadata" })
-                AddTree(Path.Combine(dotnetRoot, name), "dotnet/" + name, dependencies, budget);
+                AddTree(Path.Combine(dotnetRoot, name), "dotnet/" + name, dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             foreach (var entry in Entries(dotnetRoot, budget))
             {
                 var attributes = Attributes(entry);
                 if ((attributes & FileAttributes.Directory) == 0)
-                    AddFile(entry, "dotnet/" + Path.GetFileName(entry), dependencies, budget);
+                    AddFile(entry, "dotnet/" + Path.GetFileName(entry), dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             }
             Append(dependencies, "sdk-directory-inventory");
             foreach (var entry in Entries(sdkParent, budget))
@@ -123,7 +123,7 @@ internal static partial class CliReuseProof
             }
             var payload = CliPaths.Root(Path.GetFullPath(AppContext.BaseDirectory));
             Append(dependencies, payload);
-            AddTree(payload, "tool", dependencies, budget);
+            AddTree(payload, "tool", dependencies, budget, PhaseMetrics.ReadCategory.Tool);
             token.ThrowIfCancellationRequested();
             PhaseMetrics.Decision("reuse.proof-capture", "captured");
             return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant(), package?.Root);
@@ -228,6 +228,7 @@ internal static partial class CliReuseProof
         frameworkFree = false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var reader = XmlReader.Create(input, new XmlReaderSettings
         {
@@ -310,6 +311,7 @@ internal static partial class CliReuseProof
             || !File.Exists(Path.Combine(project, name[..name.IndexOf(".nuget.g.", StringComparison.Ordinal)]))) return false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var reader = XmlReader.Create(input, new XmlReaderSettings
         { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = IndexSnapshotValidator.MaximumInputFileBytes });
@@ -352,6 +354,7 @@ internal static partial class CliReuseProof
         if (Path.GetFileName(Path.GetDirectoryName(path)) != "obj") return false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var document = JsonDocument.Parse(input, new JsonDocumentOptions { MaxDepth = 64 });
         var assets = document.RootElement;
@@ -554,7 +557,8 @@ internal static partial class CliReuseProof
         return attributes;
     }
 
-    internal static void AddTree(string directory, string label, IncrementalHash hash, ProofBudget budget)
+    internal static void AddTree(string directory, string label, IncrementalHash hash, ProofBudget budget,
+        PhaseMetrics.ReadCategory category = PhaseMetrics.ReadCategory.Workspace)
     {
         Append(hash, label);
         if (!Exists(directory)) { Append(hash, "absent"); return; }
@@ -571,7 +575,7 @@ internal static partial class CliReuseProof
             }
             if (files.Count <= 1)
             {
-                foreach (var file in files) AddFile(file, Path.GetRelativePath(directory, file), hash, budget);
+                foreach (var file in files) AddFile(file, Path.GetRelativePath(directory, file), hash, budget, category);
                 continue;
             }
             var fingerprints = new (long Length, string Digest)[files.Count];
@@ -579,7 +583,7 @@ internal static partial class CliReuseProof
                 () => ArrayPool<byte>.Shared.Rent(65536),
                 (index, _, buffer) =>
                 {
-                    fingerprints[index] = ReadFile(files[index], budget, buffer);
+                    fingerprints[index] = ReadFile(files[index], budget, category, buffer);
                     return buffer;
                 }, buffer => ArrayPool<byte>.Shared.Return(buffer));
             // Only the owning thread appends to the ordered proof hash.
@@ -588,9 +592,10 @@ internal static partial class CliReuseProof
         }
     }
 
-    private static string AddFile(string path, string label, IncrementalHash hash, ProofBudget budget)
+    private static string AddFile(string path, string label, IncrementalHash hash, ProofBudget budget,
+        PhaseMetrics.ReadCategory category = PhaseMetrics.ReadCategory.Workspace)
     {
-        var fingerprint = ReadFile(path, budget);
+        var fingerprint = ReadFile(path, budget, category);
         AppendFile(hash, label, fingerprint);
         return fingerprint.Digest;
     }
@@ -602,11 +607,13 @@ internal static partial class CliReuseProof
         Append(hash, fingerprint.Digest);
     }
 
-    private static (long Length, string Digest) ReadFile(string path, ProofBudget budget, byte[]? buffer = null)
+    private static (long Length, string Digest) ReadFile(string path, ProofBudget budget,
+        PhaseMetrics.ReadCategory category, byte[]? buffer = null)
     {
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(category, input);
         var length = input.Length;
         budget.Bytes(length);
         using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -622,7 +629,6 @@ internal static partial class CliReuseProof
         if (read != length || input.Length != length) throw new IOException("Reuse input changed.");
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
-        PhaseMetrics.Count("read.bytes", read);
         return (length, Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant());
     }
 

@@ -78,6 +78,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
             if (Attributes(path) is not { } attributes || (attributes & FileAttributes.Directory) != 0)
                 throw Changed(input.RelativePath);
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
             if (stream.Length != input.ByteLength) throw Changed(input.RelativePath);
             var bytes = new byte[(int)input.ByteLength];
             var offset = 0;

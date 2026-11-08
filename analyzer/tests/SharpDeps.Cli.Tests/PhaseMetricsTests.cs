@@ -1,6 +1,9 @@
 namespace SharpDeps.Cli.Tests;
 
 using System.Diagnostics;
+using System.Security.Cryptography;
+using Microsoft.CodeAnalysis.MSBuild;
+using SharpDeps.Analysis.Roslyn;
 using System.Text.Json;
 using SharpDeps.Analysis.Core.Diagnostics;
 using SharpDeps.Analysis.Roslyn.Evidence;
@@ -73,6 +76,11 @@ public sealed class PhaseMetricsTests(ITestOutputHelper output)
         {
             for (var index = 0; index < 100; index++)
                 PhaseMetrics.Count("observed", index);
+            using var input = new MemoryStream([1, 2, 3]);
+            using (PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input))
+                Assert.Equal(1, input.ReadByte());
+            using var progress = SemanticLoadMetrics.TryCreate()!;
+            progress.Report(ProjectLoadOperation.Evaluate, TimeSpan.FromMilliseconds(1));
             failing.Complete();
         }
         Assert.False(PhaseMetrics.Enabled);
@@ -188,6 +196,146 @@ public sealed class PhaseMetricsTests(ITestOutputHelper output)
         Assert.False(PhaseMetrics.Enabled);
     }
 
+    [Theory]
+    [InlineData(0, "workspace")]
+    [InlineData(1, "sdk")]
+    [InlineData(2, "git")]
+    [InlineData(3, "package")]
+    [InlineData(4, "tool")]
+    public void ReadCategoriesPreserveTheExistingOrderedProof(int categoryValue, string label)
+    {
+        using var fixture = new MetricsFixture();
+        var category = (PhaseMetrics.ReadCategory)categoryValue;
+        var inputs = Path.Combine(fixture.Directory, "inputs");
+        System.IO.Directory.CreateDirectory(inputs);
+        File.WriteAllBytes(Path.Combine(inputs, "first"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(inputs, "second"), [4, 5, 6, 7]);
+        using var expected = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        CliReuseProof.AddTree(inputs, "fixture", expected, new(default), category);
+        using var actual = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var repeated = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using (var run = PhaseMetrics.Start(Path.Combine(fixture.Directory, "metrics"), "fixture")!)
+        {
+            using (PhaseMetrics.Measure("proof.first"))
+                CliReuseProof.AddTree(inputs, "fixture", actual, new(default), category);
+            using (PhaseMetrics.Measure("proof.second"))
+                CliReuseProof.AddTree(inputs, "fixture", repeated, new(default), category);
+            run.Complete();
+        }
+        var expectedDigest = expected.GetHashAndReset();
+        Assert.Equal(expectedDigest, actual.GetHashAndReset());
+        Assert.Equal(expectedDigest, repeated.GetHashAndReset());
+        var events = Read(Assert.Single(System.IO.Directory.GetFiles(Path.Combine(fixture.Directory, "metrics"), "*.jsonl")));
+        var reads = events.Where(e => Payload(e, "read")).Select(e => e.GetProperty("payload")).ToArray();
+        var phases = events.Where(e => Payload(e, "phase")).Select(e => e.GetProperty("payload")).ToArray();
+        Assert.Equal(4, reads.Length);
+        Assert.All(reads, read => Assert.Equal(label, read.GetProperty("category").GetString()));
+        Assert.Equal(14, reads.Sum(read => read.GetProperty("bytes").GetInt64()));
+        Assert.All(reads, read =>
+        {
+            Assert.Equal(JsonValueKind.Null, read.GetProperty("reason").ValueKind);
+            var phase = Assert.Single(phases, phase => phase.GetProperty("spanId").GetInt64() == read.GetProperty("spanId").GetInt64());
+            Assert.Equal(read.GetProperty("phase").GetString(), phase.GetProperty("phase").GetString());
+            Assert.Equal(read.GetProperty("parentSpanId").GetInt64(), phase.GetProperty("parentSpanId").GetInt64());
+        });
+        Assert.Equal(4, reads.Select(read => read.GetProperty("spanId").GetInt64()).Distinct().Count());
+        foreach (var pass in new[] { "proof.first", "proof.second" })
+        {
+            var parent = Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == pass);
+            var passReads = reads.Where(read => read.GetProperty("parentSpanId").GetInt64() == parent.GetProperty("spanId").GetInt64()).ToArray();
+            Assert.Equal(2, passReads.Length);
+            Assert.Equal(7, passReads.Sum(read => read.GetProperty("bytes").GetInt64()));
+        }
+        Assert.False(PhaseMetrics.Enabled);
+    }
+    [Fact]
+    public void ReadsObserveExistingBytesDuringCancellationAndDoNotReadForDiagnostics()
+    {
+        using var fixture = new MetricsFixture();
+        using var input = new ReadProbeStream([1, 2, 3, 4]);
+        input.PositionUnavailable = true;
+        Assert.Null(PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input));
+        Assert.Equal(0, input.PositionRequests);
+        input.PositionUnavailable = false;
+        using (var run = PhaseMetrics.Start(fixture.Directory, "fixture")!)
+        {
+            Assert.Throws<OperationCanceledException>((Action)(() =>
+            {
+                using var read = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
+                Assert.Equal(1, input.ReadByte());
+                Assert.Equal(2, input.ReadByte());
+                throw new OperationCanceledException();
+            }));
+            input.PositionUnavailable = true;
+            using (PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Git, input))
+                Assert.Equal(3, input.ReadByte());
+            run.Fail(cancelled: true);
+        }
+        Assert.Equal(3, input.ReadCalls);
+        var events = Read(Assert.Single(System.IO.Directory.GetFiles(fixture.Directory, "*.jsonl")));
+        var reads = events.Where(e => Payload(e, "read")).Select(e => e.GetProperty("payload")).ToArray();
+        Assert.Equal(2, reads.Length);
+        Assert.Equal(2, reads[0].GetProperty("bytes").GetInt64());
+        Assert.Equal(JsonValueKind.Null, reads[1].GetProperty("bytes").ValueKind);
+        Assert.Equal("stream-position-unavailable", reads[1].GetProperty("reason").GetString());
+        Assert.Equal("cancelled", events[^1].GetProperty("payload").GetProperty("outcome").GetString());
+        Assert.False(PhaseMetrics.Enabled);
+    }
+
+    [Fact]
+    public async Task MsbuildDurationsBindToTheRunWithoutAmbientCallbackContext()
+    {
+        using var fixture = new MetricsFixture();
+        Assert.Null(SemanticLoadMetrics.TryCreate());
+        using (var run = PhaseMetrics.Start(fixture.Directory, "fixture")!)
+        {
+            using var progress = SemanticLoadMetrics.TryCreate()!;
+            Task callback;
+            using (ExecutionContext.SuppressFlow())
+                callback = Task.Run(() => progress.Report(ProjectLoadOperation.Evaluate, TimeSpan.FromMilliseconds(12)));
+            await callback;
+            progress.Report(ProjectLoadOperation.Evaluate, TimeSpan.FromMilliseconds(7));
+            progress.Report(ProjectLoadOperation.Resolve, TimeSpan.FromMilliseconds(-1));
+            progress.Report((ProjectLoadOperation)999, TimeSpan.FromMilliseconds(99));
+            progress.Dispose();
+            progress.Report(ProjectLoadOperation.Build, TimeSpan.FromMilliseconds(100));
+            run.Fail(cancelled: true);
+        }
+        var events = Read(Assert.Single(System.IO.Directory.GetFiles(fixture.Directory, "*.jsonl")));
+        var durations = events.Where(e => Payload(e, "reported-duration")).Select(e => e.GetProperty("payload")).ToArray();
+        Assert.Equal(5, durations.Length);
+        Assert.All(durations, value => Assert.Equal("reported-operation-elapsed", value.GetProperty("timing").GetString()));
+        Assert.Equal(new[] { 12d, 7d }, durations.Where(value => value.GetProperty("operation").GetString() == "evaluate")
+            .Select(value => value.GetProperty("elapsedMilliseconds").GetDouble()));
+        var missing = Assert.Single(durations, value => value.GetProperty("operation").GetString() == "build");
+        Assert.Equal(JsonValueKind.Null, missing.GetProperty("elapsedMilliseconds").ValueKind);
+        Assert.Equal("no-progress-event", missing.GetProperty("reason").GetString());
+        Assert.Contains(durations, value => value.GetProperty("reason").GetString() == "invalid-elapsed");
+        Assert.Contains(durations, value => value.GetProperty("reason").GetString() == "unsupported-progress-operation");
+        Assert.DoesNotContain(events, value => Payload(value, "phase") && value.GetProperty("payload").GetProperty("phase").GetString() == "semantic.msbuild-progress");
+        Assert.False(PhaseMetrics.Enabled);
+    }
+
+    private sealed class ReadProbeStream(byte[] bytes) : MemoryStream(bytes)
+    {
+        internal bool PositionUnavailable { get; set; }
+        internal int PositionRequests { get; private set; }
+        internal int ReadCalls { get; private set; }
+        public override long Position
+        {
+            get
+            {
+                PositionRequests++;
+                return PositionUnavailable ? throw new NotSupportedException("private diagnostic failure") : base.Position;
+            }
+            set => base.Position = value;
+        }
+        public override int ReadByte()
+        {
+            ReadCalls++;
+            return base.ReadByte();
+        }
+    }
     private static bool Payload(JsonElement value, string type) => value.GetProperty("payload").GetProperty("type").GetString() == type;
     private static JsonElement[] Read(string path) => File.ReadLines(path).Select(line =>
     {

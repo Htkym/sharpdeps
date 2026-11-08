@@ -115,7 +115,8 @@ public static class SemanticLoader
         try
         {
             using var openMetrics = PhaseMetrics.Measure("semantic.msbuild-open");
-            solution = await OpenAsync(workspace, targetPath, cancellationToken);
+            using var progress = SemanticLoadMetrics.TryCreate();
+            solution = await OpenAsync(workspace, targetPath, progress, cancellationToken);
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -970,6 +971,7 @@ public static class SemanticLoader
     private static Task<Solution> OpenAsync(
         MSBuildWorkspace workspace,
         string targetPath,
+        IProgress<ProjectLoadProgress>? progress,
         CancellationToken cancellationToken)
     {
         var extension = Path.GetExtension(targetPath);
@@ -977,18 +979,19 @@ public static class SemanticLoader
             || string.Equals(extension, ".vbproj", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".fsproj", StringComparison.OrdinalIgnoreCase))
         {
-            return OpenProjectAsync(workspace, targetPath, cancellationToken);
+            return OpenProjectAsync(workspace, targetPath, progress, cancellationToken);
         }
 
-        return workspace.OpenSolutionAsync(targetPath, cancellationToken: cancellationToken);
+        return workspace.OpenSolutionAsync(targetPath, progress: progress, cancellationToken: cancellationToken);
     }
 
     private static async Task<Solution> OpenProjectAsync(
         MSBuildWorkspace workspace,
         string projectPath,
+        IProgress<ProjectLoadProgress>? progress,
         CancellationToken cancellationToken)
     {
-        var project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken);
+        var project = await workspace.OpenProjectAsync(projectPath, progress: progress, cancellationToken: cancellationToken);
         return project.Solution;
     }
 }
