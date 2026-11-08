@@ -54,7 +54,17 @@ internal sealed class CoordinatorExecutor(IndexWriter writer) : IDisposable
     private CliSdkSelection? selection;
     private readonly MarkdownPreparedCache preparedCache = new();
     private readonly CliSemanticSession semanticSession = new();
-    public void Dispose() => semanticSession.Dispose();
+    public void Dispose()
+    {
+        try
+        {
+            semanticSession.Dispose();
+        }
+        finally
+        {
+            preparedCache.Clear();
+        }
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal Task<CliIndexBuild> BuildAsync(CoordinatorUpdate update, CancellationToken token)
@@ -91,24 +101,42 @@ internal sealed class CoordinatorExecutor(IndexWriter writer) : IDisposable
         }
         catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && full) { }
         var candidate = preparedCache.BeginUpdate();
-        using var semantic = semanticSession.BeginUpdate(full);
-        if (full)
-            options = options with { AllowSemanticReuse = false };
-        var build = await CliIndexer.BuildForPublicationAsync(options, previous, token, null, null, null, candidate, semantic);
-        var directory = Path.GetDirectoryName(options.Target)!;
-        var prepared = build with
+        try
         {
-            VerifySelection = PublicationGuard(current, directory, build.VerifySelection),
-            AdoptCommittedState = () =>
+            using var semantic = semanticSession.BeginUpdate(full);
+            if (full)
+                options = options with { AllowSemanticReuse = false };
+            var build = await CliIndexer.BuildForPublicationAsync(options, previous, token, null, null, null, candidate, semantic);
+            var directory = Path.GetDirectoryName(options.Target)!;
+            var prepared = build with
             {
-                semantic.Adopt(build.Snapshot.Graph.Generation);
-                candidate.Adopt();
-            },
-            DiscardPreparedState = semantic.Discard,
-            VerifyQueryInputs = build.VerifyQueryInputs is not { } verify ? null : QueryGuard(current, directory, verify)
-        };
-        semantic.Detach();
-        return prepared;
+                VerifySelection = PublicationGuard(current, directory, build.VerifySelection),
+                AdoptCommittedState = () =>
+                {
+                    semantic.Adopt(build.Snapshot.Graph.Generation);
+                    candidate.Adopt();
+                },
+                DiscardPreparedState = () =>
+                {
+                    try
+                    {
+                        semantic.Discard();
+                    }
+                    finally
+                    {
+                        candidate.Dispose();
+                    }
+                },
+                VerifyQueryInputs = build.VerifyQueryInputs is not { } verify ? null : QueryGuard(current, directory, verify)
+            };
+            semantic.Detach();
+            return prepared;
+        }
+        catch
+        {
+            candidate.Dispose();
+            throw;
+        }
     }
 
     private static Func<CancellationToken, SharpDeps.Query.QueryInputInventory> QueryGuard(CliSdkSelection current,
