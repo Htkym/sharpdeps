@@ -17,9 +17,10 @@ internal static class PhaseMetrics
             return null;
         try
         {
-            if (!IsOutputIsolated(directory, workspaceRoot, DependencyRoots()))
+            var output = IsolatedDirectory(directory, workspaceRoot, DependencyRoots());
+            if (output is null)
                 return null;
-            return Start(directory, operation);
+            return StartCore(output, operation);
         }
         catch (Exception error) when (IsDiagnosticFailure(error))
         {
@@ -29,23 +30,38 @@ internal static class PhaseMetrics
 
     internal static bool IsOutputIsolated(string directory, string workspaceRoot, IEnumerable<string> dependencyRoots)
     {
-        if (!Path.IsPathFullyQualified(directory))
+        try
+        {
+            return IsolatedDirectory(directory, workspaceRoot, dependencyRoots) is not null;
+        }
+        catch (Exception error) when (IsDiagnosticFailure(error))
+        {
             return false;
-        var relative = Path.GetRelativePath(workspaceRoot, directory);
+        }
+    }
+
+    private static string? IsolatedDirectory(string directory, string workspaceRoot, IEnumerable<string> dependencyRoots)
+    {
+        var output = MetricsPath.Canonicalize(directory);
+        var workspace = MetricsPath.Canonicalize(workspaceRoot);
+        var relative = Path.GetRelativePath(workspace, output);
         if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || !relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0].Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase))
-            return false;
+            return null;
         foreach (var dependency in dependencyRoots)
-            if (!Path.IsPathFullyQualified(dependency) || Contains(dependency, directory) || Contains(directory, dependency))
-                return false;
-        return true;
+        {
+            var input = MetricsPath.Canonicalize(dependency);
+            if (Contains(input, output) || Contains(output, input))
+                return null;
+        }
+        return output;
     }
 
     private static bool Contains(string root, string path)
     {
         // Case-insensitive comparison is conservative on case-sensitive filesystems.
-        var parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        var child = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var parent = Path.TrimEndingDirectorySeparator(root);
+        var child = Path.TrimEndingDirectorySeparator(path);
         return child.Equals(parent, StringComparison.OrdinalIgnoreCase)
             || child.StartsWith(Path.EndsInDirectorySeparator(parent) ? parent : parent + Path.DirectorySeparatorChar,
                 StringComparison.OrdinalIgnoreCase);
@@ -66,20 +82,22 @@ internal static class PhaseMetrics
     {
         try
         {
-            if (!Label(operation) || !Path.IsPathFullyQualified(directory))
-                return null;
-            for (var ancestor = new DirectoryInfo(directory); ancestor is not null; ancestor = ancestor.Parent)
-                if (ancestor.Exists && (ancestor.Attributes & FileAttributes.ReparsePoint) != 0)
-                    return null;
-            Directory.CreateDirectory(directory);
-            var id = Guid.NewGuid().ToString("N");
-            var stream = new FileStream(Path.Combine(directory, id + ".jsonl"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-            return new Run(id, operation, new StreamWriter(stream, new UTF8Encoding(false)));
+            return Label(operation) ? StartCore(MetricsPath.Canonicalize(directory), operation) : null;
         }
         catch (Exception error) when (IsDiagnosticFailure(error))
         {
             return null;
         }
+    }
+
+    private static Run? StartCore(string directory, string operation)
+    {
+        if (!Label(operation))
+            return null;
+        Directory.CreateDirectory(directory);
+        var id = Guid.NewGuid().ToString("N");
+        var stream = new FileStream(Path.Combine(directory, id + ".jsonl"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        return new Run(id, operation, new StreamWriter(stream, new UTF8Encoding(false)));
     }
 
     public static Scope? Measure(string phase)
@@ -101,7 +119,7 @@ internal static class PhaseMetrics
         && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_');
     private static bool IsDiagnosticFailure(Exception error) => error is IOException or UnauthorizedAccessException
         or ArgumentException or NotSupportedException or System.Security.SecurityException or InvalidOperationException
-        or System.ComponentModel.Win32Exception;
+        or System.ComponentModel.Win32Exception or DllNotFoundException or EntryPointNotFoundException or BadImageFormatException;
 
     public sealed class Run : IDisposable
     {
