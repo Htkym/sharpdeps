@@ -15,9 +15,11 @@ public sealed class IndexReader : IDisposable
     private readonly int schemaVersion;
     private IndexSnapshot? cachedSnapshot;
     private bool disposed;
-    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion)
-    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion; }
+    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath)
+    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath; }
     public string ManifestHash { get; }
+    public string IndexPath { get; }
+    public int SchemaVersion => schemaVersion;
     public static IndexReader Open(string indexPath,Guid workspaceUuid,CancellationToken token=default)
     {
         using var metricsScope = PhaseMetrics.Measure("reader.open");
@@ -55,7 +57,7 @@ public sealed class IndexReader : IDisposable
             token.ThrowIfCancellationRequested();
             if(header.Generation!=row.GetInt64(0)||header.SnapshotId!=row.GetString(1)||header.WorkspaceId!=workspace)
                 throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved generation metadata disagrees with the graph.");
-            var result=new IndexReader(connection,transaction,header,row.GetString(2),schemaVersion);row.Close();
+            var result=new IndexReader(connection,transaction,header,row.GetString(2),schemaVersion,path);row.Close();
             _=result.Snapshot(token);token.ThrowIfCancellationRequested();return result;
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)

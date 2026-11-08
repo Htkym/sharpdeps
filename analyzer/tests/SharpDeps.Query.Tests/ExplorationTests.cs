@@ -325,7 +325,7 @@ public sealed class ExplorationTests
         using (var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true))
             writer.Commit(IndexStage.Create(fixture.Snapshot));
         using var reader = IndexReader.Open(path, workspace);
-        var pinned = new PinnedQueryIndex(reader);
+        var pinned = new PinnedQueryIndex(reader, default, fixture.Root);
         var prepared = pinned.PrepareExploration(default);
         Assert.Same(reader.Snapshot(), prepared.saved);
         Assert.Same(prepared, pinned.PrepareExploration(default));
@@ -339,6 +339,129 @@ public sealed class ExplorationTests
         Assert.Throws<OperationCanceledException>(() => pinned.PrepareExploration(cancellation.Token));
         reader.Dispose();
         Assert.Throws<ObjectDisposedException>(() => pinned.PrepareExploration(default));
+        using var reopened = IndexReader.Open(path, workspace);
+        var replacement = new PinnedQueryIndex(reopened, default, fixture.Root);
+        Assert.Same(prepared, replacement.PrepareExploration(default));
+        Assert.Equal(expected.Text, new ExplorationService(replacement, new QueryWorkspace(fixture.Root), true).Execute(request).Text);
+    }
+
+    [Fact]
+    public async Task SharedPreparationKeepsFourReaderPinsAndTheirFtsGenerationTogether()
+    {
+        using var fixture = new Fixture(dense: true);
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var path = Path.Combine(fixture.Root, ".sharpdeps", "shared.sqlite");
+        using var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true);
+        writer.Commit(IndexStage.Create(fixture.Snapshot));
+        var cache = new ValidatedExplorationSnapshotCache(maximumEntries: 1);
+        using var originalReader = IndexReader.Open(path, workspace);
+        var original = new PinnedQueryIndex(originalReader, fixture.Root, cache);
+        var first = original.PrepareExploration(default);
+        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var expected = new ExplorationService(original, new QueryWorkspace(fixture.Root), true).Execute(request);
+        using var barrier = new Barrier(4);
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            using var reader = IndexReader.Open(path, workspace);
+            var pinned = new PinnedQueryIndex(reader, fixture.Root, cache);
+            Assert.True(barrier.SignalAndWait(TimeSpan.FromSeconds(20)));
+            var prepared = pinned.PrepareExploration(default);
+            var reply = new ExplorationService(pinned, new QueryWorkspace(fixture.Root), true).Execute(request);
+            return (prepared, reply.Text);
+        })));
+        foreach (var (prepared, text) in results)
+        {
+            Assert.Same(first, prepared);
+            Assert.Equal(expected.Text, text);
+        }
+
+        var changedText = fixture.Sources[Fixture.CorePath].Replace("value + count", "value - count", StringComparison.Ordinal);
+        File.WriteAllText(fixture.CoreFullPath, changedText, Fixture.Utf8);
+        var next = fixture.NewGeneration(changedText);
+        next = next with
+        {
+            Graph = next.Graph with { Edges = next.Graph.Edges.Where(edge => edge.Id != "direct-helper").ToArray() },
+            SearchText = next.SearchText.Select(row => row.NodeId == fixture.Pump
+                ? row with { Body = "NewGenerationSearchToken" } : row).ToArray()
+        };
+        writer.Commit(IndexStage.Create(next));
+        using var currentReader = IndexReader.Open(path, workspace);
+        var current = new PinnedQueryIndex(currentReader, fixture.Root, cache);
+        var replacement = current.PrepareExploration(default);
+        Assert.NotSame(first, replacement);
+        Assert.Equal(2, replacement.saved.Graph.Generation);
+        Assert.DoesNotContain(replacement.outgoing[fixture.RunInt], edge => edge.Id == "direct-helper");
+        Assert.Contains(current.Search("NewGenerationSearchToken", 100), hit => hit.NodeId == fixture.Pump);
+        Assert.Empty(original.Search("NewGenerationSearchToken", 100));
+        var rebuilt = new PinnedQueryIndex(originalReader, fixture.Root, cache).PrepareExploration(default);
+        Assert.NotSame(first, rebuilt);
+        Assert.Equal(JsonSerializer.Serialize(first.saved, QueryJson.Options), JsonSerializer.Serialize(rebuilt.saved, QueryJson.Options));
+        Assert.Contains(rebuilt.outgoing[fixture.RunInt], edge => edge.Id == "direct-helper");
+        var stale = new ExplorationService(original, new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", stale.OmissionReasons);
+        Assert.DoesNotContain(stale.Units, unit => unit.SourceId == Fixture.CorePath);
+        originalReader.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => original.PrepareExploration(default));
+        Assert.True(new ExplorationService(current, new QueryWorkspace(fixture.Root), true).Execute(request).Succeeded);
+    }
+
+    [Fact]
+    public void SharedPreparationSeparatesPayloadRootIndexAndSchemaAndBoundsRetention()
+    {
+        using var fixture = new Fixture();
+        var path = Path.Combine(fixture.Root, "index.sqlite");
+        var cache = new ValidatedExplorationSnapshotCache(maximumEntries: 8);
+        var saved = fixture.Snapshot;
+        ExplorationSnapshot Prepare(IndexSnapshot snapshot, string? root = null, string? index = null, int schema = 3)
+            => cache.GetOrCreate(snapshot, root ?? fixture.Root, index ?? path, schema, default);
+        var first = Prepare(saved);
+        Assert.Same(first, Prepare(saved, fixture.Root + Path.DirectorySeparatorChar, Path.Combine(fixture.Root, ".", "index.sqlite")));
+        Assert.NotSame(first, Prepare(saved, root: Path.Combine(fixture.Root, "other")));
+        Assert.NotSame(first, Prepare(saved, index: Path.Combine(fixture.Root, "other.sqlite")));
+        Assert.NotSame(first, Prepare(saved, schema: 2));
+        Assert.NotSame(first, Prepare(saved, index: Path.Combine(fixture.Root, "INDEX.sqlite")));
+        var changedGraph = saved with { Graph = saved.Graph with { Edges = [] } };
+        var changedSearch = saved with { SearchText = saved.SearchText.Select(row => row with { Body = "changed search payload" }).ToArray() };
+        IndexSnapshotValidator.Validate(changedGraph);
+        IndexSnapshotValidator.Validate(changedSearch);
+        Assert.NotSame(first, Prepare(changedGraph));
+        Assert.NotSame(first, Prepare(changedSearch));
+        Assert.Same(first, Prepare(saved));
+        var bytes = ExplorationSnapshotCache.Serialize(saved, Stream.Null, default).Bytes;
+        var bounded = new ValidatedExplorationSnapshotCache(maximumPayloadBytes: bytes);
+        var retained = bounded.GetOrCreate(saved, fixture.Root, path, 3, default);
+        var oversized = bounded.GetOrCreate(changedSearch, fixture.Root, path, 3, default);
+        Assert.NotSame(oversized, bounded.GetOrCreate(changedSearch, fixture.Root, path, 3, default));
+        Assert.Same(retained, bounded.GetOrCreate(saved, fixture.Root, path, 3, default));
+        bounded.GetOrCreate(changedGraph, fixture.Root, path, 3, default);
+        Assert.NotSame(retained, bounded.GetOrCreate(saved, fixture.Root, path, 3, default));
+    }
+
+    [Fact]
+    public void SharedPreparationDoesNotPublishCancelledDerivedDataOrEvictThePriorEntry()
+    {
+        using var fixture = new Fixture();
+        var cache = new ValidatedExplorationSnapshotCache(maximumEntries: 1);
+        var path = Path.Combine(fixture.Root, "index.sqlite");
+        var first = cache.GetOrCreate(fixture.Snapshot, fixture.Root, path, 3, default);
+        var changed = fixture.Snapshot with { SearchText = fixture.Snapshot.SearchText.Select(row => row with { Body = "changed" }).ToArray() };
+        var reads = 0;
+        using var cancellation = new CancellationTokenSource();
+        var interrupted = changed with { Graph = changed.Graph with
+        {
+            Nodes = new ObservedNodes(changed.Graph.Nodes, () =>
+            {
+                if (++reads > changed.Graph.Nodes.Count)
+                    cancellation.Cancel();
+            })
+        } };
+        Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(interrupted, fixture.Root, path, 3, cancellation.Token));
+        Assert.True(reads > changed.Graph.Nodes.Count);
+        Assert.Same(first, cache.GetOrCreate(fixture.Snapshot, fixture.Root, path, 3, default));
+        var recovered = cache.GetOrCreate(changed, fixture.Root, path, 3, default);
+        Assert.NotSame(first, recovered);
+        Assert.Same(recovered, cache.GetOrCreate(changed, fixture.Root, path, 3, default));
+        Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(changed, fixture.Root, path, 3, cancellation.Token));
     }
 
     [Theory]

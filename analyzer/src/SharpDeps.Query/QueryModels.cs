@@ -80,7 +80,17 @@ public sealed class PinnedQueryIndex : IQueryIndex
     private readonly IndexReader reader;
     private readonly SemaphoreSlim preparationGate = new(1, 1);
     private ExplorationSnapshot? exploration;
+    private readonly string? canonicalRoot;
+    private readonly ValidatedExplorationSnapshotCache? sharedCache;
     public PinnedQueryIndex(IndexReader reader, CancellationToken token = default) { this.reader = reader; Snapshot = reader.Snapshot(token); }
+    public PinnedQueryIndex(IndexReader reader, CancellationToken token, string canonicalRoot)
+        : this(reader, canonicalRoot, ValidatedExplorationSnapshotCache.Shared, token) { }
+    internal PinnedQueryIndex(IndexReader reader, string canonicalRoot, ValidatedExplorationSnapshotCache cache,
+        CancellationToken token = default) : this(reader, token)
+    {
+        this.canonicalRoot = canonicalRoot;
+        sharedCache = cache;
+    }
     public IndexSnapshot Snapshot { get; }
     public IReadOnlyList<IndexSearchHit> Search(string literal, int limit) => reader.Search(literal, limit);
     public IndexSnapshot ReadSnapshot(CancellationToken token) => reader.Snapshot(token);
@@ -106,7 +116,8 @@ public sealed class PinnedQueryIndex : IQueryIndex
             {
                 PhaseMetrics.Decision("explore.prepare", "pin-cache-miss");
                 // IndexReader validated and froze every reachable collection before publication.
-                prepared = new ExplorationSnapshot(saved, token);
+                prepared = sharedCache is null ? new ExplorationSnapshot(saved, token)
+                    : sharedCache.GetOrCreate(saved, canonicalRoot!, reader.IndexPath, reader.SchemaVersion, token);
                 token.ThrowIfCancellationRequested();
                 Volatile.Write(ref exploration, prepared);
             }

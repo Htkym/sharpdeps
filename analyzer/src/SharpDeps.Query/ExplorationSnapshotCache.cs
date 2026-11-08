@@ -1,6 +1,8 @@
 namespace SharpDeps.Query;
 
 using SharpDeps.Analysis.Core.Diagnostics;
+using System.Collections.Frozen;
+using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -8,23 +10,23 @@ using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Index;
 
 internal sealed record ExplorationSearchMetadata(HarnessNode Node, string Label, string SimpleName, string BaseName,
-    string[] Aliases, string[] NameWords, string[] SignatureWords, string[] ContextWords);
+    IReadOnlyList<string> Aliases, IReadOnlyList<string> NameWords, IReadOnlyList<string> SignatureWords, IReadOnlyList<string> ContextWords);
 
 internal sealed class ExplorationSnapshot
 {
     internal readonly IndexSnapshot saved;
-    internal readonly Dictionary<string, HarnessNode> nodes;
-    internal readonly Dictionary<string, HarnessSymbolOccurrence> occurrences;
-    internal readonly Dictionary<string, HarnessSymbolOccurrence[]> bySymbol;
-    internal readonly Dictionary<string, IndexFile> files;
-    internal readonly Dictionary<string, HarnessEdge[]> outgoing;
-    internal readonly Dictionary<string, HarnessEdge[]> incoming;
-    internal readonly Dictionary<string, ExplorationSearchMetadata> search;
-    internal readonly Dictionary<string, HarnessNode[]> names;
-    internal readonly Dictionary<string, HarnessNode[]> words;
-    internal readonly Dictionary<string, HarnessNode[]> paths;
-    internal readonly HashSet<string> savedPaths;
-    private Dictionary<string, IReadOnlyList<HarnessEdge>>? httpGetDeclarations;
+    internal readonly IReadOnlyDictionary<string, HarnessNode> nodes;
+    internal readonly IReadOnlyDictionary<string, HarnessSymbolOccurrence> occurrences;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessSymbolOccurrence>> bySymbol;
+    internal readonly IReadOnlyDictionary<string, IndexFile> files;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> outgoing;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> incoming;
+    internal readonly IReadOnlyDictionary<string, ExplorationSearchMetadata> search;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> names;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> words;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> paths;
+    internal readonly FrozenSet<string> savedPaths;
+    private IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>>? httpGetDeclarations;
     private SemaphoreSlim? httpGetDeclarationsGate;
 
     internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token)
@@ -37,7 +39,7 @@ internal sealed class ExplorationSnapshot
         bySymbol = Group(frozen.Graph.SymbolOccurrences, occurrence => occurrence.LogicalSymbolId, occurrence => occurrence.Id, token);
         outgoing = Group(frozen.Graph.Edges, edge => edge.SourceNodeId, edge => edge.Id, token);
         incoming = Group(frozen.Graph.Edges, edge => edge.TargetNodeId, edge => edge.Id, token);
-        search = new(StringComparer.Ordinal);
+        var searchBuilder = new Dictionary<string, ExplorationSearchMetadata>(StringComparer.Ordinal);
         foreach (var node in frozen.Graph.Nodes)
         {
             token.ThrowIfCancellationRequested();
@@ -60,23 +62,25 @@ internal sealed class ExplorationSnapshot
             string[] signatureWords = context.Length > 0 && declarationStart >= 0
                 ? [.. Components(signature[..declarationStart], token), "", .. Components(signature[(declarationStart + context.Length)..], token)]
                 : Components(signature, token);
-            search.Add(node.Id, new(node, label, simple, baseName,
-                new[] { node.Name, simple, baseName, label }.Distinct(StringComparer.Ordinal).ToArray(),
-                Components(baseName, token), signatureWords, contextWords));
+            searchBuilder.Add(node.Id, new(node, label, simple, baseName,
+                Array.AsReadOnly(new[] { node.Name, simple, baseName, label }.Distinct(StringComparer.Ordinal).ToArray()),
+                Array.AsReadOnly(Components(baseName, token)), Array.AsReadOnly(signatureWords), Array.AsReadOnly(contextWords)));
         }
+        search = new ReadOnlyDictionary<string, ExplorationSearchMetadata>(searchBuilder);
         names = SearchLookup(item => item.Aliases.Concat(item.Node.Signature is { } signature ? [signature] : []),
             StringComparer.OrdinalIgnoreCase, token);
         words = SearchLookup(item => item.NameWords.Concat(item.SignatureWords), StringComparer.OrdinalIgnoreCase, token);
         paths = SearchLookup(item => Locations(item.Node, null).Where(location => files.ContainsKey(location.SourceId))
             .SelectMany(location => new[] { files[location.SourceId].RelativePath, Path.GetFileName(files[location.SourceId].RelativePath) }),
             StringComparer.Ordinal, token);
-        savedPaths = new(StringComparer.Ordinal);
+        var savedPathBuilder = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in frozen.Files)
         {
             token.ThrowIfCancellationRequested();
-            savedPaths.Add(file.RelativePath);
-            savedPaths.Add(Path.GetFileName(file.RelativePath));
+            savedPathBuilder.Add(file.RelativePath);
+            savedPathBuilder.Add(Path.GetFileName(file.RelativePath));
         }
+        savedPaths = savedPathBuilder.ToFrozenSet(StringComparer.Ordinal);
         token.ThrowIfCancellationRequested();
     }
 
@@ -115,11 +119,12 @@ internal sealed class ExplorationSnapshot
                     foreach (var (key, edges) in grouped)
                     {
                         token.ThrowIfCancellationRequested();
-                        prepared.Add(key, Array.AsReadOnly(edges));
+                        prepared.Add(key, edges);
                     }
+                    var immutable = new ReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>>(prepared);
                     token.ThrowIfCancellationRequested();
-                    Volatile.Write(ref httpGetDeclarations, prepared);
-                    cached = prepared;
+                    Volatile.Write(ref httpGetDeclarations, immutable);
+                    cached = immutable;
                 }
             }
             finally { gate.Release(); }
@@ -128,7 +133,7 @@ internal sealed class ExplorationSnapshot
         return cached.TryGetValue(template, out var declarations) ? declarations : Array.Empty<HarnessEdge>();
     }
 
-    private Dictionary<string, HarnessNode[]> SearchLookup(Func<ExplorationSearchMetadata, IEnumerable<string>> keys,
+    private IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> SearchLookup(Func<ExplorationSearchMetadata, IEnumerable<string>> keys,
         StringComparer comparer, CancellationToken token)
     {
         var groups = new Dictionary<string, List<HarnessNode>>(comparer);
@@ -139,7 +144,7 @@ internal sealed class ExplorationSnapshot
                 if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = []);
                 group.Add(item.Node);
             }
-        var result = new Dictionary<string, HarnessNode[]>(comparer);
+        var result = new Dictionary<string, IReadOnlyList<HarnessNode>>(comparer);
         foreach (var (key, group) in groups)
         {
             token.ThrowIfCancellationRequested();
@@ -153,9 +158,9 @@ internal sealed class ExplorationSnapshot
             }
             catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
             { throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token); }
-            result.Add(key, group.ToArray());
+            result.Add(key, Array.AsReadOnly(group.ToArray()));
         }
-        return result;
+        return new ReadOnlyDictionary<string, IReadOnlyList<HarnessNode>>(result);
     }
 
     private static string ShortName(string name)
@@ -193,7 +198,7 @@ internal sealed class ExplorationSnapshot
         return result.ToArray();
     }
 
-    private static Dictionary<string, T> Lookup<T>(IEnumerable<T> values, Func<T, string> key, CancellationToken token)
+    private static IReadOnlyDictionary<string, T> Lookup<T>(IEnumerable<T> values, Func<T, string> key, CancellationToken token)
     {
         var result = new Dictionary<string, T>(StringComparer.Ordinal);
         foreach (var value in values)
@@ -201,10 +206,10 @@ internal sealed class ExplorationSnapshot
             token.ThrowIfCancellationRequested();
             result.Add(key(value), value);
         }
-        return result;
+        return new ReadOnlyDictionary<string, T>(result);
     }
 
-    private static Dictionary<string, T[]> Group<T>(IEnumerable<T> values, Func<T, string> groupKey,
+    private static IReadOnlyDictionary<string, IReadOnlyList<T>> Group<T>(IEnumerable<T> values, Func<T, string> groupKey,
         Func<T, string> orderKey, CancellationToken token)
     {
         var groups = new Dictionary<string, List<T>>(StringComparer.Ordinal);
@@ -215,7 +220,7 @@ internal sealed class ExplorationSnapshot
             if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = []);
             group.Add(value);
         }
-        var result = new Dictionary<string, T[]>(StringComparer.Ordinal);
+        var result = new Dictionary<string, IReadOnlyList<T>>(StringComparer.Ordinal);
         foreach (var (key, group) in groups)
         {
             token.ThrowIfCancellationRequested();
@@ -230,9 +235,9 @@ internal sealed class ExplorationSnapshot
             catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
             { throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token); }
             token.ThrowIfCancellationRequested();
-            result.Add(key, group.ToArray());
+            result.Add(key, Array.AsReadOnly(group.ToArray()));
         }
-        return result;
+        return new ReadOnlyDictionary<string, IReadOnlyList<T>>(result);
     }
 
     internal string? Project(HarnessNode node)
@@ -266,7 +271,7 @@ internal sealed class ExplorationSnapshotCache
 {
     private static readonly ExplorationSnapshotCache Shared = new();
     private sealed record Entry(Fingerprint Key, ExplorationSnapshot Snapshot);
-    private readonly record struct Fingerprint(string Sha256, long Bytes);
+    internal readonly record struct Fingerprint(string Sha256, long Bytes);
     private readonly SemaphoreSlim Gate = new(1, 1);
     private Entry? latest;
 
@@ -332,7 +337,7 @@ internal sealed class ExplorationSnapshotCache
         finally { Gate.Release(); }
     }
 
-    private static Fingerprint Serialize(IndexSnapshot snapshot, Stream destination, CancellationToken token)
+    internal static Fingerprint Serialize(IndexSnapshot snapshot, Stream destination, CancellationToken token)
     {
         using var metricsScope = PhaseMetrics.Measure("explore.fingerprint");
         token.ThrowIfCancellationRequested();

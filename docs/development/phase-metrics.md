@@ -53,8 +53,16 @@ constructors and `CliApplication.ExploreAsync` retain their existing signatures.
 Each admitted saved request writes its own run, including reader open/snapshot,
 freeze/validation and derived indexes, search/resolve/expand, source read/hash and
 freshness verification, and final rendering where those stages are reached.
-Existing pinned and payload-cache hit/miss decisions are recorded without changing
-cache keys, lifetime or reuse. A completed query run means the saved request
+Existing pinned and payload-cache decisions remain. CLI/MCP exploration also emits
+`validated-cache-hit`, `validated-cache-miss`, `validated-cache-evicted` and
+`validated-cache-capacity-bypass` for shared immutable derived data. Its key includes
+canonical root/index, workspace, schema/identity, complete payload fingerprint and
+derived version. Retention is limited to four entries and 64 MiB of complete
+serialized payload bytes, not a managed-heap cap. Each call still opens its own
+reader, hydrates and validates the full snapshot, and performs the requested source
+and freshness checks. No live reader or transaction is retained by the cache.
+A derived-cache hit does not mean the whole query is warm or faster.
+A completed query run means the saved request
 succeeded, not that freshness was verified. Failed and cancelled requests retain
 their outcome; stages never reached are absent. Setup rejected before admission
 may emit no run. Output failures never change the response or its exit status.

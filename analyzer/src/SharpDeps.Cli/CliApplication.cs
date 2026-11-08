@@ -69,7 +69,7 @@ public static class CliApplication
             var queryToken = token;
             queryToken.ThrowIfCancellationRequested();
             using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid, queryToken);
-            var pinned = new PinnedQueryIndex(reader, queryToken);
+            var pinned = new PinnedQueryIndex(reader, queryToken, root);
             var sourceWorkspace = options.Has("trusted") ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             var service = new QueryService(pinned, sourceWorkspace, options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
@@ -126,7 +126,7 @@ public static class CliApplication
             var queryToken = deadline.Token;
             queryToken.ThrowIfCancellationRequested();
             using var reader = IndexReader.Open(index, state.WorkspaceUuid, queryToken);
-            var pinned = new PinnedQueryIndex(reader, queryToken);
+            var pinned = new PinnedQueryIndex(reader, queryToken, root);
             var sourceWorkspace = trusted ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, index, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);

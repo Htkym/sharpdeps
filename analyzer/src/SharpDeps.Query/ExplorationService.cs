@@ -594,10 +594,10 @@ public sealed partial class ExplorationService
         private static bool PathTerm(string term) => term.Contains('/') || term.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
             || term.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
-        private bool ContainsWords(string[] source, string[] term)
+        private bool ContainsWords(IReadOnlyList<string> source, string[] term)
         {
             if (term.Length == 0) return false;
-            for (var start = 0; start <= source.Length - term.Length; start++)
+            for (var start = 0; start <= source.Count - term.Length; start++)
             {
                 Check();
                 var index = 0;
@@ -750,7 +750,7 @@ public sealed partial class ExplorationService
                 if (visited.Count > request.Budget!.MaxNodes) { reasons.Add("NODE_LIMIT"); break; }
                 if (current.Depth >= request.Budget.MaxDepth)
                 {
-                    if ((owner.outgoing.GetValueOrDefault(current.Item.Node.Id) ?? []).Length > 0) reasons.Add("DEPTH_LIMIT");
+                    if ((owner.outgoing.GetValueOrDefault(current.Item.Node.Id) ?? []).Count > 0) reasons.Add("DEPTH_LIMIT");
                     continue;
                 }
                 var steps = (owner.outgoing.GetValueOrDefault(current.Item.Node.Id) ?? []).Select(e => (Edge: e, Reverse: false));
