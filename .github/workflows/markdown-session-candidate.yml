@@ -25,9 +25,6 @@ jobs:
     env:
       SharpDepsUseMarkdownSessionCandidate: 'true'
       SHARPDEPS_TEST_REPOSITORY_ROOT: ${{ github.workspace }}
-      ARTIFACTS_ROOT: ${{ runner.temp }}/markdown-session-artifacts
-      NUGET_PACKAGES: ${{ runner.temp }}/markdown-session-packages
-      DOTNET_CLI_HOME: ${{ runner.temp }}/markdown-session-home
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
       MSBUILDDISABLENODEREUSE: '1'
@@ -44,6 +41,9 @@ jobs:
           dotnet_root="$(dirname "$(readlink -f "$(command -v dotnet)")")"
           test -f "$dotnet_root/sdk/10.0.403/MSBuild.dll"
           {
+            echo "ARTIFACTS_ROOT=$RUNNER_TEMP/markdown-session-artifacts"
+            echo "NUGET_PACKAGES=$RUNNER_TEMP/markdown-session-packages"
+            echo "DOTNET_CLI_HOME=$RUNNER_TEMP/markdown-session-home"
             echo "DOTNET_HOST_PATH=$dotnet_root/dotnet"
             echo "MSBuildSDKsPath=$dotnet_root/sdk/10.0.403/Sdks"
             echo "MSBUILD_EXE_PATH=$dotnet_root/sdk/10.0.403/MSBuild.dll"

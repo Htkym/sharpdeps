@@ -28,19 +28,42 @@ public sealed class CliTests
         var measured = await Run([.. args, "--metrics-directory", directory]);
         Assert.Equal(expected, measured);
         Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
-        var text = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        var metricsPath = Assert.Single(Directory.GetFiles(directory, "*.jsonl"));
+        var text = File.ReadAllText(metricsPath);
         Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal);
         Assert.DoesNotContain("Service", text, StringComparison.Ordinal);
-        using var end = JsonDocument.Parse(text.Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1]);
-        Assert.Equal("completed", end.RootElement.GetProperty("payload").GetProperty("outcome").GetString());
-        Assert.Contains("reader.open", text);
-        Assert.Contains("reader.snapshot", text);
-        Assert.Contains(command == "explore" ? "explore.render" : "query.render", text);
-        Assert.Contains(command == "explore" ? "explore.derived-index" : "query.derived-index", text);
+        var events = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        Assert.Equal(Path.GetFileNameWithoutExtension(metricsPath),
+            Assert.Single(events.Select(e => e.GetProperty("runId").GetString()).Distinct()));
+        var payloads = events.Select(e => e.GetProperty("payload")).ToArray();
+        Assert.Equal("run.start", payloads[0].GetProperty("type").GetString());
+        Assert.Equal(command == "explore" ? "explore" : "query", payloads[0].GetProperty("operation").GetString());
+        Assert.Equal("run.end", payloads[^1].GetProperty("type").GetString());
+        Assert.Equal("completed", payloads[^1].GetProperty("outcome").GetString());
+        var phases = payloads.Where(p => p.GetProperty("type").GetString() == "phase")
+            .Select(p => p.GetProperty("phase").GetString()).ToArray();
+        Assert.Contains("reader.open", phases);
+        Assert.Contains("reader.snapshot", phases);
+        Assert.Contains(command == "explore" ? "explore.render" : "query.render", phases);
+        if (command == "explore")
+        {
+            Assert.Contains("explore.prepare", phases);
+            Assert.Contains("explore.fingerprint", phases);
+            var preparation = Assert.Single(payloads, p => p.GetProperty("type").GetString() == "decision"
+                && p.GetProperty("stage").GetString() == "explore.prepare"
+                && p.GetProperty("reason").GetString() is "validated-cache-hit" or "validated-cache-miss");
+            Assert.Equal(preparation.GetProperty("reason").GetString() == "validated-cache-miss" ? 1 : 0,
+                phases.Count(phase => phase == "explore.derived-index"));
+        }
+        else
+        {
+            Assert.Contains("query.derived-index", phases);
+        }
         if (command != "search")
         {
-            Assert.Contains("source.read", text);
-            Assert.Contains("source.hash", text);
+            Assert.Contains("source.read", phases);
+            Assert.Contains("source.hash", phases);
         }
         var refused = Path.Combine(fixture.Root, "refused");
         Assert.Equal(expected, await Run([.. args, "--metrics-directory", refused]));

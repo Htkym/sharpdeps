@@ -98,10 +98,17 @@ if (pin.developmentOnly === true) {
     throw new Error('Unexpected restored source package path');
   let verified = false;
   for (const folder of Object.keys(assets.packageFolders)) {
-    const file = path.join(folder, sourcePath, 'syntamark.source.' + pin.componentVersion + '.nupkg');
+    const file = path.join(
+      folder,
+      sourcePath,
+      'syntamark.source.' + pin.componentVersion + '.nupkg'
+    );
     if (!fs.existsSync(file)) continue;
     const bytes = fs.readFileSync(file);
-    if (bytes.length !== pin.artifacts.source.byteLength || hash(bytes) !== pin.artifacts.source.sha256)
+    if (
+      bytes.length !== pin.artifacts.source.byteLength ||
+      hash(bytes) !== pin.artifacts.source.sha256
+    )
       throw new Error('Restored source package hash mismatch');
     verified = true;
     break;

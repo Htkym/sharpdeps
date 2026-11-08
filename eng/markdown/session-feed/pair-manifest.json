@@ -12,10 +12,7 @@
   "contractVersion": "1.0",
   "profileId": "lithosharp-markdown/1",
   "defaultProfileId": "lithosharp-markdown/1",
-  "supportedProfileIds": [
-    "lithosharp-markdown/1",
-    "commonmark/0.31.2"
-  ],
+  "supportedProfileIds": ["lithosharp-markdown/1", "commonmark/0.31.2"],
   "hashEncoding": "UTF8 path byte order + uint64 BE path/content lengths + Git blob bytes",
   "excludedGeneratedStamp": "src/Syntamark/Portable/MarkdownParserVersion.g.cs",
   "dependencies": [
