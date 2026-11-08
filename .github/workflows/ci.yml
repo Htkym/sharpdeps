@@ -224,4 +224,5 @@ jobs:
           path: |
             .local/ci/
             ${{ runner.temp }}/sharpdeps-tests/sharpdeps-full-oracle/
+            ${{ runner.temp }}/sharpdeps-tests/sde-cli/
           if-no-files-found: error

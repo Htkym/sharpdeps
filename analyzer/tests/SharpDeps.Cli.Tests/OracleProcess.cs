@@ -91,14 +91,15 @@ internal static class OracleProcess
             File.Move(marker + ".tmp", marker);
             await Task.Delay(Timeout.Infinite);
         }
+        // CoreFoundation can add this startup metadata after the parent filters the child environment.
+        // Keep the controlled fixtures closed; subsequent production proof checks remain unchanged.
+        if (OperatingSystem.IsMacOS()
+            && (args is ["--semantic-encoding-oracle", _] or ["--full-oracle", _, _]))
+            Environment.SetEnvironmentVariable("__CF_USER_TEXT_ENCODING", null);
         if (args is ["--semantic-encoding-oracle", var encodingRoot])
             return await SemanticEncodingCliTests.RunFixtureAsync(encodingRoot);
         if (args is not ["--full-oracle", var input, var output])
             return 2;
-        // CoreFoundation can add this startup metadata after the parent filters the child environment.
-        // Keep the controlled fixture closed; subsequent production proof checks remain unchanged.
-        if (OperatingSystem.IsMacOS())
-            Environment.SetEnvironmentVariable("__CF_USER_TEXT_ENCODING", null);
         var run = JsonSerializer.Deserialize<OracleRun>(File.ReadAllText(input), QueryJson.Options)
             ?? throw new InvalidDataException("Oracle request is missing.");
         var sequence = 0;
