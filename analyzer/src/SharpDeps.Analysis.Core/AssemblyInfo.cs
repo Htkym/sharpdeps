@@ -7,3 +7,5 @@ using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("SharpDeps.Query")]
 [assembly: InternalsVisibleTo("SharpDeps.Query.Tests")]
+
+[assembly: InternalsVisibleTo("SharpDeps.Analysis.Markdown")]

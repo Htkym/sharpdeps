@@ -7,7 +7,12 @@
   <ItemGroup>
     <ProjectReference Include="..\SharpDeps.Analysis.Contracts\SharpDeps.Analysis.Contracts.csproj" />
     <ProjectReference Include="..\SharpDeps.Analysis.Core\SharpDeps.Analysis.Core.csproj" />
-    <PackageReference Include="Syntamark" VersionOverride="[1.2.0]" />
+    <PackageReference Include="Syntamark" VersionOverride="[1.2.0]" Condition="'$(SharpDepsUseMarkdownSessionCandidate)' != 'true'" />
+    <PackageReference Include="Syntamark" VersionOverride="[2.0.0-preview.217731285591823]" Condition="'$(SharpDepsUseMarkdownSessionCandidate)' == 'true'" />
+    <PackageReference Include="Syntamark.Source" VersionOverride="[2.0.0-preview.217731285591823]" PrivateAssets="all" IncludeAssets="none" Condition="'$(SharpDepsUseMarkdownSessionCandidate)' == 'true'" />
     <PackageReference Include="YamlDotNet" VersionOverride="[18.1.0]" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SharpDepsUseMarkdownSessionCandidate)' != 'true'">
+    <Compile Remove="LithoSharpMarkdownAdapter.Session.cs" />
   </ItemGroup>
 </Project>

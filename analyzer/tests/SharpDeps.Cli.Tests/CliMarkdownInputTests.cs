@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
+using SharpDeps.Analysis.Core.Diagnostics;
 using SharpDeps.Analysis.Markdown;
 using SharpDeps.Cli;
 using SharpDeps.Index;
@@ -25,24 +26,7 @@ public sealed class CliMarkdownInputTests
     {
         using var fixture = new Fixture();
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        var config = Path.Combine(fixture.Root, "NuGet.Config");
-        File.WriteAllText(config, "<configuration><packageSources><clear /></packageSources></configuration>");
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-        { WorkingDirectory = fixture.Root, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var argument in new[] { "restore", fixture.Options.Target, "--configfile", config, "--verbosity", "quiet" })
-            start.ArgumentList.Add(argument);
-        using (var restore = Process.Start(start) ?? throw new InvalidOperationException("Offline fixture restore did not start."))
-        {
-            var stdout = restore.StandardOutput.ReadToEndAsync();
-            var stderr = restore.StandardError.ReadToEndAsync();
-            try { await restore.WaitForExitAsync(deadline.Token); }
-            finally
-            {
-                if (!restore.HasExited) { restore.Kill(entireProcessTree: true); await restore.WaitForExitAsync(); }
-            }
-            Assert.True(restore.ExitCode == 0, await stdout + await stderr);
-        }
+        await fixture.Restore(deadline.Token);
         using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
         var executor = new CoordinatorExecutor(writer);
         Task<CliIndexBuild> Build(bool full = false) => executor.BuildAsync(new(fixture.Options, full), deadline.Token);
@@ -240,6 +224,129 @@ public sealed class CliMarkdownInputTests
         Assert.Equal("unverified", saved.Envelope.Snapshot.Freshness);
     }
 
+#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task OwnerSessionsCacheCatalogRefreshAndPublicationRejectionMatchTheSavedColdOracle()
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        await fixture.Restore(deadline.Token);
+        const string raw = "Alpha 😀\r\n\r\nExample Beta\r\n\r\nGamma suffix\r\n";
+        File.WriteAllText(fixture.MarkdownPath, raw);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        var oraclePath = Path.Combine(fixture.Root, ".sharpdeps", "oracle.sqlite");
+        using var oracleWriter = IndexWriter.Open(fixture.Root, oraclePath, fixture.Options.WorkspaceUuid, true);
+        var executor = new CoordinatorExecutor(writer);
+        var initial = await Build("full", full: true);
+        Commit(initial);
+        using var pinned = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid);
+        var pinnedJson = JsonSerializer.Serialize(pinned.Snapshot(), QueryJson.Options);
+        var documentId = Assert.Single(initial.Snapshot.Documents).DocumentUuid;
+        var sectionToken = Assert.Single(Assert.Single(initial.Snapshot.Documents).Sections).Token;
+
+        var editedRaw = raw.Replace("Beta", "Beta longer");
+        File.WriteAllText(fixture.MarkdownPath, editedRaw);
+        var edited = await Build("session-delta");
+        Assert.Equal(documentId, Assert.Single(edited.Snapshot.Documents).DocumentUuid);
+        Assert.Equal(sectionToken, Assert.Single(Assert.Single(edited.Snapshot.Documents).Sections).Token);
+        var mention = Assert.Single(edited.Snapshot.Graph.Nodes, node => node.Kind == HarnessNodeKind.SymbolMention && node.Name == "Example");
+        Assert.Equal(new HarnessRawSpan(editedRaw.IndexOf("Example", StringComparison.Ordinal), "Example".Length), mention.Location!.RawSpan);
+        var oldTargets = edited.Snapshot.Graph.Edges.Where(edge => edge.SourceNodeId == mention.Id && edge.Kind == "mentions_symbol")
+            .Select(edge => edge.TargetNodeId).ToHashSet(StringComparer.Ordinal);
+        Assert.NotEmpty(oldTargets);
+        Commit(edited);
+        await AssertColdEquivalent(initial.Snapshot, edited.Snapshot);
+
+        File.WriteAllText(Path.Combine(fixture.Root, "Example.cs"), "public sealed class Renamed { }");
+        var catalogOnly = await Build("cache");
+        Assert.Equal(0, catalogOnly.MarkdownPrepareCalls);
+        Assert.Equal(1, catalogOnly.MarkdownPreparedCacheHits);
+        Assert.DoesNotContain(catalogOnly.Snapshot.Graph.Edges, edge => edge.SourceNodeId == mention.Id
+            && edge.Kind == "mentions_symbol" && oldTargets.Contains(edge.TargetNodeId));
+        Commit(catalogOnly);
+        await AssertColdEquivalent(edited.Snapshot, catalogOnly.Snapshot);
+
+        File.WriteAllText(fixture.MarkdownPath, "\uFEFF# Heading\r\n[Example](Example.cs)\r\n" + editedRaw);
+        var unsupported = await Build("full");
+        Commit(unsupported);
+        await AssertColdEquivalent(catalogOnly.Snapshot, unsupported.Snapshot);
+        File.WriteAllText(fixture.MarkdownPath, editedRaw);
+        var undo = await Build("full");
+        Commit(undo);
+        await AssertColdEquivalent(unsupported.Snapshot, undo.Snapshot);
+
+        File.WriteAllText(fixture.MarkdownPath, editedRaw.Replace("longer", "rejected publication"));
+        var rejected = await Build("session-delta");
+        Assert.Throws<CliFailure>(() => writer.Commit(IndexStage.Create(rejected.Snapshot), deadline.Token,
+            () => throw new CliFailure("TEST_PUBLICATION_REJECTED", 4)));
+        using (var afterRejection = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid))
+            Assert.Equal(undo.Snapshot.Graph.SnapshotId, afterRejection.Snapshot().Graph.SnapshotId);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => executor.BuildAsync(new(fixture.Options, false), new(true)));
+        File.WriteAllText(fixture.MarkdownPath, editedRaw);
+        var retained = await Build("cache");
+        Commit(retained);
+        await AssertColdEquivalent(undo.Snapshot, retained.Snapshot);
+        Assert.Equal(pinnedJson, JsonSerializer.Serialize(pinned.Snapshot(), QueryJson.Options));
+
+        var restarted = new CoordinatorExecutor(writer);
+        var rebuilt = await restarted.BuildAsync(new(fixture.Options, false), deadline.Token);
+        Assert.Equal(1, rebuilt.MarkdownPrepareCalls);
+        Assert.Equal(0, rebuilt.MarkdownPreparedCacheHits);
+        Commit(rebuilt);
+        await AssertColdEquivalent(retained.Snapshot, rebuilt.Snapshot);
+
+        async Task<CliIndexBuild> Build(string mode, bool full = false)
+        {
+            var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+            string runId;
+            CliIndexBuild build;
+            using (var metrics = PhaseMetrics.Start(directory, "markdown-owner") ?? throw new InvalidOperationException("Metrics did not start."))
+            {
+                runId = metrics.RunId;
+                build = await executor.BuildAsync(new(fixture.Options, full), deadline.Token);
+                metrics.Complete();
+            }
+            var events = File.ReadAllLines(Path.Combine(directory, runId + ".jsonl"))
+                .Select(line => JsonSerializer.Deserialize<JsonElement>(line).GetProperty("payload")).ToArray();
+            Assert.Contains(events, item => item.GetProperty("type").GetString() == "decision"
+                && item.GetProperty("stage").GetString() == "markdown.prepare.mode" && item.GetProperty("reason").GetString() == mode);
+            if (mode == "cache")
+                Assert.DoesNotContain(events, item => item.GetProperty("type").GetString() == "count"
+                    && item.GetProperty("name").GetString()!.StartsWith("markdown.session.", StringComparison.Ordinal));
+            Assert.DoesNotContain(build.Snapshot.Graph.Diagnostics!, diagnostic => diagnostic.Code.StartsWith("markdown.session.", StringComparison.Ordinal)
+                || diagnostic.Code == "markdown.prepare.mode");
+            return build;
+        }
+
+        void Commit(CliIndexBuild build)
+        {
+            writer.Commit(IndexStage.Create(build.Snapshot), deadline.Token, build.VerifySelection);
+            build.AdoptCommittedState!();
+        }
+
+        async Task AssertColdEquivalent(IndexSnapshot previous, IndexSnapshot cached)
+        {
+            var previousTokens = previous.Documents.SelectMany(document => document.Sections.Select(section => section.Token))
+                .ToHashSet(StringComparer.Ordinal);
+            var allocations = new Queue<Guid>(new[] { Guid.ParseExact(cached.Graph.SnapshotId, "N") }
+                .Concat(cached.Documents.SelectMany(document => document.Sections).Where(section => !previousTokens.Contains(section.Token))
+                    .Select(section => Guid.ParseExact(section.Token, "N"))));
+            var cold = await CliIndexer.BuildForPublicationAsync(fixture.Options, previous, deadline.Token, null, () => allocations.Dequeue());
+            Assert.Empty(allocations);
+            oracleWriter.Commit(IndexStage.Create(cold.Snapshot), deadline.Token, cold.VerifySelection);
+            using var coldReader = IndexReader.Open(oraclePath, fixture.Options.WorkspaceUuid);
+            using var actualReader = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid);
+            var differences = FullBuildOracle.Differences(Observe(coldReader), Observe(actualReader));
+            Assert.True(differences.Count == 0, string.Join(Environment.NewLine, differences.Take(20)));
+        }
+
+        static OracleObservation Observe(IndexReader reader)
+            => new(reader.Snapshot(), new[] { "Example", "longer", "suffix", "Alpha", "Renamed" }
+                .ToDictionary(term => term, term => reader.Search(term, 500).ToArray(), StringComparer.Ordinal), [], Environment.ProcessId);
+    }
+#endif
+
     private sealed class Fixture : IDisposable
     {
         private static readonly string Base = OperatingSystem.IsMacOS()
@@ -256,6 +363,40 @@ public sealed class CliMarkdownInputTests
             File.WriteAllText(MarkdownPath, "`IReadOnlyState<T>`");
             var state = CliWorkspaceState.Open(Root, create: true);
             Options = new(Root, Path.Combine(Root, "App.csproj"), Path.Combine(Root, ".sharpdeps", "index.sqlite"), state.WorkspaceUuid);
+        }
+
+        public async Task Restore(CancellationToken token)
+        {
+            var config = Path.Combine(Root, "NuGet.Config");
+            File.WriteAllText(config, "<configuration><packageSources><clear /></packageSources></configuration>");
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+            {
+                WorkingDirectory = Root,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            foreach (var argument in new[] { "restore", Options.Target, "--configfile", config, "--verbosity", "quiet" })
+                start.ArgumentList.Add(argument);
+            using (var restore = Process.Start(start) ?? throw new InvalidOperationException("Offline fixture restore did not start."))
+            {
+                var stdout = restore.StandardOutput.ReadToEndAsync();
+                var stderr = restore.StandardError.ReadToEndAsync();
+                try
+                {
+                    await restore.WaitForExitAsync(token);
+                }
+                finally
+                {
+                    if (!restore.HasExited)
+                    {
+                        restore.Kill(entireProcessTree: true);
+                        await restore.WaitForExitAsync();
+                    }
+                }
+                Assert.True(restore.ExitCode == 0, await stdout + await stderr);
+            }
         }
 
         public IndexSnapshot CompleteSnapshot()

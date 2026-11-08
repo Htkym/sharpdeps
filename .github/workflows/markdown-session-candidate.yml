@@ -1,0 +1,98 @@
+name: Markdown session candidate
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'analyzer/**'
+      - 'eng/markdown/**'
+      - 'docs/contracts/markdown-session-candidate-pin.json'
+      - '.github/workflows/markdown-session-candidate.yml'
+  pull_request:
+    paths:
+      - 'analyzer/**'
+      - 'eng/markdown/**'
+      - 'docs/contracts/markdown-session-candidate-pin.json'
+      - '.github/workflows/markdown-session-candidate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SharpDepsUseMarkdownSessionCandidate: 'true'
+      ARTIFACTS_ROOT: ${{ runner.temp }}/markdown-session-artifacts
+      NUGET_PACKAGES: ${{ runner.temp }}/markdown-session-packages
+      DOTNET_CLI_HOME: ${{ runner.temp }}/markdown-session-home
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      MSBUILDDISABLENODEREUSE: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 20
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.403
+      - name: Prepare isolated SDK and feeds
+        run: |
+          dotnet_root="$(dirname "$(readlink -f "$(command -v dotnet)")")"
+          test -f "$dotnet_root/sdk/10.0.403/MSBuild.dll"
+          {
+            echo "DOTNET_HOST_PATH=$dotnet_root/dotnet"
+            echo "MSBuildSDKsPath=$dotnet_root/sdk/10.0.403/Sdks"
+            echo "MSBUILD_EXE_PATH=$dotnet_root/sdk/10.0.403/MSBuild.dll"
+            echo 'MSBuildEnableWorkloadResolver=false'
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/markdown-session-work"
+          printf '%s\n' '{"sdk":{"version":"10.0.403","rollForward":"disable"}}' > "$RUNNER_TEMP/markdown-session-work/global.json"
+          cat > "$RUNNER_TEMP/markdown-session-work/NuGet.Config" <<EOF
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="session" value="$GITHUB_WORKSPACE/eng/markdown/session-feed" />
+              <add key="stable" value="$GITHUB_WORKSPACE/eng/markdown/feed" />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+          </configuration>
+          EOF
+      - name: Generate and verify isolated locks
+        working-directory: ${{ runner.temp }}/markdown-session-work
+        run: |
+          test "$(dotnet --version)" = '10.0.403'
+          for project in SharpDeps.Markdown.Tests SharpDeps.Cli.Tests; do
+            dotnet restore "$GITHUB_WORKSPACE/analyzer/tests/$project/$project.csproj" --configfile NuGet.Config -p:RestoreLockedMode=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT"
+          done
+          find "$ARTIFACTS_ROOT/locks" -type f -name '*.json' -print0 | sort -z | xargs -0 sha256sum > locks.sha256
+          for project in SharpDeps.Markdown.Tests SharpDeps.Cli.Tests; do
+            dotnet restore "$GITHUB_WORKSPACE/analyzer/tests/$project/$project.csproj" --configfile NuGet.Config -p:RestoreLockedMode=true -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT"
+          done
+          sha256sum --check locks.sha256
+      - name: Verify exact runtime and source artifacts
+        working-directory: ${{ runner.temp }}/markdown-session-work
+        run: |
+          assets="$(dotnet msbuild "$GITHUB_WORKSPACE/analyzer/src/SharpDeps.Analysis.Markdown/SharpDeps.Analysis.Markdown.csproj" -getProperty:ProjectAssetsFile -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT")"
+          node "$GITHUB_WORKSPACE/eng/markdown/Verify-ConsumerArtifacts.mjs" \
+            "$GITHUB_WORKSPACE/eng/markdown/session-feed/pair-manifest.json" \
+            "$GITHUB_WORKSPACE/eng/markdown/session-feed" "$assets" \
+            "$GITHUB_WORKSPACE/docs/contracts/markdown-session-candidate-pin.json" > artifact-gate.json
+      - name: Test candidate adapter and owner
+        working-directory: ${{ runner.temp }}/markdown-session-work
+        run: |
+          dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --logger 'trx;LogFileName=markdown.trx' --results-directory results
+          dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --filter 'FullyQualifiedName~CliMarkdownInputTests' --logger 'trx;LogFileName=owner.trx' --results-directory results
+          git -C "$GITHUB_WORKSPACE" diff --exit-code -- docs/contracts/markdown-runtime-pin.json docs/contracts/markdown-consumer-conformance-v1.json eng/markdown/feed
+      - name: Upload candidate verification
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: markdown-session-candidate-verification
+          path: |
+            ${{ runner.temp }}/markdown-session-work/results/
+            ${{ runner.temp }}/markdown-session-work/locks.sha256
+            ${{ runner.temp }}/markdown-session-work/artifact-gate.json
+          if-no-files-found: warn

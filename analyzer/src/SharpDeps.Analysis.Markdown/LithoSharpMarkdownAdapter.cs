@@ -9,7 +9,7 @@ using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 
 /// <summary>Supplied text -> shared immutable facts -> harness graph. No link traversal, rendering or code execution.</summary>
-public sealed class LithoSharpMarkdownAdapter
+public sealed partial class LithoSharpMarkdownAdapter
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
@@ -70,12 +70,22 @@ public sealed class LithoSharpMarkdownAdapter
                 request.SourceVersion, options, cancellationToken);
             facts = syntax.Facts;
             syntaxRoot = syntax.Root;
-            // In the pinned runtime only syntax resource exhaustion can change the full canonical facts.
-            if (facts.Diagnostics.Any(diagnostic => diagnostic.Id == "LMD003" && diagnostic.Origin == "resource"))
-                facts = MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken);
+            facts = CanonicalFacts(request, options, facts, cancellationToken);
         }
         else
             facts = MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken);
+        return PrepareParsed(request, options, facts, syntaxRoot, cancellationToken);
+    }
+
+    private static MarkdownDocument CanonicalFacts(MarkdownGraphRequest request, MarkdownParseOptions options,
+        MarkdownDocument facts, CancellationToken cancellationToken)
+        => facts.Diagnostics.Any(diagnostic => diagnostic.Id == "LMD003" && diagnostic.Origin == "resource")
+            ? MarkdownParser.Parse(request.RawText, request.ScopeId, request.SourceId, request.SourceVersion, options, cancellationToken)
+            : facts;
+
+    private static MarkdownPreparedInput PrepareParsed(MarkdownGraphRequest request, MarkdownParseOptions options,
+        MarkdownDocument facts, MarkdownSyntaxNode? syntaxRoot, CancellationToken cancellationToken)
+    {
         MarkdownRuntimePin.RequireFacts(facts);
         var (attributes, ignored) = Metadata(facts.FrontMatter.Root);
         cancellationToken.ThrowIfCancellationRequested();

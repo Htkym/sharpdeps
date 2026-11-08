@@ -10,6 +10,12 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <ProjectReference Include="..\..\src\SharpDeps.Analysis.Markdown\SharpDeps.Analysis.Markdown.csproj" />
     <None Include="..\..\..\docs\contracts\markdown-consumer-conformance-v1.json" Link="markdown-consumer-conformance-v1.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\docs\contracts\markdown-runtime-pin.json" Link="markdown-runtime-pin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\docs\contracts\markdown-runtime-pin.json" Link="markdown-runtime-pin.json" CopyToOutputDirectory="PreserveNewest" Condition="'$(SharpDepsUseMarkdownSessionCandidate)' != 'true'" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SharpDepsUseMarkdownSessionCandidate)' == 'true'">
+    <None Include="..\..\..\docs\contracts\markdown-session-candidate-pin.json" Link="markdown-runtime-pin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SharpDepsUseMarkdownSessionCandidate)' != 'true'">
+    <Compile Remove="MarkdownSessionCacheTests.cs" />
   </ItemGroup>
 </Project>
