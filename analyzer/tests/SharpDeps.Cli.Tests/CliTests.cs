@@ -790,6 +790,185 @@ public sealed class CliTests
         await owner.DrainAsync().WaitAsync(deadline.Token);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task ActualCliShortOwnerDrainsSharedPublicationAfterItsDeadlineOrCallerCancellation(bool cancelCaller)
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        using var survivorCancellation = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        var mutexName = "sharpdeps-drain-" + Guid.NewGuid().ToString("N");
+        var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Named mutex ownership must stay on this dedicated thread across the asynchronous test.
+        var held = Task.Factory.StartNew(() =>
+        {
+            using var mutex = new Mutex(true, mutexName, out var created);
+            try
+            {
+                Assert.True(created);
+                acquired.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                if (created)
+                    mutex.ReleaseMutex();
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        using var progress = new OwnerStartGateWriter();
+        Task<int>? shortOwner = null;
+        Task<int>? survivor = null;
+        try
+        {
+            await acquired.Task.WaitAsync(deadline.Token);
+            var (sdkRoot, _) = SemanticBaselineFixture();
+            Assert.True(SharpDeps.Analysis.Roslyn.SemanticEnvironment.TryRegister(sdkRoot, out var reason), reason);
+            var sdk = SharpDeps.Analysis.Roslyn.SemanticEnvironment.Describe(fixture.Root).SdkVersion;
+            Assert.NotNull(sdk);
+            File.WriteAllText(Path.Combine(fixture.Root, "global.json"), JsonSerializer.Serialize(new
+            { sdk = new { version = sdk, rollForward = "disable" } }));
+            var target = Path.Combine(fixture.Root, "App.csproj");
+            File.WriteAllText(target, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+                  </PropertyGroup>
+                  <UsingTask TaskName="HoldSharedPublication" TaskFactory="RoslynCodeTaskFactory"
+                             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+                    <ParameterGroup>
+                      <MutexName ParameterType="System.String" Required="true" />
+                      <ReadyFile ParameterType="System.String" Required="true" />
+                    </ParameterGroup>
+                    <Task>
+                      <Code Type="Fragment" Language="cs"><![CDATA[
+                        using (var mutex = new System.Threading.Mutex(false, MutexName))
+                        {
+                            System.IO.File.WriteAllText(ReadyFile, "waiting");
+                            if (!mutex.WaitOne(System.TimeSpan.FromSeconds(90)))
+                                throw new System.TimeoutException("Shared publication gate was not released.");
+                            mutex.ReleaseMutex();
+                        }
+                      ]]></Code>
+                    </Task>
+                  </UsingTask>
+                  <Target Name="HoldSharedPublicationBeforeCompile" BeforeTargets="CoreCompile"
+                          Condition="'$(DesignTimeBuild)' == 'true'">
+                    <HoldSharedPublication MutexName="{{mutexName}}"
+                        ReadyFile="$(MSBuildProjectDirectory)/.sharpdeps/drain.ready" />
+                  </Target>
+                </Project>
+                """);
+            var config = Path.Combine(fixture.Root, "restore.config");
+            File.WriteAllText(config, "<configuration><packageSources><clear /></packageSources></configuration>");
+            await OracleProcess.ExecuteAsync(fixture.Root, ["restore", target, "--configfile", config, "--verbosity", "quiet"],
+                deadline.Token, packageRoot: Path.Combine(fixture.Root, "packages"));
+            using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var original = pinned.Snapshot();
+            Assert.Null(CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid));
+            var arguments = new[] { "update", "--root", fixture.Root, "--index", fixture.IndexPath,
+                "--trusted", "--target", target };
+            var output = new StringWriter();
+            shortOwner = CliApplication.RunAsync([.. arguments, "--request-id", "short-owner", "--timeout-seconds",
+                cancelCaller ? "3600" : "30"], output, progress, caller.Token);
+            await progress.Started.Task.WaitAsync(deadline.Token);
+            var owner = Assert.IsType<CoordinatorOwner>(CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid));
+            Assert.Equal(Environment.ProcessId, owner.ProcessId);
+            var survivorOutput = new StringWriter();
+            survivor = CliApplication.RunAsync([.. arguments, "--request-id", "drain-survivor", "--timeout-seconds", "1800"],
+                survivorOutput, TextWriter.Null, survivorCancellation.Token);
+            CoordinatorReply status;
+            // Admit the survivor before cold SDK/workspace startup can consume the owner's deadline.
+            do
+            {
+                status = Assert.IsType<CoordinatorReply>(await StatusAsync());
+                if (status.DesiredRevision != 1 || status.State != "updating")
+                    await Task.Delay(20, deadline.Token);
+            } while (status.DesiredRevision != 1 || status.State != "updating");
+            progress.Resume.TrySetResult();
+            do
+            {
+                status = Assert.IsType<CoordinatorReply>(await StatusAsync());
+                if (status.DesiredRevision < 2)
+                    await Task.Delay(20, deadline.Token);
+            } while (status.DesiredRevision < 2);
+            while (!File.Exists(Path.Combine(fixture.Root, ".sharpdeps", "drain.ready")))
+            {
+                Assert.False(shortOwner.IsCompleted, output.ToString());
+                Assert.False(survivor.IsCompleted, survivorOutput.ToString());
+                await Task.Delay(20, deadline.Token);
+            }
+            Assert.False(shortOwner.IsCompleted);
+            Assert.Equal("updating", status.State);
+            if (cancelCaller)
+                caller.Cancel();
+            // Drain closes admission before it waits for the controlled shared extraction.
+            while (true)
+            {
+                using var probe = new NamedPipeClientStream(".", owner.Endpoint, PipeDirection.InOut,
+                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                try
+                {
+                    await probe.ConnectAsync(750, deadline.Token);
+                }
+                catch (TimeoutException)
+                {
+                    break;
+                }
+                await Task.Delay(20, deadline.Token);
+            }
+            Assert.False(shortOwner.IsCompleted);
+            Assert.False(survivor.IsCompleted);
+            Assert.Empty(output.ToString());
+            Assert.Contains("extraction started", progress.ToString(), StringComparison.Ordinal);
+            Assert.Equal(owner.Instance, CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid)!.Instance);
+            Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+                IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+            using (var unchanged = IndexReader.Open(fixture.IndexPath, fixture.Uuid))
+                Assert.Equal(original.Graph.SnapshotId, unchanged.Snapshot().Graph.SnapshotId);
+            release.TrySetResult();
+            await held.WaitAsync(deadline.Token);
+            var survivorExit = await survivor.WaitAsync(deadline.Token);
+            Assert.True(survivorExit == 0, $"Exit={survivorExit}; {survivorOutput}");
+            Assert.Equal(cancelCaller ? 130 : 4, await shortOwner.WaitAsync(deadline.Token));
+            Assert.Equal(cancelCaller ? "CANCELLED" : "TIMEOUT", Code(output.ToString()));
+            using var reply = JsonDocument.Parse(survivorOutput.ToString());
+            var result = reply.RootElement.GetProperty("result");
+            Assert.Equal(owner.Instance, result.GetProperty("ownerInstance").GetGuid());
+            Assert.Equal(2, result.GetProperty("revision").GetInt64());
+            Assert.Equal(2, result.GetProperty("desiredRevision").GetInt64());
+            Assert.Equal(original.Graph.Generation + 1, result.GetProperty("generation").GetInt64());
+            using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var published = current.Snapshot().Graph;
+            Assert.Equal(result.GetProperty("snapshotId").GetString(), published.SnapshotId);
+            Assert.Equal(original.Graph.Generation + 1, published.Generation);
+            var service = Assert.Single(published.Nodes, node => node.Kind == HarnessNodeKind.Type && node.Name == "Service");
+            Assert.Equal(HarnessIdentity.LogicalSymbolId(fixture.Uuid,
+                HarnessIdentity.ProjectId(fixture.Uuid, "App.csproj"), "type", "doc:T:Service"), service.Id);
+            Assert.Contains(current.Search("Service"), hit => hit.NodeId == service.Id);
+            Assert.Equal(original.Graph.SnapshotId, pinned.Snapshot().Graph.SnapshotId);
+            Assert.Contains(pinned.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
+            Assert.Equal(owner.Instance, CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid)!.Instance);
+            Assert.Null(await StatusAsync());
+            using var available = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+            Assert.Equal(fixture.Uuid, available.WorkspaceUuid);
+            Task<CoordinatorReply?> StatusAsync() => CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version,
+                owner.Instance, fixture.Uuid, "drain-status", "status", fixture.Root, fixture.IndexPath, false, []), deadline.Token);
+        }
+        finally
+        {
+            progress.Resume.TrySetResult();
+            release.TrySetResult();
+            caller.Cancel();
+            survivorCancellation.Cancel();
+            await Task.WhenAll(new Task?[] { held, shortOwner, survivor }.OfType<Task>()).WaitAsync(TimeSpan.FromMinutes(2));
+        }
+    }
+
     [Fact]
     public async Task PreparedStateIsDiscardedOnRollbackAndAdoptionFailureCannotUndoCommit()
     {
@@ -1306,6 +1485,18 @@ public sealed class CliTests
         var output = new StringWriter(); var progress = new StringWriter();
         var exit = await CliApplication.RunAsync(arguments, output, progress);
         return (exit, output.ToString(), progress.ToString());
+    }
+
+    private sealed class OwnerStartGateWriter : StringWriter
+    {
+        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async Task WriteLineAsync(string? value)
+        {
+            await base.WriteLineAsync(value);
+            Started.TrySetResult();
+            await Resume.Task;
+        }
     }
 
     private sealed class Fixture : IDisposable
