@@ -11,6 +11,7 @@ using SharpDeps.Query;
 internal sealed class CliCoordinator : IAsyncDisposable
 {
     private readonly IndexWriter writer;
+    private readonly CoordinatorExecutor? executor;
     private readonly Func<CoordinatorUpdate, CancellationToken, Task<CliIndexBuild>> build;
     private readonly CancellationTokenSource lifetime = new();
     private readonly CancellationTokenSource admission = new();
@@ -55,7 +56,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
         Func<CoordinatorUpdate, CancellationToken, Task<CliIndexBuild>>? build = null)
     {
         this.writer = writer;
-        this.build = build ?? new CoordinatorExecutor(writer).BuildAsync;
+        executor = build is null ? new CoordinatorExecutor(writer) : null;
+        this.build = build ?? executor!.BuildAsync;
         using var process = Process.GetCurrentProcess();
         var instance = Guid.NewGuid();
         Owner = new(CoordinatorProtocol.Version, instance, writer.WorkspaceUuid, writer.CanonicalRoot,
@@ -184,9 +186,10 @@ internal sealed class CliCoordinator : IAsyncDisposable
                 using var operation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                 operation.CancelAfter(TimeSpan.FromSeconds(CliIndexOptions.MaximumTimeoutSeconds));
                 using var metrics = PhaseMetrics.TryStart(batch.Update.Options.MetricsDirectory, batch.VerifyWatchInputs is null ? "index.update" : "index.watch-update", batch.Update.Options.Root);
+                CliIndexBuild? built = null;
                 try
                 {
-                    var built = await build(batch.Update, operation.Token);
+                    built = await build(batch.Update, operation.Token);
                     CoordinatorResult result;
                     lock (gate)
                     {
@@ -200,8 +203,15 @@ internal sealed class CliCoordinator : IAsyncDisposable
                             built.VerifySelection();
                             batch.VerifyWatchInputs?.Invoke(operation.Token);
                         });
-                        // Candidate adoption only swaps already validated immutable state after durable publication.
-                        built.AdoptCommittedState?.Invoke();
+                        // Acceleration-cache failures cannot turn a durable publication into a failed update.
+                        try
+                        {
+                            built.AdoptCommittedState?.Invoke();
+                        }
+                        catch (Exception)
+                        {
+                            PhaseMetrics.Decision("index.prepared-state", "adoption-failed");
+                        }
                         var snapshot = built.Snapshot;
                         result = new(snapshot.Graph.WorkspaceId, snapshot.Graph.SnapshotId, snapshot.Graph.Generation,
                             snapshot.Graph.Coverage.ToString(), snapshot.Graph.Diagnostics?.Any(d =>
@@ -250,6 +260,17 @@ internal sealed class CliCoordinator : IAsyncDisposable
                             state = stopping ? "stopping" : "degraded";
                             Complete(batch, captured, null, code);
                         }
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        built?.DiscardPreparedState?.Invoke();
+                    }
+                    catch (Exception)
+                    {
+                        PhaseMetrics.Decision("index.prepared-state", "discard-failed");
                     }
                 }
             }
@@ -470,11 +491,18 @@ internal sealed class CliCoordinator : IAsyncDisposable
         lock (gate) admitted = sessions.ToArray();
         await Task.WhenAll(admitted);
         // Keep a stale bounded descriptor for diagnosis. Only a newly acquired OS lease can replace it.
-        writer.Dispose();
-        lifetime.Dispose();
-        admission.Dispose();
-        signal.Dispose();
-        slots.Dispose();
-        queryProofSlot.Dispose();
+        try
+        {
+            executor?.Dispose();
+        }
+        finally
+        {
+            writer.Dispose();
+            lifetime.Dispose();
+            admission.Dispose();
+            signal.Dispose();
+            slots.Dispose();
+            queryProofSlot.Dispose();
+        }
     }
 }

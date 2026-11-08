@@ -7,7 +7,7 @@ using SharpDeps.Query;
 
 internal static class FullBuildOracle
 {
-    internal static bool IsExecutionDiagnostic(string code) => code is "cli.semanticGraphReused"
+    internal static bool IsExecutionDiagnostic(string code) => code is "cli.semanticGraphReused" or "cli.semanticWorkspaceReused"
         or "cli.semanticVariantsLoaded" or "cli.projectCollectorsExtracted" or "cli.projectCollectorsReused"
         || IsVariantCounter(code, "cli.projectExtracted.") || IsVariantCounter(code, "cli.projectReused.");
 

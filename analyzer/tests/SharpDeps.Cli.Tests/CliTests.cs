@@ -651,6 +651,8 @@ public sealed class CliTests
         var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var builds = 0;
         var publications = 0;
+        var discarded = 0;
+        var adopted = 0;
         var remoteAdmissions = 0;
         using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
         var original = pinned.Snapshot();
@@ -670,8 +672,18 @@ public sealed class CliTests
             }
             using var latest = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
             var previous = latest.Snapshot();
-            return new(previous with { Graph = previous.Graph with { Generation = previous.Graph.Generation + 1,
-                SnapshotId = Guid.NewGuid().ToString("N") } }, () => Interlocked.Increment(ref publications));
+            return new(previous with
+            {
+                Graph = previous.Graph with
+                {
+                    Generation = previous.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            }, () => Interlocked.Increment(ref publications))
+            {
+                AdoptCommittedState = () => Interlocked.Increment(ref adopted),
+                DiscardPreparedState = () => Interlocked.Increment(ref discarded)
+            };
         });
         owner.RequestAccepted = id =>
         {
@@ -701,6 +713,8 @@ public sealed class CliTests
         Assert.Equal(survivor.Result.Generation, (await shortOwner).Result!.Generation);
         Assert.Equal(2, builds); // superseded extraction + one coalesced fresh extraction
         Assert.Equal(1, publications);
+        Assert.Equal(1, Volatile.Read(ref adopted));
+        Assert.Equal(2, Volatile.Read(ref discarded));
         Assert.Equal(original.Graph.Generation, pinned.Snapshot().Graph.Generation);
         Assert.Contains(pinned.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
         using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
@@ -716,6 +730,64 @@ public sealed class CliTests
             await owner.DisposeAsync();
             return reply;
         }
+    }
+
+    [Fact]
+    public async Task PreparedStateIsDiscardedOnRollbackAndAdoptionFailureCannotUndoCommit()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project />");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var original = pinned.Snapshot();
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        var reject = true;
+        var adopted = 0;
+        var discarded = 0;
+        await using var owner = new CliCoordinator(writer, (_, _) => Task.FromResult(new CliIndexBuild(
+            original with
+            {
+                Graph = original.Graph with
+                {
+                    Generation = original.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            },
+            () =>
+            {
+                if (reject)
+                    throw new CliFailure("TEST_PUBLICATION_REJECTED", 3);
+            })
+        {
+            AdoptCommittedState = () =>
+            {
+                Interlocked.Increment(ref adopted);
+                throw new InvalidOperationException("Optional state adoption failed.");
+            },
+            DiscardPreparedState = () =>
+            {
+                Interlocked.Increment(ref discarded);
+                throw new InvalidOperationException("Optional state cleanup failed.");
+            }
+        }));
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root,
+            "--trusted", "--target", "App.csproj"]), fixture.Root, fixture.IndexPath, fixture.Uuid);
+        var failed = await owner.UpdateAsync(update, "reject-prepared", deadline.Token);
+        Assert.Equal("TEST_PUBLICATION_REJECTED", failed.ErrorCode);
+        await WaitUntilAsync(() => Volatile.Read(ref discarded) == 1, deadline.Token);
+        Assert.Equal(0, Volatile.Read(ref adopted));
+        using (var unchanged = IndexReader.Open(fixture.IndexPath, fixture.Uuid))
+            Assert.Equal(original.Graph.Generation, unchanged.Snapshot().Graph.Generation);
+        reject = false;
+        var committed = await owner.UpdateAsync(update, "commit-despite-cache", deadline.Token);
+        Assert.Null(committed.ErrorCode);
+        Assert.Equal(original.Graph.Generation + 1, committed.Result!.Generation);
+        await WaitUntilAsync(() => Volatile.Read(ref discarded) == 2, deadline.Token);
+        Assert.Equal(1, Volatile.Read(ref adopted));
+        using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(committed.Result.SnapshotId, current.Snapshot().Graph.SnapshotId);
+        Assert.Equal(original.Graph.Generation, pinned.Snapshot().Graph.Generation);
+        Assert.Equal(pinned.Search("Service").Select(h => h.NodeId), current.Search("Service").Select(h => h.NodeId));
     }
 
     [Fact]

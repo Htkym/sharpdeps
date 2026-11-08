@@ -272,7 +272,8 @@ public static class CliApplication
         using var metrics = PhaseMetrics.TryStart(selection.MetricsDirectory, "index.exclusive", selection.Root);
         using var writer = IndexWriter.Open(selection.Root, selection.IndexPath, selection.WorkspaceUuid, isTrusted: true);
         if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: exclusive extraction started (no deadline; no automatic restore)");
-        var built = await new CoordinatorExecutor(writer).BuildExclusiveAsync(update, token);
+        using var executor = new CoordinatorExecutor(writer);
+        var built = await executor.BuildExclusiveAsync(update, token);
         token.ThrowIfCancellationRequested();
         var stage = IndexStage.Create(built.Snapshot);
         token.ThrowIfCancellationRequested();

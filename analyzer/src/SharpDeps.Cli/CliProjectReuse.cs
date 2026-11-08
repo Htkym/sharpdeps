@@ -16,7 +16,7 @@ internal sealed record CliProjectSelection(string Key, string VariantId, string 
 internal static class CliProjectReuse
 {
     internal const string Version = "sharpdeps-cli-project-reuse/7";
-    internal static bool IsExecutionDiagnostic(string code) => code is "cli.semanticVariantsLoaded"
+    internal static bool IsExecutionDiagnostic(string code) => code is "cli.semanticVariantsLoaded" or "cli.semanticWorkspaceReused"
         or "cli.projectCollectorsExtracted" or "cli.projectCollectorsReused"
         || code.StartsWith("cli.projectExtracted.", StringComparison.Ordinal)
         || code.StartsWith("cli.projectReused.", StringComparison.Ordinal);

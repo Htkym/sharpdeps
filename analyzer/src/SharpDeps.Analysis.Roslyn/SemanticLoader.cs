@@ -74,6 +74,14 @@ public static class SemanticLoader
         SemanticLoadOptions options,
         CancellationToken cancellationToken = default)
     {
+        using var loaded = await LoadCandidateAsync(options, cancellationToken);
+        return loaded.Result;
+    }
+
+    internal static async Task<SemanticColdLoad> LoadCandidateAsync(
+        SemanticLoadOptions options,
+        CancellationToken cancellationToken = default)
+    {
         using var loadMetrics = PhaseMetrics.Measure("semantic.load");
         if (!Microsoft.Build.Locator.MSBuildLocator.IsRegistered)
         {
@@ -99,7 +107,7 @@ public static class SemanticLoader
         var diagnostics = new List<ProbeDiagnostic>();
         var limitations = new List<ProbeLimitation>();
 
-        using var workspace = MSBuildWorkspace.Create(properties);
+        var workspace = MSBuildWorkspace.Create(properties);
         workspace.RegisterWorkspaceFailedHandler(args =>
             diagnostics.Add(new ProbeDiagnostic(args.Diagnostic.Kind.ToString(), args.Diagnostic.Message)));
 
@@ -112,7 +120,8 @@ public static class SemanticLoader
         catch (Exception error) when (error is not OperationCanceledException)
         {
             limitations.Add(new ProbeLimitation("semantic.loadFailed", error.Message, null));
-            return new SemanticLoadResult(
+            workspace.Dispose();
+            return new SemanticColdLoad(null, null, options, diagnostics.ToArray(), new SemanticLoadResult(
                 new SemanticProbeReport(
                     SchemaVersion: "semantic-probe-1",
                     CreatedAt: DateTimeOffset.UtcNow.ToString("O"),
@@ -122,14 +131,35 @@ public static class SemanticLoader
                     Profile: new SemanticProfileInfo(options.Configuration, options.Platform, string.Empty, []),
                     Variants: [],
                     References: [],
-                    Diagnostics: diagnostics,
+                    Diagnostics: diagnostics.ToArray(),
                     Limitations: limitations,
                     Coverage: new ProbeCoverage(0, 0, 0, 0, 0, 0)),
                 new Dictionary<string, Compilation>(),
                 new Dictionary<string, IReadOnlyDictionary<string, string>>(),
-                []);
+                []));
+        }
+        catch
+        {
+            workspace.Dispose();
+            throw;
         }
 
+        try
+        {
+            solution = SelectVariants(solution, options);
+            var result = await EvaluateAsync(solution, options, diagnostics, cancellationToken);
+            return new SemanticColdLoad(workspace, solution, options, diagnostics.ToArray(), result);
+        }
+        catch
+        {
+            workspace.Dispose();
+            throw;
+        }
+    }
+
+    private static Solution SelectVariants(Solution solution, SemanticLoadOptions options)
+    {
+        var targetPath = Path.GetFullPath(options.TargetPath);
         if (options.ProjectVariants is { Count: > 0 })
         {
             var root = Path.GetDirectoryName(targetPath)!;
@@ -153,6 +183,15 @@ public static class SemanticLoader
             foreach (var project in csharp.Where(project => !selected.Contains(project.Id))) solution = solution.RemoveProject(project.Id);
         }
 
+        return solution;
+    }
+
+    internal static async Task<SemanticLoadResult> EvaluateAsync(Solution solution,
+        SemanticLoadOptions options, IReadOnlyList<ProbeDiagnostic> diagnostics,
+        CancellationToken cancellationToken)
+    {
+        var targetPath = Path.GetFullPath(options.TargetPath);
+        var limitations = new List<ProbeLimitation>();
         var addedReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var compilations = await BuildCompilationsAsync(
             solution,
@@ -423,7 +462,7 @@ public static class SemanticLoader
             Profile: BuildProfile(solution, options),
             Variants: variants,
             References: references,
-            Diagnostics: diagnostics,
+            Diagnostics: diagnostics.ToArray(),
             Limitations: limitations,
             Coverage: new ProbeCoverage(
                 Discovered: loaded + failed,
@@ -791,7 +830,7 @@ public static class SemanticLoader
     }
 
     /// <summary>Variant key of a loaded project: path + TFM + configuration + platform.</summary>
-    private static string VariantKeyFor(Project project, SemanticLoadOptions options)
+    internal static string VariantKeyFor(Project project, SemanticLoadOptions options)
         => ProjectVariantResolver.VariantKey(
             project.FilePath ?? project.Name,
             TryGetTargetFramework(project),

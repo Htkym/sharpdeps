@@ -27,6 +27,7 @@ public sealed record CliIndexBuild(IndexSnapshot Snapshot, Action VerifySelectio
 {
     internal Func<CancellationToken, QueryInputInventory>? VerifyQueryInputs { get; init; }
     internal Action? AdoptCommittedState { get; init; }
+    internal Action? DiscardPreparedState { get; init; }
     internal int MarkdownPrepareCalls { get; init; }
     internal int MarkdownPreparedCacheHits { get; init; }
 }
@@ -78,7 +79,8 @@ public static class CliIndexer
 
     internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
-        Action<CliProofAdmission>? observeProof, MarkdownPreparedCache.Candidate? preparedCache)
+        Action<CliProofAdmission>? observeProof, MarkdownPreparedCache.Candidate? preparedCache,
+        CliSemanticSession.Update? semanticUpdate = null)
     {
         using var buildMetrics = PhaseMetrics.Measure("index.build");
         ArgumentNullException.ThrowIfNull(options);
@@ -156,6 +158,8 @@ public static class CliIndexer
             diagnostics = (graph.Diagnostics ?? []).ToDictionary(d => d.Code, d => d.Count, StringComparer.Ordinal);
             diagnostics["cli.semanticGraphReused"] = 1;
             reuseProof = savedProof;
+            semanticUpdate?.Retain(new(optionsHash, savedProof.Projects!.StructureHash,
+                currentFingerprint!.DependencyHash, currentFingerprint.EnvironmentHash, currentFingerprint.SdkPath), previous.Graph.Generation);
         }
         else
         {
@@ -180,8 +184,27 @@ public static class CliIndexer
                     Identity.ProjectLogicalId(Identity.WorkspaceRootId(loaderRoot), Path.GetRelativePath(loaderRoot, path)),
                     options.TargetFramework!)).ToArray();
             }
-            var loaded = await SemanticLoader.LoadAsync(new(target, options.Configuration, options.Platform,
-                options.TimeoutSeconds, selections), token);
+            SemanticLoadResult? warmed = null;
+            if (semanticUpdate is { CanUpdate: true } && options.AllowSemanticReuse && previous is not null
+                && savedProof?.Projects is { } savedProjects && savedProjects.Version == CliProjectReuse.Version && fullFingerprint is not null
+                && !previous.Files.Any(QueryWorkspace.IsStored)
+                && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash))
+            {
+                var owned = previous.Files.Where(f => !f.Deleted && f.Kind == "source").ToArray();
+                var paths = owned.Select(f => f.RelativePath).ToHashSet(PathComparer);
+                var structure = await FingerprintInputs(root, options.IndexPath, true, token,
+                    includeMarkdown: true, ownedSourcePaths: paths);
+                if (structure is not null && structure == savedProjects.StructureHash)
+                {
+                    foreach (var file in owned)
+                        await Capture(Path.Combine(root, file.RelativePath), "source");
+                    warmed = await semanticUpdate.TryUpdateAsync(new(optionsHash, structure, fullFingerprint.DependencyHash,
+                        fullFingerprint.EnvironmentHash, fullFingerprint.SdkPath), previous.Graph.Generation, SemanticSources(), token);
+                }
+            }
+            using var coldLoad = warmed is null ? await SemanticLoader.LoadCandidateAsync(new(target, options.Configuration,
+                options.Platform, options.TimeoutSeconds, selections), token) : null;
+            var loaded = warmed ?? coldLoad!.Result;
             var variants = loaded.Report.Variants.Where(v => selectedPaths.Count == 0
                     || selectedPaths.Contains(Path.GetFullPath(v.ProjectPath)))
                 .Where(v => options.TargetFramework is null || v.TargetFramework == options.TargetFramework).ToArray();
@@ -464,6 +487,8 @@ public static class CliIndexer
             diagnostics = (graph.Diagnostics ?? []).ToDictionary(d => d.Code, d => d.Count, StringComparer.Ordinal);
             diagnostics["cli.configurationInventoryUnverified"] = 1;
             diagnostics["cli.semanticVariantsLoaded"] = inputs.Length;
+            if (semanticUpdate?.Warm == true)
+                diagnostics["cli.semanticWorkspaceReused"] = 1;
             diagnostics["cli.projectCollectorsExtracted"] = extracted.Count;
             if (reused.Count > 0) diagnostics["cli.projectCollectorsReused"] = reused.Count;
             foreach (var project in projects)
@@ -506,6 +531,9 @@ public static class CliIndexer
                 { Projects = CliProjectReuse.Capture(structureHash, projectSelections, extractions, capturedFiles) };
             if (reused.Count > 0 && reuseProof is null)
                 throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+            if (semanticUpdate is not null && coldLoad is not null && reuseProof?.Projects is { } closedProjects)
+                await semanticUpdate.PrepareColdAsync(coldLoad, new(optionsHash, closedProjects.StructureHash,
+                    afterFingerprint!.DependencyHash, afterFingerprint.EnvironmentHash, afterFingerprint.SdkPath), SemanticSources(), token);
         }
 
         // SourceFile nodes expose actual manifest metadata and retain project-path to persisted-ID binding.
@@ -661,6 +689,10 @@ public static class CliIndexer
             return prepared;
         }
 
+        IReadOnlyDictionary<string, SemanticSourceInput> SemanticSources()
+            => manifest.Values.Where(i => i.File.Kind == "source" && !i.File.Deleted).ToDictionary(i => i.AbsolutePath,
+                i => new SemanticSourceInput(i.Text, i.File.ContentHash, i.EncodingName), PathComparer);
+
         async Task<InputText> Capture(string path, string kind)
         {
             path = InsideRoot(root, path);
@@ -678,7 +710,7 @@ public static class CliIndexer
             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
                 throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
             var input = new InputText(path, new("cli-input:" + relative, relative, kind, text.Hash,
-                text.Bytes, text.Text.Length), text.Text, text.HasBom);
+                text.Bytes, text.Text.Length), text.Text, text.HasBom, text.EncodingName);
             manifest.Add(relative, input);
             return input;
         }
@@ -870,7 +902,7 @@ public static class CliIndexer
         { return null; }
     }
 
-    private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasBom);
+    private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasBom, string EncodingName = "utf8");
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static IEnumerable<string> WalkInputs(string root, string indexPath, CancellationToken token)
@@ -901,7 +933,7 @@ public static class CliIndexer
         ".csproj" or ".fsproj" or ".vbproj" or ".sln" or ".slnx" or ".props" or ".targets" or ".editorconfig"
         || Path.GetFileName(path).ToLowerInvariant() is "global.json" or "nuget.config" or "packages.lock.json" or ".editorconfig";
 
-    private static async Task<(string Text, string Hash, long Bytes, bool HasBom)> ReadInput(string path, CancellationToken token)
+    private static async Task<(string Text, string Hash, long Bytes, bool HasBom, string EncodingName)> ReadInput(string path, CancellationToken token)
     {
         RejectLinks(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
@@ -915,7 +947,9 @@ public static class CliIndexer
         catch (DecoderFallbackException error)
         { throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require UTF-8 or BOM-marked UTF-16 text.", inner: error); }
         RejectLinks(path);
-        return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, text.StartsWith('\uFEFF'));
+        return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, text.StartsWith('\uFEFF'),
+            bytes.Length >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe ? "utf16le"
+                : bytes.Length >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff ? "utf16be" : "utf8");
     }
 
     private static async Task Verify(InputText input, string root, CancellationToken token)

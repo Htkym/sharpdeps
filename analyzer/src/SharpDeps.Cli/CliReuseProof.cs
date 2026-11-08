@@ -21,7 +21,7 @@ internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHas
 /// </summary>
 internal static partial class CliReuseProof
 {
-    internal const string OwnerVersion = "sharpdeps-cli-reuse/2";
+    internal const string OwnerVersion = "sharpdeps-cli-reuse/3";
     private const int MaximumEntries = 100_000;
     private const long MaximumBytes = 2L * 1024 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -187,6 +187,12 @@ internal static partial class CliReuseProof
                     continue;
                 }
                 var name = Path.GetFileName(entry);
+                if (name.Equals("Directory.Build.props", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PlainDirectoryBuildProps(entry, budget))
+                        return false;
+                    continue;
+                }
                 if (ImplicitConfiguration.Any(candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase))) return false;
                 if (Path.GetExtension(entry).Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
                     || Path.GetExtension(entry).Equals(".vbproj", StringComparison.OrdinalIgnoreCase)) return false;
