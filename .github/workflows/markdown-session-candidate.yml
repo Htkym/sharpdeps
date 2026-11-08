@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 15
     env:
       SharpDepsUseMarkdownSessionCandidate: 'true'
+      SHARPDEPS_TEST_REPOSITORY_ROOT: ${{ github.workspace }}
       ARTIFACTS_ROOT: ${{ runner.temp }}/markdown-session-artifacts
       NUGET_PACKAGES: ${{ runner.temp }}/markdown-session-packages
       DOTNET_CLI_HOME: ${{ runner.temp }}/markdown-session-home
@@ -84,7 +85,7 @@ jobs:
         working-directory: ${{ runner.temp }}/markdown-session-work
         run: |
           dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --logger 'trx;LogFileName=markdown.trx' --results-directory results
-          dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --filter 'FullyQualifiedName~CliMarkdownInputTests' --logger 'trx;LogFileName=owner.trx' --results-directory results
+          dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --filter 'FullyQualifiedName~CliMarkdownInputTests|FullyQualifiedName~PreparedStateIsDiscardedOnRollbackAndAdoptionFailureCannotUndoCommit|FullyQualifiedName~SemanticSessionWorkspaceTests' --logger 'trx;LogFileName=owner.trx' --results-directory results
           git -C "$GITHUB_WORKSPACE" diff --exit-code -- docs/contracts/markdown-runtime-pin.json docs/contracts/markdown-consumer-conformance-v1.json eng/markdown/feed
       - name: Upload candidate verification
         if: always()
