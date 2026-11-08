@@ -908,14 +908,14 @@ public sealed class CliTests
             // Admit the survivor before cold SDK/workspace startup can consume the owner's deadline.
             do
             {
-                status = Assert.IsType<CoordinatorReply>(await StatusAsync());
+                status = Assert.IsType<CoordinatorReply>(await StatusAsync(deadline.Token));
                 if (status.DesiredRevision != 1 || status.State != "updating")
                     await Task.Delay(20, deadline.Token);
             } while (status.DesiredRevision != 1 || status.State != "updating");
             progress.Resume.TrySetResult();
             do
             {
-                status = Assert.IsType<CoordinatorReply>(await StatusAsync());
+                status = Assert.IsType<CoordinatorReply>(await StatusAsync(deadline.Token));
                 if (status.DesiredRevision < 2)
                     await Task.Delay(20, deadline.Token);
             } while (status.DesiredRevision < 2);
@@ -926,21 +926,38 @@ public sealed class CliTests
                 await Task.Delay(20, deadline.Token);
             }
             Assert.False(shortOwner.IsCompleted);
+            Assert.Equal(owner.Instance, status.Instance);
+            Assert.Equal(0, status.Revision);
+            Assert.Equal(2, status.DesiredRevision);
             Assert.Equal("updating", status.State);
+            Assert.Null(status.ErrorCode);
             if (cancelCaller)
                 caller.Cancel();
-            // Drain closes admission before it waits for the controlled shared extraction.
+            // Observe status admission, not socket connectivity: Unix shares a listener across admitted sessions.
             while (true)
             {
-                using var probe = new NamedPipeClientStream(".", owner.Endpoint, PipeDirection.InOut,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                using var probeDeadline = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+                probeDeadline.CancelAfter(TimeSpan.FromSeconds(2));
                 try
                 {
-                    await probe.ConnectAsync(750, deadline.Token);
+                    var probe = await StatusAsync(probeDeadline.Token);
+                    if (probe is null)
+                    {
+                        break;
+                    }
+                    Assert.Equal(owner.Instance, probe.Instance);
+                    Assert.Equal(0, probe.Revision);
+                    Assert.Equal(2, probe.DesiredRevision);
+                    Assert.Equal("updating", probe.State);
+                    Assert.Null(probe.ErrorCode);
                 }
-                catch (TimeoutException)
+                catch (OperationCanceledException) when (probeDeadline.IsCancellationRequested && !deadline.IsCancellationRequested)
                 {
                     break;
+                }
+                catch (CliFailure failure) when (failure.Code == "COORDINATOR_RESULT_UNKNOWN")
+                {
+                    // A connection raced admission shutdown; retry without treating transport failure as proof.
                 }
                 await Task.Delay(20, deadline.Token);
             }
@@ -976,11 +993,11 @@ public sealed class CliTests
             Assert.Equal(original.Graph.SnapshotId, pinned.Snapshot().Graph.SnapshotId);
             Assert.Contains(pinned.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
             Assert.Equal(owner.Instance, CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid)!.Instance);
-            Assert.Null(await StatusAsync());
+            Assert.Null(await StatusAsync(deadline.Token));
             using var available = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
             Assert.Equal(fixture.Uuid, available.WorkspaceUuid);
-            Task<CoordinatorReply?> StatusAsync() => CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version,
-                owner.Instance, fixture.Uuid, "drain-status", "status", fixture.Root, fixture.IndexPath, false, []), deadline.Token);
+            Task<CoordinatorReply?> StatusAsync(CancellationToken token) => CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version,
+                owner.Instance, fixture.Uuid, "drain-status", "status", fixture.Root, fixture.IndexPath, false, []), token);
         }
         finally
         {
