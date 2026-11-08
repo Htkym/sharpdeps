@@ -9,12 +9,13 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <ProjectReference Include="..\..\src\SharpDeps.Index\SharpDeps.Index.csproj" />
-    <ProjectReference Include="WriterLockProbe\WriterLockProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="WriterLockProbe\WriterLockProbe.csproj" ReferenceOutputAssembly="false" OutputItemType="WriterLockProbeTargetPath" />
     <Compile Remove="WriterLockProbe\**\*.cs" />
   </ItemGroup>
   <Target Name="CopyWriterLockProbe" AfterTargets="Build">
+    <Error Condition="'@(WriterLockProbeTargetPath-&gt;Count())' != '1'" Text="Expected exactly one writer-lock probe target path." />
     <ItemGroup>
-      <WriterLockProbeOutput Include="$(MSBuildProjectDirectory)\WriterLockProbe\bin\$(Configuration)\$(TargetFramework)\**\*" />
+      <WriterLockProbeOutput Include="%(WriterLockProbeTargetPath.RootDir)%(WriterLockProbeTargetPath.Directory)**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(WriterLockProbeOutput)" DestinationFolder="$(OutDir)WriterLockProbe\%(RecursiveDir)" SkipUnchangedFiles="true" />
   </Target>
