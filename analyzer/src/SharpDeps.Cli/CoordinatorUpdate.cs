@@ -3,6 +3,7 @@ namespace SharpDeps.Cli;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using SharpDeps.Analysis.Markdown;
 using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Index;
 
@@ -51,6 +52,7 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
 internal sealed class CoordinatorExecutor(IndexWriter writer)
 {
     private CliSdkSelection? selection;
+    private readonly MarkdownPreparedCache preparedCache = new();
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal Task<CliIndexBuild> BuildAsync(CoordinatorUpdate update, CancellationToken token)
@@ -86,11 +88,13 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
             previous = reader.Snapshot(token);
         }
         catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && full) { }
-        var build = await CliIndexer.BuildForPublicationAsync(options, previous, token);
+        var candidate = preparedCache.BeginUpdate();
+        var build = await CliIndexer.BuildForPublicationAsync(options, previous, token, null, null, null, candidate);
         var directory = Path.GetDirectoryName(options.Target)!;
         return build with
         {
             VerifySelection = PublicationGuard(current, directory, build.VerifySelection),
+            AdoptCommittedState = () => candidate.Adopt(),
             VerifyQueryInputs = build.VerifyQueryInputs is not { } verify ? null : QueryGuard(current, directory, verify)
         };
     }

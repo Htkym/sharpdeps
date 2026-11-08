@@ -26,6 +26,9 @@ public sealed record CliIndexOptions(string Root, string Target, string IndexPat
 public sealed record CliIndexBuild(IndexSnapshot Snapshot, Action VerifySelection)
 {
     internal Func<CancellationToken, QueryInputInventory>? VerifyQueryInputs { get; init; }
+    internal Action? AdoptCommittedState { get; init; }
+    internal int MarkdownPrepareCalls { get; init; }
+    internal int MarkdownPreparedCacheHits { get; init; }
 }
 
 public sealed class CliIndexException : Exception
@@ -68,9 +71,14 @@ public static class CliIndexer
         CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity)
         => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, allocateIdentity, null);
 
-    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+    internal static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
         Action<CliProofAdmission>? observeProof)
+        => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, allocateIdentity, observeProof, null);
+
+    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
+        Action<CliProofAdmission>? observeProof, MarkdownPreparedCache.Candidate? preparedCache)
     {
         using var buildMetrics = PhaseMetrics.Measure("index.build");
         ArgumentNullException.ThrowIfNull(options);
@@ -509,13 +517,14 @@ public static class CliIndexer
         // Document projection coverage must not change the completeness of the supplied code catalog.
         var codeCatalog = graph;
         var adapter = new LithoSharpMarkdownAdapter();
+        var prepareCalls = 0;
+        var preparedCacheHits = 0;
         var markdown = new List<(InputText Input, MarkdownPreparedInput Prepared, string? ExplicitId)>();
         foreach (var input in manifest.Values.Where(i => i.File.Kind == "markdown").OrderBy(i => i.File.RelativePath, StringComparer.Ordinal))
         {
             var request = new MarkdownGraphRequest(input.Text, options.WorkspaceUuid, Guid.NewGuid(), workspaceId,
                 input.File.SourceId, input.File.ContentHash, snapshotId, generation);
-            using var prepareMetrics = PhaseMetrics.Measure("markdown.prepare");
-            var prepared = adapter.Prepare(request, isTrusted: true, token);
+            var prepared = PrepareMarkdown(request);
             RequireIndexableMarkdownFacts(prepared.Facts, input.File.RelativePath);
             var ids = prepared.Attributes.Where(a => a.Key == "sharpdeps.id").ToArray();
             if (ids.Length > 1 || (ids.Length == 1 && string.IsNullOrWhiteSpace(ids[0].Source.Scalar.Text)))
@@ -542,7 +551,7 @@ public static class CliIndexer
             var scope = old?.ScopeId ?? workspaceId;
             var request = new MarkdownGraphRequest(item.Input.Text, options.WorkspaceUuid, uuid, scope,
                 item.Input.File.SourceId, item.Input.File.ContentHash, snapshotId, generation);
-            var prepared = scope == workspaceId ? item.Prepared : adapter.Prepare(request, true, token);
+            var prepared = scope == workspaceId ? item.Prepared : PrepareMarkdown(request);
             var facts = prepared.Facts;
             var oldSections = old is null ? null : new MarkdownSectionIdentitySnapshot(
                 HarnessIdentity.DocumentId(options.WorkspaceUuid, uuid), old.ScopeId, old.ContentHash,
@@ -610,6 +619,8 @@ public static class CliIndexer
             identities.ToArray(), [], search, generatedBodies, packageBodies);
         using (PhaseMetrics.Measure("snapshot.validate"))
             IndexSnapshotValidator.Validate(snapshot);
+        PhaseMetrics.Count("markdown.prepare.calls", prepareCalls);
+        PhaseMetrics.Count("markdown.prepared-cache.hits", preparedCacheHits);
         PhaseMetrics.Count("files", snapshot.Files.Count);
         PhaseMetrics.Count("input.bytes", inputBytes);
         PhaseMetrics.Count("graph.nodes", snapshot.Graph.Nodes.Count);
@@ -629,8 +640,26 @@ public static class CliIndexer
         {
             // Only a production extraction with a closed dependency/SDK proof may attest freshness.
             // Retain file metadata/options, not the graph or compiler workspace.
-            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs)
+            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs),
+            MarkdownPrepareCalls = prepareCalls,
+            MarkdownPreparedCacheHits = preparedCacheHits
         };
+
+        MarkdownPreparedInput PrepareMarkdown(MarkdownGraphRequest request)
+        {
+            using var prepareMetrics = PhaseMetrics.Measure("markdown.prepare");
+            if (preparedCache is null)
+            {
+                prepareCalls++;
+                return adapter.Prepare(request, true, token);
+            }
+            var prepared = preparedCache.Prepare(adapter, request, true, out var hit, token);
+            if (hit)
+                preparedCacheHits++;
+            else
+                prepareCalls++;
+            return prepared;
+        }
 
         async Task<InputText> Capture(string path, string kind)
         {

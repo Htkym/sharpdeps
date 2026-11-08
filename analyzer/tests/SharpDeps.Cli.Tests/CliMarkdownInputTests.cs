@@ -44,21 +44,31 @@ public sealed class CliMarkdownInputTests
             Assert.True(restore.ExitCode == 0, await stdout + await stderr);
         }
         using var writer = IndexWriter.Open(fixture.Root, fixture.Options.IndexPath, fixture.Options.WorkspaceUuid, true);
+        var executor = new CoordinatorExecutor(writer);
+        Task<CliIndexBuild> Build(bool full = false) => executor.BuildAsync(new(fixture.Options, full), deadline.Token);
         // Exact original first-index failure input, before testing a complete-to-Partial update.
         File.WriteAllText(fixture.MarkdownPath, "IReadOnlyState<T>");
-        var initial = await CliIndexer.BuildForPublicationAsync(fixture.Options, null, deadline.Token);
+        var initial = await Build(full: true);
+        Assert.Equal(1, initial.MarkdownPrepareCalls);
+        Assert.Equal(0, initial.MarkdownPreparedCacheHits);
         Assert.Equal(1, initial.Snapshot.Graph.Generation);
         Assert.Equal(HarnessCoverage.Partial, initial.Snapshot.Graph.Coverage);
         Assert.Single(initial.Snapshot.Documents);
         writer.Commit(IndexStage.Create(initial.Snapshot), deadline.Token, initial.VerifySelection);
+        initial.AdoptCommittedState!();
         File.WriteAllText(fixture.MarkdownPath, "`IReadOnlyState<T>`");
-        var complete = await CliIndexer.BuildForPublicationAsync(fixture.Options, initial.Snapshot, deadline.Token);
+        var complete = await Build();
+        Assert.Equal(1, complete.MarkdownPrepareCalls);
+        Assert.Equal(0, complete.MarkdownPreparedCacheHits);
         Assert.Single(complete.Snapshot.Documents);
         writer.Commit(IndexStage.Create(complete.Snapshot), deadline.Token, complete.VerifySelection);
+        complete.AdoptCommittedState!();
         using var pinned = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid);
         var original = JsonSerializer.Serialize(pinned.Snapshot(), QueryJson.Options);
         File.WriteAllText(fixture.MarkdownPath, "IReadOnlyState<T>");
-        var partial = await CliIndexer.BuildForPublicationAsync(fixture.Options, complete.Snapshot, deadline.Token);
+        var partial = await Build();
+        Assert.Equal(1, partial.MarkdownPrepareCalls);
+        Assert.Equal(0, partial.MarkdownPreparedCacheHits);
         Assert.Equal(complete.Snapshot.Graph.Generation + 1, partial.Snapshot.Graph.Generation);
         Assert.Equal(HarnessCoverage.Partial, partial.Snapshot.Graph.Coverage);
         Assert.Contains(partial.Snapshot.Graph.Diagnostics!, diagnostic => diagnostic.Code == "markdown.parser-diagnostic.LMD006");
@@ -66,6 +76,7 @@ public sealed class CliMarkdownInputTests
         Assert.NotEmpty(Assert.Single(partial.Snapshot.Documents).Sections);
         IndexSnapshotValidator.Validate(partial.Snapshot);
         writer.Commit(IndexStage.Create(partial.Snapshot), deadline.Token, partial.VerifySelection);
+        partial.AdoptCommittedState!();
         Assert.Equal(original, JsonSerializer.Serialize(pinned.Snapshot(), QueryJson.Options));
         using var current = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid);
         Assert.Equal(partial.Snapshot.Graph.Generation, current.Snapshot().Graph.Generation);
@@ -76,7 +87,9 @@ public sealed class CliMarkdownInputTests
 
         // Saved readers order search rows by node ID; compare the complete saved representation on both sides.
         var committed = JsonSerializer.Serialize(current.Snapshot(), QueryJson.Options);
-        var unchanged = await CliIndexer.BuildForPublicationAsync(fixture.Options, partial.Snapshot, deadline.Token);
+        var unchanged = await Build();
+        Assert.Equal(0, unchanged.MarkdownPrepareCalls);
+        Assert.Equal(1, unchanged.MarkdownPreparedCacheHits);
         Assert.Equal(Assert.Single(partial.Snapshot.Documents).Sections, Assert.Single(unchanged.Snapshot.Documents).Sections);
         const string duplicateId = "---\nsharpdeps:\n  id: duplicate\n---\n# Duplicate\n";
         File.WriteAllText(fixture.MarkdownPath, duplicateId);
@@ -84,12 +97,91 @@ public sealed class CliMarkdownInputTests
         var duplicate = await Assert.ThrowsAsync<CliIndexException>(() => CliIndexer.BuildForPublicationAsync(
             fixture.Options, partial.Snapshot, deadline.Token));
         Assert.Equal("CLI_MARKDOWN_ID_AMBIGUOUS", duplicate.Code);
+        File.Delete(Path.Combine(fixture.Root, "duplicate.md"));
+        CliIndexBuild? ownerBuild = null;
+        var rejectPublication = false;
+        await using (var owner = new CliCoordinator(writer, async (update, token) =>
+        {
+            ownerBuild = await executor.BuildAsync(update, token);
+            return rejectPublication ? ownerBuild with
+            {
+                VerifySelection = () => throw new CliFailure("TEST_PUBLICATION_REJECTED", 4)
+            } : ownerBuild;
+        }))
+        {
+            var update = new CoordinatorUpdate(fixture.Options, false);
+            // The coordinator must not adopt a parsed replacement whose transaction is rejected.
+            File.WriteAllText(fixture.MarkdownPath, "# Replacement\n[Example](Example.cs)\nChanged paragraph.\n");
+            rejectPublication = true;
+            var rejected = await owner.UpdateAsync(update, "reject-prepared-candidate", deadline.Token);
+            Assert.Equal("TEST_PUBLICATION_REJECTED", rejected.ErrorCode);
+            Assert.Equal(1, ownerBuild!.MarkdownPrepareCalls);
+            Assert.Equal(0, ownerBuild.MarkdownPreparedCacheHits);
+            using (var afterRejection = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid))
+                Assert.Equal(committed, JsonSerializer.Serialize(afterRejection.Snapshot(), QueryJson.Options));
+
+            File.WriteAllText(fixture.MarkdownPath, "IReadOnlyState<T>");
+            rejectPublication = false;
+            var cached = await owner.UpdateAsync(update, "retain-committed-prepared", deadline.Token);
+            Assert.Null(cached.ErrorCode);
+            Assert.Equal(0, ownerBuild!.MarkdownPrepareCalls);
+            Assert.Equal(1, ownerBuild.MarkdownPreparedCacheHits);
+            // A successful publication must adopt its new facts before the next owner update.
+            File.WriteAllText(fixture.MarkdownPath, "# Replacement\n[Example](Example.cs)\nChanged paragraph.\n");
+            Assert.Null((await owner.UpdateAsync(update, "adopt-new-prepared", deadline.Token)).ErrorCode);
+            Assert.Equal(1, ownerBuild!.MarkdownPrepareCalls);
+            Assert.Null((await owner.UpdateAsync(update, "reuse-new-prepared", deadline.Token)).ErrorCode);
+            Assert.Equal(0, ownerBuild!.MarkdownPrepareCalls);
+            Assert.Equal(1, ownerBuild.MarkdownPreparedCacheHits);
+            Assert.Equal(original, JsonSerializer.Serialize(pinned.Snapshot(), QueryJson.Options));
+
+            var beforeCatalogEdit = ownerBuild.Snapshot;
+            var mention = Assert.Single(beforeCatalogEdit.Graph.Nodes, node =>
+                node.Kind == HarnessNodeKind.SymbolMention && node.Name == "Example.cs");
+            var oldTargets = beforeCatalogEdit.Graph.Edges.Where(edge => edge.SourceNodeId == mention.Id
+                && edge.Kind == "documents_symbol").Select(edge => edge.TargetNodeId).ToHashSet(StringComparer.Ordinal);
+            Assert.NotEmpty(oldTargets);
+            File.WriteAllText(Path.Combine(fixture.Root, "Example.cs"), "public sealed class Renamed { }");
+            Assert.Null((await owner.UpdateAsync(update, "rebind-cached-mentions", deadline.Token)).ErrorCode);
+            Assert.Equal(0, ownerBuild!.MarkdownPrepareCalls);
+            Assert.Equal(1, ownerBuild.MarkdownPreparedCacheHits);
+            Assert.DoesNotContain(ownerBuild.Snapshot.Graph.Edges, edge => edge.SourceNodeId == mention.Id
+                && edge.Kind == "documents_symbol" && oldTargets.Contains(edge.TargetNodeId));
+            Assert.Contains(ownerBuild.Snapshot.Graph.Edges, edge => edge.SourceNodeId == mention.Id
+                && edge.Kind == "documents_symbol");
+            await AssertColdEquivalent(beforeCatalogEdit, ownerBuild.Snapshot);
+
+            var beforeRename = ownerBuild.Snapshot;
+            var documentUuid = Assert.Single(beforeRename.Documents).DocumentUuid;
+            File.Move(fixture.MarkdownPath, Path.Combine(fixture.Root, "renamed.md"));
+            Assert.Null((await owner.UpdateAsync(update, "rename-prepared-source", deadline.Token)).ErrorCode);
+            Assert.Equal(1, ownerBuild!.MarkdownPrepareCalls);
+            Assert.Equal(0, ownerBuild.MarkdownPreparedCacheHits);
+            var renamed = Assert.Single(ownerBuild.Snapshot.Documents);
+            Assert.Equal("renamed.md", renamed.RelativePath);
+            Assert.Equal(documentUuid, renamed.DocumentUuid);
+            await AssertColdEquivalent(beforeRename, ownerBuild.Snapshot);
+        }
+        using (var latest = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid))
+            committed = JsonSerializer.Serialize(latest.Snapshot(), QueryJson.Options);
         File.WriteAllBytes(fixture.MarkdownPath, [0xff]);
         await Assert.ThrowsAsync<CliIndexException>(() => CliIndexer.BuildForPublicationAsync(fixture.Options, partial.Snapshot, deadline.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CliIndexer.BuildForPublicationAsync(
             fixture.Options, partial.Snapshot, new CancellationToken(true)));
         using var retained = IndexReader.Open(fixture.Options.IndexPath, fixture.Options.WorkspaceUuid);
         Assert.Equal(committed, JsonSerializer.Serialize(retained.Snapshot(), QueryJson.Options));
+
+        async Task AssertColdEquivalent(IndexSnapshot previous, IndexSnapshot cached)
+        {
+            // Snapshot-local Markdown IDs include this run identity; bind the same input as the process oracle.
+            var allocations = 0;
+            Guid AllocateSnapshot() => ++allocations == 1 ? Guid.ParseExact(cached.Graph.SnapshotId, "N")
+                : throw new InvalidOperationException("The oracle unexpectedly allocated a new durable identity.");
+            var cold = await CliIndexer.BuildForPublicationAsync(fixture.Options, previous, deadline.Token, null, AllocateSnapshot);
+            var differences = FullBuildOracle.Differences(new(cold.Snapshot, [], [], Environment.ProcessId),
+                new(cached, [], [], Environment.ProcessId));
+            Assert.True(differences.Count == 0, string.Join(Environment.NewLine, differences.Take(20)));
+        }
     }
 
     [Fact]

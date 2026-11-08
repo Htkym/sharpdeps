@@ -200,6 +200,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
                             built.VerifySelection();
                             batch.VerifyWatchInputs?.Invoke(operation.Token);
                         });
+                        // Candidate adoption only swaps already validated immutable state after durable publication.
+                        built.AdoptCommittedState?.Invoke();
                         var snapshot = built.Snapshot;
                         result = new(snapshot.Graph.WorkspaceId, snapshot.Graph.SnapshotId, snapshot.Graph.Generation,
                             snapshot.Graph.Coverage.ToString(), snapshot.Graph.Diagnostics?.Any(d =>

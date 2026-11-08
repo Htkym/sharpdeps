@@ -36,7 +36,7 @@ public sealed class LithoSharpMarkdownAdapter
         return ProjectCore(request, prepared, CopyTokens(request), cancellationToken);
     }
 
-    private static MarkdownParseOptions ValidateRequest(MarkdownGraphRequest request, bool isTrusted, CancellationToken cancellationToken)
+    internal static MarkdownParseOptions ValidateRequest(MarkdownGraphRequest request, bool isTrusted, CancellationToken cancellationToken)
     {
         if (!HarnessTrustPolicy.Allows(HarnessOperation.Index, isTrusted))
             throw new UnauthorizedAccessException("Markdown indexing requires a trusted workspace.");
