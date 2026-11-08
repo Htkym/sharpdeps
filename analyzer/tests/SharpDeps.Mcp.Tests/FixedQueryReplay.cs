@@ -17,7 +17,7 @@ internal sealed record ReplayCase(string Id, string Query, string Format = "audi
     int MaxMilliseconds = 0, bool OwnerStatus = false, string Equivalence = "exact",
     string? Purpose = null);
 internal sealed record ReplayInput(string Root, string CliDll, string McpDll, string RepositoryRoot,
-    IReadOnlyList<ReplayCase> Cases, bool Trusted = true, string Index = ".sharpdeps/index.sqlite");
+    IReadOnlyList<ReplayCase> Cases, bool Trusted = true, string Index = ".sharpdeps/index.sqlite", bool PhaseMetrics = false);
 internal sealed record ReplayUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan? Span,
     IReadOnlyList<HarnessRawSpan> PossibleSpans, int FirstLine, string Text, string RenderedNumberedText, string? ProjectId,
     string? VariantId, IReadOnlyList<string> Selectors, bool WholeSavedRangeVerified,
@@ -161,11 +161,17 @@ internal static class FixedQueryReplay
                 .Select(name => Path.Combine(input.RepositoryRoot, name)).Where(File.Exists)
                 .Select(path => new { path, sha256 = Hash(File.ReadAllBytes(path)) }).ToArray(),
             limits = new[] { "No model trial, tokens, cost or additional Read behavior is measured.",
-                "Per-phase timings and unreported candidate counts are null; process CPU includes all host work.",
+                "Per-phase timings require explicit opt-in; unreported candidate counts remain null; process CPU includes all host work.",
                 "Agent spans are supplied only when uniquely proven by saved declarations; ambiguous candidates are retained.",
                 "A source commit plus payload hashes identifies this replay, not an unbound historical binary or index." }
         });
+        var metricsRoot = input.PhaseMetrics ? Path.GetFullPath(Path.Combine(input.Root, ".sharpdeps", "replay-phase-" + Guid.NewGuid().ToString("N"))) : null;
+        var mcpMetrics = new ReplayPhaseMetrics(metricsRoot is null ? null : Path.Combine(metricsRoot, "mcp"));
         var hostArguments = new List<string> { input.McpDll, "--root", input.Root, "--index", input.Index };
+        if (mcpMetrics.DirectoryPath is { } mcpMetricsDirectory)
+        {
+            hostArguments.AddRange(["--metrics-directory", mcpMetricsDirectory]);
+        }
         if (input.Trusted)
         {
             hostArguments.Add("--trusted");
@@ -194,29 +200,67 @@ internal static class FixedQueryReplay
             Require(item.Equivalence is "exact" or "protocol-error" or "deadline-sensitive", "Unknown equivalence rule.");
             var caseDirectory = Path.Combine(directory, item.Id);
             Directory.CreateDirectory(caseDirectory);
+            var cliMetrics = new ReplayPhaseMetrics(metricsRoot is null ? null : Path.Combine(metricsRoot, item.Id, "cli"));
             var arguments = Arguments(input, item);
+            if (cliMetrics.DirectoryPath is { } cliMetricsDirectory)
+            {
+                arguments.AddRange(["--metrics-directory", cliMetricsDirectory]);
+            }
             WriteJson(Path.Combine(caseDirectory, "cli-argv.json"), new { executable = Dotnet, arguments });
-            var cli = await ReplayProcess.RunAsync(input.Root, Dotnet, arguments, token);
+            cliMetrics.BeginRequest();
+            ReplayCapture cli;
+            try
+            {
+                cli = await ReplayProcess.RunAsync(input.Root, Dotnet, arguments, token);
+            }
+            catch
+            {
+                cliMetrics.Capture(caseDirectory, "cli", token.IsCancellationRequested ? "cancelled" : "capture-aborted");
+                throw;
+            }
             File.WriteAllBytes(Path.Combine(caseDirectory, "cli.stdout"), cli.Stdout);
             File.WriteAllBytes(Path.Combine(caseDirectory, "cli.stderr"), cli.Stderr);
-            var reply = await RpcAsync("tools/call", new { name = "explore", arguments = ToolArguments(item) }, item.Id + "/mcp");
+            var cliPhases = cliMetrics.Capture(caseDirectory, "cli", RequestOutcome(cli.Stdout, cli.ExitCode != 0));
+            mcpMetrics.BeginRequest();
+            (byte[] Bytes, double WallMilliseconds, double? CpuMilliseconds) reply;
+            try
+            {
+                reply = await RpcAsync("tools/call", new { name = "explore", arguments = ToolArguments(item) }, item.Id + "/mcp");
+            }
+            catch
+            {
+                mcpMetrics.Capture(caseDirectory, "mcp", token.IsCancellationRequested ? "cancelled" : "capture-aborted");
+                throw;
+            }
             using var rpc = JsonDocument.Parse(reply.Bytes);
             var root = rpc.RootElement;
             string? mcpText = null;
             bool? isError = null;
             string? wire = null;
-            if (root.TryGetProperty("result", out var result))
+            ReplayPhaseCapture mcpPhases;
+            try
             {
-                Require(!result.TryGetProperty("structuredContent", out _), "Explore unexpectedly duplicated source in structuredContent.");
-                isError = result.GetProperty("isError").GetBoolean();
-                var content = result.GetProperty("content");
-                Require(content.GetArrayLength() == 1 && content[0].GetProperty("type").GetString() == "text", "Unexpected explore content.");
-                mcpText = content[0].GetProperty("text").GetString()!;
-                wire = result.GetRawText();
+                if (root.TryGetProperty("result", out var result))
+                {
+                    Require(!result.TryGetProperty("structuredContent", out _), "Explore unexpectedly duplicated source in structuredContent.");
+                    isError = result.GetProperty("isError").GetBoolean();
+                    var content = result.GetProperty("content");
+                    Require(content.GetArrayLength() == 1 && content[0].GetProperty("type").GetString() == "text", "Unexpected explore content.");
+                    mcpText = content[0].GetProperty("text").GetString()!;
+                    wire = result.GetRawText();
+                }
+                else
+                {
+                    Require(root.TryGetProperty("error", out _), "JSON-RPC response has neither result nor error.");
+                }
+                mcpPhases = mcpMetrics.Capture(caseDirectory, "mcp", root.TryGetProperty("error", out var rpcError)
+                    ? rpcError.GetProperty("code").GetInt32() switch { -32602 => "rejected", -32800 => "cancelled", _ => "failed" }
+                    : RequestOutcome(mcpText ?? "", isError == true));
             }
-            else
+            catch
             {
-                Require(root.TryGetProperty("error", out _), "JSON-RPC response has neither result nor error.");
+                mcpMetrics.Capture(caseDirectory, "mcp", "response-invalid");
+                throw;
             }
             var cliText = Utf8.GetString(cli.Stdout);
             Require(cliText.EndsWith(Environment.NewLine, StringComparison.Ordinal), "CLI omitted its transport newline.");
@@ -305,12 +349,13 @@ internal static class FixedQueryReplay
                     nonSourceUtf16 = mcpText is null ? (int?)null : mcpText.Length - units.Sum(unit => unit.RenderedNumberedText.Length),
                     nonSourceUtf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText) - units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText))
                 },
-                phaseMilliseconds = new
+                phaseMilliseconds = new { cli = cliPhases.PhaseMilliseconds, mcp = mcpPhases.PhaseMilliseconds },
+                phaseMetrics = new
                 {
-                    readerPreparation = (double?)null,
-                    searchAndScope = (double?)null,
-                    sourceVerification = (double?)null,
-                    rendering = (double?)null
+                    definition = ReplayPhaseMetrics.Definition,
+                    groups = ReplayPhaseMetrics.Groups,
+                    cli = cliPhases,
+                    mcp = mcpPhases
                 },
                 modelUsage = (object?)null
             });
@@ -337,6 +382,7 @@ internal static class FixedQueryReplay
             }
         }
         var host = await mcp.FinishAsync(token);
+        mcpMetrics.CaptureOutsideRequest(directory);
         File.WriteAllBytes(Path.Combine(directory, "mcp.stderr"), host.Stderr);
         File.WriteAllBytes(Path.Combine(directory, "mcp.trailing.stdout"), host.Stdout);
         Require(host.ExitCode == 0 && host.Stderr.Length == 0 && host.Stdout.Length == 0, "MCP failed or emitted unexpected trailing output.");
@@ -604,6 +650,25 @@ internal static class FixedQueryReplay
         return end == target.End;
     }
 
+    private static string RequestOutcome(byte[] bytes, bool failed)
+    {
+        try
+        {
+            return RequestOutcome(Utf8.GetString(bytes), failed);
+        }
+        catch (Exception error) when (error is JsonException or DecoderFallbackException)
+        {
+            return "response-invalid";
+        }
+    }
+    private static string RequestOutcome(string text, bool failed)
+    {
+        var errors = PublicErrorCodes(text);
+        return errors.Contains("QUERY_TIMEOUT", StringComparer.Ordinal) ? "timeout"
+            : errors.Contains("CANCELLED", StringComparer.Ordinal) ? "cancelled"
+            : errors.Contains("ARGUMENT_INVALID", StringComparer.Ordinal) ? "rejected"
+            : failed ? "failed" : "completed";
+    }
     private static string RenderSource(string text) => text.EndsWith('\n') ? text : text + "\n";
     private static string[] PublicErrorCodes(string text)
     {

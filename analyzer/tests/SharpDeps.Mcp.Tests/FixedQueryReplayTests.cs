@@ -55,6 +55,49 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         Assert.Contains("groups=4 omittedGroups=0", discovery.CliText, StringComparison.Ordinal);
         Assert.Equal(4, discovery.Units.Select(unit => (unit.ProjectId, unit.VariantId)).Distinct().Count());
         var member = observations.Single(item => item.Id == "single-member");
+        var withoutMetricsDirectory = ReceiptDirectory("metrics-disabled");
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1)))
+        {
+            var disabled = Assert.Single(await FixedQueryReplay.RunAsync(Input(fixture, [new("metrics-disabled", fixture.Member)])
+                with
+            { PhaseMetrics = false }, withoutMetricsDirectory, deadline.Token));
+            Assert.Equal(member.CliText, disabled.CliText);
+            Assert.Equal(member.McpText, disabled.McpText);
+            using var disabledReceipt = JsonDocument.Parse(File.ReadAllBytes(disabled.ReceiptPath));
+            Assert.Equal("disabled", disabledReceipt.RootElement.GetProperty("phaseMetrics").GetProperty("cli").GetProperty("status").GetString());
+            Assert.DoesNotContain("--metrics-directory", File.ReadAllText(Path.Combine(withoutMetricsDirectory, "mcp-argv.json")), StringComparison.Ordinal);
+            Assert.DoesNotContain("--metrics-directory", File.ReadAllText(Path.Combine(Path.GetDirectoryName(disabled.ReceiptPath)!, "cli-argv.json")), StringComparison.Ordinal);
+        }
+        foreach (var observation in observations)
+        {
+            using var receipt = JsonDocument.Parse(File.ReadAllBytes(observation.ReceiptPath));
+            foreach (var host in new[] { "cli", "mcp" })
+            {
+                var phases = receipt.RootElement.GetProperty("phaseMetrics").GetProperty(host);
+                if (observation.Id == "unsupported-selection")
+                {
+                    Assert.Equal("request-rejected-before-admission", phases.GetProperty("reason").GetString());
+                    Assert.All(phases.GetProperty("phaseMilliseconds").EnumerateObject(), property => Assert.Equal(JsonValueKind.Null, property.Value.ValueKind));
+                    continue;
+                }
+                Assert.Equal("recorded", phases.GetProperty("status").GetString());
+                Assert.True(phases.GetProperty("phaseMilliseconds").GetProperty("readerPreparation").GetDouble() >= 0);
+                Assert.True(phases.GetProperty("phaseMilliseconds").GetProperty("searchAndScope").GetDouble() >= 0);
+                Assert.True(phases.GetProperty("phaseMilliseconds").GetProperty("rendering").GetDouble() >= 0);
+                var artifact = Assert.Single(phases.GetProperty("artifacts").EnumerateArray());
+                var bytes = File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(observation.ReceiptPath)!, artifact.GetProperty("path").GetString()!));
+                Assert.Equal(FixedQueryReplay.Hash(bytes), artifact.GetProperty("sha256").GetString());
+                using var firstRecord = JsonDocument.Parse(Encoding.UTF8.GetString(bytes).Split('\n')[0]);
+                Assert.Equal(phases.GetProperty("runId").GetString(), firstRecord.RootElement.GetProperty("runId").GetString());
+                if (observation.Id is "no-match" or "explicit-unique" or "escaped-budget")
+                {
+                    Assert.Equal(JsonValueKind.Null, phases.GetProperty("phaseMilliseconds").GetProperty("sourceVerification").ValueKind);
+                    Assert.Equal("phase-not-reached", phases.GetProperty("missingReasons").GetProperty("sourceVerification").GetString());
+                }
+                else
+                    Assert.True(phases.GetProperty("phaseMilliseconds").GetProperty("sourceVerification").GetDouble() >= 0);
+            }
+        }
         Assert.Contains(member.Units, unit => unit.Text == ReplayFixture.RunInt);
         Assert.DoesNotContain(ReplayFixture.Unrelated, member.CliText, StringComparison.Ordinal);
         var overloads = observations.Single(item => item.Id == "overloads");
@@ -143,6 +186,18 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         using (var receipt = JsonDocument.Parse(File.ReadAllBytes(timed.ReceiptPath)))
         {
             var resolution = receipt.RootElement.GetProperty("resolution");
+            foreach (var (host, timedOut) in new[] { ("cli", cliTimedOut), ("mcp", mcpTimedOut) })
+            {
+                var phases = receipt.RootElement.GetProperty("phaseMetrics").GetProperty(host);
+                Assert.Equal(timedOut ? "timeout" : "completed", phases.GetProperty("requestOutcome").GetString());
+                foreach (var phase in phases.GetProperty("phaseMilliseconds").EnumerateObject())
+                {
+                    if (phase.Value.ValueKind == JsonValueKind.Null)
+                        Assert.NotNull(phases.GetProperty("missingReasons").GetProperty(phase.Name).GetString());
+                    else
+                        Assert.True(phase.Value.GetDouble() >= 0);
+                }
+            }
             if (cliTimedOut)
             {
                 Assert.Contains("QUERY_TIMEOUT", resolution.GetProperty("cliPublicErrorCodes").EnumerateArray().Select(code => code.GetString()));
@@ -166,9 +221,10 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         var directory = ReceiptDirectory("cancellation");
         Directory.CreateDirectory(directory);
         var input = Input(fixture, []);
+        var metrics = new ReplayPhaseMetrics(Path.Combine(fixture.Root, ".sharpdeps", "cancellation-metrics"));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var process = new ReplayProcess(fixture.Root, FixedQueryReplay.Dotnet,
-            [input.McpDll, "--root", fixture.Root, "--trusted"]);
+            [input.McpDll, "--root", fixture.Root, "--trusted", "--metrics-directory", metrics.DirectoryPath!]);
         await Send("initialize", new
         {
             protocolVersion = "2025-11-25",
@@ -177,6 +233,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         }, 1, "initialize");
         await Read("initialize");
         await Send("notifications/initialized", new { }, null, "initialized");
+        metrics.BeginRequest();
         await Send("tools/call", new { name = "explore", arguments = new { query = fixture.Member, format = "audit", maxMilliseconds = 0 } }, 2, "call");
         await Send("notifications/cancelled", new { requestId = 2, reason = "fixed replay cancellation" }, null, "cancel");
         await Send("ping", new { }, 3, "ping");
@@ -209,6 +266,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             notificationSent = true,
             cancellationAccepted,
             classification,
+            phases = metrics.Capture(directory, "mcp", classification),
             hostResponsiveToPing = true,
             limitation = "CLI signal cancellation is not covered. Sending a notification does not prove that cancellation won the race.",
             finished
@@ -460,6 +518,6 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         var mcp = Path.Combine(analyzer.FullName, "src", "SharpDeps.Mcp", "bin", configuration, "net10.0", "SharpDeps.Mcp.dll");
         Assert.True(File.Exists(cli), cli);
         Assert.True(File.Exists(mcp), mcp);
-        return new(fixture.Root, cli, mcp, analyzer.Parent!.FullName, cases, trusted);
+        return new(fixture.Root, cli, mcp, analyzer.Parent!.FullName, cases, trusted, PhaseMetrics: true);
     }
 }
