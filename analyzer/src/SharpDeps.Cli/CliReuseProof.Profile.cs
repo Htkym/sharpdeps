@@ -14,7 +14,8 @@ internal static partial class CliReuseProof
         "Deterministic", "DebugType", "DebugSymbols"
     };
 
-    private static bool PlainDirectoryBuildProps(string path, ProofBudget budget)
+    private static bool PlainDirectoryBuildProps(string path, string root, ProofBudget budget,
+        HashSet<string>? importedProps)
     {
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -24,9 +25,25 @@ internal static partial class CliReuseProof
         var project = XDocument.Load(reader).Root;
         if (project?.Name != "Project" || project.HasAttributes)
             return false;
-        // shortcut: Only unconditional compiler properties are closed; imports, conditions and items stay cold.
+        // shortcut: Only one literal import level and unconditional compiler properties are closed.
         foreach (var group in project.Elements())
         {
+            if (group.Name == "Import" && importedProps is not null)
+            {
+                var include = (string?)group.Attribute("Project");
+                if (group.Attributes().Count() != 1 || group.HasElements || !string.IsNullOrWhiteSpace(group.Value)
+                    || string.IsNullOrEmpty(include) || Path.IsPathRooted(include)
+                    || include.Any(c => !char.IsLetterOrDigit(c) && c is not ('.' or '-' or '_' or '/' or '\\'))
+                    || (!OperatingSystem.IsWindows() && include.Contains('\\'))
+                    || include.Split('/', '\\').Any(part => part.Length == 0 || part is "." or ".." || part.EndsWith('.')))
+                    return false;
+                var imported = CliPaths.InRoot(root, Path.GetFullPath(include, Path.GetDirectoryName(path)!));
+                if (!imported.EndsWith(".props", StringComparison.OrdinalIgnoreCase) || ExcludedProject(root, imported)
+                    || !File.Exists(imported) || !PlainDirectoryBuildProps(imported, root, budget, null))
+                    return false;
+                importedProps.Add(imported);
+                continue;
+            }
             if (group.Name != "PropertyGroup" || group.HasAttributes)
                 return false;
             foreach (var property in group.Elements())

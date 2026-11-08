@@ -8,7 +8,21 @@ Warm admission requires the same workspace/target/options key, committed generat
 
 The initial CLI profile keeps BOM-bearing inputs, generators, additional inputs, compiler-error baselines/candidates, and unsupported closure configurations cold. A rejected error candidate leaves the old committed solution intact until a successful cold publication. A generator reference is rejected even if its previous output was empty. The framework-free MSBuild fixture tests the internal prototype only; it does not grant production CLI admission or disable generators in user projects. UTF-8/BOM and UTF-16 coordinate tests are distinct from production warm eligibility.
 
-The input proof additionally accepts unconditional compiler properties in `Directory.Build.props`. Conditions, imports, item changes, CPM, unknown SDK/environment inputs, and unsupported package profiles remain fail-closed. Full inventory guards include changed, added, removed, and absent configuration inputs. Restore remains a separate operation.
+The input proof additionally accepts this narrow compiler-property profile. Performance and real-repository applicability remain unmeasured.
+
+| Configuration | Input-proof eligibility |
+| --- | --- |
+| Unconditional static compiler properties in `Directory.Build.props` | Supported |
+| Direct `Import Project="build/Compiler.props"` from `Directory.Build.props` | Supported when the existing target is a root-contained, non-linked `.props` file containing only the same compiler properties |
+| Missing targets, conditional or nested imports, import SDKs, expressions, globs, escapes, lists, absolute/external paths | Cold |
+| Unreferenced custom `.props` files, custom `.targets`, items, targets, CPM | Cold |
+| Unknown SDK/environment inputs, generators, unsupported package profiles | Cold |
+
+Literal import paths use nonempty relative segments containing letters, digits, `.`, `-`, or `_`, separated by `/` (or `\` on Windows). Empty, `.` and `..` segments, trailing dots, whitespace, and excluded Git/output directories are rejected. An import has exactly one `Project` attribute and no child content. Literal path casing must match the enumerated file path exactly, including on case-insensitive Windows directories; a mismatch stays cold. Imported files cannot import other files. This does not widen the existing SDK, Git, package, or generator profiles.
+
+The compiler-property set is `LangVersion`, `Nullable`, `ImplicitUsings`, `AllowUnsafeBlocks`, `DefineConstants`, `Optimize`, `CheckForOverflowUnderflow`, `WarningLevel`, `NoWarn`, `WarningsAsErrors`, `WarningsNotAsErrors`, `TreatWarningsAsErrors`, `GenerateAssemblyInfo`, `GenerateGlobalUsings`, `Deterministic`, `DebugType`, and `DebugSymbols`. Properties and property groups must be unconditional and attribute-free; property values cannot contain expressions, globs, or escapes.
+
+Full inventory and publication guards bind file paths, bytes, directories, and existence, including added or removed imported files. A property or import change requires cold evaluation; source membership is discovered from that evaluation rather than inferred. Restore remains a separate operation. Proof eligibility alone does not grant semantic-session admission.
 
 Candidates are adopted after the durable DB commit. Cancellation, supersession, staging/publication failure, and owner shutdown discard them. Adoption failure preserves the successful DB publication and returns the session to cold. Readers continue to use committed index generations and the existing freshness checks.
 

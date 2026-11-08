@@ -21,7 +21,7 @@ internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHas
 /// </summary>
 internal static partial class CliReuseProof
 {
-    internal const string OwnerVersion = "sharpdeps-cli-reuse/3";
+    internal const string OwnerVersion = "sharpdeps-cli-reuse/4";
     private const int MaximumEntries = 100_000;
     private const long MaximumBytes = 2L * 1024 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -166,6 +166,7 @@ internal static partial class CliReuseProof
         var projectPaths = new List<string>();
         var packages = new List<PackageSpec>();
         var imports = new List<string>();
+        var importedProps = new HashSet<string>(StringComparer.Ordinal);
         var assets = new List<string>();
         var directories = new Stack<string>(); directories.Push(root);
         var projects = 0;
@@ -189,7 +190,7 @@ internal static partial class CliReuseProof
                 var name = Path.GetFileName(entry);
                 if (name.Equals("Directory.Build.props", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!PlainDirectoryBuildProps(entry, budget))
+                    if (!PlainDirectoryBuildProps(entry, root, budget, importedProps))
                         return false;
                     continue;
                 }
@@ -211,7 +212,8 @@ internal static partial class CliReuseProof
                 projects++;
             }
         }
-        if (projects == 0 || imports.Any(path => !PlainRestoreImport(path, budget))) return false;
+        if (projects == 0 || imports.Any(path => !importedProps.Contains(path) && !PlainRestoreImport(path, budget)))
+            return false;
         if (packages.Count == 0) return assets.All(path => PlainAssets(path, root, sdk, budget));
         return packages.Count == 1 && CapturePackage(root, sdk, packages[0], projectPaths, imports, assets, budget, out package);
     }

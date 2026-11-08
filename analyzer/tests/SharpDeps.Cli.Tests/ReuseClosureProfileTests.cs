@@ -12,7 +12,7 @@ public sealed class ReuseClosureProfileTests(ITestOutputHelper output)
 {
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task StaticDirectoryBuildPropsStayClosedAcrossEditsAndFallBackForConditionalImports()
+    public async Task LiteralDirectoryBuildImportsStayClosedAcrossEditsAndFallBackForUnsupportedImports()
     {
         var runRoot = Path.Combine(Path.GetTempPath(), "sharpdeps-profile-oracle", Guid.NewGuid().ToString("N"));
         var root = Path.Combine(runRoot, "workspace");
@@ -31,10 +31,12 @@ public sealed class ReuseClosureProfileTests(ITestOutputHelper output)
             "#if PROFILE_A\npublic class ProfileA { }\n#elif PROFILE_B\npublic class ProfileB { }\n#else\npublic class DefaultProfile { }\n#endif\n";
         const string props = "<Project><PropertyGroup><Nullable>enable</Nullable><LangVersion>latest</LangVersion>" +
             "<DefineConstants>PROFILE_A</DefineConstants></PropertyGroup></Project>";
-        Write("Directory.Build.props", props);
+        const string import = "<Project><Import Project=\"build/Compiler.props\" /></Project>";
+        Write("Directory.Build.props", import);
+        Write("build/Compiler.props", props);
         Write("Service.cs", source);
         Write("guide.md", "# Guide\n`Demo.Service.Run`\n");
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(15));
         try
         {
             await OracleProcess.ExecuteAsync(root, ["restore", "App.csproj", "--configfile", Path.Combine(runRoot, "restore.config"), "--verbosity", "quiet"],
@@ -46,7 +48,7 @@ public sealed class ReuseClosureProfileTests(ITestOutputHelper output)
             var previous = await OracleProcess.RunAsync(new(options, null, terms), runRoot, "baseline", deadline.Token);
             Assert.Single(previous.Snapshot.Files, f => f.Reuse is not null);
             Assert.Contains(previous.Snapshot.Graph.Nodes, n => n.Name == "Demo.ProfileA");
-            for (var step = 0; step < 7; step++)
+            for (var step = 0; step < 9; step++)
             {
                 switch (step)
                 {
@@ -58,19 +60,36 @@ public sealed class ReuseClosureProfileTests(ITestOutputHelper output)
                         Write("guide.md", "# Guide\n`Demo.Service.Execute` edited together.\n");
                         break;
                     case 2:
-                        Write("Directory.Build.props", props.Replace("PROFILE_A", "PROFILE_B"));
+                        var path = Path.Combine(root, "build", "Compiler.props");
+                        var timestamp = File.GetLastWriteTimeUtc(path);
+                        Write("build/Compiler.props", props.Replace("PROFILE_A", "PROFILE_B"));
+                        File.SetLastWriteTimeUtc(path, timestamp);
                         break;
                     case 3:
-                        File.Delete(Path.Combine(root, "Directory.Build.props"));
+                        Write("Directory.Build.props", "<Project />");
+                        File.Delete(Path.Combine(root, "build", "Compiler.props"));
                         break;
                     case 4:
-                        Write("Directory.Build.props", props);
+                        Write("Directory.Build.props", import);
+                        Write("build/Compiler.props", props);
                         break;
                     case 5:
-                        Write("Directory.Build.props", props.Replace("<PropertyGroup>", "<PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\">"));
+                        Write("build/Compiler.props", props.Replace("<PropertyGroup>", "<PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\">"));
                         break;
                     case 6:
-                        Write("Directory.Build.props", "<Project><Import Project=\"Absent.props\" Condition=\"Exists('Absent.props')\" /></Project>");
+                        Write("build/Nested.props", props);
+                        Write("build/Compiler.props", "<Project><Import Project=\"Nested.props\" /></Project>");
+                        break;
+                    case 7:
+                        File.Delete(Path.Combine(root, "build", "Nested.props"));
+                        File.Delete(Path.Combine(root, "build", "Compiler.props"));
+                        File.WriteAllText(Path.Combine(runRoot, "External.props"), props);
+                        Write("Directory.Build.props", new System.Xml.Linq.XElement("Project",
+                            new System.Xml.Linq.XElement("Import", new System.Xml.Linq.XAttribute("Project", Path.Combine(runRoot, "External.props")))).ToString());
+                        break;
+                    case 8:
+                        Write("Directory.Build.props", import);
+                        Write("build/Compiler.props", props);
                         break;
                 }
                 var update = options with { IndexPath = Path.Combine(root, ".sharpdeps", $"update-{step}.sqlite"), AllowSemanticReuse = true };
@@ -85,13 +104,13 @@ public sealed class ReuseClosureProfileTests(ITestOutputHelper output)
                 Assert.Equal(step == 0 ? 0 : 1, Count(incremental, "cli.projectCollectorsExtracted"));
                 Assert.Equal(1, Count(full, "cli.projectCollectorsExtracted"));
                 Assert.Equal(0, Count(full, "cli.semanticGraphReused"));
-                Assert.Equal(step < 5, incremental.Snapshot.Files.Any(f => f.Reuse is not null));
+                Assert.Equal(step < 5 || step == 8, incremental.Snapshot.Files.Any(f => f.Reuse is not null));
                 if (step == 2)
                 {
                     Assert.Contains(incremental.Snapshot.Graph.Nodes, n => n.Name == "Demo.ProfileB");
                     Assert.DoesNotContain(incremental.Snapshot.Graph.Nodes, n => n.Name == "Demo.ProfileA");
                 }
-                else if (step is 3 or 6)
+                else if (step == 3)
                     Assert.Contains(incremental.Snapshot.Graph.Nodes, n => n.Name == "Demo.DefaultProfile");
                 var differences = FullBuildOracle.Differences(full, incremental);
                 Assert.True(differences.Count == 0, string.Join(Environment.NewLine, differences.Take(30)) + "\nArtifacts: " + runRoot);
@@ -99,6 +118,51 @@ public sealed class ReuseClosureProfileTests(ITestOutputHelper output)
                     $"proof={incremental.Snapshot.Files.Any(f => f.Reuse is not null)}.");
                 previous = incremental;
             }
+            var rollback = options with { IndexPath = Path.Combine(root, ".sharpdeps", "update-8.sqlite"), AllowSemanticReuse = true };
+            try
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => OracleProcess.RunAsync(new(rollback, previous.Snapshot, terms)
+                {
+                    BeforeCommit = new("build/Compiler.props", props.Replace("PROFILE_A", "PROFILE_B"))
+                }, runRoot, "publication-race", deadline.Token));
+                using var failure = JsonDocument.Parse(File.ReadAllText(Path.Combine(runRoot, "publication-race.result.failure.json")));
+                Assert.Equal("SOURCE_CHANGED_SINCE_STAGING", failure.RootElement.GetProperty("code").GetString());
+                Assert.Equal(typeof(IndexStoreException).FullName, failure.RootElement.GetProperty("exceptionType").GetString());
+                using var reader = IndexReader.Open(rollback.IndexPath, rollback.WorkspaceUuid);
+                Assert.Equal(previous.Snapshot.Graph.Generation, reader.Snapshot().Graph.Generation);
+                Assert.Equal(previous.Snapshot.Graph.SnapshotId, reader.Snapshot().Graph.SnapshotId);
+            }
+            finally
+            {
+                Write("build/Compiler.props", props);
+            }
+            Write("Directory.Build.props", "<Project><Import Project=\"Missing.props\" /></Project>");
+            var missingOptions = rollback with { IndexPath = Path.Combine(root, ".sharpdeps", "missing-update.sqlite") };
+            var missingUpdate = await OracleProcess.RunAsync(new(missingOptions, previous.Snapshot, terms), runRoot, "missing-update", deadline.Token);
+            var missingFull = await OracleProcess.RunAsync(new(missingOptions with
+            { IndexPath = Path.Combine(root, ".sharpdeps", "missing-full.sqlite"), AllowSemanticReuse = false }, previous.Snapshot, terms),
+                runRoot, "missing-full", deadline.Token);
+            Assert.NotEqual(missingUpdate.ProcessId, missingFull.ProcessId);
+            foreach (var missing in new[] { missingUpdate, missingFull })
+            {
+                Assert.DoesNotContain(missing.Snapshot.Files, f => f.Reuse is not null);
+                Assert.Equal(0, Count(missing, "cli.semanticGraphReused"));
+                Assert.Equal(1, Count(missing, "cli.projectCollectorsExtracted"));
+                Assert.Contains(missing.Snapshot.Graph.Nodes, n => n.Name == "Demo.DefaultProfile");
+            }
+            var missingDifferences = FullBuildOracle.Differences(missingFull, missingUpdate);
+            Assert.True(missingDifferences.Count == 0, string.Join(Environment.NewLine, missingDifferences.Take(30)));
+            Write("Directory.Build.props", import);
+            using (var reader = IndexReader.Open(rollback.IndexPath, rollback.WorkspaceUuid))
+                Assert.Equal(previous.Snapshot.Graph.SnapshotId, reader.Snapshot().Graph.SnapshotId);
+            var recovered = await OracleProcess.RunAsync(new(rollback, previous.Snapshot, terms), runRoot, "recovered", deadline.Token);
+            var recoveredFull = await OracleProcess.RunAsync(new(rollback with
+            { IndexPath = Path.Combine(root, ".sharpdeps", "recovered-full.sqlite"), AllowSemanticReuse = false }, previous.Snapshot, terms),
+                runRoot, "recovered-full", deadline.Token);
+            Assert.Equal(1, Count(recovered, "cli.semanticGraphReused"));
+            var recoveryDifferences = FullBuildOracle.Differences(recoveredFull, recovered);
+            Assert.True(recoveryDifferences.Count == 0, string.Join(Environment.NewLine, recoveryDifferences.Take(30)));
+            output.WriteLine("Imported property mutation was rejected at publication with the committed generation intact; missing imports stayed cold and recovery matched full.");
         }
         catch (Exception error)
         {

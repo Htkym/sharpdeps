@@ -7,7 +7,11 @@ using System.Text.Json;
 using SharpDeps.Index;
 using SharpDeps.Query;
 
-internal sealed record OracleRun(CliIndexOptions Options, IndexSnapshot? Previous, string[] Terms);
+internal sealed record OracleFileMutation(string RelativePath, string Text);
+internal sealed record OracleRun(CliIndexOptions Options, IndexSnapshot? Previous, string[] Terms)
+{
+    public OracleFileMutation? BeforeCommit { get; init; }
+}
 internal sealed record OracleObservation(IndexSnapshot Snapshot, Dictionary<string, IndexSearchHit[]> Fts,
     Dictionary<string, QueryEnvelope> Queries, int ProcessId);
 
@@ -18,6 +22,21 @@ internal static class OracleProcess
     private static readonly TimeSpan ExitCleanupTimeout = TimeSpan.FromSeconds(3);
 
     public static async Task<int> Main(string[] args)
+    {
+        try
+        {
+            return await RunMainAsync(args);
+        }
+        catch (Exception error) when (args is ["--full-oracle", _, _] && error is CliIndexException or IndexStoreException)
+        {
+            var code = error is CliIndexException cli ? cli.Code : ((IndexStoreException)error).Code;
+            File.WriteAllText(Path.ChangeExtension(args[2], "failure.json"), JsonSerializer.Serialize(new
+            { Code = code, ExceptionType = error.GetType().FullName, error.Message }, QueryJson.Options));
+            throw;
+        }
+    }
+
+    private static async Task<int> RunMainAsync(string[] args)
     {
         if (args is ["--oracle-hold-pipes", var heldMarker])
         {
@@ -88,6 +107,8 @@ internal static class OracleProcess
         var build = await CliIndexer.BuildForPublicationAsync(run.Options, run.Previous, default, null,
             run.Previous is null ? null : Allocate, admissions.Add);
         WriteProofDiagnostic(Path.ChangeExtension(output, "proof-diagnostic.json"), run.Options.Root, before, admissions);
+        if (run.BeforeCommit is { } mutation)
+            File.WriteAllText(CliPaths.InRoot(run.Options.Root, mutation.RelativePath), mutation.Text, new UTF8Encoding(false, true));
         using (var writer = IndexWriter.Open(run.Options.Root, run.Options.IndexPath, run.Options.WorkspaceUuid, true))
             writer.Commit(IndexStage.Create(build.Snapshot), verifySelection: build.VerifySelection);
         using var reader = IndexReader.Open(run.Options.IndexPath, run.Options.WorkspaceUuid);
@@ -335,7 +356,12 @@ internal static class OracleProcess
             }
         }
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"Oracle process exited {process.ExitCode}:\n{await stdout}\n{await stderr}");
+        {
+            var failure = $"Oracle process exited {process.ExitCode}:\n{await stdout}\n{await stderr}";
+            if (arguments is [_, "--full-oracle", _, var output])
+                File.WriteAllText(Path.ChangeExtension(output, "failure.log"), failure);
+            throw new InvalidOperationException(failure);
+        }
     }
 
     private static async Task WaitForExitBoundedAsync(Process process)
