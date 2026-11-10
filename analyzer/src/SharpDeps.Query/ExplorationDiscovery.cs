@@ -72,19 +72,22 @@ public sealed partial class ExplorationService
             if (Errors.Count != 0)
                 return;
             var rankedScopes = new Dictionary<(string Project, string Variant), int>();
-            for (var rank = 0; rank < matches.Count; rank++)
+            using (PhaseMetrics.Measure("explore.discovery-rank"))
             {
-                Check();
-                var node = matches[rank].Node;
-                if (IsDocument(node))
-                    continue;
-                foreach (var occurrence in owner.bySymbol.GetValueOrDefault(node.Id) ?? [])
+                for (var rank = 0; rank < matches.Count; rank++)
                 {
                     Check();
-                    var scope = owner.saved.Graph.Variants.Single(value => value.Id == occurrence.VariantId);
-                    if ((project is null || scope.ProjectId == project) && (variant is null || scope.Id == variant)
-                        && owner.Locations(node, scope.Id).Any(PathAllowed))
-                        rankedScopes.TryAdd((scope.ProjectId, scope.Id), rank);
+                    var node = matches[rank].Node;
+                    if (IsDocument(node))
+                        continue;
+                    foreach (var occurrence in owner.bySymbol.GetValueOrDefault(node.Id) ?? [])
+                    {
+                        Check();
+                        var scope = owner.saved.Graph.Variants.Single(value => value.Id == occurrence.VariantId);
+                        if ((project is null || scope.ProjectId == project) && (variant is null || scope.Id == variant)
+                            && owner.Locations(node, scope.Id).Any(PathAllowed))
+                            rankedScopes.TryAdd((scope.ProjectId, scope.Id), rank);
+                    }
                 }
             }
             if (rankedScopes.Count == 0)
@@ -102,9 +105,13 @@ public sealed partial class ExplorationService
             }
 
             var budget = request.Budget!;
-            var scopes = rankedScopes.OrderBy(item => item.Value)
-                .ThenBy(item => item.Key.Project, StringComparer.Ordinal).ThenBy(item => item.Key.Variant, StringComparer.Ordinal)
-                .Take(Math.Min(4, Math.Min(budget.MaxNodes, budget.MaxEdges))).Select(item => item.Key).ToArray();
+            (string Project, string Variant)[] scopes;
+            using (PhaseMetrics.Measure("explore.discovery-select"))
+            {
+                scopes = rankedScopes.OrderBy(item => item.Value)
+                    .ThenBy(item => item.Key.Project, StringComparer.Ordinal).ThenBy(item => item.Key.Variant, StringComparer.Ordinal)
+                    .Take(Math.Min(4, Math.Min(budget.MaxNodes, budget.MaxEdges))).Select(item => item.Key).ToArray();
+            }
             omittedGroups = rankedScopes.Count - scopes.Length;
             if (omittedGroups > 0)
                 reasons.Add("SCOPE_GROUP_LIMIT");

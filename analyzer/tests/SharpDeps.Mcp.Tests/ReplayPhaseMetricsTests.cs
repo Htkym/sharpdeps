@@ -26,6 +26,31 @@ public sealed class ReplayPhaseMetricsTests
         Assert.Equal("timeout", ReplayPhaseMetrics.Parse(Sidecar("failed"), RunId, "timeout").RequestOutcome);
     }
 
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public void DiscoveryScopeLeavesJoinSearchUnionWithoutIncludingSourceOrOrchestration(string outcome)
+    {
+        var capture = ReplayPhaseMetrics.Parse(Encode<object>(
+        [
+            new { type = "run.start", schema = "sharpdeps-phase-metrics/1", operation = "explore", timing = "inclusive-and-measured-child-exclusive" },
+            Phase(3, 2, "explore.discovery-rank", 2, 3), Phase(4, 2, "explore.discovery-select", 6, 2),
+            Phase(5, 2, "explore.discovery-rank", 7, 4), Phase(6, 2, "explore.search", 1, 3),
+            Phase(7, 2, "source.read", 12, 6), Phase(2, 1, "explore.discover", 1, 20, 5, overlaps: true),
+            Phase(1, null, "run", 0, 24, 4), new { type = "run.end", outcome }
+        ]), RunId, outcome);
+        Assert.Equal("recorded", capture.Status);
+        Assert.Equal(outcome, capture.RunOutcome);
+        Assert.Equal(9, capture.PhaseMilliseconds["searchAndScope"]);
+        Assert.Equal(6, capture.PhaseMilliseconds["sourceVerification"]);
+        foreach (var group in new[] { "readerPreparation", "rendering" })
+        {
+            Assert.Null(capture.PhaseMilliseconds[group]);
+            Assert.Equal("phase-not-reached", capture.MissingReasons[group]);
+        }
+    }
+
     [Fact]
     public void MalformedTruncatedForeignOrUnfinishedRunsNeverBecomeTimings()
     {
@@ -197,21 +222,22 @@ public sealed class ReplayPhaseMetricsTests
         }
     }
 
+    private static object Phase(long id, long? parent, string name, double start, double duration, double? exclusive = null, bool overlaps = false)
+        => new
+        {
+            type = "phase",
+            phase = name,
+            spanId = id,
+            parentSpanId = parent,
+            startedMilliseconds = start,
+            inclusiveMilliseconds = duration,
+            measuredChildExclusiveMilliseconds = exclusive ?? duration,
+            overlappingChildren = overlaps,
+            unfinishedChildren = false
+        };
+
     private static byte[] Sidecar(string outcome = "completed", string? observations = null)
     {
-        object Phase(long id, long? parent, string name, double start, double duration, double? exclusive = null, bool overlaps = false)
-            => new
-            {
-                type = "phase",
-                phase = name,
-                spanId = id,
-                parentSpanId = parent,
-                startedMilliseconds = start,
-                inclusiveMilliseconds = duration,
-                measuredChildExclusiveMilliseconds = exclusive ?? duration,
-                overlappingChildren = overlaps,
-                unfinishedChildren = false
-            };
         List<object> payloads =
         [
             new { type = "run.start", schema = "sharpdeps-phase-metrics/1", operation = "explore", timing = "inclusive-and-measured-child-exclusive" },

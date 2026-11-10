@@ -16,13 +16,14 @@ internal sealed class ReplayPhaseMetrics(string? directory)
     internal const string Definition = "Each value is the wall-time union of the listed phase intervals within one host request. "
         + "Nested/repeated intervals are counted once, not added or reported as exclusive time. Groups may overlap and are not additive. "
         + "Only closed, validated spans are evidence; elapsed spans do not establish successful work. "
-        + "Search/scope excludes uninstrumented discovery orchestration; source verification includes read/decode/hash/freshness, not unit selection. "
+        + "Search/scope includes discovery scope ranking/selection but excludes remaining discovery orchestration; source verification includes read/decode/hash/freshness, not unit selection. "
         + "Rendering covers explore.render, not transport serialization. Missing phases are null, never inferred zero.";
     internal static readonly IReadOnlyDictionary<string, string[]> Groups = new Dictionary<string, string[]>
     {
         ["readerPreparation"] = ["reader.open", "reader.snapshot", "explore.prepare", "explore.freeze", "explore.validate",
             "explore.derived-index", "explore.fingerprint", "explore.http-declarations"],
-        ["searchAndScope"] = ["reader.search", "explore.resolve", "explore.search", "explore.expand"],
+        ["searchAndScope"] = ["reader.search", "explore.resolve", "explore.search", "explore.expand",
+            "explore.discovery-rank", "explore.discovery-select"],
         ["sourceVerification"] = ["source.read", "source.stored", "source.hash", "source.freshness"],
         ["rendering"] = ["explore.render"]
     };

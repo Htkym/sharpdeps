@@ -42,6 +42,117 @@ public sealed class ExplorationTests
         Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal);
         Assert.DoesNotContain("Pump", text, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void DiscoveryMetricsPreserveRepliesAndKeepScopeLeavesSeparateFromSource(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true, format: format);
+        var engine = fixture.Engine();
+        var request = new ExploreRequest("Pump Run", Budget: Generous with { MaxMilliseconds = 0 },
+            Format: format, ScopePolicy: ExploreScopePolicy.Discover);
+        var expected = engine.Execute(request);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(engine.Execute(request)));
+            metrics.Complete();
+        }
+        Assert.Equal("source-returned", expected.Outcome);
+        var phases = ReadMetricPhases(directory);
+        AssertDiscoveryMetricLeaves(phases);
+        var selection = phases.Single(phase => phase.GetProperty("phase").GetString() == "explore.discovery-select");
+        var end = selection.GetProperty("startedMilliseconds").GetDouble() + selection.GetProperty("inclusiveMilliseconds").GetDouble();
+        Assert.All(phases.Where(phase => phase.GetProperty("phase").GetString() is "source.read" or "explore.render"),
+            phase => Assert.True(phase.GetProperty("startedMilliseconds").GetDouble() >= end));
+        var text = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        foreach (var value in new[] { fixture.Root, request.Query, fixture.Project, fixture.Variant })
+            Assert.DoesNotContain(value, text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DiscoveryMetricsLeaveUnreachedScopeSelectionAbsent()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            var reply = fixture.Engine().Execute(new ExploreRequest("MissingDiscoveryName", Budget: Generous with { MaxMilliseconds = 0 },
+                ScopePolicy: ExploreScopePolicy.Discover));
+            Assert.Equal("no-match", reply.Outcome);
+            metrics.Complete();
+        }
+        var phases = ReadMetricPhases(directory);
+        Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == "explore.discovery-rank");
+        Assert.DoesNotContain(phases, phase => phase.GetProperty("phase").GetString() == "explore.discovery-select");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void DiscoveryMetricsKeepClosedScopeLeavesOnSourceProofFailureOrCancellation(int interruption)
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var replies = new List<ExploreReply>();
+        foreach (var enabled in new[] { false, true })
+        {
+            using var cancellation = new CancellationTokenSource();
+            var proofs = 0;
+            var workspace = new QueryWorkspace(fixture.Root, _ =>
+            {
+                if (++proofs == 2 && interruption != 0)
+                    cancellation.Cancel();
+                return new(fixture.Sources.Keys.Order(StringComparer.Ordinal).ToArray(), proofs != 2 || interruption != 0);
+            });
+            using (var metrics = enabled ? SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore") : null)
+            {
+                var reply = fixture.Engine(workspace).Execute(new ExploreRequest("Pump Run", Budget: Generous with { MaxMilliseconds = 0 },
+                    ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh),
+                    interruption == 1 ? cancellation.Token : default, interruption == 2 ? cancellation.Token : default);
+                Assert.Equal(2, proofs);
+                Assert.Equal("failed", reply.Outcome);
+                Assert.Empty(reply.Units);
+                Assert.Contains(reply.Errors, error => error.Code == (interruption == 0 ? "FRESHNESS_REQUIREMENT_NOT_MET"
+                    : interruption == 1 ? "CANCELLED" : "QUERY_TIMEOUT"));
+                replies.Add(reply);
+                metrics?.Fail(interruption != 0);
+            }
+        }
+        Assert.Equal(JsonSerializer.Serialize(replies[0]), JsonSerializer.Serialize(replies[1]));
+        AssertDiscoveryMetricLeaves(ReadMetricPhases(directory));
+    }
+
+    private static JsonElement[] ReadMetricPhases(string directory)
+    {
+        var phases = File.ReadAllLines(Assert.Single(Directory.GetFiles(directory, "*.jsonl"))).Select(line =>
+        {
+            using var document = JsonDocument.Parse(line);
+            return document.RootElement.GetProperty("payload").Clone();
+        }).Where(payload => payload.GetProperty("type").GetString() == "phase").ToArray();
+        Assert.All(phases, phase =>
+        {
+            Assert.False(phase.GetProperty("unfinishedChildren").GetBoolean());
+            Assert.True(double.IsFinite(phase.GetProperty("inclusiveMilliseconds").GetDouble()));
+            Assert.NotEqual(JsonValueKind.Null, phase.GetProperty("measuredChildExclusiveMilliseconds").ValueKind);
+        });
+        return phases;
+    }
+
+    private static void AssertDiscoveryMetricLeaves(JsonElement[] phases)
+    {
+        var discovery = Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == "explore.discover");
+        foreach (var label in new[] { "explore.discovery-rank", "explore.discovery-select" })
+        {
+            var leaf = Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == label);
+            Assert.Equal(discovery.GetProperty("spanId").GetInt64(), leaf.GetProperty("parentSpanId").GetInt64());
+            Assert.DoesNotContain(phases, phase => phase.GetProperty("parentSpanId").ValueKind == JsonValueKind.Number
+                && phase.GetProperty("parentSpanId").GetInt64() == leaf.GetProperty("spanId").GetInt64());
+        }
+    }
+
     private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
     [Theory]
