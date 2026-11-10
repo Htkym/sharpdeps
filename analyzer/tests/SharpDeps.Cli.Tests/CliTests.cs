@@ -1329,15 +1329,18 @@ public sealed class CliTests
     [Trait("Category", "Integration")]
     public async Task GeneratedDomainVariantsSurviveIndexingAndTheStoreRoundTrip()
     {
-        var (root, target) = SemanticBaselineFixture();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        await RestoreAndBuildAsync(root, target, deadline.Token);
-
-        var workspace = Guid.NewGuid();
-        var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
-        var indexPath = Path.Combine(outputDirectory, "index.sqlite");
+        var (fixtureRoot, _) = SemanticBaselineFixture();
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-generated-" + Guid.NewGuid().ToString("N"));
         try
         {
+            CopyFixture(fixtureRoot, root);
+            var target = Path.Combine(root, "SemanticBaseline.sln");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            await RestoreAndBuildAsync(root, target, deadline.Token);
+
+            var workspace = Guid.NewGuid();
+            var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
+            var indexPath = Path.Combine(outputDirectory, "index.sqlite");
             using var writer = IndexWriter.Open(root, indexPath, workspace, true);
             var snapshot = await CliIndexer.BuildAsync(new(root, target, indexPath, workspace), null, deadline.Token);
             var generated = snapshot.Files.Where(file => file.Kind == IndexFileKinds.GeneratedSource).ToArray();
@@ -1360,7 +1363,10 @@ public sealed class CliTests
             Assert.Equal(snapshot.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal),
                 saved.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal));
         }
-        finally { if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true); }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Fact]

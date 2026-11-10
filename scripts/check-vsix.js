@@ -74,6 +74,7 @@ const FORBIDDEN = [
   'node_modules/',
   'analyzer/src/',
   'analyzer/tests/',
+  'eng/oracles/',
   'media/viewer.js',
   'media/viewer.css',
   'media/graph/prototype.js',

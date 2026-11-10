@@ -7,10 +7,35 @@ using System.Text.Json;
 using SharpDeps.Index;
 using SharpDeps.Query;
 
-internal sealed record OracleFileMutation(string RelativePath, string Text);
+internal sealed record OracleFileMutation(string RelativePath, string Text)
+{
+    public bool PackageCache
+    {
+        get; init;
+    }
+    public byte[]? Bytes
+    {
+        get; init;
+    }
+    public bool PreserveWriteTime
+    {
+        get; init;
+    }
+    public long? LastWriteTimeUtcTicks
+    {
+        get; init;
+    }
+}
 internal sealed record OracleRun(CliIndexOptions Options, IndexSnapshot? Previous, string[] Terms)
 {
-    public OracleFileMutation? BeforeCommit { get; init; }
+    public OracleFileMutation? BeforeCommit
+    {
+        get; init;
+    }
+    public string? ExactSdkVersion
+    {
+        get; init;
+    }
 }
 internal sealed record OracleObservation(IndexSnapshot Snapshot, Dictionary<string, IndexSearchHit[]> Fts,
     Dictionary<string, QueryEnvelope> Queries, int ProcessId);
@@ -31,13 +56,151 @@ internal static class OracleProcess
         {
             var code = error is CliIndexException cli ? cli.Code : ((IndexStoreException)error).Code;
             File.WriteAllText(Path.ChangeExtension(args[2], "failure.json"), JsonSerializer.Serialize(new
-            { Code = code, ExceptionType = error.GetType().FullName, error.Message }, QueryJson.Options));
+            {
+                Code = code,
+                ExceptionType = error.GetType().FullName,
+                error.Message
+            }, QueryJson.Options));
             throw;
         }
     }
 
+    private static void RegisterExactOracleSdk(OracleRun run)
+    {
+        if (run.ExactSdkVersion is not { } version)
+            return;
+        if (version != "10.0.403")
+            throw new InvalidDataException("oracle-sdk-request-unsupported: " + version);
+        var expected = Path.GetFullPath(Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(),
+            "..", "..", "..", "sdk", version));
+        if (!Directory.Exists(expected))
+            throw new InvalidDataException("oracle-sdk-unavailable: " + expected);
+        var pin = CliPaths.InRoot(run.Options.Root, "global.json");
+        var text = JsonSerializer.Serialize(new
+        {
+            sdk = new
+            {
+                version,
+                rollForward = "disable"
+            }
+        });
+        using (var stream = new FileStream(pin, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            var bytes = new UTF8Encoding(false, true).GetBytes(text);
+            stream.Write(bytes);
+        }
+        try
+        {
+            if (!SharpDeps.Analysis.Roslyn.SemanticEnvironment.TryRegister(run.Options.Root, out var reason))
+                throw new InvalidDataException("oracle-sdk-registration-failed: " + reason);
+            var actual = SharpDeps.Analysis.Roslyn.SemanticEnvironment.Describe(run.Options.Root).MsBuildPath;
+            if (actual is null || !CliPaths.SamePath(actual, expected))
+                throw new InvalidDataException("oracle-sdk-selection-mismatch: actual=" + (actual ?? "<null>") + "; expected=" + expected);
+        }
+        finally
+        {
+            if (File.Exists(pin))
+            {
+                if (File.ReadAllText(pin) != text)
+                    throw new InvalidDataException("oracle-sdk-pin-changed: " + pin);
+                File.Delete(pin);
+            }
+        }
+    }
     private static async Task<int> RunMainAsync(string[] args)
     {
+        if (args is ["--oracle-owned-stop-leaf", var exitMode] && exitMode is "exit0" or "exit7")
+        {
+            await Console.Out.WriteAsync("leaf stdout");
+            await Console.Error.WriteAsync("leaf stderr");
+            return exitMode == "exit0" ? 0 : 7;
+        }
+        if (args is ["--oracle-owned-stop-canary", var canaryMarker])
+        {
+            File.WriteAllText(canaryMarker + ".ready", "ready");
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            File.WriteAllText(canaryMarker + ".natural-exit", "exit0");
+            return 0;
+        }
+        if (args is ["--oracle-owned-stop-requester", var stopMode, var stopMarker])
+        {
+            var binding = OracleOwnedStop.RequireBinding(Environment.GetEnvironmentVariable(OracleOwnedStop.PathKey),
+                Environment.GetEnvironmentVariable(OracleOwnedStop.NonceKey));
+            File.WriteAllText(stopMarker + ".before", "ready");
+            if (stopMode is "validstop" or "cancelstop" or "precancelstop" or "normal-launch" or "ordinary-reject")
+            {
+                bool positive = stopMode is "normal-launch" or "ordinary-reject";
+                string[] childArguments = positive
+                    ? [typeof(OracleProcess).Assembly.Location, "--oracle-owned-stop-leaf", stopMode == "normal-launch" ? "exit0" : "exit7"]
+                    : [typeof(OracleProcess).Assembly.Location,
+                        stopMode == "validstop" ? "--oracle-exit-with-pipes" : "--oracle-wait", stopMarker + ".child"];
+                var childStart = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+                {
+                    WorkingDirectory = Path.GetDirectoryName(stopMarker)!,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                var inherited = childStart.Environment.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+                var planned = OracleChildEnvironmentPlanner.Create(inherited, OracleChildCommand.ManagedDll);
+                childStart.Environment.Clear();
+                foreach (var pair in planned)
+                    childStart.Environment[pair.Key] = pair.Value;
+                foreach (string argument in childArguments)
+                    childStart.ArgumentList.Add(argument);
+                using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(stopMode == "cancelstop" ? 3 : 6));
+                if (stopMode == "precancelstop")
+                    stop.Cancel();
+                try
+                {
+                    bool rejected = false;
+                    try
+                    {
+                        await ExecuteOwnedAsync(childStart, childArguments, stop.Token, binding);
+                    }
+                    catch (InvalidOperationException error) when (stopMode == "ordinary-reject"
+                        && error.Message.StartsWith("Oracle process exited 7:\n", StringComparison.Ordinal))
+                    {
+                        rejected = true;
+                    }
+                    if (positive)
+                    {
+                        if (stopMode == "ordinary-reject" && !rejected)
+                            throw new InvalidOperationException("Expected ordinary terminal/drained exit7 rejection.");
+                        File.WriteAllText(stopMarker + (rejected ? ".ordinary-rejected" : ".normal-return"), "terminal-and-drained");
+                        return 0;
+                    }
+                }
+                finally
+                {
+                    if (!positive)
+                        File.WriteAllText(stopMarker + ".fixture-restore", "unsafe unwind");
+                }
+                File.WriteAllText(stopMarker + ".after-request", "unsafe return");
+                return 3;
+            }
+            switch (stopMode)
+            {
+                case "normal":
+                    return 0;
+                // Validation-induced publisher failure exercises the same catch-and-wait path without changing ACLs.
+                case "publishfailure":
+                    await OracleOwnedStop.RequestAndWaitAsync(binding, "invalid-reason");
+                    break;
+                case "invalidrequest":
+                    string stale = binding.Nonce == new string('A', 64) ? new string('B', 64) : new string('A', 64);
+                    await OracleOwnedStop.RequestAndWaitAsync(binding with
+                    {
+                        Nonce = stale
+                    }, "child-uncertain");
+                    break;
+                default:
+                    return 2;
+            }
+            File.WriteAllText(stopMarker + ".after-request", "unsafe return");
+            return 3;
+        }
         if (args is ["--oracle-hold-pipes", var heldMarker])
         {
             using var outputPipe = Console.OpenStandardOutput();
@@ -77,7 +240,7 @@ internal static class OracleProcess
             catch
             {
                 if (!child.HasExited)
-                    child.Kill(entireProcessTree: true);
+                    child.Kill();
                 await WaitForExitBoundedAsync(child);
                 throw;
             }
@@ -102,6 +265,7 @@ internal static class OracleProcess
             return 2;
         var run = JsonSerializer.Deserialize<OracleRun>(File.ReadAllText(input), QueryJson.Options)
             ?? throw new InvalidDataException("Oracle request is missing.");
+        RegisterExactOracleSdk(run);
         var sequence = 0;
         Guid Allocate() => new(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{run.Options.WorkspaceUuid:N}:{run.Previous?.Graph.Generation ?? 0}:{++sequence}"))[..16]);
@@ -111,7 +275,25 @@ internal static class OracleProcess
             run.Previous is null ? null : Allocate, admissions.Add);
         WriteProofDiagnostic(Path.ChangeExtension(output, "proof-diagnostic.json"), run.Options.Root, before, admissions);
         if (run.BeforeCommit is { } mutation)
-            File.WriteAllText(CliPaths.InRoot(run.Options.Root, mutation.RelativePath), mutation.Text, new UTF8Encoding(false, true));
+        {
+            var mutationRoot = run.Options.Root;
+            if (mutation.PackageCache)
+            {
+                mutationRoot = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(input))!, "packages");
+                if (!CliPaths.SamePath(mutationRoot, Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? ""))
+                    throw new InvalidDataException("Oracle package mutation must stay in its private package cache.");
+            }
+            var target = CliPaths.InRoot(mutationRoot, mutation.RelativePath);
+            var writeTime = mutation.PreserveWriteTime ? File.GetLastWriteTimeUtc(target) : (DateTime?)null;
+            if (mutation.Bytes is { } bytes)
+                File.WriteAllBytes(target, bytes);
+            else
+                File.WriteAllText(target, mutation.Text, new UTF8Encoding(false, true));
+            if (mutation.LastWriteTimeUtcTicks is { } ticks)
+                File.SetLastWriteTimeUtc(target, new DateTime(ticks, DateTimeKind.Utc));
+            else if (writeTime is { } originalTime)
+                File.SetLastWriteTimeUtc(target, originalTime);
+        }
         using (var writer = IndexWriter.Open(run.Options.Root, run.Options.IndexPath, run.Options.WorkspaceUuid, true))
             writer.Commit(IndexStage.Create(build.Snapshot), verifySelection: build.VerifySelection);
         File.WriteAllText(output, JsonSerializer.Serialize(Observe(run.Options.IndexPath, run.Options.WorkspaceUuid, run.Terms), QueryJson.Options));
@@ -157,7 +339,10 @@ internal static class OracleProcess
             }
             catch (Exception error)
             {
-                return new { exceptionType = error.GetBaseException().GetType().Name };
+                return new
+                {
+                    exceptionType = error.GetBaseException().GetType().Name
+                };
             }
         }
         string HostState(string name)
@@ -221,7 +406,10 @@ internal static class OracleProcess
             }
             catch (Exception error)
             {
-                return new { exceptionType = error.GetBaseException().GetType().Name };
+                return new
+                {
+                    exceptionType = error.GetBaseException().GetType().Name
+                };
             }
         }
         string RegisteredState(string name, string? expected)
@@ -255,22 +443,35 @@ internal static class OracleProcess
         };
     }
 
+    internal static Task<OracleObservation> RunAsync(OracleRun run, string directory, string label,
+        CancellationToken token) => RunAsync(run, directory, label, token, isolation: null);
+
     internal static async Task<OracleObservation> RunAsync(OracleRun run, string directory, string label,
-        CancellationToken token)
+        CancellationToken token, OracleCliIsolationSpec? isolation)
     {
         var input = Path.Combine(directory, label + ".request.json");
         var output = Path.Combine(directory, label + ".result.json");
+        var arguments = new[] { typeof(OracleProcess).Assembly.Location, "--full-oracle", input, output };
+        var packageRoot = Path.Combine(directory, "packages");
+        isolation?.ValidateLaunch(isolation.DotnetHostPath, run.Options.Root, arguments, packageRoot, typeof(OracleProcess).Assembly.Location);
         File.WriteAllText(input, JsonSerializer.Serialize(run, QueryJson.Options));
-        await ExecuteAsync(run.Options.Root, [typeof(OracleProcess).Assembly.Location, "--full-oracle", input, output], token,
-            packageRoot: Path.Combine(directory, "packages"));
+        await ExecuteAsync(run.Options.Root, arguments, token, packageRoot, isolation);
         return JsonSerializer.Deserialize<OracleObservation>(File.ReadAllText(output), QueryJson.Options)
             ?? throw new InvalidDataException("Oracle result is missing.");
     }
 
-    internal static async Task ExecuteAsync(string root, string[] arguments, CancellationToken token, string? packageRoot = null)
+    internal static Task ExecuteAsync(string root, string[] arguments, CancellationToken token, string? packageRoot = null)
+        => ExecuteAsync(root, arguments, token, packageRoot, isolation: null);
+
+    internal static async Task ExecuteAsync(string root, string[] arguments, CancellationToken token, string? packageRoot,
+        OracleCliIsolationSpec? isolation)
     {
-        token.ThrowIfCancellationRequested();
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        if (isolation is null)
+            token.ThrowIfCancellationRequested();
+        var hostPath = isolation?.DotnetHostPath ?? Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
+        var command = isolation is null ? OracleChildEnvironmentPlanner.Classify(arguments)
+            : isolation.ValidateLaunch(hostPath, root, arguments, packageRoot, typeof(OracleProcess).Assembly.Location);
+        var start = new ProcessStartInfo(hostPath)
         {
             WorkingDirectory = root,
             UseShellExecute = false,
@@ -280,28 +481,18 @@ internal static class OracleProcess
         };
         // Keep unknown host/MSBuild properties out of the closed-input proof without changing this process.
         var inherited = start.Environment.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+        var planned = OracleChildEnvironmentPlanner.Create(inherited, command, packageRoot, isolation);
         start.Environment.Clear();
-        foreach (var name in new[] { "PATH", "PATHEXT", "SystemRoot", "windir", "ComSpec", "ProgramFiles",
-            "ProgramFiles(x86)", "ProgramW6432", "TEMP", "TMP", "TMPDIR", "USERPROFILE", "HOME", "HOMEDRIVE",
-            "HOMEPATH", "APPDATA", "LOCALAPPDATA", "NUGET_PACKAGES", "DOTNET_ROOT", "DOTNET_ROOT_X64",
-            "DOTNET_ROOT_ARM64", "DOTNET_HOST_PATH" })
-            if (inherited.TryGetValue(name, out var value) && value is not null)
-                start.Environment[name] = value;
-        if (packageRoot is not null)
-        {
-            if (!Path.IsPathFullyQualified(packageRoot))
-                throw new ArgumentException("Oracle package root must be absolute.", nameof(packageRoot));
-            start.Environment["NUGET_PACKAGES"] = packageRoot;
-        }
-        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        start.Environment["MSBuildEnableWorkloadResolver"] = "false";
-        start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-        start.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
-        start.Environment["DOTNET_NOLOGO"] = "1";
-        if (arguments is ["restore", ..] && inherited.TryGetValue("DOTNET_CLI_HOME", out var cliHome) && cliHome is not null)
-            start.Environment["DOTNET_CLI_HOME"] = cliHome;
+        foreach (var pair in planned)
+            start.Environment[pair.Key] = pair.Value;
         foreach (var argument in arguments)
             start.ArgumentList.Add(argument);
+        if (isolation is not null)
+        {
+            var binding = OracleOwnedStop.RequireBinding(isolation.OwnedStop?.RequestPath, isolation.OwnedStop?.Nonce, isolation.RunRoot);
+            await ExecuteOwnedAsync(start, arguments, token, binding);
+            return;
+        }
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Oracle process did not start.");
         using var reads = new CancellationTokenSource();
         var stdout = process.StandardOutput.ReadToEndAsync(reads.Token);
@@ -391,6 +582,61 @@ internal static class OracleProcess
             var failure = $"Oracle process exited {process.ExitCode}:\n{await stdout}\n{await stderr}";
             if (arguments is [_, "--full-oracle", _, var output])
                 File.WriteAllText(Path.ChangeExtension(output, "failure.log"), failure);
+            throw new InvalidOperationException(failure);
+        }
+    }
+
+    private static async Task ExecuteOwnedAsync(ProcessStartInfo start, string[] arguments, CancellationToken token,
+        OracleOwnedStopBinding binding)
+    {
+        using var process = new Process { StartInfo = start };
+        using var reads = new CancellationTokenSource();
+        Task<string> stdout, stderr;
+        bool terminal = false, drained = false;
+        int exitCode;
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            // Every operation after the start attempt is inside the owned uncertainty boundary.
+            if (!process.Start())
+                throw new InvalidOperationException("Owned oracle process did not start.");
+            stdout = process.StandardOutput.ReadToEndAsync(reads.Token);
+            stderr = process.StandardError.ReadToEndAsync(reads.Token);
+            var drain = Task.WhenAll(stdout, stderr);
+            ObserveFault(drain);
+            if (arguments is [_, "--full-oracle", _, var artifact])
+                File.WriteAllText(Path.ChangeExtension(artifact, "process.json"), JsonSerializer.Serialize(new
+                {
+                    processId = process.Id,
+                    startTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                    executable = start.FileName,
+                    arguments
+                }, QueryJson.Options));
+            await process.WaitForExitAsync(token);
+            terminal = true;
+            await drain.WaitAsync(OutputDrainTimeout, token);
+            drained = true;
+            exitCode = process.ExitCode;
+            token.ThrowIfCancellationRequested();
+        }
+        catch (Exception error)
+        {
+            await OracleOwnedStop.RequestAndWaitAsync(binding, error is OperationCanceledException ? "cancelled" : "child-uncertain");
+            throw;
+        }
+        if (!OracleOwnedStop.TerminalAndDrained(terminal, drained))
+            await OracleOwnedStop.RequestAndWaitAsync(binding, "child-uncertain");
+        if (arguments is [_, "--full-oracle", _, var output])
+        {
+            File.WriteAllText(Path.ChangeExtension(output, "stdout.log"), await stdout);
+            File.WriteAllText(Path.ChangeExtension(output, "stderr.log"), await stderr);
+        }
+        // A fully terminal, drained nonzero is an ordinary rejection, including the three SOURCE_CHANGED cases.
+        if (exitCode != 0)
+        {
+            var failure = $"Oracle process exited {exitCode}:\n{await stdout}\n{await stderr}";
+            if (arguments is [_, "--full-oracle", _, var result])
+                File.WriteAllText(Path.ChangeExtension(result, "failure.log"), failure);
             throw new InvalidOperationException(failure);
         }
     }
