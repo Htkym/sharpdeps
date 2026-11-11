@@ -196,13 +196,9 @@ Instruction-only opt-out is a routing preference, not a security control blockin
 
 ### Large cold indexes
 
-Only the development CLI supports the separate preparation budget; check the selected CLI help. Where a larger finite cold-reader budget is appropriate and authorized, use explicit opt-in values such as:
+For a shell-capable agent using a development CLI that advertises `--prepare-max-milliseconds`, prefer explicitly selected finite preparation/exploration budgets when a large index or cold read needs them. Use the [CLI budget guide and example](contracts/cli-skill-v1.ja.md#cold-index-budgets) for the single definition of bounds and timeout recovery. The example worked in a limited case; it is not a completion guarantee for every index or operation. Choose values for the user's purpose, load and caller deadline rather than automatically increasing or disabling limits.
 
-```bash
-sharpdeps explore --root /absolute/workspace --term "related names" --format agent --prepare-max-milliseconds 5000 --max-milliseconds 3000
-```
-
-The 5000 ms preparation budget includes full snapshot validation; the separate 3000 ms budget covers derived exploration, source/freshness checks and output. Add `--trusted` only with source permission and retain your selected `--index`. These cooperative limits do not change the shared 1000 ms default or solve the original large-index cold-default limitation. This option is not in the MCP schema and must not be added to MCP startup/query arguments.
+Full snapshot validation remains required. Omitting the option keeps the shared 1000 ms default and its cold-timeout limitation. Retain the selected `--index` and respect opt-out; do not replace existing user settings. Add `--trusted` only with source permission. This CLI-only option is absent from the MCP schema and must not be added to MCP startup/query arguments.
 
 ### Reference used
 
@@ -220,7 +216,7 @@ Defaults are 12,000 response characters, 48,000 UTF-8 bytes, and 1,000 milliseco
 
 Use `--max-milliseconds 0` (MCP `maxMilliseconds: 0`) to disable the computation deadline explicitly. Caller cancellation, source and freshness checks, and node, depth and output limits still apply. Positive time budgets remain 10–30,000 milliseconds.
 
-For the **unreleased development explore CLI only**, `--prepare-max-milliseconds N` explicitly gives saved-index reader preparation a separate finite deadline of 10–30,000 ms; `0` is rejected. Full snapshot integrity validation still runs. After the reader is prepared, the existing `--max-milliseconds` budget starts for derived exploration preparation, exploration, source/freshness checks and output. For example, `sharpdeps explore Service --root /absolute/workspace --prepare-max-milliseconds 5000` retains the default 1,000 ms exploration budget. Without this option, the existing shared computation deadline still includes reader preparation. Preparation expiry returns `PREPARATION_TIMEOUT` (exit 4); exploration expiry returns `QUERY_TIMEOUT` (exit 4). Caller cancellation applies to both. This option does not change the MCP schema or existing public explore overloads, and it does not upgrade coverage or freshness guarantees. With an explicit preparation budget, `--max-milliseconds 0` disables only the later exploration deadline. These deadlines remain cooperative rather than hard OS process limits.
+The **unreleased development explore CLI only** can opt in to a separate finite saved-index preparation budget; see the [CLI budget contract and operating guidance](contracts/cli-skill-v1.ja.md#cold-index-budgets) for bounds, examples and `PREPARATION_TIMEOUT`/`QUERY_TIMEOUT` recovery. This does not change the MCP schema or existing public explore overloads, skip full snapshot validation or establish freshness/coverage. Caller cancellation remains applicable to both stages, and computation deadlines are cooperative rather than hard OS process limits.
 
 For .NET consumers, `IndexReader.Snapshot` returns a validated snapshot with recursively read-only collections. Mutation through an `IList` cast throws `NotSupportedException`; create a new snapshot with copied collections for an explicit update. Exploration through `PinnedQueryIndex` reuses preparation within that reader, while arbitrary `IQueryIndex` payloads retain defensive cloning and validation. Reader lifetime and generation pins still apply.
 

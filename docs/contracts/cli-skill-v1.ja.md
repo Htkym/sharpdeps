@@ -66,7 +66,17 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 `--freshness allow-stale|require-fresh|refresh`、`--require-complete`と、`--max-nodes`/`--max-edges`/`--max-depth`/`--max-milliseconds`/`--max-chars`/`--max-bytes`を使える。Query既定は60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes。Queryと`explore`の`--max-milliseconds 0`は計算期限だけを外し、呼出し側の取消、件数・深さ・出力予算、trustと鮮度の検証は維持する。正の時間枠は10〜30000msで、1〜9は拒否する。設定範囲と探索・certainty・cursorの意味は[Query/context契約](query-context-v1.ja.md)に従う。commandに非対応のflagと、繰返し指定を許可したflag以外の重複を拒否する。
 
+### Cold index budgets
+
 未リリースの開発版`explore` CLIだけは`--prepare-max-milliseconds N`を明示して、saved-index readerのopen・全snapshotの読取り／整合性検証／read-only化に別の準備期限を設定できる。Nは10〜30000msの有限値で、0・範囲外・不正数・重複は拒否する。省略時は従来どおり準備を含む共有の計算期限（既定1000ms）であり、既定値を延長しない。準備が期限内に完了した後、`--max-milliseconds`の計算期限を新たに開始し、探索用の派生データ準備、探索、source／鮮度検証、出力をその枠内で行う。caller取消は両段階に適用する。準備期限切れは`PREPARATION_TIMEOUT`（exit 4）、探索期限切れは`QUERY_TIMEOUT`（exit 4）、caller取消は`CANCELLED`（exit 130）でsourceを返さない。既存の`--max-milliseconds 0`は探索の計算期限だけを外し、明示した有限の準備期限は外さない。同期処理の即時停止を保証するOS制限ではない。このflagは他のQuery commandやMCP schema、既存の公開explore overloadには追加しない。
+
+大きな保存indexやcold読取りで準備が共有期限に収まらない場合は、対応CLIのhelpを確認し、用途・indexの規模・負荷・呼出し側の期限に応じて準備と探索の有限budgetを利用者が明示選択する。たとえば次は準備5000ms、探索3000msを選ぶ。
+
+```text
+sharpdeps explore --root /absolute/workspace --term "related names" --format agent --prepare-max-milliseconds 5000 --max-milliseconds 3000
+```
+
+これは限定したsource読取りで使えた配分例であり、すべてのindex・操作の完了保証ではない。全snapshot検証を省かず、省略時の既定1000ms cold timeoutは残る。明示時の`PREPARATION_TIMEOUT`はreader準備枠、`QUERY_TIMEOUT`はその後の探索枠を示す。省略時の`QUERY_TIMEOUT`は準備も含む共有枠の期限切れなので、返されたstageを確認する。対象scopeを絞るか、目的に合う有限値を明示し、失敗だけを理由に自動再試行・無制限化・上限への引上げをしない。sourceを読む`--trusted`は別途許可が必要で、選択済み`--index`も保持する。この案内は設定変更・opt-out解除・追加アクセスを許可しない。
 
 ## JSONと終了コード
 
