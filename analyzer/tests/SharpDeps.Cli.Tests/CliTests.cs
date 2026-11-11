@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Markdown;
@@ -614,6 +615,41 @@ public sealed class CliTests
         var unavailable = await Run(observationArguments);
         Assert.Equal(0, unavailable.Exit);
         Assert.Contains("Owner observation state=unavailable generation=unknown pin=unknown", unavailable.Json);
+    }
+
+    [Theory]
+    [InlineData("explore", 14, 14, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("search", 14, 14, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("explore", 14, 270, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("search", 14, 270, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("explore", 1, 1, "INTERNAL_ERROR", 7)]
+    [InlineData("search", 1, 1, "INTERNAL_ERROR", 7)]
+    public async Task SavedQueryCannotOpenErrorsAreActionableWithoutLeakingExceptionDetails(
+        string command, int primaryCode, int extendedCode, string expectedCode, int expectedExit)
+    {
+        using var fixture = new Fixture();
+        const string privateDetail = "private exception detail";
+        using var writer = new PhaseCallbackWriter("reader.snapshot",
+            () => throw new SqliteException(privateDetail + fixture.Root, primaryCode, extendedCode));
+        using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("open-failure", command, writer);
+        var reply = await Run(command, "--root", fixture.Root, "--term", "Service", "--max-milliseconds", "3000");
+        Assert.True(writer.Invoked);
+        Assert.Equal(expectedExit, reply.Exit);
+        Assert.Equal(expectedCode, Code(reply.Json));
+        Assert.Empty(reply.Progress);
+        Assert.DoesNotContain(privateDetail, reply.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Root, reply.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(nameof(SqliteException), reply.Json, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(reply.Json);
+        Assert.Single(document.RootElement.GetProperty("errors").EnumerateArray());
+        Assert.False(document.RootElement.TryGetProperty("result", out _));
+        if (expectedCode == "INDEX_OPEN_FAILED")
+        {
+            Assert.Equal(5, CliApplication.ExitFor(expectedCode));
+            Assert.Contains("index/WAL/SHM", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("normal scoped permission review", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("No source evidence was returned", reply.Json, StringComparison.Ordinal);
+        }
     }
 
     [Theory]

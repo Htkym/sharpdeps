@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using SharpDeps.Index;
 using SharpDeps.Query;
 
@@ -202,6 +203,7 @@ public static class CliApplication
         OperationCanceledException when timedOut => ("QUERY_TIMEOUT", 4),
         OperationCanceledException => ("CANCELLED", 130),
         ArgumentException => ("ARGUMENT_INVALID", 2),
+        SqliteException { SqliteErrorCode: SQLitePCL.raw.SQLITE_CANTOPEN } => ("INDEX_OPEN_FAILED", 5),
         IOException or UnauthorizedAccessException => ("ROOT_ACCESS_DENIED", 5),
         _ => ("INTERNAL_ERROR", 7)
     };
@@ -373,7 +375,7 @@ public static class CliApplication
     internal static int ExitFor(string code) => code switch
     {
         "CANCELLED" => 130,
-        "WORKSPACE_UNTRUSTED" or "INDEX_UNTRUSTED" or "ROOT_ACCESS_DENIED" or "INVALID_SOURCE_ENCODING" => 5,
+        "WORKSPACE_UNTRUSTED" or "INDEX_UNTRUSTED" or "ROOT_ACCESS_DENIED" or "INDEX_OPEN_FAILED" or "INVALID_SOURCE_ENCODING" => 5,
         "UPDATE_REQUIRED" or "FRESHNESS_UNVERIFIED" or "FRESHNESS_REQUIREMENT_NOT_MET" or "SOURCE_CHANGED_SINCE_SNAPSHOT"
             or "INDEX_NO_SNAPSHOT" or "INDEX_NOT_FOUND" => 3,
         "SYMBOL_NOT_FOUND" or "HTTP_GET_DECLARATION_NOT_FOUND" => 2,
@@ -398,9 +400,12 @@ public static class CliApplication
 
     private static string ErrorText(string command, string requestId, string code, string? recovery = null)
     {
-        var message = recovery ?? (code == "CLI_MARKDOWN_FACTS_INCOMPLETE"
-            ? "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying."
-            : "See CLI contract for the recovery action.");
+        var message = recovery ?? (code switch
+        {
+            "INDEX_OPEN_FAILED" => "SQLite could not open the saved index or a required file. Check index/WAL/SHM access and the runtime temporary directory. If sandboxed, use only the client's normal scoped permission review; otherwise report the blocker. No source evidence was returned.",
+            "CLI_MARKDOWN_FACTS_INCOMPLETE" => "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying.",
+            _ => "See CLI contract for the recovery action."
+        });
         return JsonSerializer.Serialize(new { apiVersion = "1", command,
             requestId, errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options);
     }

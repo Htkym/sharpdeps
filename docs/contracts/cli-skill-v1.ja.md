@@ -78,10 +78,12 @@ Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま
 | 2 | 不正引数、曖昧なtarget/選択 |
 | 3 | index未作成、freshness条件未達 |
 | 4 | SDK/MSBuild/restore/解析/coverage失敗、index入力の`CLI_ENCODING_UNSUPPORTED`、TIMEOUT、require-completeの打切り・不足 |
-| 5 | trust、root containment、source access拒否、Query errorの`INVALID_SOURCE_ENCODING` |
+| 5 | trust、root containment、source access拒否、保存indexのopen失敗、Query errorの`INVALID_SOURCE_ENCODING` |
 | 6 | lock、schema/protocol、cursor失敗 |
 | 7 | 内部失敗 |
 | 130 | cancellation |
+
+未リリースの開発版CLIはSQLiteの`SQLITE_CANTOPEN`（primary code 14、拡張codeを含む）を`INDEX_OPEN_FAILED`（exit 5）として返し、例外本文・stack trace・内部pathは出さない。これはindexまたは必要なfileを開けない状態で、sandbox拒否・OS ACL拒否・TEMP欠落のいずれかをcodeだけで断定しない。選択したindex、既存WAL/SHM、runtimeの一時directoryの存在と利用可能性を確認し、sandbox内ならclientの通常の対象限定permission reviewだけを使う。拒否時は停止してblockerを報告し、権限変更・sandbox無効化・index複製やcheckpoint・immutable指定で迂回しない。予算延長はaccess問題の解決にならない。未知の例外は従来どおり`INTERNAL_ERROR`（exit 7）を保つ。
 
 exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialをResolved/Completeへ補完せず、複数TFMのoccurrenceを混ぜない。truncatedなら返却件数を全件数と呼ばない。errorや打切りを、stdoutにJSONがあることだけで成功扱いしない。
 
