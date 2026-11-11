@@ -11,6 +11,53 @@ using Xunit;
 
 public sealed class ExplorationTests
 {
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void ExactSavedIdentityDefersLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
+    {
+        using var fixture = new Fixture(format: format);
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var path = Path.Combine(fixture.Root, ".sharpdeps", "lazy.sqlite");
+        using var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true);
+        writer.Commit(IndexStage.Create(fixture.Snapshot));
+        using var reader = IndexReader.Open(path, workspace);
+        var engine = new ExplorationService(new PinnedQueryIndex(reader), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "exact-metrics");
+        ExploreReply exact;
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            exact = engine.Execute(request);
+            metrics.Complete();
+        }
+        Assert.Equal("source-returned", exact.Outcome);
+        Assert.DoesNotContain(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+        Assert.True(engine.Execute(fixture.Request("Pump") with { Budget = Generous with { MaxMilliseconds = 0 } }).Succeeded);
+        Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(request)));
+    }
+
+    [Fact]
+    public void CancelledLexicalPreparationDoesNotPoisonTheValidatedSnapshot()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var reads = 0;
+        var saved = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        {
+            Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, () =>
+            {
+                if (++reads > fixture.Snapshot.Graph.Nodes.Count) cancellation.Cancel();
+            })
+        } };
+        var prepared = new ExplorationSnapshot(saved, default);
+        Assert.Throws<OperationCanceledException>(() => prepared.GetSearchIndex(cancellation.Token));
+        var recovered = prepared.GetSearchIndex(default);
+        Assert.True(recovered.Names.ContainsKey("Pump"));
+        Assert.Same(recovered, prepared.GetSearchIndex(default));
+        Assert.Throws<OperationCanceledException>(() => prepared.GetSearchIndex(cancellation.Token));
+    }
+
     [Fact]
     public void ExplorationMetricsReportExistingCacheBranchesAndPreserveCancellation()
     {

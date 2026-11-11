@@ -12,6 +12,16 @@
     <Description>Explicit trusted indexing and saved graph queries for SharpDeps.</Description>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
+  <!-- Optimize first-call saved queries; this does not change query deadlines or library hosts. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <TieredCompilation>true</TieredCompilation>
+    <TieredPGO>false</TieredPGO>
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeHostConfigurationOption Include="System.GC.HeapCount" Value="8" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" Publish="true" />
     <PackageReference Include="NuGet.Packaging" />

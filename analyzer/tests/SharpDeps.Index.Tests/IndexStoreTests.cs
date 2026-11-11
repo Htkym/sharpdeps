@@ -45,14 +45,158 @@ public sealed class IndexStoreTests
         Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
     }
 
+    [Theory]
+    [InlineData("nodes", null)]
+    [InlineData("nodes", "null")]
+    [InlineData("nodes", "{}")]
+    [InlineData("markdown", null)]
+    [InlineData("generation", "null")]
+    [InlineData("coverage", "99")]
+    [InlineData("coverage", "\"partial\"")]
+    [InlineData("diagnostics", "[]")]
+    public void ProjectedHeaderPreservesRequiredFieldsAndEnumContract(string property, string? replacement)
+    {
+        using var fixture = new StoreFixture();
+        var original = fixture.Snapshot(1, "Before").Graph with
+        { Nodes = [], Variants = [], SymbolOccurrences = [], Edges = [], LegacyReferences = [] };
+        var document = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(original, HarnessGraphJsonContext.Default.HarnessGraphEnvelope))!.AsObject();
+        if (replacement is null) document.Remove(property);
+        else document[property] = System.Text.Json.Nodes.JsonNode.Parse(replacement);
+        var json = document.ToJsonString();
+        var error = Record.Exception(() => HarnessGraphContract.Read(json));
+        if (error is null)
+            Assert.Equal(JsonSerializer.Serialize(HarnessGraphContract.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope),
+                JsonSerializer.Serialize(IndexGraphHeader.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        else Assert.Throws<JsonException>(() => IndexGraphHeader.Read(json));
+    }
+
+    [Theory]
+    [InlineData("{}", false)]
+    [InlineData("[42]", false)]
+    [InlineData("null", false)]
+    [InlineData("[42]", true)]
+    public void ProjectedHeaderPreservesTypedChecksForDuplicateLegacyCollections(string value, bool last)
+    {
+        using var fixture = new StoreFixture();
+        var original = fixture.Snapshot(1, "Before").Graph with
+        { Nodes = [], Variants = [], SymbolOccurrences = [], Edges = [], LegacyReferences = [] };
+        var json = JsonSerializer.Serialize(original, HarnessGraphJsonContext.Default.HarnessGraphEnvelope);
+        const string empty = "\"nodes\": []";
+        Assert.Contains(empty, json, StringComparison.Ordinal);
+        var duplicate = "\"nodes\": " + value;
+        json = json.Replace(empty, last ? empty + "," + duplicate : duplicate + "," + empty, StringComparison.Ordinal);
+        var expected = Record.Exception(() => HarnessGraphContract.Read(json));
+        if (expected is null)
+            Assert.Equal(JsonSerializer.Serialize(HarnessGraphContract.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope),
+                JsonSerializer.Serialize(IndexGraphHeader.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        else Assert.Throws<JsonException>(() => IndexGraphHeader.Read(json));
+    }
+
     [Fact]
-    public void SavedNullRowsAreRejectedBeforePublishingAReader()
+    public void ValidatedLookupMapsReferenceOnlyTheFrozenPinnedSnapshot()
     {
         using var fixture = new StoreFixture();
         using var writer = fixture.Writer();
         writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using var pinned = fixture.Reader();
+        var saved = pinned.Snapshot();
+        Assert.Same(saved.Graph.Nodes.Single(node => node.Id == fixture.MemberId), pinned.ValidatedNodes[fixture.MemberId]);
+        foreach (var occurrence in saved.Graph.SymbolOccurrences)
+        {
+            Assert.Same(occurrence, pinned.ValidatedOccurrences[occurrence.Id]);
+            Assert.Throws<NotSupportedException>(() => ((IList<HarnessLocation>)occurrence.Declarations!).Clear());
+        }
+        foreach (var file in saved.Files) Assert.Same(file, pinned.ValidatedFiles[file.SourceId]);
+        Assert.Throws<NotSupportedException>(() => ((IDictionary<string, HarnessNode>)pinned.ValidatedNodes).Clear());
+        writer.Commit(IndexStage.Create(fixture.Snapshot(2, "After")));
+        using var current = fixture.Reader();
+        Assert.Equal("Before", pinned.ValidatedNodes[fixture.MemberId].Name);
+        Assert.Equal("After", current.ValidatedNodes[fixture.MemberId].Name);
+        Assert.Same(saved, pinned.Snapshot());
+    }
+
+    [Fact]
+    public void PipelinedRowsRetainOrderAndRejectCorruptionInALaterBatch()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = [.. snapshot.Graph.Nodes, .. Enumerable.Range(0, 4200).Select(i =>
+                new HarnessNode("source-" + i, HarnessNodeKind.SourceFile, "Source " + i, snapshot.Graph.WorkspaceId, null))]
+        } };
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using var pinned = fixture.Reader();
+        Assert.Equal(snapshot.Graph.Nodes, pinned.Snapshot().Graph.Nodes);
         using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
-            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json='null' WHERE id=$id", ("$id", fixture.MemberId));
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json='null' WHERE id='source-4199'");
+        AssertCode("INDEX_INVALID_SNAPSHOT", () => { using var rejected = fixture.Reader(); });
+        Assert.Equal(snapshot.Graph.Nodes, pinned.Snapshot().Graph.Nodes);
+    }
+
+    [Fact]
+    public void Utf8RowsCannotJoinMalformedValuesIntoValidObjects()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        var first = JsonSerializer.Serialize(snapshot.Graph.Nodes[0], IndexStage.Json);
+        var second = JsonSerializer.Serialize(snapshot.Graph.Nodes[1], IndexStage.Json);
+        // Combined these are two valid objects; neither database row is a valid JSON value.
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json=$json WHERE id=$id",
+                ("$json", first[..^1]), ("$id", snapshot.Graph.Nodes[0].Id));
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json=$json WHERE id=$id",
+                ("$json", "\"ignored\":0}," + second), ("$id", snapshot.Graph.Nodes[1].Id));
+        }
+        Assert.Throws<JsonException>(() => { using var rejected = fixture.Reader(); });
+    }
+
+    [Theory]
+    [InlineData(63)]
+    [InlineData(64)]
+    public void BatchedRowsPreservePerRowDepthAllowance(int depth)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        var node = snapshot.Graph.Nodes.Single(node => node.Id == fixture.MemberId);
+        var json = JsonSerializer.Serialize(node, IndexStage.Json);
+        json = json[..^1] + ",\"ignored\":" + new string('[', depth) + "0" + new string(']', depth) + "}";
+        var info = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<HarnessNode>)IndexReadJsonContext.Default.GetTypeInfo(typeof(HarnessNode))!;
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json=$json WHERE id=$id", ("$json", json), ("$id", node.Id));
+        if (depth == 63)
+        {
+            var expected = JsonSerializer.Deserialize(json, info);
+            using var reader = fixture.Reader();
+            Assert.Equal(expected, reader.Snapshot().Graph.Nodes.Single(node => node.Id == fixture.MemberId));
+        }
+        else
+        {
+            Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json, info));
+            Assert.Throws<JsonException>(() => { using var rejected = fixture.Reader(); });
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SavedNullRowsAreRejectedBeforePublishingAReader(bool unrelated)
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        var snapshot = fixture.Snapshot(1, "Before");
+        const string unrelatedId = "unrelated-source";
+        if (unrelated) snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = [.. snapshot.Graph.Nodes, new HarnessNode(unrelatedId, HarnessNodeKind.SourceFile,
+                "Unrelated", snapshot.Graph.WorkspaceId, null)]
+        } };
+        writer.Commit(IndexStage.Create(snapshot));
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json='null' WHERE id=$id", ("$id", unrelated ? unrelatedId : fixture.MemberId));
         AssertCode("INDEX_INVALID_SNAPSHOT", () => { using var rejected = fixture.Reader(); });
     }
 
@@ -759,6 +903,8 @@ public sealed class IndexStoreTests
         catch (Exception error)
         {
             Console.Error.WriteLine("Writer-lock probe failure before fixture cleanup: " + error);
+            if (error is SqliteException sqlite)
+                Console.Error.WriteLine($"SQLite recovery failure: primary={sqlite.SqliteErrorCode}, extended={sqlite.SqliteExtendedErrorCode}.");
             throw;
         }
         finally

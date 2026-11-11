@@ -479,12 +479,12 @@ public sealed partial class ExplorationService
             if (!wholeIdentity && !terms.Any(term => owner.occurrences.ContainsKey(term) || owner.nodes.ContainsKey(term) || IsSavedIdentity(term)))
             {
                 var literal = new List<Match>();
-                foreach (var node in owner.names.GetValueOrDefault(query) ?? [])
+                foreach (var node in owner.GetSearchIndex(timer.Token).Names.GetValueOrDefault(query) ?? [])
                 {
                     Check();
-                    if ((node.Name == query || owner.search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
+                    if ((node.Name == query || owner.GetSearchIndex(timer.Token).Search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
                         literal.Add(new(node, MatchTier.ExactName, true, true, MatchedTerms: 1,
-                            NameTerms: node.Name == query || owner.search[node.Id].Label == query ? 1u : 0u));
+                            NameTerms: node.Name == query || owner.GetSearchIndex(timer.Token).Search[node.Id].Label == query ? 1u : 0u));
                 }
                 if (literal.Count > 0) { searchTerms = [query]; return literal; }
             }
@@ -541,15 +541,15 @@ public sealed partial class ExplorationService
                     : new HashSet<string>(StringComparer.Ordinal);
                 var components = ExplorationSnapshot.Components(term, timer.Token);
                 var candidates = new HashSet<string>(hits, StringComparer.Ordinal);
-                foreach (var node in owner.names.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                foreach (var node in owner.GetSearchIndex(timer.Token).Names.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
                 foreach (var component in components)
-                    foreach (var node in owner.words.GetValueOrDefault(component) ?? []) { Check(); candidates.Add(node.Id); }
+                    foreach (var node in owner.GetSearchIndex(timer.Token).Words.GetValueOrDefault(component) ?? []) { Check(); candidates.Add(node.Id); }
                 if (pathTerms.Contains(term))
-                    foreach (var node in owner.paths.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                    foreach (var node in owner.GetSearchIndex(timer.Token).Paths.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
                 foreach (var id in candidates)
                 {
                     Check();
-                    if (!owner.search.TryGetValue(id, out var metadata) || !Searchable(metadata.Node) || !NodeAllowed(metadata.Node, variant)) continue;
+                    if (!owner.GetSearchIndex(timer.Token).Search.TryGetValue(id, out var metadata) || !Searchable(metadata.Node) || !NodeAllowed(metadata.Node, variant)) continue;
                     var node = metadata.Node;
                     var exact = term == node.Name || term == metadata.SimpleName || term == metadata.BaseName || term == metadata.Label || term == node.Signature;
                     var qualified = term.Contains('.') && term == metadata.Label || term == node.Signature;
@@ -563,7 +563,9 @@ public sealed partial class ExplorationService
                     if (tier is { } matched) AddMatch(found, node, matched, exact, qualified, path, bit, name);
                 }
             }
-            foreach (var metadata in owner.search.Values)
+            if (terms.All(term => owner.nodes.ContainsKey(term) || owner.occurrences.ContainsKey(term)))
+                return found.Values.ToList();
+            foreach (var metadata in owner.GetSearchIndex(timer.Token).Search.Values)
             {
                 Check();
                 if (!Searchable(metadata.Node)) continue;
@@ -628,7 +630,7 @@ public sealed partial class ExplorationService
                 throw new ArgumentException("Explore name wildcards require one leading or trailing star and at least two identifier characters.");
             searchTerms = [identifier];
             var matches = new List<Match>();
-            foreach (var metadata in owner.search.Values)
+            foreach (var metadata in owner.GetSearchIndex(timer.Token).Search.Values)
             {
                 Check();
                 if (!Searchable(metadata.Node) || !metadata.Aliases.Any(alias => prefix
@@ -641,12 +643,15 @@ public sealed partial class ExplorationService
 
         private List<Match> OrderMatches(List<Match> matches)
         {
+            // Ranking zero or one match needs no whole-snapshot lexical index.
+            Check();
+            if (matches.Count <= 1) return matches;
             var terms = searchTerms.Select(term => ExplorationSnapshot.Components(term, timer.Token)).ToArray();
             var ranked = new List<(Match Match, int Context, int Penalty, string Path, int Start)>();
             foreach (var match in matches)
             {
                 Check();
-                var metadata = owner.search[match.Node.Id];
+                var metadata = owner.GetSearchIndex(timer.Token).Search[match.Node.Id];
                 uint context = 0;
                 for (var index = 0; index < terms.Length; index++)
                     if (ContainsWords(metadata.ContextWords, terms[index])) context |= 1u << index;
@@ -681,7 +686,7 @@ public sealed partial class ExplorationService
                     if (order == 0) order = left.Penalty.CompareTo(right.Penalty);
                     if (order == 0) order = StringComparer.Ordinal.Compare(left.Path, right.Path);
                     if (order == 0) order = left.Start.CompareTo(right.Start);
-                    if (order == 0) order = StringComparer.Ordinal.Compare(owner.search[left.Match.Node.Id].Label, owner.search[right.Match.Node.Id].Label);
+                    if (order == 0) order = StringComparer.Ordinal.Compare(owner.GetSearchIndex(timer.Token).Search[left.Match.Node.Id].Label, owner.GetSearchIndex(timer.Token).Search[right.Match.Node.Id].Label);
                     return order != 0 ? order : StringComparer.Ordinal.Compare(left.Match.Node.Id, right.Match.Node.Id);
                 });
             }

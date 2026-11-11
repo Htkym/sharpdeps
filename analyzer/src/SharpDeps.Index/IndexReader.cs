@@ -15,13 +15,17 @@ public sealed class IndexReader : IDisposable
     private readonly HarnessGraphEnvelope header;
     private readonly int schemaVersion;
     private readonly bool utf8Rows;
+    private readonly bool singleGeneration;
     private IndexSnapshot? cachedSnapshot;
     private bool disposed;
-    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath,bool utf8Rows)
-    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath;this.utf8Rows=utf8Rows; }
+    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath,bool utf8Rows,bool singleGeneration)
+    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath;this.utf8Rows=utf8Rows;this.singleGeneration=singleGeneration; }
     public string ManifestHash { get; }
     public string IndexPath { get; }
     public int SchemaVersion => schemaVersion;
+    internal IReadOnlyDictionary<string, HarnessNode> ValidatedNodes { get; private set; } = null!;
+    internal IReadOnlyDictionary<string, HarnessSymbolOccurrence> ValidatedOccurrences { get; private set; } = null!;
+    internal IReadOnlyDictionary<string, IndexFile> ValidatedFiles { get; private set; } = null!;
     public static IndexReader Open(string indexPath,Guid workspaceUuid,CancellationToken token=default)
     {
         using var metricsScope = PhaseMetrics.Measure("reader.open");
@@ -57,11 +61,14 @@ public sealed class IndexReader : IDisposable
             using var row=command.ExecuteReader();
             token.ThrowIfCancellationRequested();
             if(!ReadRow(row,token))throw new IndexStoreException("INDEX_NO_SNAPSHOT", "No committed generation exists.");
-            var header=HarnessGraphContract.Read(row.GetString(3));
+            var header=IndexGraphHeader.Read(row.GetString(3));
             token.ThrowIfCancellationRequested();
             if(header.Generation!=row.GetInt64(0)||header.SnapshotId!=row.GetString(1)||header.WorkspaceId!=workspace)
                 throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved generation metadata disagrees with the graph.");
-            var result=new IndexReader(connection,transaction,header,row.GetString(2),schemaVersion,path,utf8Rows);row.Close();
+            var manifestHash=row.GetString(2);row.Close();
+            var singleGeneration=Convert.ToInt64(IndexDatabase.Scalar(connection,transaction,
+                "SELECT NOT EXISTS(SELECT 1 FROM generations WHERE generation<>$g)",("$g",header.Generation)))!=0;
+            var result=new IndexReader(connection,transaction,header,manifestHash,schemaVersion,path,utf8Rows,singleGeneration);
             _=result.Snapshot(token);token.ThrowIfCancellationRequested();return result;
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)
@@ -90,8 +97,9 @@ public sealed class IndexReader : IDisposable
             var bodies = schemaVersion >= 2 ? ReadGeneratedBodies(token) : [];
             var packages = schemaVersion >= 3 ? ReadPackageBodies(token) : [];
             var snapshot=new IndexSnapshot(graph,Read<IndexFile>("files",token),Read<IndexDocumentIdentity>("document_identities",token),Read<IndexAlias>("aliases",token),search.AsReadOnly(),bodies,packages);
+            IndexValidationLookups validated;
             using (PhaseMetrics.Measure("reader.validate"))
-                IndexSnapshotValidator.Validate(snapshot,token);
+                validated = IndexSnapshotValidator.ValidateWithLookups(snapshot,token);
             token.ThrowIfCancellationRequested();
             var manifestHash=IndexStage.ComputeManifestHash(snapshot.Files);
             token.ThrowIfCancellationRequested();
@@ -109,6 +117,15 @@ public sealed class IndexReader : IDisposable
                 Documents = Copy(snapshot.Documents, token, document => document with
                     { Sections = Copy(document.Sections, token) })
             };
+            token.ThrowIfCancellationRequested();
+            // Rebind cloned nested records before making the validated maps available to the query assembly.
+            foreach (var occurrence in snapshot.Graph.SymbolOccurrences)
+            { token.ThrowIfCancellationRequested(); validated.Occurrences[occurrence.Id] = occurrence; }
+            foreach (var file in snapshot.Files)
+            { token.ThrowIfCancellationRequested(); validated.Files[file.SourceId] = file; }
+            ValidatedNodes = new System.Collections.ObjectModel.ReadOnlyDictionary<string, HarnessNode>(validated.Nodes);
+            ValidatedOccurrences = new System.Collections.ObjectModel.ReadOnlyDictionary<string, HarnessSymbolOccurrence>(validated.Occurrences);
+            ValidatedFiles = new System.Collections.ObjectModel.ReadOnlyDictionary<string, IndexFile>(validated.Files);
             token.ThrowIfCancellationRequested();
             return cachedSnapshot=snapshot;
         }
@@ -167,21 +184,94 @@ public sealed class IndexReader : IDisposable
     {
         using var metricsScope = PhaseMetrics.Measure("reader.rows-" + table.Replace('_', '-'));
         token.ThrowIfCancellationRequested();
+        if(utf8Rows)return ReadUtf8Batches<T>(table,token);
         var result=new List<T>();
         var typeInfo=(JsonTypeInfo<T>)IndexReadJsonContext.Default.GetTypeInfo(typeof(T))!;
-        var projection=utf8Rows ? "CAST(json AS BLOB)" : "json";
-        using var command=IndexDatabase.Command(connection,transaction,$"SELECT {projection} FROM {table} WHERE generation=$g ORDER BY rowid",("$g",header.Generation));
+        using var command=IndexDatabase.Command(connection,transaction,$"SELECT json FROM {table}{(singleGeneration ? " NOT INDEXED" : "")} WHERE generation=$g ORDER BY rowid",("$g",header.Generation));
         using var rows=command.ExecuteReader();
         while(ReadRow(rows,token))
         {
-            // GetBytes opens a provider stream per call; read the complete projected BLOB once instead.
-            var item=utf8Rows ? JsonSerializer.Deserialize(rows.GetFieldValue<byte[]>(0),typeInfo)
-                : JsonSerializer.Deserialize(rows.GetString(0),typeInfo);
+            var item=JsonSerializer.Deserialize(rows.GetString(0),typeInfo);
             if(item is null)throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
             token.ThrowIfCancellationRequested();
             result.Add(item);
         }
         return result.AsReadOnly();
+    }
+    private IReadOnlyList<T> ReadUtf8Batches<T>(string table,CancellationToken token)
+    {
+        const int maximumRows = 4096;
+        const long maximumBatchBytes = 4 * 1024 * 1024;
+        var result = new List<T>();
+        var typeInfo = (JsonTypeInfo<T>)IndexReadJsonContext.Default.GetTypeInfo(typeof(T))!;
+        using var command = IndexDatabase.Command(connection, transaction,
+            $"SELECT CAST(json AS BLOB) FROM {table}{(singleGeneration ? " NOT INDEXED" : "")} WHERE generation=$g ORDER BY rowid", ("$g", header.Generation));
+        using var rows = command.ExecuteReader();
+        var exhausted = false;
+        List<byte[]> Fetch()
+        {
+            var batch = new List<byte[]>();
+            var bytes = 0L;
+            while (batch.Count < maximumRows && bytes < maximumBatchBytes)
+            {
+                if (!ReadRow(rows, token)) { exhausted = true; break; }
+                var value = rows.GetFieldValue<byte[]>(0);
+                batch.Add(value);
+                bytes += value.Length;
+            }
+            return batch;
+        }
+        var current = Fetch();
+        while (current.Count > 0)
+        {
+            T[] restored;
+            List<byte[]> next;
+            if (!exhausted && current.Count >= 128)
+            {
+                // Only the owning thread touches SQLite; at most two bounded byte batches are retained.
+                var captured = current;
+                var pending = Task.Run(() => DeserializeRows(captured, typeInfo, token), CancellationToken.None);
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo? readFailure = null;
+                next = [];
+                try { next = Fetch(); }
+                catch (Exception error) { readFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error); }
+                // Always join the owned decoding work, including cancellation and a failing next fetch.
+                restored = pending.GetAwaiter().GetResult();
+                readFailure?.Throw();
+            }
+            else
+            {
+                restored = DeserializeRows(current, typeInfo, token);
+                next = exhausted ? [] : Fetch();
+            }
+            foreach (var value in restored) { token.ThrowIfCancellationRequested(); result.Add(value); }
+            current = next;
+        }
+        return result.AsReadOnly();
+    }
+    internal static T[] DeserializeRows<T>(IReadOnlyList<byte[]> batch, JsonTypeInfo<T> typeInfo, CancellationToken token)
+    {
+        var restored = new T[batch.Count];
+        var failures = new System.Runtime.ExceptionServices.ExceptionDispatchInfo?[batch.Count];
+        void Decode(int i)
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                restored[i] = JsonSerializer.Deserialize(batch[i], typeInfo)
+                    ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
+            }
+            catch (Exception error) when (error is not (OperationCanceledException or OutOfMemoryException))
+            { failures[i] = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error); }
+        }
+        var parallel = new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = Math.Min(8, Environment.ProcessorCount) };
+        if (batch.Count < 128 || parallel.MaxDegreeOfParallelism == 1)
+            for (var i = 0; i < batch.Count; i++) Decode(i);
+        else Parallel.For(0, batch.Count, parallel, Decode);
+        token.ThrowIfCancellationRequested();
+        // Preserve database order and the first corrupt row's original exception contract.
+        foreach (var failure in failures) { token.ThrowIfCancellationRequested(); failure?.Throw(); }
+        return restored;
     }
     public IReadOnlyList<IndexSearchHit> Search(string term,int limit=100,CancellationToken token=default)
     {

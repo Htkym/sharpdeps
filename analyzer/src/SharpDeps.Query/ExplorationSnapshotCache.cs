@@ -21,26 +21,69 @@ internal sealed class ExplorationSnapshot
     internal readonly IReadOnlyDictionary<string, IndexFile> files;
     internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> outgoing;
     internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> incoming;
-    internal readonly IReadOnlyDictionary<string, ExplorationSearchMetadata> search;
-    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> names;
-    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> words;
-    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> paths;
+    private ExplorationSearchIndex? searchIndex;
+    private readonly SemaphoreSlim searchGate = new(1, 1);
     internal readonly FrozenSet<string> savedPaths;
     private IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>>? httpGetDeclarations;
     private SemaphoreSlim? httpGetDeclarationsGate;
 
-    internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token)
+    internal ExplorationSnapshot(IndexSnapshot frozen, CancellationToken token,
+        IReadOnlyDictionary<string, HarnessNode>? validatedNodes = null,
+        IReadOnlyDictionary<string, HarnessSymbolOccurrence>? validatedOccurrences = null,
+        IReadOnlyDictionary<string, IndexFile>? validatedFiles = null)
     {
         using var metricsScope = PhaseMetrics.Measure("explore.derived-index");
         saved = frozen;
-        nodes = Lookup(frozen.Graph.Nodes, node => node.Id, token);
-        occurrences = Lookup(frozen.Graph.SymbolOccurrences, occurrence => occurrence.Id, token);
-        files = Lookup(frozen.Files, file => file.SourceId, token);
+        nodes = validatedNodes ?? Lookup(frozen.Graph.Nodes, node => node.Id, token);
+        occurrences = validatedOccurrences ?? Lookup(frozen.Graph.SymbolOccurrences, occurrence => occurrence.Id, token);
+        files = validatedFiles ?? Lookup(frozen.Files, file => file.SourceId, token);
         bySymbol = Group(frozen.Graph.SymbolOccurrences, occurrence => occurrence.LogicalSymbolId, occurrence => occurrence.Id, token);
-        outgoing = Group(frozen.Graph.Edges, edge => edge.SourceNodeId, edge => edge.Id, token);
-        incoming = Group(frozen.Graph.Edges, edge => edge.TargetNodeId, edge => edge.Id, token);
+        // Expand imposes its own total edge order; avoid sorting every unused adjacency group.
+        outgoing = Group(frozen.Graph.Edges, edge => edge.SourceNodeId, null, token);
+        incoming = Group(frozen.Graph.Edges, edge => edge.TargetNodeId, null, token);
+        var savedPathBuilder = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in frozen.Files)
+        {
+            token.ThrowIfCancellationRequested();
+            savedPathBuilder.Add(file.RelativePath);
+            savedPathBuilder.Add(Path.GetFileName(file.RelativePath));
+        }
+        savedPaths = savedPathBuilder.ToFrozenSet(StringComparer.Ordinal);
+        token.ThrowIfCancellationRequested();
+    }
+
+    internal sealed record ExplorationSearchIndex(
+        IReadOnlyDictionary<string, ExplorationSearchMetadata> Search,
+        IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> Names,
+        IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> Words,
+        IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> Paths);
+
+    internal ExplorationSearchIndex GetSearchIndex(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var cached = Volatile.Read(ref searchIndex);
+        if (cached is not null) return cached;
+        searchGate.Wait(token);
+        try
+        {
+            cached = searchIndex;
+            if (cached is null)
+            {
+                using var metricsScope = PhaseMetrics.Measure("explore.lexical-index");
+                cached = BuildSearchIndex(token);
+                token.ThrowIfCancellationRequested();
+                Volatile.Write(ref searchIndex, cached);
+            }
+            token.ThrowIfCancellationRequested();
+            return cached;
+        }
+        finally { searchGate.Release(); }
+    }
+
+    private ExplorationSearchIndex BuildSearchIndex(CancellationToken token)
+    {
         var searchBuilder = new Dictionary<string, ExplorationSearchMetadata>(StringComparer.Ordinal);
-        foreach (var node in frozen.Graph.Nodes)
+        foreach (var node in saved.Graph.Nodes)
         {
             token.ThrowIfCancellationRequested();
             var label = Label(node);
@@ -66,22 +109,15 @@ internal sealed class ExplorationSnapshot
                 Array.AsReadOnly(new[] { node.Name, simple, baseName, label }.Distinct(StringComparer.Ordinal).ToArray()),
                 Array.AsReadOnly(Components(baseName, token)), Array.AsReadOnly(signatureWords), Array.AsReadOnly(contextWords)));
         }
-        search = new ReadOnlyDictionary<string, ExplorationSearchMetadata>(searchBuilder);
-        names = SearchLookup(item => item.Aliases.Concat(item.Node.Signature is { } signature ? [signature] : []),
+        var search = new ReadOnlyDictionary<string, ExplorationSearchMetadata>(searchBuilder);
+        var names = SearchLookup(search.Values, item => item.Aliases.Concat(item.Node.Signature is { } signature ? [signature] : []),
             StringComparer.OrdinalIgnoreCase, token);
-        words = SearchLookup(item => item.NameWords.Concat(item.SignatureWords), StringComparer.OrdinalIgnoreCase, token);
-        paths = SearchLookup(item => Locations(item.Node, null).Where(location => files.ContainsKey(location.SourceId))
+        var words = SearchLookup(search.Values, item => item.NameWords.Concat(item.SignatureWords), StringComparer.OrdinalIgnoreCase, token);
+        var paths = SearchLookup(search.Values, item => Locations(item.Node, null).Where(location => files.ContainsKey(location.SourceId))
             .SelectMany(location => new[] { files[location.SourceId].RelativePath, Path.GetFileName(files[location.SourceId].RelativePath) }),
             StringComparer.Ordinal, token);
-        var savedPathBuilder = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var file in frozen.Files)
-        {
-            token.ThrowIfCancellationRequested();
-            savedPathBuilder.Add(file.RelativePath);
-            savedPathBuilder.Add(Path.GetFileName(file.RelativePath));
-        }
-        savedPaths = savedPathBuilder.ToFrozenSet(StringComparer.Ordinal);
         token.ThrowIfCancellationRequested();
+        return new(search, names, words, paths);
     }
 
     internal IReadOnlyList<HarnessEdge> GetHttpGetDeclarations(string template, CancellationToken token)
@@ -133,11 +169,12 @@ internal sealed class ExplorationSnapshot
         return cached.TryGetValue(template, out var declarations) ? declarations : Array.Empty<HarnessEdge>();
     }
 
-    private IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> SearchLookup(Func<ExplorationSearchMetadata, IEnumerable<string>> keys,
+    private static IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> SearchLookup(IEnumerable<ExplorationSearchMetadata> metadata,
+        Func<ExplorationSearchMetadata, IEnumerable<string>> keys,
         StringComparer comparer, CancellationToken token)
     {
         var groups = new Dictionary<string, List<HarnessNode>>(comparer);
-        foreach (var item in search.Values)
+        foreach (var item in metadata)
             foreach (var key in keys(item).Where(key => key.Length != 0).Distinct(comparer))
             {
                 token.ThrowIfCancellationRequested();
@@ -200,7 +237,7 @@ internal sealed class ExplorationSnapshot
 
     private static IReadOnlyDictionary<string, T> Lookup<T>(IEnumerable<T> values, Func<T, string> key, CancellationToken token)
     {
-        var result = new Dictionary<string, T>(StringComparer.Ordinal);
+        var result = new Dictionary<string, T>(values.TryGetNonEnumeratedCount(out var count) ? count : 0, StringComparer.Ordinal);
         foreach (var value in values)
         {
             token.ThrowIfCancellationRequested();
@@ -210,7 +247,7 @@ internal sealed class ExplorationSnapshot
     }
 
     private static IReadOnlyDictionary<string, IReadOnlyList<T>> Group<T>(IEnumerable<T> values, Func<T, string> groupKey,
-        Func<T, string> orderKey, CancellationToken token)
+        Func<T, string>? orderKey, CancellationToken token)
     {
         var groups = new Dictionary<string, List<T>>(StringComparer.Ordinal);
         foreach (var value in values)
@@ -220,22 +257,23 @@ internal sealed class ExplorationSnapshot
             if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = []);
             group.Add(value);
         }
-        var result = new Dictionary<string, IReadOnlyList<T>>(StringComparer.Ordinal);
+        var result = new Dictionary<string, IReadOnlyList<T>>(groups.Count, StringComparer.Ordinal);
+        Comparison<T>? order = orderKey is null ? null : (left, right) =>
+        {
+            token.ThrowIfCancellationRequested();
+            return StringComparer.Ordinal.Compare(orderKey(left), orderKey(right));
+        };
         foreach (var (key, group) in groups)
         {
             token.ThrowIfCancellationRequested();
             try
             {
-                group.Sort((left, right) =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return StringComparer.Ordinal.Compare(orderKey(left), orderKey(right));
-                });
+                if (group.Count > 1 && order is not null) group.Sort(order);
             }
             catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
             { throw new OperationCanceledException("Snapshot preparation was cancelled.", error, token); }
             token.ThrowIfCancellationRequested();
-            result.Add(key, Array.AsReadOnly(group.ToArray()));
+            result.Add(key, group.AsReadOnly());
         }
         return new ReadOnlyDictionary<string, IReadOnlyList<T>>(result);
     }

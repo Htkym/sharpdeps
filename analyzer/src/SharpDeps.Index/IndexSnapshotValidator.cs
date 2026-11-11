@@ -21,9 +21,12 @@ public static class IndexSnapshotValidator
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static void Validate(IndexSnapshot snapshot, CancellationToken token = default)
+        => _ = ValidateWithLookups(snapshot, token);
+
+    internal static IndexValidationLookups ValidateWithLookups(IndexSnapshot snapshot, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        try { ValidateCore(snapshot, token); token.ThrowIfCancellationRequested(); }
+        try { var result = ValidateCore(snapshot, token); token.ThrowIfCancellationRequested(); return result; }
         catch (IndexStoreException) { throw; }
         catch (Exception error) when (error is ArgumentException or JsonException or OverflowException or InvalidOperationException)
         { throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Snapshot data does not satisfy the index contract.", error); }
@@ -40,7 +43,7 @@ public static class IndexSnapshotValidator
         => Require(hash is not null && hash.Length == 64 && !hash.AsSpan().ContainsAnyExcept("0123456789abcdef"),
             "A lowercase full SHA256 hash is required.");
 
-    private static void ValidateCore(IndexSnapshot snapshot, CancellationToken token)
+    private static IndexValidationLookups ValidateCore(IndexSnapshot snapshot, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         HarnessGraphContract.ValidateHeader(snapshot.Graph);
@@ -139,6 +142,8 @@ public static class IndexSnapshotValidator
             Location(node.Location);
         }
         var owners = new Dictionary<string, (string? Project, string? Document)>(StringComparer.Ordinal);
+        var ownerPending = new List<HarnessNode>();
+        var ownerSeen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var node in nodes.Values) { token.ThrowIfCancellationRequested(); Owner(node.Id); }
         foreach (var variant in variants.Values)
         {
@@ -458,12 +463,19 @@ public static class IndexSnapshotValidator
         if (bodyIntegrityError is not null)
             throw bodyIntegrityError;
 
+        return new(nodes, occurrences, files);
+
         void Location(HarnessLocation? location)
         {
             token.ThrowIfCancellationRequested();
             if (location is null) return;
-            Identifier(location.SourceId, "Location source ID");
-            Require(files.TryGetValue(location.SourceId, out var file) && !file.Deleted, "Location source is not a live manifest file.");
+            if (!files.TryGetValue(location.SourceId ?? "", out var file))
+            {
+                Identifier(location.SourceId!, "Location source ID");
+                throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Location source is not a live manifest file.");
+            }
+            // Exact ordinal membership already proves the source ID passed the manifest identifier checks.
+            Require(!file.Deleted, "Location source is not a live manifest file.");
             Require(location.ContentHash == file.ContentHash, "Location content hash differs from its manifest source.");
             if (location.SourceVersion is not null) Text(location.SourceVersion, "Source version", 4096);
             if (location.RawSpan is { } span)
@@ -474,8 +486,9 @@ public static class IndexSnapshotValidator
 
         (string? Project, string? Document) Owner(string nodeId)
         {
-            var pending = new List<HarnessNode>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (owners.TryGetValue(nodeId, out var cached)) return cached;
+            var pending = ownerPending; pending.Clear();
+            var seen = ownerSeen; seen.Clear();
             var cursor = nodeId;
             (string? Project, string? Document) owner = default;
             while (!owners.TryGetValue(cursor, out owner))
@@ -504,13 +517,14 @@ public static class IndexSnapshotValidator
     private static Dictionary<string, T> Unique<T>(IReadOnlyList<T> values, Func<T, string> key, string label, CancellationToken token) where T : class
     {
         Count(values, label);
-        var result = new Dictionary<string, T>(StringComparer.Ordinal);
+        var result = new Dictionary<string, T>(values.Count, StringComparer.Ordinal);
+        var identityLabel = label + " ID";
         foreach (var value in values)
         {
             token.ThrowIfCancellationRequested();
-            Require(value is not null, label + " cannot be null.");
-            var id = key(value); Identifier(id, label + " ID");
-            Require(result.TryAdd(id, value), label + " IDs must be unique.");
+            if (value is null) throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", label + " cannot be null.");
+            var id = key(value); Identifier(id, identityLabel);
+            if (!result.TryAdd(id, value)) throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", label + " IDs must be unique.");
         }
         return result;
     }
@@ -528,7 +542,7 @@ public static class IndexSnapshotValidator
         => Require(values is not null && values.Count <= MaximumCollectionItems, label + " must be present and bounded.");
 
     private static void HashId(string id, string prefix)
-        => Require(id.Length == prefix.Length + 65 && id.StartsWith(prefix + "_", StringComparison.Ordinal)
+        => Require(id.Length == prefix.Length + 65 && id.StartsWith(prefix, StringComparison.Ordinal) && id[prefix.Length] == '_'
             && !id.AsSpan(prefix.Length + 1).ContainsAnyExcept("0123456789abcdef"), "Non-canonical harness identity.");
 
     private static void OptionalIdentifier(string? value, string label, int limit)
@@ -539,13 +553,17 @@ public static class IndexSnapshotValidator
     private static void Identifier(string value, string label, int limit = 2048)
     {
         Text(value, label, limit);
-        Require(!string.IsNullOrWhiteSpace(value) && value == value.Trim() && !value.Any(char.IsControl),
-            label + " must be nonempty and owner-normalized.");
+        if (string.IsNullOrWhiteSpace(value) || value != value.Trim() || ContainsControlCharacters(value.AsSpan()))
+            throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", label + " must be nonempty and owner-normalized.");
     }
+
+    internal static bool ContainsControlCharacters(ReadOnlySpan<char> value)
+        => value.ContainsAnyInRange('\0', '\u001f') || value.ContainsAnyInRange('\u007f', '\u009f');
 
     private static void Text(string value, string label, int limit)
     {
-        Require(value is not null && value.Length <= limit && !value.Contains('\0'), label + " must be present and bounded without NUL.");
+        if (value is null || value.Length > limit || value.Contains('\0'))
+            throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", label + " must be present and bounded without NUL.");
         try { _ = StrictUtf8.GetByteCount(value); }
         catch (EncoderFallbackException error)
         { throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", label + " contains invalid UTF-16.", error); }
@@ -556,3 +574,6 @@ public static class IndexSnapshotValidator
         if (!condition) throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", message);
     }
 }
+
+internal sealed record IndexValidationLookups(Dictionary<string, HarnessNode> Nodes,
+    Dictionary<string, HarnessSymbolOccurrence> Occurrences, Dictionary<string, IndexFile> Files);

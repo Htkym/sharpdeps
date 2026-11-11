@@ -116,7 +116,8 @@ public sealed class PinnedQueryIndex : IQueryIndex
             {
                 PhaseMetrics.Decision("explore.prepare", "pin-cache-miss");
                 // IndexReader validated and froze every reachable collection before publication.
-                prepared = sharedCache is null ? new ExplorationSnapshot(saved, token)
+                prepared = sharedCache is null ? new ExplorationSnapshot(saved, token,
+                    reader.ValidatedNodes, reader.ValidatedOccurrences, reader.ValidatedFiles)
                     : sharedCache.GetOrCreate(saved, canonicalRoot!, reader.IndexPath, reader.SchemaVersion, token);
                 token.ThrowIfCancellationRequested();
                 Volatile.Write(ref exploration, prepared);

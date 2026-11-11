@@ -42,6 +42,19 @@ public sealed class IndexReadCancellationTests
     }
 
     [Fact]
+    public void VectorizedControlValidationMatchesEveryUtf16CodeUnit()
+    {
+        var prefix = new string('a', 40);
+        var suffix = new string('z', 40);
+        for (var code = 0; code <= char.MaxValue; code++)
+        {
+            var value = prefix + (char)code + suffix;
+            Assert.Equal(char.IsControl((char)code), IndexSnapshotValidator.ContainsControlCharacters(value.AsSpan()));
+        }
+        Assert.False(IndexSnapshotValidator.ContainsControlCharacters(ReadOnlySpan<char>.Empty));
+    }
+
+    [Fact]
     public void CancellationDuringCollectionValidationIsNotReportedAsInvalidStorage()
     {
         var baseline = Fixture.CreateSnapshot(Guid.NewGuid());
@@ -51,6 +64,51 @@ public sealed class IndexReadCancellationTests
         Assert.Throws<OperationCanceledException>(() => IndexSnapshotValidator.Validate(snapshot, cancellation.Token));
         Assert.Equal(2, nodes.Visited);
         IndexSnapshotValidator.Validate(baseline);
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(256)]
+    public void RowBatchCancellationCannotPublishPartialResults(int count)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var row = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new HarnessNode("id", HarnessNodeKind.SourceFile, "name", null, null), IndexReadJsonContext.Default.Options);
+        var rows = new CancellingRows(Enumerable.Repeat(row, count).ToArray(), cancellation);
+        var info = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<HarnessNode>)IndexReadJsonContext.Default.GetTypeInfo(typeof(HarnessNode))!;
+        Assert.Throws<OperationCanceledException>(() => IndexReader.DeserializeRows(rows, info, cancellation.Token));
+        Assert.Equal(count, IndexReader.DeserializeRows(Enumerable.Repeat(row, count).ToArray(), info, default).Length);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ParallelRowsPreserveOrderAndFirstCorruption(bool nullFirst)
+    {
+        var values = Enumerable.Range(0, 256).Select(i => new HarnessNode("id-" + i, HarnessNodeKind.SourceFile, "name-" + i, null, null)).ToArray();
+        var rows = values.Select(node => System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(node, IndexReadJsonContext.Default.Options)).ToArray();
+        var info = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<HarnessNode>)IndexReadJsonContext.Default.GetTypeInfo(typeof(HarnessNode))!;
+        Assert.Equal(values, IndexReader.DeserializeRows(rows, info, default));
+        rows[7] = System.Text.Encoding.UTF8.GetBytes(nullFirst ? "null" : "{");
+        rows[8] = System.Text.Encoding.UTF8.GetBytes(nullFirst ? "{" : "null");
+        if (nullFirst)
+            Assert.Equal("INDEX_INVALID_SNAPSHOT", Assert.Throws<IndexStoreException>(() => IndexReader.DeserializeRows(rows, info, default)).Code);
+        else Assert.Throws<System.Text.Json.JsonException>(() => IndexReader.DeserializeRows(rows, info, default));
+    }
+
+    private sealed class CancellingRows(byte[][] values, CancellationTokenSource cancellation) : IReadOnlyList<byte[]>
+    {
+        private int visited;
+        public int Count => values.Length;
+        public byte[] this[int index]
+        {
+            get
+            {
+                if (Interlocked.Increment(ref visited) == 2) cancellation.Cancel();
+                return values[index];
+            }
+        }
+        public IEnumerator<byte[]> GetEnumerator() => ((IEnumerable<byte[]>)values).GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private sealed class CancellingList<T>(IReadOnlyList<T> values, CancellationTokenSource cancellation) : IReadOnlyList<T>
