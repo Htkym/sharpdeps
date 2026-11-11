@@ -647,7 +647,10 @@ public sealed class CliTests
         {
             Assert.Equal(5, CliApplication.ExitFor(expectedCode));
             Assert.Contains("index/WAL/SHM", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("missing or invalid", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("paths are valid and evidence indicates a sandbox restriction", reply.Json, StringComparison.Ordinal);
             Assert.Contains("normal scoped permission review", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("authorized operation within retry limits", reply.Json, StringComparison.Ordinal);
             Assert.Contains("No source evidence was returned", reply.Json, StringComparison.Ordinal);
         }
     }

@@ -402,7 +402,7 @@ public static class CliApplication
     {
         var message = recovery ?? (code switch
         {
-            "INDEX_OPEN_FAILED" => "SQLite could not open the saved index or a required file. Check index/WAL/SHM access and the runtime temporary directory. If sandboxed, use only the client's normal scoped permission review; otherwise report the blocker. No source evidence was returned.",
+            "INDEX_OPEN_FAILED" => "SQLite could not open the saved index or a required file. Check for missing or invalid index/WAL/SHM and runtime temporary paths within existing permissions. Only when paths are valid and evidence indicates a sandbox restriction, request the client's normal scoped permission review for an authorized operation within retry limits. Otherwise report the path/access blocker or use permitted source search. No source evidence was returned.",
             "CLI_MARKDOWN_FACTS_INCOMPLETE" => "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying.",
             _ => "See CLI contract for the recovery action."
         });

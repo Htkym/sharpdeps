@@ -83,7 +83,7 @@ Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま
 | 7 | 内部失敗 |
 | 130 | cancellation |
 
-未リリースの開発版CLIはSQLiteの`SQLITE_CANTOPEN`（primary code 14、拡張codeを含む）を`INDEX_OPEN_FAILED`（exit 5）として返し、例外本文・stack trace・内部pathは出さない。これはindexまたは必要なfileを開けない状態で、sandbox拒否・OS ACL拒否・TEMP欠落のいずれかをcodeだけで断定しない。選択したindex、既存WAL/SHM、runtimeの一時directoryの存在と利用可能性を確認し、sandbox内ならclientの通常の対象限定permission reviewだけを使う。拒否時は停止してblockerを報告し、権限変更・sandbox無効化・index複製やcheckpoint・immutable指定で迂回しない。予算延長はaccess問題の解決にならない。未知の例外は従来どおり`INTERNAL_ERROR`（exit 7）を保つ。
+未リリースの開発版CLIはSQLiteの`SQLITE_CANTOPEN`（primary code 14、拡張codeを含む）を`INDEX_OPEN_FAILED`（exit 5）として返し、例外本文・stack trace・内部pathは出さない。これはindexまたは必要なfileを開けない状態で、sandbox拒否・OS ACL拒否・TEMP欠落のいずれかをcodeだけで断定しない。まず現在の権限内で選択したindex、既存WAL/SHM、runtimeの一時directoryの欠落・不正path・利用可能性を確認する。欠落や誤った選択はpermission reviewでは修復できず、既に許可された範囲で選択を直せない場合はblockerを報告する。pathが正しく、sandboxのaccess制限を示す根拠があり、その操作と再試行が許可されている場合だけ、clientの通常の対象限定permission reviewを依頼する。codeだけを根拠に審査や再試行をしない。OS ACL制限の確認時や審査拒否時は停止してblockerを報告し、権限変更・sandbox無効化・index複製やcheckpoint・immutable指定で迂回しない。失敗した個別fileが未特定なら未特定と明記し、許可された通常検索へ戻れる。予算延長はaccess問題の解決にならない。未知の例外は従来どおり`INTERNAL_ERROR`（exit 7）を保つ。
 
 exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialをResolved/Completeへ補完せず、複数TFMのoccurrenceを混ぜない。truncatedなら返却件数を全件数と呼ばない。errorや打切りを、stdoutにJSONがあることだけで成功扱いしない。
 
