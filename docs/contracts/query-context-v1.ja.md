@@ -46,6 +46,8 @@ JSON escape、envelope、coverage/診断、error、cursor、使用量fieldを含
 
 usedCharsは最終JSONのUTF-16長、usedBytesはそのUTF-8長である。estimatedTokensは文字数からの推定で、tokenizerの厳密な制限ではない。取消と時間枠は探索、source読取境界、最終wire構築で検査し、CANCELLED/QUERY_TIMEOUTを返す。同期SQLite/serializer/filesystem呼出そのものを強制中断するOS sandboxではない。
 
+未リリースの開発版CLIの`explore --prepare-max-milliseconds N`は、明示的な有限のreader準備期限（10〜30000ms、0は不可）を追加するtransport側のopt-inである。全snapshot検証を維持し、その完了後に既存の`QueryBudget.MaxMilliseconds`を探索用の派生データ準備と探索へ適用する。指定なしの共有期限、typed Query API、MCP、既存の公開overloadは変えない。caller取消、source trust、現在入力／configurationの証明、coverageの意味を変更しない。別準備枠の期限切れはCLIの`PREPARATION_TIMEOUT`（exit 4）となる。
+
 ## Exploreの根拠とprovenance
 
 現行の`explore`は名前・exact ID・source pathを入口に、scope内の保存済み実装と参照根拠をまとめる。曖昧なproject／variantを自動統合せず、明示scopeと`unique`／`prefer-debug`の選択に従う。`http-get-literal`は保存されたHttpGet宣言断片との完全一致であり、実効URLの解決ではない。`pathTo`はexact occurrence間の保存済みcall witnessを扱い、runtime到達性を証明しない。候補、omission、freshness、coverageを保つ。

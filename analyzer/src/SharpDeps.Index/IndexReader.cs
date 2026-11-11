@@ -86,7 +86,8 @@ public sealed class IndexReader : IDisposable
             var bodies = schemaVersion >= 2 ? ReadGeneratedBodies(token) : [];
             var packages = schemaVersion >= 3 ? ReadPackageBodies(token) : [];
             var snapshot=new IndexSnapshot(graph,Read<IndexFile>("files",token),Read<IndexDocumentIdentity>("document_identities",token),Read<IndexAlias>("aliases",token),search.AsReadOnly(),bodies,packages);
-            IndexSnapshotValidator.Validate(snapshot,token);
+            using (PhaseMetrics.Measure("reader.validate"))
+                IndexSnapshotValidator.Validate(snapshot,token);
             token.ThrowIfCancellationRequested();
             var manifestHash=IndexStage.ComputeManifestHash(snapshot.Files);
             token.ThrowIfCancellationRequested();
@@ -112,6 +113,7 @@ public sealed class IndexReader : IDisposable
     }
     private IReadOnlyList<IndexGeneratedBody> ReadGeneratedBodies(CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("reader.generated-bodies");
         token.ThrowIfCancellationRequested();
         var result=new List<IndexGeneratedBody>();
         using var command=IndexDatabase.Command(connection,transaction,"SELECT source_id,body FROM generated_bodies WHERE generation=$g ORDER BY source_id",("$g",header.Generation));
@@ -121,6 +123,7 @@ public sealed class IndexReader : IDisposable
     }
     private IReadOnlyList<IndexPackageBody> ReadPackageBodies(CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("reader.package-bodies");
         token.ThrowIfCancellationRequested();
         var result=new List<IndexPackageBody>();
         using var command=IndexDatabase.Command(connection,transaction,"SELECT source_id,body FROM package_bodies WHERE generation=$g ORDER BY source_id",("$g",header.Generation));
@@ -158,6 +161,7 @@ public sealed class IndexReader : IDisposable
 
     private IReadOnlyList<T> Read<T>(string table,CancellationToken token)
     {
+        using var metricsScope = PhaseMetrics.Measure("reader.rows-" + table.Replace('_', '-'));
         token.ThrowIfCancellationRequested();
         var result=new List<T>();
         using var command=IndexDatabase.Command(connection,transaction,$"SELECT json FROM {table} WHERE generation=$g ORDER BY rowid",("$g",header.Generation));

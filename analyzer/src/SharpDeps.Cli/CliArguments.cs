@@ -21,7 +21,7 @@ internal sealed class CliArguments
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind", "metrics-directory" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
+      "max-depth", "max-milliseconds", "prepare-max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -126,6 +126,9 @@ internal sealed class CliArguments
         }
         return parsed;
     }
+
+    public int? ExplorePreparationMilliseconds() => Has("prepare-max-milliseconds")
+        ? Number("prepare-max-milliseconds", 1000, 10, 30000) : null;
 
     public ExploreRequest ExplorationRequest()
     {
