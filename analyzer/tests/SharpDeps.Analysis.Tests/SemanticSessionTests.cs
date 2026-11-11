@@ -10,8 +10,16 @@ using Xunit;
 
 namespace SharpDeps.Analysis.Tests;
 
+[Collection("semantic")]
 public sealed class SemanticSessionTests
 {
+    static SemanticSessionTests()
+    {
+        Assert.True(
+            SemanticEnvironment.TryRegister(TestPaths.RepositoryRoot, out var reason),
+            reason ?? "MSBuild registration failed.");
+    }
+
     private static readonly string Root = Path.Combine(TestPaths.RepositoryRoot, ".local", "session-input");
     private static readonly string Shared = Path.Combine(Root, "Shared.cs");
     private static readonly string Dependent = Path.Combine(Root, "Dependent.cs");
