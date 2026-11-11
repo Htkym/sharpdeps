@@ -27,6 +27,25 @@ public sealed class IndexStoreTests
     }
 
     [Fact]
+    public void Utf8RowsPreserveLargeEscapedAndNonAsciiValuesAcrossRowBoundaries()
+    {
+        using var fixture = new StoreFixture();
+        var value = string.Concat(Enumerable.Repeat("設定😀\\\"二", 1200));
+        var snapshot = fixture.Snapshot(1, "Before");
+        snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = snapshot.Graph.Nodes.Select(node => node.Id == fixture.MemberId ? node with { Name = value } : node).ToArray()
+        } };
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var saved = reader.Snapshot();
+        Assert.Equal(value, Assert.Single(saved.Graph.Nodes, node => node.Id == fixture.MemberId).Name);
+        Assert.Equal(JsonSerializer.Serialize(snapshot.Graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope),
+            JsonSerializer.Serialize(saved.Graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
+    }
+
+    [Fact]
     public void SavedNullRowsAreRejectedBeforePublishingAReader()
     {
         using var fixture = new StoreFixture();

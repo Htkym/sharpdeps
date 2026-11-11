@@ -172,20 +172,11 @@ public sealed class IndexReader : IDisposable
         var projection=utf8Rows ? "CAST(json AS BLOB)" : "json";
         using var command=IndexDatabase.Command(connection,transaction,$"SELECT {projection} FROM {table} WHERE generation=$g ORDER BY rowid",("$g",header.Generation));
         using var rows=command.ExecuteReader();
-        byte[] buffer=[];
         while(ReadRow(rows,token))
         {
-            T? item;
-            if(utf8Rows)
-            {
-                var length=rows.GetBytes(0,0,null,0,0);
-                if(length>int.MaxValue)throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved row exceeds the readable size.");
-                if(buffer.Length<length)buffer=new byte[Math.Max(4096,(int)length)];
-                if(rows.GetBytes(0,0,buffer,0,(int)length)!=length)
-                    throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved row could not be read completely.");
-                item=JsonSerializer.Deserialize(buffer.AsSpan(0,(int)length),typeInfo);
-            }
-            else item=JsonSerializer.Deserialize(rows.GetString(0),typeInfo);
+            // GetBytes opens a provider stream per call; read the complete projected BLOB once instead.
+            var item=utf8Rows ? JsonSerializer.Deserialize(rows.GetFieldValue<byte[]>(0),typeInfo)
+                : JsonSerializer.Deserialize(rows.GetString(0),typeInfo);
             if(item is null)throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
             token.ThrowIfCancellationRequested();
             result.Add(item);
