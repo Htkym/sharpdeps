@@ -2,6 +2,7 @@ namespace SharpDeps.Index;
 
 using SharpDeps.Analysis.Core.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
@@ -13,10 +14,11 @@ public sealed class IndexReader : IDisposable
     private readonly SqliteTransaction transaction;
     private readonly HarnessGraphEnvelope header;
     private readonly int schemaVersion;
+    private readonly bool utf8Rows;
     private IndexSnapshot? cachedSnapshot;
     private bool disposed;
-    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath)
-    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath; }
+    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath,bool utf8Rows)
+    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath;this.utf8Rows=utf8Rows; }
     public string ManifestHash { get; }
     public string IndexPath { get; }
     public int SchemaVersion => schemaVersion;
@@ -35,6 +37,8 @@ public sealed class IndexReader : IDisposable
             token.ThrowIfCancellationRequested();
             transaction=connection.BeginTransaction(deferred:true);
             var schemaVersion=IndexDatabase.CheckMetadata(connection,transaction,workspace);
+            // CAST(TEXT AS BLOB) follows the database encoding; retain the string path for UTF-16 databases.
+            var utf8Rows=string.Equals((string?)IndexDatabase.Scalar(connection,transaction,"PRAGMA encoding;"),"UTF-8",StringComparison.OrdinalIgnoreCase);
             token.ThrowIfCancellationRequested();
             // Rows are the validated graph source; project only header fields from legacy full-graph JSON.
             using var command=IndexDatabase.Command(connection,transaction,"""
@@ -57,7 +61,7 @@ public sealed class IndexReader : IDisposable
             token.ThrowIfCancellationRequested();
             if(header.Generation!=row.GetInt64(0)||header.SnapshotId!=row.GetString(1)||header.WorkspaceId!=workspace)
                 throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved generation metadata disagrees with the graph.");
-            var result=new IndexReader(connection,transaction,header,row.GetString(2),schemaVersion,path);row.Close();
+            var result=new IndexReader(connection,transaction,header,row.GetString(2),schemaVersion,path,utf8Rows);row.Close();
             _=result.Snapshot(token);token.ThrowIfCancellationRequested();return result;
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)
@@ -164,12 +168,25 @@ public sealed class IndexReader : IDisposable
         using var metricsScope = PhaseMetrics.Measure("reader.rows-" + table.Replace('_', '-'));
         token.ThrowIfCancellationRequested();
         var result=new List<T>();
-        using var command=IndexDatabase.Command(connection,transaction,$"SELECT json FROM {table} WHERE generation=$g ORDER BY rowid",("$g",header.Generation));
+        var typeInfo=(JsonTypeInfo<T>)IndexReadJsonContext.Default.GetTypeInfo(typeof(T))!;
+        var projection=utf8Rows ? "CAST(json AS BLOB)" : "json";
+        using var command=IndexDatabase.Command(connection,transaction,$"SELECT {projection} FROM {table} WHERE generation=$g ORDER BY rowid",("$g",header.Generation));
         using var rows=command.ExecuteReader();
+        byte[] buffer=[];
         while(ReadRow(rows,token))
         {
-            var item=JsonSerializer.Deserialize<T>(rows.GetString(0),IndexReadJsonContext.Default.Options)
-                ?? throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
+            T? item;
+            if(utf8Rows)
+            {
+                var length=rows.GetBytes(0,0,null,0,0);
+                if(length>int.MaxValue)throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved row exceeds the readable size.");
+                if(buffer.Length<length)buffer=new byte[Math.Max(4096,(int)length)];
+                if(rows.GetBytes(0,0,buffer,0,(int)length)!=length)
+                    throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved row could not be read completely.");
+                item=JsonSerializer.Deserialize(buffer.AsSpan(0,(int)length),typeInfo);
+            }
+            else item=JsonSerializer.Deserialize(rows.GetString(0),typeInfo);
+            if(item is null)throw new IndexStoreException("INDEX_INVALID_SNAPSHOT", "Saved rows cannot be null.");
             token.ThrowIfCancellationRequested();
             result.Add(item);
         }

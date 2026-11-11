@@ -26,18 +26,34 @@ public sealed class IndexStoreTests
         Assert.Equal(json, JsonSerializer.Serialize(restored, IndexStage.Json));
     }
 
+    [Fact]
+    public void SavedNullRowsAreRejectedBeforePublishingAReader()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json='null' WHERE id=$id", ("$id", fixture.MemberId));
+        AssertCode("INDEX_INVALID_SNAPSHOT", () => { using var rejected = fixture.Reader(); });
+    }
+
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(3)]
-    public void LegacyFullEnvelopeAndCompactGenerationPreserveCompleteSnapshotsAndReaderPins(int schema)
+    [InlineData(1, "UTF-8")]
+    [InlineData(2, "UTF-8")]
+    [InlineData(3, "UTF-8")]
+    [InlineData(3, "UTF-16le")]
+    [InlineData(3, "UTF-16be")]
+    public void LegacyFullEnvelopeAndCompactGenerationPreserveCompleteSnapshotsAndReaderPins(int schema, string encoding)
     {
         using var fixture = new StoreFixture();
         Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
         using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
         {
+            Assert.Contains(encoding, new[] { "UTF-8", "UTF-16le", "UTF-16be" });
+            IndexDatabase.Execute(connection, null, $"PRAGMA encoding='{encoding}';");
             IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
             IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), schema);
+            Assert.Equal(encoding, (string?)IndexDatabase.Scalar(connection, null, "PRAGMA encoding;"));
         }
         using var writer = fixture.Writer();
         var before = Expected(fixture.Snapshot(1, "Before"));
@@ -924,9 +940,8 @@ public sealed class IndexStoreTests
     private sealed class StoreFixture : IDisposable
     {
         public static readonly UTF8Encoding Utf8 = new(false, true);
-        private static readonly string FixtureBase = OperatingSystem.IsWindows()
-            ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd205-20261010-01\fixtures-revision01"
-            : Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-sd205-fixtures-revision01");
+        private static readonly string FixtureBase = Path.Combine(
+            OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-index-store-tests");
         public const string Code = "namespace App; class Service { public void Before() { } }\n";
         private readonly string _code;
         public const string Markdown = "# 設定\r\n\r\n😀 Service の設定の手順を説明する。\r\n";
