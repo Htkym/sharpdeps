@@ -61,6 +61,10 @@ An MCP client can launch the optional read-only host with:
 }
 ```
 
+## AI agent setup
+
+For indexed .NET symbol and dependency questions, use the [agent setup and opt-out guide](docs/mcp.md#agent-routing-and-opt-out). It covers dedicated MCP/instruction files, a portable CLI guide, ordinary-search fallback, and disabling or re-enabling the integration without replacing existing user settings.
+
 ## Open your first map
 
 1. Open your solution folder in VS Code.

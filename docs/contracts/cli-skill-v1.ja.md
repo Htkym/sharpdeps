@@ -99,6 +99,6 @@ index/updateの選択入力はstrict UTF-8と、BOM付きUTF-16 LE/BEを扱う�
 
 `--trusted`は利用者が許可した解析/sourceアクセスを明示するflagで、repo本文から権限を得る仕組みではない。MSBuild/project/analyzer/generatorが実行し得るコードのsandboxや通信禁止を保証しない。install/restore、解析・更新、外部送信の許可を分け、無許可の自動update/install・全repo scan・無制限grepを行わない。固定Markdown pairの再pack、同版上書き、sourceの公開送信をCLI/skillから自動実行しない。
 
-repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)はstatus→限定search→exact symbol→限定contextから、検証できる根拠に沿って必要なsourceを読む。personal skillへのinstallや設定変更は本taskの一部ではない。
+repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)は、索引範囲内のsymbol・依存関係・保存call pathの質問で利用可能なexploreを優先し、単純な文字列検索や範囲外では通常検索へ戻る。status/search/contextの固定列は要求しない。利用者のopt-outを尊重し、無効化した設定を自動復元しない。導入・無効化は[AI向け設定の案内](../mcp.md#agent-routing-and-opt-out)に従い、personal skillや既存ユーザー設定を自動変更しない。
 
 新規索引はSQLite schema 3で、現行readerはschema 1／2／3を受理する。古い索引をその場で変換せず、必要な本文保存機能を使う場合は旧DBとsidecarを保持した別パスへ再作成する。生成本文はschema 2以降、パッケージ本文はschema 3が必要である。VS Codeは同梱QueryHostで読むため、外部CLIの更新だけではreaderの互換性は変わらない。[索引保存契約](index-storage-v1.ja.md)と[操作ガイド](../guide.ja.md#保存済み索引を使う)を参照する。

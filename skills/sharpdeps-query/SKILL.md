@@ -1,6 +1,6 @@
 ---
 name: sharpdeps-query
-description: Use an existing SharpDeps CLI or MCP index to investigate .NET implementations, relationships and bounded source evidence. Start with explore; preserve exact selectors, scope, uncertainty and freshness. A query does not authorize installation, indexing or global configuration changes.
+description: Investigate .NET symbol identity, dependencies, callers/callees and saved call paths with an available SharpDeps CLI or MCP index. Prefer explore for indexed structural questions; use ordinary search for literal text or unindexed work. Respect user opt-out, exact scope, uncertainty and freshness; queries do not authorize setup or updates.
 ---
 
 # SharpDeps Query
@@ -8,6 +8,12 @@ description: Use an existing SharpDeps CLI or MCP index to investigate .NET impl
 Use the already selected tool version and workspace root/index. The CLI package is `SharpDeps.Cli`, with command `sharpdeps`; the MCP host is `sharpdeps-mcp`. Check availability instead of installing tools or changing global settings. Acquisition, restore and first-time dnx execution can access the network or update caches. Local-manifest `dotnet tool run` and `dnx` launchers need an SDK; an installed tool shim or direct saved-query DLL execution needs a .NET 10 runtime. Report missing prerequisites. Do not repack the fixed Markdown runtime/source pair under the same version.
 
 This repository copy includes unreleased v0.5 development behavior: discovery and omission-sensitive scope defaults, source outcomes, positional CLI queries and explore-only current-directory root selection. These are not claims about published 0.4.0 packages. Check the registry or release page for actual availability, and inspect the selected CLI's help or MCP tool schema for options supported by that installed version. Documentation of a feature does not authorize upgrading a tool or rebuilding its index.
+
+## Choose when to use SharpDeps
+
+For .NET symbol identity, dependencies, callers/callees, saved call paths or cross-file implementation questions covered by the configured index, prefer the available SharpDeps exploration entry point before broad repository searches. Choose ordinary read/search for a simple literal text lookup, documentation, dirty or unindexed files, a missing tool/index, or work outside the saved scope. Do not install or create an index merely to answer a query.
+
+A user opt-out or disabled integration takes precedence over this routing. Use ordinary tools until the user explicitly requests re-enabling it; do not reinstall, reconnect or restore removed settings yourself. Disabling automatic guidance does not ban an explicitly authorized CLI command. See the [opt-out and setup instructions](../../docs/mcp.md#agent-routing-and-opt-out).
 
 ## Start with explore
 
@@ -19,6 +25,8 @@ sharpdeps explore "src/Parser.cs" --root ROOT_ABS --format agent
 ```
 
 For CLI `explore` only, `--root` can be omitted: the absolute current directory is selected without searching parent directories. The default index remains `.sharpdeps/index.sqlite` under that root. Use either one positional query or `--term`, not both. Missing-index errors report the selected root/index and do not create them.
+
+For a large cold index, only a development CLI that advertises `--prepare-max-milliseconds` supports a separate finite reader-preparation budget. An explicitly chosen example is `--prepare-max-milliseconds 5000 --max-milliseconds 3000`: full snapshot preparation gets 5000 ms, then derived exploration/source/output gets 3000 ms. Omission retains the shared 1000 ms default; the original cold-default limitation remains. Do not apply this CLI-only flag to MCP or silently increase deadlines. Preserve preparation/query timeout errors and the user's run limits.
 
 MCP uses tool `explore` with `query` instead of the CLI query, and defaults to agent format. CLI defaults to audit, so these examples select agent explicitly. Choose audit for full saved identities, hashes, spans and provenance. Format does not grant source access.
 

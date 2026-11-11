@@ -361,7 +361,16 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         try
         {
             await Send("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"sharpdeps-test","version":"1"}}}""");
-            using (var ready = await Reply(1)) Assert.Equal("2025-11-25", ready.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
+            using (var ready = await Reply(1))
+            {
+                var initialized = ready.RootElement.GetProperty("result");
+                Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
+                var instructions = initialized.GetProperty("instructions").GetString()!;
+                Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
+                Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
+                Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
+                Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);
+            }
             await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
             using (var listed = await Reply(2))
