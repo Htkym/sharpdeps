@@ -304,4 +304,72 @@ public sealed class FullBuildOracleTests(ITestOutputHelper output)
         };
         Assert.NotEmpty(FullBuildOracle.Differences(baseline, changed));
     }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("missing")]
+    [InlineData("extra")]
+    public void WideCatalogComparisonIgnoresOrderAndRetainsEveryDifference(string mutation)
+    {
+        var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, 1, HarnessGraphContract.IdentityVersion,
+            "hw_11111111222243338444555555555555", "baseline", 1, HarnessCoverage.Partial, [], [], [], [], [], null, []);
+        var catalog = Enumerable.Range(0, 1024).ToDictionary(i => $"term-{i:D4}",
+            _ => new[] { new IndexSearchHit("symbol", 1, "fts") }, StringComparer.Ordinal);
+        var baseline = new OracleObservation(new(graph, [], [], [], []), catalog, new(), 1);
+        var reordered = catalog.Reverse().ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+        var changed = baseline with { Fts = reordered, ProcessId = 2 };
+        Assert.Empty(FullBuildOracle.Differences(baseline, changed));
+
+        var expectedPath = "$.fts.term-0512";
+        if (mutation == "value")
+        {
+            reordered["term-0512"] = [new("symbol", 2, "fts")];
+            expectedPath += "[0].rank:";
+        }
+        else if (mutation == "missing")
+        {
+            reordered.Remove("term-0512");
+            expectedPath += ": property missing";
+        }
+        else
+        {
+            reordered.Add("term-2048", [new("symbol", 1, "fts")]);
+            expectedPath = "$.fts.term-2048: property missing";
+        }
+        Assert.StartsWith(expectedPath, Assert.Single(FullBuildOracle.Differences(baseline, changed)));
+    }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("missing")]
+    [InlineData("extra")]
+    [InlineData("order")]
+    public void LargeArrayComparisonPreservesOrderLengthsAndValues(string mutation)
+    {
+        var graph = new HarnessGraphEnvelope(HarnessGraphContract.Format, 1, HarnessGraphContract.IdentityVersion,
+            "hw_11111111222243338444555555555555", "baseline", 1, HarnessCoverage.Partial, [], [], [], [], [], null, []);
+        var hits = Enumerable.Range(0, 1024).Select(i => new IndexSearchHit($"symbol-{i:D4}", 1, "fts")).ToArray();
+        var baseline = new OracleObservation(new(graph, [], [], [], []), new() { ["Service"] = hits }, new(), 1);
+        var changedHits = hits.ToArray();
+        var changed = baseline with { Fts = new() { ["Service"] = changedHits } };
+        Assert.Empty(FullBuildOracle.Differences(baseline, changed));
+
+        if (mutation == "value") changedHits[512] = changedHits[512] with { Rank = 2 };
+        else if (mutation == "missing") changed = changed with { Fts = new() { ["Service"] = hits[..^1] } };
+        else if (mutation == "extra") changed = changed with { Fts = new() { ["Service"] = [.. hits, new("extra", 1, "fts")] } };
+        else (changedHits[512], changedHits[513]) = (changedHits[513], changedHits[512]);
+
+        var differences = FullBuildOracle.Differences(baseline, changed);
+        if (mutation == "order")
+        {
+            Assert.Equal(2, differences.Count);
+            Assert.Contains(differences, d => d.StartsWith("$.fts.Service[512].nodeId:", StringComparison.Ordinal));
+            Assert.Contains(differences, d => d.StartsWith("$.fts.Service[513].nodeId:", StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.StartsWith(mutation == "value" ? "$.fts.Service[512].rank:" : "$.fts.Service: array length differs",
+                Assert.Single(differences));
+        }
+    }
 }

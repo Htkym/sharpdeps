@@ -95,6 +95,23 @@ internal static class FullBuildOracle
         }
         if (expected.ValueKind == JsonValueKind.Object)
         {
+            // Query/FTS catalogs can contain thousands of keys. Repeated TryGetProperty
+            // scans are quadratic; avoid lookup tables for small records.
+            if (expected.GetPropertyCount() >= 128 || actual.GetPropertyCount() >= 128)
+            {
+                var leftProperties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                var rightProperties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                foreach (var property in expected.EnumerateObject()) leftProperties[property.Name] = property.Value;
+                foreach (var property in actual.EnumerateObject()) rightProperties[property.Name] = property.Value;
+                foreach (var property in leftProperties.Keys.Union(rightProperties.Keys).Order(StringComparer.Ordinal))
+                {
+                    if (!leftProperties.TryGetValue(property, out var left) || !rightProperties.TryGetValue(property, out var right))
+                        differences.Add(path + "." + property + ": property missing");
+                    else
+                        Compare(left, right, path + "." + property, differences);
+                }
+                return;
+            }
             var properties = expected.EnumerateObject().Select(p => p.Name)
                 .Union(actual.EnumerateObject().Select(p => p.Name)).Order(StringComparer.Ordinal);
             foreach (var property in properties)
@@ -109,8 +126,14 @@ internal static class FullBuildOracle
         {
             if (expected.GetArrayLength() != actual.GetArrayLength())
                 differences.Add(path + ": array length differs");
-            for (var i = 0; i < Math.Min(expected.GetArrayLength(), actual.GetArrayLength()); i++)
-                Compare(expected[i], actual[i], path + "[" + i + "]", differences);
+            var leftItems = expected.EnumerateArray();
+            var rightItems = actual.EnumerateArray();
+            var i = 0;
+            while (leftItems.MoveNext() && rightItems.MoveNext())
+            {
+                Compare(leftItems.Current, rightItems.Current, path + "[" + i + "]", differences);
+                i++;
+            }
         }
         else if (expected.GetRawText() != actual.GetRawText())
             differences.Add(path + ": " + expected.GetRawText() + " != " + actual.GetRawText());
