@@ -1,8 +1,6 @@
 # 固定Markdown packageから文書graphを作る契約
 
-この契約は、固定Markdown runtimeのfactsからHarness graphを作る現行adapterを記述します。CLIの索引作成は準備済みfactsを文書・節の照合、投影、mention解決へ渡します。利用手順は[CLI契約](cli-skill-v1.ja.md)、永続IDは[Markdown identity契約](markdown-identity-mentions-v1.ja.md)を参照してください。
-
-導入時のSD2-03はSharpDeps `feature/0.2.0`、基準SHA `fdadba7620f0c22e00690ede73df63a2d840aea1`から始めました。当時、SD2-01の全9ファイルと整形修正2ファイルはBocchiが合格とし、修正SHAのCI run 37770408926も成功しました。この履歴を0.4.0の検証結果へ転用しません。
+この契約は固定Markdown runtimeのfactsからHarness graphを作る現行adapterを記述します。CLIの索引作成は準備済みfactsを文書・節の照合、投影、mention解決へ渡します。利用手順は[CLI契約](cli-skill-v1.ja.md)、永続IDは[Markdown identity契約](markdown-identity-mentions-v1.ja.md)を参照してください。
 
 新しい `SharpDeps.Analysis.Markdown` はnet10の独立adapterです。Contracts/Coreと固定runtime packageだけを参照し、Quick、既存solution/host/report v2、共通identityを変更しません。parserの手動copy、独立parser、renderer、MSBuild、SQLiteは導入しません。
 
@@ -16,7 +14,7 @@ restore後に `Verify-ConsumerArtifacts.mjs` で同pair、feedの両artifact、�
 
 ## 元factsを保持する投影
 
-`LithoSharpMarkdownAdapter.Analyze` は供給本文とopaque scope/source/versionを公開facadeへ渡します。`MarkdownGraphProjection.Facts` とtyped bindingは、frontmatter、heading、section、link、fence、text region、diagnostics、coverageを元の不変DTOとして保持します。raw UTF-16 span、decoded source segments、Atomic/Unknown、`Map` のRawFragmentsを独自の1:1位置へ変換しません。
+`LithoSharpMarkdownAdapter.Analyze` は供給本文とopaque scope/source/versionを公開facadeへ渡します。`MarkdownGraphProjection.Facts` とtyped bindingはfrontmatter、heading、section、link、fence、text region、diagnostics、coverageを元の不変DTOとして保持します。raw UTF-16 span、decoded source segments、Atomic/Unknown、`Map` のRawFragmentsを独自の1:1位置へ変換しません。
 
 現行pinはSyntamark 1.2.0、ContractVersion 1.0、legacy profileの`lithosharp-markdown/1`です。`Prepare`はfactsと補助構文木を一度取得し、`Project`と`ResolvePrepared`が同じ入力へ再利用します。補助構文木が不足しても、完全なfactsを不足したfactsへ置き換えません。準備済み入力はworkspace、scope/source/version、原文、parser stampに加え、`MaxInputUtf16`、`MaxOutputItems`、`MaxNestingDepth`、`MaxScanUnits`、`ProfileId`、`OptionsSchemaVersion`、`FrontMatterRecovery`、`InputKind`の8項目へ結び付けます。差異がある入力への流用を拒否します。
 
@@ -30,20 +28,10 @@ workspace/document UUIDは永続ownerが供給します。parser SourceIdやhead
 
 section所有は開始位置のbinary lookupと親階層で選び、各factでsection全件を走査しません。未知の位置はnull、既知空spanはlength 0のままです。source/version/hashを位置と一緒に保持します。
 
-MarkdownのResolvedReferenceは同一文書のdefinition解決だけです。file/anchor/member targetの確定とは扱わず、graph edgeはCandidateまたはUnresolvedです。relative path/root外判定、broken file/anchor、symbol候補とmove/section matchingはSD2-04/09のownerへ残します。外部URLをcrawlせず、HTML/MDX/fenceを実行・描画しません。
+MarkdownのResolvedReferenceは同一文書のdefinition解決だけです。file/anchor/member targetの確定とは扱わず、graph edgeはCandidateまたはUnresolvedです。relative path/root外判定、broken file/anchor、symbol候補とmove/section matchingは文書・節IDと差分更新のownerが扱います。外部URLをcrawlせず、HTML/MDX/fenceを実行・描画しません。
 
-parse Failedはgraph Failed、Partial/unknown mappingと未完了identity/target解決はgraph Partialです。parser statusとprojection reasonsを別に保持し、空配列で未完了を隠しません。coordinatorのpublish世代、cache、保存/完全graph検証はSD2-05/06/09とIN-01で扱います。
+parse Failedはgraph Failed、Partial/unknown mappingと未完了identity/target解決はgraph Partialです。parser statusとprojection reasonsを別に保持し、空配列で未完了を隠しません。coordinatorのpublish世代、cache、保存/完全graph検証は索引保存、Query、coordinatorの各処理で扱います。
 
 ## trust
 
-新Index入口はSD2-01のread/write policyでuntrustedを拒否します。既存Quick/Semantic gateを変更せず、workspace trustをOS sandboxや外部AI送信許可とは扱いません。cancel時は結果を返しません。
-
-## 導入時の限定検証の履歴
-
-以下の件数、タスク予定と待機条件はSD2-03当時の記録です。現行pinのartifact照合や0.4.0の検証結果は、対応する実行証跡で判断します。
-
-MD-05でruntime/固定source hostの全factsが一致した3fixtureを、SharpDepsの実adapterでも同じ正規化/hashで照合します。BOM/CRLF/YAML、entity/非BMP、重複heading/未解決referenceを同じ本文で確認します。追加の小checkはwhitelist、fence原文slice/hash、隣接section、TextHashに結び付いたID、trust/cancel、invalid Unicode/limitの保守的coverageです。実Roslyn hostと両repo matrixはIN-01の別ゲートです。
-
-`Markdown.Tests` の明示restore/testにはimmutable local feedと既存dependency cacheを渡します。RTKで限定testを実行し、node reuse/shared compilationを無効にします。restore後のartifact gate、既存CIと同じ整形check、Quick project/Contracts/Coreの不変確認を記録します。全suiteやカバレッジ目標を追加しません。
-
-固定packageのrestoreとartifact照合、adapter test 8件、既存のformat/lint checkが成功しました。test assertの書式warningを修正後、8件・warning 0を確認しています。Bocchiの全差分レビューが合格するまで次のタスクへ進みません。MD-06はIN-01 PASSまで開始しません。
+Index入口はread/write policyでuntrustedを拒否します。既存Quick/Semantic gateを変更せず、workspace trustをOS sandboxや外部AI送信許可とは扱いません。cancel時は結果を返しません。

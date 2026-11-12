@@ -26,18 +26,197 @@ public sealed class IndexStoreTests
         Assert.Equal(json, JsonSerializer.Serialize(restored, IndexStage.Json));
     }
 
+    [Fact]
+    public void Utf8RowsPreserveLargeEscapedAndNonAsciiValuesAcrossRowBoundaries()
+    {
+        using var fixture = new StoreFixture();
+        var value = string.Concat(Enumerable.Repeat("設定😀\\\"二", 1200));
+        var snapshot = fixture.Snapshot(1, "Before");
+        snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = snapshot.Graph.Nodes.Select(node => node.Id == fixture.MemberId ? node with { Name = value } : node).ToArray()
+        } };
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var saved = reader.Snapshot();
+        Assert.Equal(value, Assert.Single(saved.Graph.Nodes, node => node.Id == fixture.MemberId).Name);
+        Assert.Equal(JsonSerializer.Serialize(snapshot.Graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope),
+            JsonSerializer.Serialize(saved.Graph, HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        Assert.Equal(fixture.MemberId, Assert.Single(reader.Search("Before")).NodeId);
+    }
+
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(3)]
-    public void LegacyFullEnvelopeAndCompactGenerationPreserveCompleteSnapshotsAndReaderPins(int schema)
+    [InlineData("nodes", null)]
+    [InlineData("nodes", "null")]
+    [InlineData("nodes", "{}")]
+    [InlineData("markdown", null)]
+    [InlineData("generation", "null")]
+    [InlineData("coverage", "99")]
+    [InlineData("coverage", "\"partial\"")]
+    [InlineData("diagnostics", "[]")]
+    public void ProjectedHeaderPreservesRequiredFieldsAndEnumContract(string property, string? replacement)
+    {
+        using var fixture = new StoreFixture();
+        var original = fixture.Snapshot(1, "Before").Graph with
+        { Nodes = [], Variants = [], SymbolOccurrences = [], Edges = [], LegacyReferences = [] };
+        var document = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(original, HarnessGraphJsonContext.Default.HarnessGraphEnvelope))!.AsObject();
+        if (replacement is null) document.Remove(property);
+        else document[property] = System.Text.Json.Nodes.JsonNode.Parse(replacement);
+        var json = document.ToJsonString();
+        var error = Record.Exception(() => HarnessGraphContract.Read(json));
+        if (error is null)
+            Assert.Equal(JsonSerializer.Serialize(HarnessGraphContract.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope),
+                JsonSerializer.Serialize(IndexGraphHeader.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        else Assert.Throws<JsonException>(() => IndexGraphHeader.Read(json));
+    }
+
+    [Theory]
+    [InlineData("{}", false)]
+    [InlineData("[42]", false)]
+    [InlineData("null", false)]
+    [InlineData("[42]", true)]
+    public void ProjectedHeaderPreservesTypedChecksForDuplicateLegacyCollections(string value, bool last)
+    {
+        using var fixture = new StoreFixture();
+        var original = fixture.Snapshot(1, "Before").Graph with
+        { Nodes = [], Variants = [], SymbolOccurrences = [], Edges = [], LegacyReferences = [] };
+        var json = JsonSerializer.Serialize(original, HarnessGraphJsonContext.Default.HarnessGraphEnvelope);
+        const string empty = "\"nodes\": []";
+        Assert.Contains(empty, json, StringComparison.Ordinal);
+        var duplicate = "\"nodes\": " + value;
+        json = json.Replace(empty, last ? empty + "," + duplicate : duplicate + "," + empty, StringComparison.Ordinal);
+        var expected = Record.Exception(() => HarnessGraphContract.Read(json));
+        if (expected is null)
+            Assert.Equal(JsonSerializer.Serialize(HarnessGraphContract.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope),
+                JsonSerializer.Serialize(IndexGraphHeader.Read(json), HarnessGraphJsonContext.Default.HarnessGraphEnvelope));
+        else Assert.Throws<JsonException>(() => IndexGraphHeader.Read(json));
+    }
+
+    [Fact]
+    public void ValidatedLookupMapsReferenceOnlyTheFrozenPinnedSnapshot()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using var pinned = fixture.Reader();
+        var saved = pinned.Snapshot();
+        Assert.Same(saved.Graph.Nodes.Single(node => node.Id == fixture.MemberId), pinned.ValidatedNodes[fixture.MemberId]);
+        foreach (var occurrence in saved.Graph.SymbolOccurrences)
+        {
+            Assert.Same(occurrence, pinned.ValidatedOccurrences[occurrence.Id]);
+            Assert.Throws<NotSupportedException>(() => ((IList<HarnessLocation>)occurrence.Declarations!).Clear());
+        }
+        foreach (var file in saved.Files) Assert.Same(file, pinned.ValidatedFiles[file.SourceId]);
+        Assert.Throws<NotSupportedException>(() => ((IDictionary<string, HarnessNode>)pinned.ValidatedNodes).Clear());
+        writer.Commit(IndexStage.Create(fixture.Snapshot(2, "After")));
+        using var current = fixture.Reader();
+        Assert.Equal("Before", pinned.ValidatedNodes[fixture.MemberId].Name);
+        Assert.Equal("After", current.ValidatedNodes[fixture.MemberId].Name);
+        Assert.Same(saved, pinned.Snapshot());
+    }
+
+    [Fact]
+    public void PipelinedRowsRetainOrderAndRejectCorruptionInALaterBatch()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = [.. snapshot.Graph.Nodes, .. Enumerable.Range(0, 4200).Select(i =>
+                new HarnessNode("source-" + i, HarnessNodeKind.SourceFile, "Source " + i, snapshot.Graph.WorkspaceId, null))]
+        } };
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        using var pinned = fixture.Reader();
+        Assert.Equal(snapshot.Graph.Nodes, pinned.Snapshot().Graph.Nodes);
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json='null' WHERE id='source-4199'");
+        AssertCode("INDEX_INVALID_SNAPSHOT", () => { using var rejected = fixture.Reader(); });
+        Assert.Equal(snapshot.Graph.Nodes, pinned.Snapshot().Graph.Nodes);
+    }
+
+    [Fact]
+    public void Utf8RowsCannotJoinMalformedValuesIntoValidObjects()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        var first = JsonSerializer.Serialize(snapshot.Graph.Nodes[0], IndexStage.Json);
+        var second = JsonSerializer.Serialize(snapshot.Graph.Nodes[1], IndexStage.Json);
+        // Combined these are two valid objects; neither database row is a valid JSON value.
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json=$json WHERE id=$id",
+                ("$json", first[..^1]), ("$id", snapshot.Graph.Nodes[0].Id));
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json=$json WHERE id=$id",
+                ("$json", "\"ignored\":0}," + second), ("$id", snapshot.Graph.Nodes[1].Id));
+        }
+        Assert.Throws<JsonException>(() => { using var rejected = fixture.Reader(); });
+    }
+
+    [Theory]
+    [InlineData(63)]
+    [InlineData(64)]
+    public void BatchedRowsPreservePerRowDepthAllowance(int depth)
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1, "Before");
+        using (var writer = fixture.Writer()) writer.Commit(IndexStage.Create(snapshot));
+        var node = snapshot.Graph.Nodes.Single(node => node.Id == fixture.MemberId);
+        var json = JsonSerializer.Serialize(node, IndexStage.Json);
+        json = json[..^1] + ",\"ignored\":" + new string('[', depth) + "0" + new string(']', depth) + "}";
+        var info = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<HarnessNode>)IndexReadJsonContext.Default.GetTypeInfo(typeof(HarnessNode))!;
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json=$json WHERE id=$id", ("$json", json), ("$id", node.Id));
+        if (depth == 63)
+        {
+            var expected = JsonSerializer.Deserialize(json, info);
+            using var reader = fixture.Reader();
+            Assert.Equal(expected, reader.Snapshot().Graph.Nodes.Single(node => node.Id == fixture.MemberId));
+        }
+        else
+        {
+            Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json, info));
+            Assert.Throws<JsonException>(() => { using var rejected = fixture.Reader(); });
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SavedNullRowsAreRejectedBeforePublishingAReader(bool unrelated)
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        var snapshot = fixture.Snapshot(1, "Before");
+        const string unrelatedId = "unrelated-source";
+        if (unrelated) snapshot = snapshot with { Graph = snapshot.Graph with
+        {
+            Nodes = [.. snapshot.Graph.Nodes, new HarnessNode(unrelatedId, HarnessNodeKind.SourceFile,
+                "Unrelated", snapshot.Graph.WorkspaceId, null)]
+        } };
+        writer.Commit(IndexStage.Create(snapshot));
+        using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(connection, null, "UPDATE nodes SET json='null' WHERE id=$id", ("$id", unrelated ? unrelatedId : fixture.MemberId));
+        AssertCode("INDEX_INVALID_SNAPSHOT", () => { using var rejected = fixture.Reader(); });
+    }
+
+    [Theory]
+    [InlineData(1, "UTF-8")]
+    [InlineData(2, "UTF-8")]
+    [InlineData(3, "UTF-8")]
+    [InlineData(3, "UTF-16le")]
+    [InlineData(3, "UTF-16be")]
+    public void LegacyFullEnvelopeAndCompactGenerationPreserveCompleteSnapshotsAndReaderPins(int schema, string encoding)
     {
         using var fixture = new StoreFixture();
         Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
         using (var connection = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
         {
+            Assert.Contains(encoding, new[] { "UTF-8", "UTF-16le", "UTF-16be" });
+            IndexDatabase.Execute(connection, null, $"PRAGMA encoding='{encoding}';");
             IndexDatabase.Execute(connection, null, "PRAGMA journal_mode=WAL;");
             IndexDatabase.Create(connection, HarnessIdentity.WorkspaceId(fixture.Workspace), schema);
+            Assert.Equal(encoding, (string?)IndexDatabase.Scalar(connection, null, "PRAGMA encoding;"));
         }
         using var writer = fixture.Writer();
         var before = Expected(fixture.Snapshot(1, "Before"));
@@ -283,6 +462,71 @@ public sealed class IndexStoreTests
             writer.Commit(IndexStage.Create(snapshot));
         using var reader = fixture.Reader();
         Assert.Equal(relative, Assert.Single(reader.Snapshot().Files).RelativePath);
+    }
+
+    [Theory]
+    [InlineData("search")]
+    [InlineData("catalog")]
+    [InlineData("project-proof")]
+    public void IndependentTextBudgetsAcceptTheirBoundaryAndRejectOverflow(string kind)
+    {
+        using var fixture = new StoreFixture();
+        var original = fixture.Snapshot(1, "Before");
+        var maximum = kind switch
+        {
+            "search" => IndexSnapshotValidator.MaximumSearchTextUtf16,
+            "catalog" => IndexSnapshotValidator.MaximumReuseCatalogUtf16,
+            _ => IndexSnapshotValidator.MaximumProjectProofUtf16
+        };
+        foreach (var delta in new[] { -1, 0, 1 })
+        {
+            var snapshot = original;
+            var length = maximum + delta;
+            if (kind == "search")
+            {
+                var nodes = new List<HarnessNode>();
+                var rows = new List<IndexSearchText>();
+                while (length > 0)
+                {
+                    var id = HarnessIdentity.LogicalSymbolId(fixture.Workspace, fixture.ProjectId, "method", "M:App.Budget" + rows.Count);
+                    nodes.Add(new(id, HarnessNodeKind.Member, "Budget", fixture.ProjectId, null));
+                    var size = Math.Min(length, IndexSnapshotValidator.MaximumSearchFieldUtf16);
+                    rows.Add(new(id, "", "", "", new string('x', size), ""));
+                    length -= size;
+                }
+                snapshot = snapshot with { Graph = snapshot.Graph with { Nodes = [.. snapshot.Graph.Nodes, .. nodes] }, SearchText = rows };
+            }
+            else
+            {
+                var catalog = new List<IndexReuseSymbol>();
+                if (kind == "catalog")
+                {
+                    while (length > 0)
+                    {
+                        var size = Math.Min(length - 1, IndexSnapshotValidator.MaximumSearchFieldUtf16 - 1);
+                        if (length <= IndexSnapshotValidator.MaximumSearchFieldUtf16 + 1)
+                            size = length - 1;
+                        catalog.Add(new(fixture.MemberId, new string('x', size), "x", null, null, null, null, null));
+                        length -= size + 1;
+                    }
+                }
+                var reuse = new IndexReuseProof("test-owner/1", new string('a', 64), new string('b', 64),
+                    new string('c', 64), new string('d', 64), "unused-sdk-path", catalog);
+                if (kind == "project-proof")
+                {
+                    using var document = JsonDocument.Parse("{\"p\":\"" + new string('x', length - 8) + "\"}");
+                    reuse = reuse with { Projects = new("test-projects/1", new string('e', 64),
+                        [new("project-key", snapshot.Graph.Variants[0].Id, fixture.ProjectId,
+                            [fixture.CodeLocation.SourceId], [], document.RootElement.Clone())]) };
+                }
+                snapshot = snapshot with { Files = snapshot.Files.Select((file, i) => i == 0
+                    ? file with { Kind = "source", Reuse = reuse } : file).ToArray() };
+            }
+            if (delta > 0)
+                AssertCode("INDEX_INVALID_SNAPSHOT", () => IndexSnapshotValidator.Validate(snapshot));
+            else
+                IndexSnapshotValidator.Validate(snapshot);
+        }
     }
 
     [Fact]
@@ -659,6 +903,8 @@ public sealed class IndexStoreTests
         catch (Exception error)
         {
             Console.Error.WriteLine("Writer-lock probe failure before fixture cleanup: " + error);
+            if (error is SqliteException sqlite)
+                Console.Error.WriteLine($"SQLite recovery failure: primary={sqlite.SqliteErrorCode}, extended={sqlite.SqliteExtendedErrorCode}.");
             throw;
         }
         finally
@@ -859,9 +1105,8 @@ public sealed class IndexStoreTests
     private sealed class StoreFixture : IDisposable
     {
         public static readonly UTF8Encoding Utf8 = new(false, true);
-        private static readonly string FixtureBase = OperatingSystem.IsWindows()
-            ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd205-20261010-01\fixtures-revision01"
-            : Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-sd205-fixtures-revision01");
+        private static readonly string FixtureBase = Path.Combine(
+            OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "sharpdeps-index-store-tests");
         public const string Code = "namespace App; class Service { public void Before() { } }\n";
         private readonly string _code;
         public const string Markdown = "# 設定\r\n\r\n😀 Service の設定の手順を説明する。\r\n";

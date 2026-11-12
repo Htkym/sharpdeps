@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。この文書は0.4.0のCLI契約を記述する。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。基礎契約は0.4.0に対応し、discoveryとその既定値、およびexploreでのroot省略は未公開のv0.5開発版の仕様である。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
 
 候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
 
@@ -49,7 +49,11 @@ watchなしの`serve`には解析選択を付けない。watchの解析期限も
 
 Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids`を同時指定しない。
 
-`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy unique|prefer-debug`を使う。`--query-kind http-get-literal`は保存済みのHttpGet宣言断片との完全一致を調べ、実効URLの一致を保証しない。`--path-to`はsymbol探索で、exactな開始occurrenceから対象occurrenceへの保存済みcall witnessを要求する。`--owner-status`は既存ownerを観測するだけで鮮度の証明ではない。探索形式と根拠の限界は[Exploreの案内](../mcp.md)に従う。
+`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy discover|unique|prefer-debug`を使う。通常の名前／pathでの`--scope-policy`の既定はproject／variantを明示しなければ`discover`、明示した場合は`unique`となる。exactな保存ID、`--path-to`、HttpGet literalでは`unique`を既定とし、`discover`の明示を拒否する。typed Query API自体の既定は`unique`のままである。`explore Service`と`explore --term Service`は同じ入口であり、併用しない。`explore`だけは`--root`を省略でき、その場合は絶対化した現在directoryを使い、祖先directoryを検索しない。indexがなければ選択したroot／indexと回復手順を返し、自動作成しない。
+
+`discover`は同一snapshotからproject／variant別のgroupを最大4件返し、全体で件数・出力・計算の予算を共有する。group間の関係を一つのcall chainへまとめない。aliasはgroup内だけで有効であり、後続要求には対象scopeと保存IDを使う。予算に入らない巨大typeでは、完全に返せる関連memberの保存範囲を候補とし、source返却と省略理由を区別する。
+
+`--query-kind http-get-literal`は保存済みのHttpGet宣言断片との完全一致を調べ、実効URLの一致を保証しない。`--path-to`はsymbol探索で、exactな開始occurrenceから対象occurrenceへの保存済みcall witnessを要求する。`--owner-status`は既存ownerを観測するだけで鮮度の証明ではない。探索形式と根拠の限界は[Exploreの案内](../mcp.md)に従う。
 
 | Query command | 必須selector |
 |---|---|
@@ -62,6 +66,18 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 `--freshness allow-stale|require-fresh|refresh`、`--require-complete`と、`--max-nodes`/`--max-edges`/`--max-depth`/`--max-milliseconds`/`--max-chars`/`--max-bytes`を使える。Query既定は60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes。Queryと`explore`の`--max-milliseconds 0`は計算期限だけを外し、呼出し側の取消、件数・深さ・出力予算、trustと鮮度の検証は維持する。正の時間枠は10〜30000msで、1〜9は拒否する。設定範囲と探索・certainty・cursorの意味は[Query/context契約](query-context-v1.ja.md)に従う。commandに非対応のflagと、繰返し指定を許可したflag以外の重複を拒否する。
 
+### Cold index budgets
+
+未リリースの開発版`explore` CLIだけは`--prepare-max-milliseconds N`を明示して、saved-index readerのopen・全snapshotの読取り／整合性検証／read-only化に別の準備期限を設定できる。Nは10〜30000msの有限値で、0・範囲外・不正数・重複は拒否する。省略時は従来どおり準備を含む共有の計算期限（既定1000ms）であり、既定値を延長しない。準備が期限内に完了した後、`--max-milliseconds`の計算期限を新たに開始し、探索用の派生データ準備、探索、source／鮮度検証、出力をその枠内で行う。caller取消は両段階に適用する。準備期限切れは`PREPARATION_TIMEOUT`（exit 4）、探索期限切れは`QUERY_TIMEOUT`（exit 4）、caller取消は`CANCELLED`（exit 130）でsourceを返さない。既存の`--max-milliseconds 0`は探索の計算期限だけを外し、明示した有限の準備期限は外さない。同期処理の即時停止を保証するOS制限ではない。このflagは他のQuery commandやMCP schema、既存の公開explore overloadには追加しない。
+
+大きな保存indexやcold読取りで準備が共有期限に収まらない場合は、対応CLIのhelpを確認し、用途・indexの規模・負荷・呼出し側の期限に応じて準備と探索の有限budgetを利用者が明示選択する。たとえば次は準備5000ms、探索3000msを選ぶ。
+
+```text
+sharpdeps explore --root /absolute/workspace --term "related names" --format agent --prepare-max-milliseconds 5000 --max-milliseconds 3000
+```
+
+これは限定したsource読取りで使えた配分例であり、すべてのindex・操作の完了保証ではない。全snapshot検証を省かず、省略時の既定1000ms cold timeoutは残る。明示時の`PREPARATION_TIMEOUT`はreader準備枠、`QUERY_TIMEOUT`はその後の探索枠を示す。省略時の`QUERY_TIMEOUT`は準備も含む共有枠の期限切れなので、返されたstageを確認する。対象scopeを絞るか、目的に合う有限値を明示し、失敗だけを理由に自動再試行・無制限化・上限への引上げをしない。sourceを読む`--trusted`は別途許可が必要で、選択済み`--index`も保持する。この案内は設定変更・opt-out解除・追加アクセスを許可しない。
+
 ## JSONと終了コード
 
 Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま一つのJSON objectとして出す。`apiVersion: "1"`、requestId、snapshot、items/candidates/unresolved、budget、truncated/reasons、diagnostics/errors等を保持し、CLI envelopeで包み直さない。command成功は`apiVersion: "1"`、command、requestId、result、空errorsの別envelopeで返す。Query開始前のCLI errorは同じ識別fieldとerrorsを持ち、resultを省略する。stderr progressをstdoutへ混ぜず、stack traceや秘密をJSON/logへ出さない。
@@ -72,14 +88,16 @@ Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま
 | 2 | 不正引数、曖昧なtarget/選択 |
 | 3 | index未作成、freshness条件未達 |
 | 4 | SDK/MSBuild/restore/解析/coverage失敗、index入力の`CLI_ENCODING_UNSUPPORTED`、TIMEOUT、require-completeの打切り・不足 |
-| 5 | trust、root containment、source access拒否、Query errorの`INVALID_SOURCE_ENCODING` |
+| 5 | trust、root containment、source access拒否、保存indexのopen失敗、Query errorの`INVALID_SOURCE_ENCODING` |
 | 6 | lock、schema/protocol、cursor失敗 |
 | 7 | 内部失敗 |
 | 130 | cancellation |
 
+未リリースの開発版CLIはSQLiteの`SQLITE_CANTOPEN`（primary code 14、拡張codeを含む）を`INDEX_OPEN_FAILED`（exit 5）として返し、例外本文・stack trace・内部pathは出さない。これはindexまたは必要なfileを開けない状態で、sandbox拒否・OS ACL拒否・TEMP欠落のいずれかをcodeだけで断定しない。まず現在の権限内で選択したindex、既存WAL/SHM、runtimeの一時directoryの欠落・不正path・利用可能性を確認する。欠落や誤った選択はpermission reviewでは修復できず、既に許可された範囲で選択を直せない場合はblockerを報告する。pathが正しく、sandboxのaccess制限を示す根拠があり、その操作と再試行が許可されている場合だけ、clientの通常の対象限定permission reviewを依頼する。codeだけを根拠に審査や再試行をしない。OS ACL制限の確認時や審査拒否時は停止してblockerを報告し、権限変更・sandbox無効化・index複製やcheckpoint・immutable指定で迂回しない。失敗した個別fileが未特定なら未特定と明記し、許可された通常検索へ戻れる。予算延長はaccess問題の解決にならない。未知の例外は従来どおり`INTERNAL_ERROR`（exit 7）を保つ。
+
 exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialをResolved/Completeへ補完せず、複数TFMのoccurrenceを混ぜない。truncatedなら返却件数を全件数と呼ばない。errorや打切りを、stdoutにJSONがあることだけで成功扱いしない。
 
-`CLI_MARKDOWN_FACTS_INCOMPLETE`（exit 4）は、不正、打切り、未対応のMarkdown原文構造を拒否する。index／updateは新世代を公開せず、既存のcommitted snapshotを保持する。原文構造が完全な、対応済みopaque／decoded mappingのPartial factsは索引へ取り込み、Partial coverageを保つ。見出しをdecoded identity keyに使うには、その見出し自体の投影が信頼できる必要がある。errorには長さを制限した復旧案内を含め、parserの例外文字列やsource本文をIPCへ転送しない。入力を黙って除外せず、exact hash、runtime pin、durable section identityの検査を維持する。
+`CLI_MARKDOWN_FACTS_INCOMPLETE`（exit 4）は不正、打切り、未対応のMarkdown原文構造を拒否する。index／updateは新世代を公開せず、既存のcommitted snapshotを保持する。原文構造が完全な、対応済みopaque／decoded mappingのPartial factsは索引へ取り込み、Partial coverageを保つ。見出しをdecoded identity keyに使うには、その見出し自体の投影が信頼できる必要がある。errorには長さを制限した復旧案内を含め、parserの例外文字列やsource本文をIPCへ転送しない。入力を黙って除外せず、exact hash、runtime pin、durable section identityの検査を維持する。
 
 [応答schema](../schemas/cli-response-v1.schema.json)はCLI envelopeと実Query DTOのwire構造を記述する。command別result内部は拡張可能なJSON objectで、各commandの成功条件、hash/spanの整合、状態の正しさ、最終JSONのUTF-8 byte予算はschemaだけで証明しない。JSON Schemaの文字長とQueryのUTF-16計測も区別する。
 
@@ -93,6 +111,6 @@ index/updateの選択入力はstrict UTF-8と、BOM付きUTF-16 LE/BEを扱う�
 
 `--trusted`は利用者が許可した解析/sourceアクセスを明示するflagで、repo本文から権限を得る仕組みではない。MSBuild/project/analyzer/generatorが実行し得るコードのsandboxや通信禁止を保証しない。install/restore、解析・更新、外部送信の許可を分け、無許可の自動update/install・全repo scan・無制限grepを行わない。固定Markdown pairの再pack、同版上書き、sourceの公開送信をCLI/skillから自動実行しない。
 
-repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)はstatus→限定search→exact symbol→限定contextから、検証できる根拠に沿って必要なsourceを読む。personal skillへのinstallや設定変更は本taskの一部ではない。
+repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)は、索引範囲内のsymbol・依存関係・保存call pathの質問で利用可能なexploreを優先し、単純な文字列検索や範囲外では通常検索へ戻る。status/search/contextの固定列は要求しない。利用者のopt-outを尊重し、無効化した設定を自動復元しない。導入・無効化は[AI向け設定の案内](../mcp.md#agent-routing-and-opt-out)に従い、personal skillや既存ユーザー設定を自動変更しない。
 
 新規索引はSQLite schema 3で、現行readerはschema 1／2／3を受理する。古い索引をその場で変換せず、必要な本文保存機能を使う場合は旧DBとsidecarを保持した別パスへ再作成する。生成本文はschema 2以降、パッケージ本文はschema 3が必要である。VS Codeは同梱QueryHostで読むため、外部CLIの更新だけではreaderの互換性は変わらない。[索引保存契約](index-storage-v1.ja.md)と[操作ガイド](../guide.ja.md#保存済み索引を使う)を参照する。

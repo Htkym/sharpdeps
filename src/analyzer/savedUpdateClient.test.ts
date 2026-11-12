@@ -17,7 +17,7 @@ function fixture(configuration = 'Debug') {
   roots.push(root);
   const target = path.join(root, 'Input.csproj');
   fs.writeFileSync(target, '<Project />');
-  const selection: SavedUpdateSelection = { root, target, configuration, timeoutSeconds: 180 };
+  const selection: SavedUpdateSelection = { root, target, configuration, timeoutSeconds: 1800 };
   const cliPath = path.join(root, 'fake-cli.dll');
   fs.writeFileSync(
     cliPath,
@@ -50,6 +50,14 @@ describe('saved update caller boundaries', () => {
     const { selection } = fixture();
     expect(savedUpdateArguments(selection, requestId)).toContain('--vscode-mutation-helper');
     expect(savedUpdateArguments(selection, requestId)).toContain('--trusted');
+    for (const timeoutSeconds of [1, 1800, 3600]) {
+      const args = savedUpdateArguments({ ...selection, timeoutSeconds }, requestId);
+      expect(args[args.indexOf('--timeout-seconds') + 1]).toBe(String(timeoutSeconds));
+    }
+    for (const timeoutSeconds of [0, 3601, 1.5, Number.NaN])
+      expect(() => savedUpdateArguments({ ...selection, timeoutSeconds }, requestId)).toThrow(
+        'savedIndexUpdateTimeoutSeconds'
+      );
     await verifySavedUpdateSelection(selection);
     expect(() =>
       savedUpdateArguments(
@@ -91,6 +99,18 @@ describe('saved update caller boundaries', () => {
     ])
       expect(() => savedUpdateReply(output, requestId, 0)).toThrow();
     expect(() => savedUpdateReply(good, requestId, 1)).toThrow();
+    expect(() =>
+      savedUpdateReply(
+        JSON.stringify({
+          apiVersion: '1',
+          command: 'update',
+          requestId,
+          errors: [{ code: 'ARGUMENT_INVALID' }]
+        }),
+        requestId,
+        2
+      )
+    ).toThrow('compatible SharpDeps.Cli.dll');
   });
 
   it('runs a child transport without a shell and waits for cooperative cancellation/drain', async () => {

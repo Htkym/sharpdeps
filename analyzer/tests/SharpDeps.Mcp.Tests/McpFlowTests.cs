@@ -16,6 +16,108 @@ using Xunit.Abstractions;
 
 public sealed class McpFlowTests(ITestOutputHelper output)
 {
+    [Fact]
+    public async Task MetricsDirectoryIsHostOnlyAndDoesNotChangeMcpText()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var host = McpHostOptions.Parse(["--root", fixture.Root, "--trusted", "--metrics-directory", directory]);
+        Assert.Equal(directory, host.MetricsDirectory);
+        Assert.Equal(new McpHostOptions(fixture.Root, Trusted: true), host with { MetricsDirectory = null });
+        var measured = new McpQueryAdapter(host);
+        Assert.False(Assert.Single(measured.ListTools()).InputSchema.GetProperty("properties").TryGetProperty("metricsDirectory", out _));
+        var request = Explore("Service");
+        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
+        var cold = await measured.CallAsync(request);
+        var expected = await new McpQueryAdapter(host with { MetricsDirectory = null }).CallAsync(request);
+        var actual = await measured.CallAsync(request);
+        Assert.Equal(expected.IsError, actual.IsError);
+        Assert.Equal(Assert.IsType<TextContentBlock>(Assert.Single(cold.Content)).Text,
+            Assert.IsType<TextContentBlock>(Assert.Single(actual.Content)).Text);
+        Assert.Equal(Assert.IsType<TextContentBlock>(Assert.Single(expected.Content)).Text,
+            Assert.IsType<TextContentBlock>(Assert.Single(actual.Content)).Text);
+        Assert.Equal(2, Directory.GetFiles(directory, "*.jsonl").Length);
+        var metrics = Directory.GetFiles(directory, "*.jsonl").Select(File.ReadAllText).ToArray();
+        Assert.Contains(metrics, text => text.Contains("validated-cache-miss", StringComparison.Ordinal));
+        Assert.Contains(metrics, text => text.Contains("validated-cache-hit", StringComparison.Ordinal));
+        Assert.All(metrics, text => Assert.Contains("reader.open", text, StringComparison.Ordinal));
+        request.Arguments["metricsDirectory"] = JsonSerializer.SerializeToElement(directory);
+        var invalid = await Assert.ThrowsAsync<McpProtocolException>(async () => await measured.CallAsync(request));
+        Assert.Equal("MCP_ARGUMENT_INVALID", invalid.Message);
+        var mutable = new McpQueryAdapter(host with { AllowMutations = true });
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await mutable.CallAsync(new()
+        {
+            Name = "index", Arguments = new Dictionary<string, JsonElement>
+            { ["arguments"] = JsonSerializer.SerializeToElement(new[] { "--metrics-directory", directory }) }
+        }));
+        Assert.Equal(2, Directory.GetFiles(directory, "*.jsonl").Length);
+        Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", fixture.Root, "--metrics-directory", directory, "--metrics-directory", directory]));
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+    [Theory]
+    [InlineData("agent", null)]
+    [InlineData("audit", null)]
+    [InlineData("agent", "discover")]
+    [InlineData("audit", "discover")]
+    public async Task UnknownProjectReturnsTheScopeErrorInCliAndMcp(string format, string? policy)
+    {
+        using var fixture = new Fixture();
+        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        var unknown = "hpr_" + new string('f', 64);
+        var request = Explore("Service", format, policy);
+        request.Arguments!["projectId"] = JsonSerializer.SerializeToElement(unknown);
+        request.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+        var arguments = new List<string> { "explore", "--root", fixture.Root, "--trusted", "--format", format,
+            "--max-milliseconds", "10000", "--project-id", unknown, "Service" };
+        if (policy is not null)
+            arguments.AddRange(["--scope-policy", policy]);
+        var (exit, text, result) = await AssertEquivalent(adapter, request, arguments);
+        Assert.NotEqual(0, exit);
+        Assert.Contains("SCOPE_NOT_FOUND", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("INTERNAL_ERROR", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.SavedText, text, StringComparison.Ordinal);
+        AssertWireBudget(result, 12000, 48000);
+    }
+
+    [Fact]
+    public async Task OmittedScopePolicyDiscoversWithoutChangingExplicitOrExactRequests()
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        var arguments = new[] { "explore", "--root", fixture.Root, "--trusted", "--format", "agent", "--max-milliseconds", "10000", "Service" };
+        CallToolRequestParams Request(string query = "Service", string? policy = null)
+        {
+            var request = Explore(query, scopePolicy: policy);
+            request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+            return request;
+        }
+        var (discoveredExit, discovered, result) = await AssertEquivalent(adapter, Request(), arguments);
+        Assert.Equal(0, discoveredExit);
+        Assert.StartsWith("SharpDeps discover ", discovered, StringComparison.Ordinal);
+        Assert.Contains("groups=2 omittedGroups=0", discovered, StringComparison.Ordinal);
+        Assert.Contains(fixture.SavedText, discovered, StringComparison.Ordinal);
+        AssertWireBudget(result, 12000, 48000);
+        var scoped = Request();
+        scoped.Arguments!["projectId"] = JsonSerializer.SerializeToElement(fixture.Project);
+        var (scopedExit, unique, _) = await AssertEquivalent(adapter, scoped, [.. arguments, "--project-id", fixture.Project]);
+        Assert.Equal(0, scopedExit);
+        Assert.DoesNotContain("SharpDeps discover ", unique, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.SavedText, unique, StringComparison.Ordinal);
+        scoped.Arguments["scopePolicy"] = JsonSerializer.SerializeToElement("discover");
+        var (_, explicitDiscovery, _) = await AssertEquivalent(adapter, scoped,
+            [.. arguments, "--project-id", fixture.Project, "--scope-policy", "discover"]);
+        Assert.Contains("groups=2 omittedGroups=0", explicitDiscovery, StringComparison.Ordinal);
+        var exactArguments = arguments.ToArray();
+        exactArguments[^1] = fixture.Occurrence;
+        var (exactExit, exact, _) = await AssertEquivalent(adapter, Request(fixture.Occurrence), exactArguments);
+        Assert.Equal(0, exactExit);
+        Assert.DoesNotContain("SharpDeps discover ", exact, StringComparison.Ordinal);
+        Assert.Contains(fixture.SavedText, exact, StringComparison.Ordinal);
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+
     [Theory]
     [InlineData(false, null, null)]
     [InlineData(true, null, null)]
@@ -107,8 +209,8 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             Assert.Equal("cli", hostError.RootElement.GetProperty("requestId").GetString());
             var hostIssue = Assert.Single(hostError.RootElement.GetProperty("errors").EnumerateArray());
             Assert.Equal("INDEX_MISSING", hostIssue.GetProperty("code").GetString());
-            Assert.Equal("See CLI contract for the recovery action.", hostIssue.GetProperty("message").GetString());
-            Assert.DoesNotContain(fixture.Root, hostText, StringComparison.Ordinal);
+            Assert.Contains(fixture.Root, hostIssue.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains(Path.Combine(fixture.Root, "missing.sqlite"), hostIssue.GetProperty("message").GetString(), StringComparison.Ordinal);
 
             var invalidPathArguments = new List<string>(arguments);
             invalidPathArguments[invalidPathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
@@ -259,13 +361,27 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         try
         {
             await Send("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"sharpdeps-test","version":"1"}}}""");
-            using (var ready = await Reply(1)) Assert.Equal("2025-11-25", ready.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
+            using (var ready = await Reply(1))
+            {
+                var initialized = ready.RootElement.GetProperty("result");
+                Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
+                var instructions = initialized.GetProperty("instructions").GetString()!;
+                Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
+                Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", instructions, StringComparison.Ordinal);
+                Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
+                Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
+                Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);
+            }
             await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
+            JsonElement example;
             using (var listed = await Reply(2))
             {
                 var tools = listed.RootElement.GetProperty("result").GetProperty("tools");
                 Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
+                var explore = Assert.Single(tools.EnumerateArray(), tool => tool.GetProperty("name").GetString() == "explore");
+                example = explore.GetProperty("inputSchema").GetProperty("examples")[0].Clone();
+                Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
                 if (!allowMutations)
                 {
                     var schema = Assert.Single(tools.EnumerateArray()).GetProperty("inputSchema");
@@ -276,8 +392,21 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                     Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
                 }
             }
-            // This checks RPC lifecycle, not cold-start latency; deadline behavior has separate tests.
-            await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service","maxMilliseconds":10000}}}""");
+            await Send("""{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"explore","arguments":{"query":{"query":"GrainFactory GetGrain GrainReferenceActivator","maxMilliseconds":8000}}}}""");
+            using (var rejected = await Reply(8))
+            {
+                var error = rejected.RootElement.GetProperty("error");
+                Assert.Equal(-32602, error.GetProperty("code").GetInt32());
+                var message = error.GetProperty("message").GetString()!;
+                Assert.Contains("query must be a string", message, StringComparison.Ordinal);
+                Assert.DoesNotContain("GrainFactory", message, StringComparison.Ordinal);
+            }
+            // Exercise the advertised flat example over real stdio, not cold-start latency.
+            await Send(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 3, method = "tools/call",
+                @params = new { name = "explore", arguments = example }
+            }));
             using (var query = await Reply(3))
             {
                 var result = query.RootElement.GetProperty("result");

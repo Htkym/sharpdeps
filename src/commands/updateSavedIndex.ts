@@ -94,7 +94,9 @@ export async function updateSavedIndex(options: {
     platform: platform.trim() || undefined,
     project,
     targetFramework: targetFramework?.trim(),
-    timeoutSeconds: 180
+    timeoutSeconds: vscode.workspace
+      .getConfiguration('sharpdeps')
+      .get<number>('savedIndexUpdateTimeoutSeconds', 1800)
   };
   await verifySavedUpdateSelection(selection);
   check();

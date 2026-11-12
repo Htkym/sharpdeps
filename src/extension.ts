@@ -308,7 +308,9 @@ export function activate(context: vscode.ExtensionContext): ReturnType<typeof ex
             : 'Saved update failed.'
       );
       void vscode.window.showWarningMessage(
-        'SharpDeps: The saved update could not be confirmed. Refresh the saved view to check its generation; no automatic restore was attempted.'
+        error instanceof SavedUpdateError
+          ? `SharpDeps: ${error.message}`
+          : 'SharpDeps: The saved update could not be confirmed. Refresh the saved view to check its generation; no automatic restore was attempted.'
       );
     } finally {
       if (savedUpdateStop === stop) savedUpdateStop = undefined;

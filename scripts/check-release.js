@@ -158,6 +158,7 @@ async function checkTool(file, version, definition, packageId, command, extraReq
     file,
     (name) =>
       name === 'icon.png' ||
+      name === 'README.md' ||
       /^[^/]+\.nuspec$/.test(name) ||
       required.some((item) => name === prefix + item)
   );
@@ -167,6 +168,8 @@ async function checkTool(file, version, definition, packageId, command, extraReq
   assert.equal(xmlValue(spec, 'id'), packageId);
   assert.equal(xmlValue(spec, 'version'), version);
   assert.equal(xmlValue(spec, 'icon'), 'icon.png', `${packageId} icon metadata`);
+  assert.equal(xmlValue(spec, 'readme'), 'README.md', `${packageId} readme metadata`);
+  assert.ok(entries['README.md']?.length, `${packageId} user README payload`);
   assert.ok(entries['icon.png'], `${packageId} icon payload`);
   assert.deepEqual(
     entries['icon.png'],

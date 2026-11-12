@@ -1,5 +1,7 @@
 namespace SharpDeps.Index;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -69,13 +71,18 @@ public sealed class IndexWriter : IDisposable
 
     public void Commit(IndexStage stage, CancellationToken cancellationToken=default, Action? verifySelection=null)
     {
+        using var commitMetrics = PhaseMetrics.Measure("writer.commit");
         ArgumentNullException.ThrowIfNull(stage);
         if (!Monitor.TryEnter(gate)) throw new IndexStoreException("INDEX_BUSY", "This writer already has an operation in progress.");
         try
         {
             ObjectDisposedException.ThrowIf(disposed,this);
-            var snapshot=stage.Materialize(); var graph=snapshot.Graph; var generation=graph.Generation;
-            IndexSnapshotValidator.Validate(snapshot);
+            IndexSnapshot snapshot;
+            using (PhaseMetrics.Measure("writer.materialize"))
+                snapshot=stage.Materialize();
+            var graph=snapshot.Graph; var generation=graph.Generation;
+            using (PhaseMetrics.Measure("writer.validate"))
+                IndexSnapshotValidator.Validate(snapshot);
             var storedBodies=snapshot.StoredGeneratedBodies.Select(body=>(body.SourceId,body.Body))
                 .Concat(snapshot.StoredPackageBodies.Select(body=>(body.SourceId,body.Body)))
                 .ToDictionary(body=>body.SourceId,body=>body.Body,StringComparer.Ordinal);
@@ -85,11 +92,13 @@ public sealed class IndexWriter : IDisposable
                 throw new IndexStoreException("INDEX_SCHEMA_MIGRATION_REQUIRED", "This index cannot store package document bodies; retain it and rebuild into a separate index.");
             if (graph.WorkspaceId!=HarnessIdentity.WorkspaceId(WorkspaceUuid))
                 throw new IndexStoreException("INDEX_WORKSPACE_MISMATCH", "Staging belongs to a different workspace.");
-            IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
+            using (PhaseMetrics.Measure("writer.verify-before-transaction"))
+                IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
             using var transaction=connection.BeginTransaction();
             var statements = new Dictionary<string, SqliteCommand>(StringComparer.Ordinal);
             try
             {
+            using var insertMetrics = PhaseMetrics.Measure("writer.graph-insert");
             var active=IndexDatabase.Scalar(connection,transaction,"SELECT active_generation FROM metadata WHERE singleton=1");
             if (active is long prior && generation<=prior)
                 throw new IndexStoreException("INDEX_GENERATION_CONFLICT", "A new commit must advance the active generation.");
@@ -118,6 +127,8 @@ public sealed class IndexWriter : IDisposable
             }
             foreach (var alias in snapshot.Aliases) Execute("INSERT INTO aliases VALUES($g,$kind,$old,$new,$json)",("$kind",alias.Kind),("$old",alias.OldId),("$new",alias.NewId),("$json",Serialize(alias)));
             foreach (var legacy in graph.LegacyReferences) Execute("INSERT INTO legacy_references VALUES($g,$schema,$old,$node,$occurrence,$json)",("$schema",legacy.SchemaVersion),("$old",legacy.LegacyId),("$node",legacy.NodeId),("$occurrence",legacy.OccurrenceId),("$json",Serialize(legacy)));
+            insertMetrics?.Dispose();
+            using var searchMetrics = PhaseMetrics.Measure("writer.fts-and-search-insert");
             IndexDatabase.CreateGenerationSearch(connection,transaction,generation);
             var searchTable=IndexDatabase.SearchTable(generation);
             foreach (var text in snapshot.SearchText)
@@ -125,6 +136,8 @@ public sealed class IndexWriter : IDisposable
                 Execute("INSERT INTO search_text(generation,node_id,name,signature,heading,body,path) VALUES($g,$id,$name,$signature,$heading,$body,$path)",("$id",text.NodeId),("$name",text.Name),("$signature",text.Signature),("$heading",text.Heading),("$body",text.Body),("$path",text.Path));
                 Execute($"INSERT INTO {searchTable}(rowid,name,signature,heading,body,path) SELECT rowid,name,signature,heading,body,path FROM search_text WHERE generation=$g AND node_id=$id",("$id",text.NodeId));
             }
+            searchMetrics?.Dispose();
+            using var guardMetrics = PhaseMetrics.Measure("writer.publication-guard");
             // Test fault injection uses the real boundary after all rows and FTS, before manifest/active publication.
             BeforePublish?.Invoke();
             IndexPaths.VerifyInputs(CanonicalRoot,snapshot.Files,cancellationToken,storedBodies);
@@ -137,7 +150,10 @@ public sealed class IndexWriter : IDisposable
             }
             Execute("UPDATE metadata SET active_generation=$g,canonical_root=$root,writer_version='sharpdeps-index/1' WHERE singleton=1",("$root",CanonicalRoot));
             cancellationToken.ThrowIfCancellationRequested();
-            transaction.Commit();
+            guardMetrics?.Dispose();
+            using (PhaseMetrics.Measure("writer.durable-commit"))
+                transaction.Commit();
+            PhaseMetrics.Decision("writer.publication", "committed");
 
             void Execute(string sql, params (string Name,object? Value)[] values)
             {

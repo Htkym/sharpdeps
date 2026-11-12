@@ -9,6 +9,8 @@ analyzer/bin/
 analyzer/obj/
 analyzer/**/bin/
 analyzer/**/obj/
+eng/oracles/**/bin/
+eng/oracles/**/obj/
 tests/fixtures/**/bin/
 tests/fixtures/**/obj/
 coverage/

@@ -7,12 +7,14 @@
     <PackageId>SharpDeps.Mcp</PackageId>
     <Version>0.4.0</Version>
     <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Description>Optional stdio adapter for SharpDeps saved Query and explicitly trusted updates.</Description>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NuGet.Frameworks" ExcludeAssets="runtime" PrivateAssets="all" />
     <None Include="..\..\..\resources\icon.png" Pack="true" PackagePath="/" />
+    <None Update="README.md" Pack="true" PackagePath="/" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <ProjectReference Include="..\SharpDeps.Cli\SharpDeps.Cli.csproj" />
   </ItemGroup>

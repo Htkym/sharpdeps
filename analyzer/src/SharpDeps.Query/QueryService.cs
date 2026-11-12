@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -26,10 +27,14 @@ public sealed class QueryService
 
     public QueryService(IQueryIndex index, QueryWorkspace? workspace = null, bool isTrusted = false, byte[]? cursorKey = null)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.prepare");
         this.index = index; trusted = isTrusted; this.workspace = isTrusted ? workspace : null;
         // Freeze producer-owned arrays before deriving any adjacency or query output.
-        saved = JsonSerializer.Deserialize<IndexSnapshot>(JsonSerializer.Serialize(index.Snapshot, QueryJson.Options), QueryJson.Options)!;
-        _ = IndexStage.Create(saved); // Complete storage validation, including references and source spans.
+        using (PhaseMetrics.Measure("query.freeze"))
+            saved = JsonSerializer.Deserialize<IndexSnapshot>(JsonSerializer.Serialize(index.Snapshot, QueryJson.Options), QueryJson.Options)!;
+        using (PhaseMetrics.Measure("query.validate"))
+            _ = IndexStage.Create(saved); // Complete storage validation, including references and source spans.
+        using var derivedMetrics = PhaseMetrics.Measure("query.derived-index");
         nodes = saved.Graph.Nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
         occurrences = saved.Graph.SymbolOccurrences.ToDictionary(o => o.Id, StringComparer.Ordinal);
         files = saved.Files.ToDictionary(f => f.SourceId, StringComparer.Ordinal);
@@ -45,6 +50,7 @@ public sealed class QueryService
 
     public QueryReply Execute(QueryRequest request, CancellationToken cancellationToken = default)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.execute");
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
         ValidateParent(request);
@@ -141,6 +147,7 @@ public sealed class QueryService
 
     private void Select(Work work, int browseOffset)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.select");
         var request = work.Request;
         if (request.Kind == QueryKind.Status) return;
         if (request.Kind == QueryKind.Browse)
@@ -233,6 +240,7 @@ public sealed class QueryService
 
     private List<QueryItem> Search(Work work)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.search");
         var term = work.Request.Term!;
         var ranks = index.Search(term, 500).ToDictionary(h => h.NodeId, StringComparer.Ordinal);
         if (ranks.Count == 500) work.Reasons.Add("SEARCH_CANDIDATE_LIMIT");
@@ -289,6 +297,7 @@ public sealed class QueryService
 
     private HashSet<WalkPosition> Walk(Work work, IReadOnlyList<string> seeds)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.walk");
         var request = work.Request;
         var visited = new HashSet<WalkPosition>();
         var frontier = new List<(WalkPosition Position, string[] Via)>();
@@ -487,6 +496,7 @@ public sealed class QueryService
 
     private void AddSnippets(Work work, List<QueryItem> page, ref QueryFreshness freshness)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.snippets");
         var changed = new HashSet<string>(StringComparer.Ordinal);
         var charsRemaining = work.Request.Budget!.MaxChars / 2;
         var groups = page.Select((item, index) => (item, index)).Where(p => p.item.Evidence?.RawSpan is not null)
@@ -556,6 +566,7 @@ public sealed class QueryService
 
     private QueryReply Finish(Work work, QuerySnapshot snapshot, List<QueryItem> page, int offset, string filter, bool hasMore, bool errorOnly = false)
     {
+        using var metricsScope = PhaseMetrics.Measure("query.render");
         page = page.Select(item => item with { ResultKind = item.Node is { } node ? ResultKind(node)
             : item.Occurrence is { } occurrence ? ResultKind(nodes[occurrence.LogicalSymbolId]) : null }).ToList();
         if (snapshot.VariantCount > snapshot.VariantIds.Count) work.Reasons.Add("VARIANT_METADATA_LIMIT");

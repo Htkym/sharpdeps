@@ -11,6 +11,39 @@ using Xunit;
 public sealed class QueryTests
 {
     [Fact]
+    public void QueryMetricsPreserveCancellationAndFreshnessWithoutLeakingTheScope()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        var snapshot = fixture.Snapshot(1);
+        writer.Commit(IndexStage.Create(snapshot));
+        using var reader = fixture.Reader();
+        var query = fixture.Query(reader);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var request = new QueryRequest("cancelled", QueryKind.Search, Term: "Service", Budget: Generous with { MaxMilliseconds = 0 });
+        var expected = query.Execute(request, cancelled.Token);
+        var workspace = new QueryWorkspace(fixture.Root);
+        var freshness = workspace.Verify(snapshot);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "fixture")!)
+        {
+            Assert.Equal(expected.Json, query.Execute(request, cancelled.Token).Json);
+            var actual = workspace.Verify(snapshot);
+            Assert.Equal(freshness.State, actual.State);
+            Assert.Equal(freshness.DirtyPaths, actual.DirtyPaths);
+            Assert.Equal(freshness.Unverified, actual.Unverified);
+            SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Count("after-cancellation", 1);
+            metrics.Complete();
+        }
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        var records = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        Assert.Contains("query.execute", records);
+        Assert.Contains("source.freshness", records);
+        Assert.Contains("after-cancellation", records);
+        Assert.DoesNotContain(fixture.Root, records, StringComparison.Ordinal);
+    }
+    [Fact]
     public void NoDeadlineQueryPreservesSavedResultsAndCallerCancellation()
     {
         using var fixture = new StoreFixture();

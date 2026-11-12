@@ -7,9 +7,10 @@ using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
+using Xunit.Abstractions;
 
 [Collection("markdown-index")]
-public sealed class ExplorationPublicationTests
+public sealed class ExplorationPublicationTests(ITestOutputHelper output)
 {
     private static readonly QueryBudget Budget = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
 
@@ -92,6 +93,53 @@ public sealed class ExplorationPublicationTests
             using var afterCancellation = fixture.Open();
             Assert.Equal(generation, afterCancellation.Snapshot().Graph.Generation);
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task MeasuredOwnerPublishesWithoutAddingMetricsToTheProtocol()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await fixture.Restore(cancellation.Token);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        string[]? responseFields = null;
+        foreach (var command in new[] { "index", "update" })
+        {
+            using var stdout = new StringWriter();
+            Assert.Equal(0, await CliApplication.RunAsync([command, "--root", fixture.Root, "--target", "App.csproj",
+                "--trusted", "--quiet", "--metrics-directory", directory], stdout, new StringWriter(), cancellation.Token));
+            using var response = System.Text.Json.JsonDocument.Parse(stdout.ToString());
+            var result = response.RootElement.GetProperty("result");
+            var fields = result.EnumerateObject().Select(p => p.Name).ToArray();
+            responseFields ??= fields;
+            Assert.Equal(responseFields, fields);
+            Assert.DoesNotContain(fields, name => name.Contains("metrics", StringComparison.OrdinalIgnoreCase));
+            output.WriteLine($"{command}: updateMode={result.GetProperty("updateMode").GetString()}");
+        }
+        var paths = Directory.GetFiles(directory, "*.jsonl");
+        Assert.Equal(2, paths.Length);
+        foreach (var path in paths)
+        {
+            var events = File.ReadLines(path).Select(line =>
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(line);
+                return document.RootElement.GetProperty("payload").Clone();
+            }).ToArray();
+            Assert.Equal("completed", events.Last().GetProperty("outcome").GetString());
+            foreach (var phase in new[] { "index.build", "stage.create", "writer.commit", "writer.durable-commit" })
+                Assert.Contains(events, e => e.GetProperty("type").GetString() == "phase" && e.GetProperty("phase").GetString() == phase);
+            output.WriteLine("raw-metrics-start");
+            output.WriteLine(File.ReadAllText(path));
+            output.WriteLine("raw-metrics-end");
+        }
+        // A refused diagnostics destination must not prevent the next durable update.
+        using var refused = new StringWriter();
+        Assert.Equal(0, await CliApplication.RunAsync(["update", "--root", fixture.Root, "--target", "App.csproj",
+            "--trusted", "--quiet", "--metrics-directory", fixture.Root], refused, new StringWriter(), cancellation.Token));
+        Assert.Equal(2, Directory.GetFiles(directory, "*.jsonl").Length);
+        using var reader = fixture.Open();
+        Assert.Equal(3, reader.Snapshot().Graph.Generation);
     }
 
     private sealed class CancelOnExtractionWriter(CancellationTokenSource cancellation) : StringWriter

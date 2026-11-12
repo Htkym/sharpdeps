@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
@@ -10,7 +11,7 @@ using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Text;
 using SharpDeps.Index;
 
-public sealed class ExplorationService
+public sealed partial class ExplorationService
 {
     private readonly IQueryIndex index;
     private readonly QueryWorkspace? workspace;
@@ -29,6 +30,7 @@ public sealed class ExplorationService
     public ExploreReply Execute(ExploreRequest request, CancellationToken cancellationToken = default,
         CancellationToken deadlineToken = default)
     {
+        using var metricsScope = PhaseMetrics.Measure("explore.execute");
         ArgumentNullException.ThrowIfNull(request);
         request = request with { Budget = request.Budget ?? new QueryBudget(MaxChars: 12000, MaxBytes: 48000) };
         Validate(request);
@@ -55,7 +57,9 @@ public sealed class ExplorationService
             if (request.Freshness == QueryFreshnessPolicy.Refresh)
                 run.Error("UPDATE_REQUIRED", "Request a trusted coordinator update and open a new reader.");
             else if (request.Freshness == QueryFreshnessPolicy.RequireFresh) run.Verify();
-            if (run.Errors.Count == 0 && run.Resolve() && (request.PathTo is null || run.ResolvePathEndpoints()))
+            if (run.Errors.Count == 0 && request.ScopePolicy == ExploreScopePolicy.Discover)
+                run.Discover();
+            else if (run.Errors.Count == 0 && run.Resolve() && (request.PathTo is null || run.ResolvePathEndpoints()))
             {
                 run.Expand();
                 if (request.PathTo is not null) run.PrepareRetainedPath();
@@ -86,10 +90,10 @@ public sealed class ExplorationService
 
     private static ExploreReply PreparationFailure(string code)
     {
-        var text = $"SharpDeps explore\nError {code}: preparation did not complete; no source returned.\n";
+        var text = $"SharpDeps explore outcome=failed\nError {code}: preparation did not complete; no source returned.\n";
         var wire = JsonSerializer.Serialize(new { content = new[] { new { type = "text", text } }, isError = true });
         return new(text, [new(code, "Reopen the index or retry with an appropriate deadline.")], [], [code],
-            wire.Length, Encoding.UTF8.GetByteCount(wire));
+            wire.Length, Encoding.UTF8.GetByteCount(wire)) { Outcome = "failed" };
     }
 
     private static void Validate(ExploreRequest request)
@@ -98,6 +102,9 @@ public sealed class ExplorationService
             || value.Length <= maximum && !string.IsNullOrWhiteSpace(value) && !value.Any(char.IsControl);
         var budget = request.Budget!;
         var literal = request.QueryKind == ExploreQueryKind.HttpGetLiteral;
+        if (request.ScopePolicy == ExploreScopePolicy.Discover
+            && (literal || request.PathTo is not null || HasSavedIdentity(request.Query)))
+            throw new ArgumentException("Discover accepts ordinary names and paths; use unique for exact identities, pathTo or HttpGet literals.", nameof(request));
         if ((literal ? !HttpGetLiteral(request.Query) : !Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query))
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
             || request.PathTo is { } target && (literal || !Text(target, 128) || !IsOccurrenceIdentity(target.Trim()) || !IsOccurrenceIdentity(request.Query.Trim()))
@@ -147,7 +154,7 @@ public sealed class ExplorationService
         int RelationKinds, int Resolved, int Candidate, int Unresolved);
     private sealed record RetainedPath(string Status, string Reason, HarnessEdge[] Hops, bool Incomplete);
 
-    private sealed class Run
+    private sealed partial class Run
     {
         private readonly ExplorationSnapshot owner;
         private readonly IQueryIndex index;
@@ -294,6 +301,7 @@ public sealed class ExplorationService
 
         public bool Resolve()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.resolve");
             Check();
             if (project is not null && !owner.saved.Graph.Variants.Any(v => v.ProjectId == project))
             { Error("SCOPE_NOT_FOUND", "The project is not in this selected index."); return false; }
@@ -455,13 +463,14 @@ public sealed class ExplorationService
             return owner.Project(node) == choice.Project && NodeAllowed(node, choice.Variant);
         }
 
-        private static string[] Terms(string query) => Regex.Matches(query,
+        public static string[] Terms(string query) => Regex.Matches(query,
                 @"[\p{L}\p{N}_@][\p{L}\p{N}_@`./\\:+<>,\[\]]*", RegexOptions.CultureInvariant)
             .Select(m => m.Value.Replace('\\', '/').TrimEnd('.', ',', ':')).Where(t => t.Length != 0)
             .Distinct(StringComparer.Ordinal).Take(33).ToArray();
 
         private List<Match> Search()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.search");
             var query = request.Query.Trim();
             var wholeIdentity = owner.occurrences.ContainsKey(query) || owner.nodes.ContainsKey(query);
             var normalized = query.Replace('\\', '/');
@@ -470,12 +479,12 @@ public sealed class ExplorationService
             if (!wholeIdentity && !terms.Any(term => owner.occurrences.ContainsKey(term) || owner.nodes.ContainsKey(term) || IsSavedIdentity(term)))
             {
                 var literal = new List<Match>();
-                foreach (var node in owner.names.GetValueOrDefault(query) ?? [])
+                foreach (var node in owner.GetSearchIndex(timer.Token).Names.GetValueOrDefault(query) ?? [])
                 {
                     Check();
-                    if ((node.Name == query || owner.search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
+                    if ((node.Name == query || owner.GetSearchIndex(timer.Token).Search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
                         literal.Add(new(node, MatchTier.ExactName, true, true, MatchedTerms: 1,
-                            NameTerms: node.Name == query || owner.search[node.Id].Label == query ? 1u : 0u));
+                            NameTerms: node.Name == query || owner.GetSearchIndex(timer.Token).Search[node.Id].Label == query ? 1u : 0u));
                 }
                 if (literal.Count > 0) { searchTerms = [query]; return literal; }
             }
@@ -532,15 +541,15 @@ public sealed class ExplorationService
                     : new HashSet<string>(StringComparer.Ordinal);
                 var components = ExplorationSnapshot.Components(term, timer.Token);
                 var candidates = new HashSet<string>(hits, StringComparer.Ordinal);
-                foreach (var node in owner.names.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                foreach (var node in owner.GetSearchIndex(timer.Token).Names.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
                 foreach (var component in components)
-                    foreach (var node in owner.words.GetValueOrDefault(component) ?? []) { Check(); candidates.Add(node.Id); }
+                    foreach (var node in owner.GetSearchIndex(timer.Token).Words.GetValueOrDefault(component) ?? []) { Check(); candidates.Add(node.Id); }
                 if (pathTerms.Contains(term))
-                    foreach (var node in owner.paths.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
+                    foreach (var node in owner.GetSearchIndex(timer.Token).Paths.GetValueOrDefault(term) ?? []) { Check(); candidates.Add(node.Id); }
                 foreach (var id in candidates)
                 {
                     Check();
-                    if (!owner.search.TryGetValue(id, out var metadata) || !Searchable(metadata.Node) || !NodeAllowed(metadata.Node, variant)) continue;
+                    if (!owner.GetSearchIndex(timer.Token).Search.TryGetValue(id, out var metadata) || !Searchable(metadata.Node) || !NodeAllowed(metadata.Node, variant)) continue;
                     var node = metadata.Node;
                     var exact = term == node.Name || term == metadata.SimpleName || term == metadata.BaseName || term == metadata.Label || term == node.Signature;
                     var qualified = term.Contains('.') && term == metadata.Label || term == node.Signature;
@@ -554,7 +563,9 @@ public sealed class ExplorationService
                     if (tier is { } matched) AddMatch(found, node, matched, exact, qualified, path, bit, name);
                 }
             }
-            foreach (var metadata in owner.search.Values)
+            if (terms.All(term => owner.nodes.ContainsKey(term) || owner.occurrences.ContainsKey(term)))
+                return found.Values.ToList();
+            foreach (var metadata in owner.GetSearchIndex(timer.Token).Search.Values)
             {
                 Check();
                 if (!Searchable(metadata.Node)) continue;
@@ -585,10 +596,10 @@ public sealed class ExplorationService
         private static bool PathTerm(string term) => term.Contains('/') || term.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
             || term.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
-        private bool ContainsWords(string[] source, string[] term)
+        private bool ContainsWords(IReadOnlyList<string> source, string[] term)
         {
             if (term.Length == 0) return false;
-            for (var start = 0; start <= source.Length - term.Length; start++)
+            for (var start = 0; start <= source.Count - term.Length; start++)
             {
                 Check();
                 var index = 0;
@@ -619,7 +630,7 @@ public sealed class ExplorationService
                 throw new ArgumentException("Explore name wildcards require one leading or trailing star and at least two identifier characters.");
             searchTerms = [identifier];
             var matches = new List<Match>();
-            foreach (var metadata in owner.search.Values)
+            foreach (var metadata in owner.GetSearchIndex(timer.Token).Search.Values)
             {
                 Check();
                 if (!Searchable(metadata.Node) || !metadata.Aliases.Any(alias => prefix
@@ -632,12 +643,15 @@ public sealed class ExplorationService
 
         private List<Match> OrderMatches(List<Match> matches)
         {
+            // Ranking zero or one match needs no whole-snapshot lexical index.
+            Check();
+            if (matches.Count <= 1) return matches;
             var terms = searchTerms.Select(term => ExplorationSnapshot.Components(term, timer.Token)).ToArray();
             var ranked = new List<(Match Match, int Context, int Penalty, string Path, int Start)>();
             foreach (var match in matches)
             {
                 Check();
-                var metadata = owner.search[match.Node.Id];
+                var metadata = owner.GetSearchIndex(timer.Token).Search[match.Node.Id];
                 uint context = 0;
                 for (var index = 0; index < terms.Length; index++)
                     if (ContainsWords(metadata.ContextWords, terms[index])) context |= 1u << index;
@@ -672,7 +686,7 @@ public sealed class ExplorationService
                     if (order == 0) order = left.Penalty.CompareTo(right.Penalty);
                     if (order == 0) order = StringComparer.Ordinal.Compare(left.Path, right.Path);
                     if (order == 0) order = left.Start.CompareTo(right.Start);
-                    if (order == 0) order = StringComparer.Ordinal.Compare(owner.search[left.Match.Node.Id].Label, owner.search[right.Match.Node.Id].Label);
+                    if (order == 0) order = StringComparer.Ordinal.Compare(owner.GetSearchIndex(timer.Token).Search[left.Match.Node.Id].Label, owner.GetSearchIndex(timer.Token).Search[right.Match.Node.Id].Label);
                     return order != 0 ? order : StringComparer.Ordinal.Compare(left.Match.Node.Id, right.Match.Node.Id);
                 });
             }
@@ -686,7 +700,7 @@ public sealed class ExplorationService
                 || part.Equals("samples", StringComparison.OrdinalIgnoreCase) || part.Equals("benchmarks", StringComparison.OrdinalIgnoreCase)
                 || part.Equals("obj", StringComparison.OrdinalIgnoreCase));
 
-        private static bool IsSavedIdentity(string value) => value.Length == 69
+        public static bool IsSavedIdentity(string value) => value.Length == 69
                 && (value.StartsWith("hsym_", StringComparison.Ordinal) || value.StartsWith("hocc_", StringComparison.Ordinal)
                     || value.StartsWith("hdoc_", StringComparison.Ordinal) || value.StartsWith("hsec_", StringComparison.Ordinal))
                 && !value.AsSpan(5).ContainsAnyExcept("0123456789abcdef")
@@ -711,6 +725,7 @@ public sealed class ExplorationService
 
         public void Expand()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.expand");
             var queue = new Queue<(Selected Item, int Depth, bool Reverse)>();
             foreach (var root in roots) queue.Enqueue((root, 0, true));
             foreach (var root in roots.Where(root => root.Node.Kind == HarnessNodeKind.Type))
@@ -740,7 +755,7 @@ public sealed class ExplorationService
                 if (visited.Count > request.Budget!.MaxNodes) { reasons.Add("NODE_LIMIT"); break; }
                 if (current.Depth >= request.Budget.MaxDepth)
                 {
-                    if ((owner.outgoing.GetValueOrDefault(current.Item.Node.Id) ?? []).Length > 0) reasons.Add("DEPTH_LIMIT");
+                    if ((owner.outgoing.GetValueOrDefault(current.Item.Node.Id) ?? []).Count > 0) reasons.Add("DEPTH_LIMIT");
                     continue;
                 }
                 var steps = (owner.outgoing.GetValueOrDefault(current.Item.Node.Id) ?? []).Select(e => (Edge: e, Reverse: false));
@@ -976,12 +991,21 @@ public sealed class ExplorationService
 
         public void ReadUnits()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.source");
+            PrepareUnits();
+            ReadRequested();
+            ReadRelated();
+        }
+
+        private void PrepareUnits()
+        {
             foreach (var item in selected.Values.Where(s => s.IncludeSource))
             {
                 Check();
                 var locations = item.Occurrence?.Declarations ?? (item.Occurrence?.Location is { } occurrenceLocation ? [occurrenceLocation]
                     : item.Node.Location is { } nodeLocation ? new[] { nodeLocation } : []);
-                if (locations.Count == 0) reasons.Add("DECLARATION_UNAVAILABLE");
+                if (locations.Count == 0)
+                    reasons.Add("DECLARATION_UNAVAILABLE");
                 foreach (var location in locations.Distinct().Where(PathAllowed))
                 {
                     Check();
@@ -991,21 +1015,34 @@ public sealed class ExplorationService
             pending.Sort((left, right) =>
             {
                 var order = left.SourcePriority.CompareTo(right.SourcePriority);
-                if (order == 0) order = left.Selection.Priority.CompareTo(right.Selection.Priority);
-                if (order == 0) order = StringComparer.Ordinal.Compare(owner.Label(left.Selection.Node), owner.Label(right.Selection.Node));
-                if (order == 0) order = StringComparer.Ordinal.Compare(left.Selection.Identity, right.Selection.Identity);
-                if (order == 0) order = StringComparer.Ordinal.Compare(left.Location.SourceId, right.Location.SourceId);
-                if (order == 0) order = Nullable.Compare(left.Location.RawSpan?.Start, right.Location.RawSpan?.Start);
+                if (order == 0)
+                    order = left.Selection.Priority.CompareTo(right.Selection.Priority);
+                if (order == 0)
+                    order = StringComparer.Ordinal.Compare(owner.Label(left.Selection.Node), owner.Label(right.Selection.Node));
+                if (order == 0)
+                    order = StringComparer.Ordinal.Compare(left.Selection.Identity, right.Selection.Identity);
+                if (order == 0)
+                    order = StringComparer.Ordinal.Compare(left.Location.SourceId, right.Location.SourceId);
+                if (order == 0)
+                    order = Nullable.Compare(left.Location.RawSpan?.Start, right.Location.RawSpan?.Start);
                 return order != 0 ? order : Nullable.Compare(left.Location.RawSpan?.Length, right.Location.RawSpan?.Length);
             });
             allCandidates.AddRange(pending);
             if (!trusted || workspace is null)
             {
                 reasons.Add(trusted ? "SOURCE_OWNER_UNAVAILABLE" : "WORKSPACE_UNTRUSTED");
-                for (var i = 0; i < pending.Count; i++) pending[i] = pending[i] with { Reason = "source access unavailable" };
+                for (var i = 0; i < pending.Count; i++)
+                    pending[i] = pending[i] with { Reason = "source access unavailable" };
                 return;
             }
-            var failedFiles = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        private readonly HashSet<string> failedFiles = new(StringComparer.Ordinal);
+
+        private void ReadRequested((int Chars, int Bytes)? globalCeiling = null)
+        {
+            if (!trusted || workspace is null)
+                return;
             var requested = allCandidates.Where(candidate => candidate.SourcePriority <= 2).ToArray();
             var groups = requested.GroupBy(candidate => candidate.Location.SourceId, StringComparer.Ordinal)
                 .OrderBy(group => group.Min(candidate => candidate.SourcePriority))
@@ -1021,16 +1058,30 @@ public sealed class ExplorationService
                     var used = groupIndex == 0 ? baseline : Size(Render(Units, pending, 0, 0));
                     var ceiling = (Chars: Math.Min(request.Budget.MaxChars, used.Chars + shareChars),
                         Bytes: Math.Min(request.Budget.MaxBytes, used.Bytes + shareBytes));
-                    foreach (var candidate in groups[groupIndex]) ReadCandidate(candidate, failedFiles, ceiling);
+                    if (globalCeiling is { } global)
+                        ceiling = (Math.Min(ceiling.Chars, global.Chars), Math.Min(ceiling.Bytes, global.Bytes));
+                    foreach (var candidate in groups[groupIndex])
+                        ReadCandidate(candidate, failedFiles, ceiling);
                 }
                 // Release unused reservations only after every requested file has had its turn.
-                foreach (var candidate in requested) ReadCandidate(candidate, failedFiles);
+                if (globalCeiling is null)
+                    foreach (var candidate in requested)
+                        ReadCandidate(candidate, failedFiles);
             }
-            CoalesceOwners(failedFiles, requestedOnly: true);
+            if (globalCeiling is null)
+                CoalesceOwners(failedFiles, requestedOnly: true);
+        }
+
+        private void ReadRelated()
+        {
+            if (!trusted || workspace is null)
+                return;
+            PrepareMemberFallback();
             foreach (var candidate in allCandidates.Where(candidate => candidate.SourcePriority > 2))
                 ReadCandidate(candidate, failedFiles);
             CoalesceOwners(failedFiles);
-            if (pending.Count != 0) reasons.Add("OMITTED_UNITS");
+            if (pending.Count != 0)
+                reasons.Add("OMITTED_UNITS");
         }
 
         private void ReadCandidate(Pending original, HashSet<string> failedFiles, (int Chars, int Bytes)? ceiling = null)
@@ -1085,7 +1136,8 @@ public sealed class ExplorationService
                 || span.End > 0 && char.IsHighSurrogate(text[span.End - 1]))
                 throw new QuerySourceException("SOURCE_CHANGED_SINCE_SNAPSHOT", file.RelativePath);
             return new(file.SourceId, file.RelativePath, file.ContentHash, span,
-                text.Substring(span.Start, span.Length), 1 + text.AsSpan(0, span.Start).Count('\n'), symbols, role);
+                text.Substring(span.Start, span.Length), 1 + text.AsSpan(0, span.Start).Count('\n'), symbols, role)
+                { ProjectId = project, VariantId = variant };
         }
 
         private void CoalesceOwners(HashSet<string> failedFiles, bool requestedOnly = false)
@@ -1154,7 +1206,7 @@ public sealed class ExplorationService
             while (true)
             {
                 Check();
-                wire = Size(Render(units, omitted, relationCount, detailCount));
+                wire = Size(Render(units, omitted, relationCount, detailCount), units.Count);
                 if (wire.Chars <= (ceiling?.Chars ?? request.Budget!.MaxChars)
                     && wire.Bytes <= (ceiling?.Bytes ?? request.Budget!.MaxBytes))
                 {
@@ -1203,6 +1255,9 @@ public sealed class ExplorationService
 
         public ExploreReply Finish()
         {
+            using var metricsScope = PhaseMetrics.Measure("explore.render");
+            if (discoveryGroups is not null)
+                return FinishDiscovery();
             var relationCount = Math.Min(relationDisplayLimit, relations.Count);
             var detailCount = omissionDisplayLimit;
             while (true)
@@ -1213,7 +1268,8 @@ public sealed class ExplorationService
                 var text = Render(Units, pending, relationCount, detailCount);
                 var wire = Size(text);
                 if (wire.Chars <= request.Budget!.MaxChars && wire.Bytes <= request.Budget.MaxBytes)
-                    return new(text, Errors.ToArray(), Units.ToArray(), reasons.Order(StringComparer.Ordinal).ToArray(), wire.Chars, wire.Bytes);
+                    return new(text, Errors.ToArray(), Units.ToArray(), reasons.Order(StringComparer.Ordinal).ToArray(), wire.Chars, wire.Bytes)
+                        { Outcome = Outcome(Units, pending) };
                 reasons.Add("OUTPUT_LIMIT");
                 if (relationCount > 0) { relationCount--; continue; }
                 if (detailCount > 0) { detailCount--; continue; }
@@ -1232,14 +1288,16 @@ public sealed class ExplorationService
                     continue;
                 }
                 Error("OUTPUT_BUDGET_TOO_SMALL", "Increase the response budget.");
-                const string minimal = "SharpDeps explore\nError OUTPUT_BUDGET_TOO_SMALL: increase maxChars/maxBytes. No source returned.\n";
+                const string minimal = "SharpDeps explore outcome=failed\nError OUTPUT_BUDGET_TOO_SMALL: increase maxChars/maxBytes. No source returned.\n";
                 var size = Size(minimal);
-                return new(minimal, Errors.ToArray(), [], reasons.Order(StringComparer.Ordinal).ToArray(), size.Chars, size.Bytes);
+                return new(minimal, Errors.ToArray(), [], reasons.Order(StringComparer.Ordinal).ToArray(), size.Chars, size.Bytes) { Outcome = "failed" };
             }
         }
 
-        private (int Chars, int Bytes) Size(string text)
+        private (int Chars, int Bytes) Size(string text, int? returnedRanges = null)
         {
+            if (measureDiscovery is not null)
+                return measureDiscovery(text, returnedRanges ?? Units.Count);
             // This bounds one text-content result with conservative escaping, not a client-controlled JSON-RPC ID.
             var wire = JsonSerializer.Serialize(new { content = new[] { new { type = "text", text } }, isError = Errors.Count != 0 });
             return (wire.Length, Encoding.UTF8.GetByteCount(wire));
@@ -1256,12 +1314,13 @@ public sealed class ExplorationService
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage}");
             Line($"Freshness={freshness.State}; returned source ranges={units.Count}, hash-verified when returned.");
+            Line($"Outcome={Outcome(units, omitted)}");
             AppendOwnerObservation(text);
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; completeness is the saved span only. Owner context does not select additional semantic targets or prove inactive text active.");
             if (project is not null || variant is not null)
             {
                 var scope = owner.saved.Graph.Variants.FirstOrDefault(v => v.Id == variant);
-                Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
+                Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} name={Safe(project is null ? null : owner.nodes.GetValueOrDefault(project)?.Name, 100)} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)}{(scope is null ? "" : ScopeChoiceDimensions(scope))} path={request.PathPrefix ?? "all saved paths"}");
             }
             AppendScopeDecision(text, detailCount);
             AppendHttpGetMatches(text);
@@ -1358,11 +1417,14 @@ public sealed class ExplorationService
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
+            Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
             AppendOwnerObservation(text);
-            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; hash-verified saved spans only. Owner context adds no semantic targets or proof that inactive text is active.");
+            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; executable body is unclassified. Owner context adds no semantic targets or proof that inactive text is active.");
             text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
-            Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)} path={request.PathPrefix ?? "all saved paths"}");
+            Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} name={Safe(project is null ? null : owner.nodes.GetValueOrDefault(project)?.Name, 100)} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)}{(scope is null ? "" : ScopeChoiceDimensions(scope))} path={request.PathPrefix ?? "all saved paths"}");
+            var header = text;
+            text = new StringBuilder();
             AppendScopeDecision(text, detailCount);
             AppendHttpGetMatches(text);
             if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
@@ -1409,13 +1471,19 @@ public sealed class ExplorationService
             var selectors = roots.Select(item => item.Identity).Concat(shownOmissions.Select(item => item.Selection.Identity)).ToHashSet(StringComparer.Ordinal);
             foreach (var row in summaryRows)
                 if (row.Member is { } member) selectors.Add(member.Identity);
-            if (identities.Count > 0) text.AppendLine("Symbols (@n is reply-local; selection=requested certainty=Resolved unless shown):");
+            if (identities.Count > 0)
+                text.AppendLine(measureDiscovery is null
+                ? "Symbols (@n is reply-local; selection=requested certainty=Resolved unless shown):"
+                : "Symbols (@n is group-local; selection=requested certainty=Resolved unless shown):");
             foreach (var item in identities.Values.OrderBy(selection => aliases[selection.Identity], StringComparer.Ordinal))
             {
+                if (units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)))
+                    continue;
                 var details = selectors.Contains(item.Identity) ? " selector=" + item.Identity : "";
                 details += units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)) ? " source" : " signature=" + Safe(item.Node.Signature, 240);
                 if (item.Reason != "requested") details += " selection=" + Safe(item.Reason, 100);
-                if (item.Certainty != HarnessCertainty.Resolved) details += " certainty=" + item.Certainty;
+                if (item.Certainty != HarnessCertainty.Resolved)
+                    details += " certainty=" + item.Certainty;
                 Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)}{details}");
             }
             var sourceIds = units.Select(unit => unit.SourceId).Concat(shownOmissions.Select(item => item.Location.SourceId))
@@ -1435,12 +1503,23 @@ public sealed class ExplorationService
                 Line($"{aliases[relation.From.Identity]} -{Safe(relation.Edge.Kind, 64)}/{relation.Edge.Certainty}-> {aliases[relation.To.Identity]} at={at}{(relation.OutsideScope ? " outside-selected-scope; not expanded" : "")}{RegistrationRoleNote(relation.Edge.Kind)}{ExtensionBindingNote(relation.Edge.ExtensionBinding)}{HttpGetDeclarationNote(relation.Edge.HttpGetDeclaration, evidence is null ? "unknown" : sourceAliases[evidence.SourceId])}");
             }
             if (relations.Count > shownRelations.Length) Line($"Relations omitted={relations.Count - shownRelations.Length}; narrow to an exact selector for more evidence.");
+            var metadata = text;
+            text = header;
+            var sourceSelectors = new HashSet<string>(StringComparer.Ordinal);
             foreach (var unit in units)
             {
                 var symbols = identities.Values.Where(selection => unit.SymbolIds.Contains(selection.Node.Id))
                     .OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal).Select(selection => aliases[selection.Identity]);
                 var lastLine = unit.FirstLine + unit.Text.AsSpan().Count('\n') - (unit.Text.EndsWith('\n') ? 1 : 0);
-                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
+                foreach (var item in identities.Values.Where(item => unit.SymbolIds.Contains(item.Node.Id)))
+                    if (sourceSelectors.Add(item.Identity))
+                    {
+                        var sourceDetails = item.Reason == "requested" ? "" : " selection=" + Safe(item.Reason, 100);
+                        if (item.Certainty != HarnessCertainty.Resolved)
+                            sourceDetails += " certainty=" + item.Certainty;
+                        Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)} selector={item.Identity} source{sourceDetails}");
+                    }
+                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)} path={unit.Path}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
                 var lines = unit.Text.Split('\n');
                 for (var index = 0; index < lines.Length; index++)
                 {
@@ -1448,6 +1527,7 @@ public sealed class ExplorationService
                     text.Append((unit.FirstLine + index).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(lines[index]).Append('\n');
                 }
             }
+            text.Append(metadata);
             if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry its exact selector with larger maxChars/maxBytes, or read the saved source range in audit.");
             foreach (var omission in shownOmissions)
                 Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
@@ -1545,7 +1625,7 @@ public sealed class ExplorationService
         }
 
         private string ScopeChoiceDimensions(HarnessVariant scope)
-            => request.ScopePolicy == ExploreScopePolicy.PreferDebug
+            => request.ScopePolicy == ExploreScopePolicy.PreferDebug || measureDiscovery is not null
                 ? $" platform={Safe(scope.Platform ?? "unspecified", 80)} rid={Safe(scope.RuntimeIdentifier ?? "unspecified", 80)}" : "";
 
         private void AppendScopeDecision(StringBuilder text, int detailCount)

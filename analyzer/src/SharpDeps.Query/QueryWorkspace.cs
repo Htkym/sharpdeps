@@ -1,5 +1,6 @@
 namespace SharpDeps.Query;
 
+using SharpDeps.Analysis.Core.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using SharpDeps.Analysis.Core.Text;
@@ -40,6 +41,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
     /// </summary>
     public byte[] ReadStored(IndexFile input, string body, CancellationToken token = default)
     {
+        using var metricsScope = PhaseMetrics.Measure("source.stored");
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(body);
         token.ThrowIfCancellationRequested();
@@ -48,7 +50,9 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
         {
             var bytes = StrictUtf8.GetBytes(body);
             if (bytes.LongLength != input.ByteLength) throw Changed(input.RelativePath);
-            var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            string hash;
+            using (PhaseMetrics.Measure("source.hash"))
+                hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             token.ThrowIfCancellationRequested();
             if (hash != input.ContentHash) throw Changed(input.RelativePath);
             if (input.Utf16Length is { } expected && body.Length != expected) throw Changed(input.RelativePath);
@@ -60,6 +64,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
 
     private byte[] ReadInput(IndexFile input, CancellationToken token, bool requireText)
     {
+        using var metricsScope = PhaseMetrics.Measure("source.read");
         ArgumentNullException.ThrowIfNull(input);
         token.ThrowIfCancellationRequested();
         ValidateInput(input);
@@ -73,6 +78,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
             if (Attributes(path) is not { } attributes || (attributes & FileAttributes.Directory) != 0)
                 throw Changed(input.RelativePath);
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
             if (stream.Length != input.ByteLength) throw Changed(input.RelativePath);
             var bytes = new byte[(int)input.ByteLength];
             var offset = 0;
@@ -86,7 +92,9 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
             token.ThrowIfCancellationRequested();
             if (stream.ReadByte() != -1 || stream.Length != input.ByteLength) throw Changed(input.RelativePath);
             RejectLinks(path, token);
-            var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            string hash;
+            using (PhaseMetrics.Measure("source.hash"))
+                hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             token.ThrowIfCancellationRequested();
             if (hash != input.ContentHash) throw Changed(input.RelativePath);
             if (requireText || input.Utf16Length is not null)
@@ -112,6 +120,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
     /// body cannot prove what a generator would emit now.</summary>
     public QueryFreshness Verify(IndexSnapshot snapshot, CancellationToken token = default)
     {
+        using var metricsScope = PhaseMetrics.Measure("source.freshness");
         token.ThrowIfCancellationRequested();
         try { IndexSnapshotValidator.Validate(snapshot, token); }
         catch (IndexStoreException error) when (error.Code is "INDEX_GENERATED_BODY_INVALID" or "INDEX_PACKAGE_BODY_INVALID")

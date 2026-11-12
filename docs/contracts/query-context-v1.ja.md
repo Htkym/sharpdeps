@@ -46,14 +46,10 @@ JSON escape、envelope、coverage/診断、error、cursor、使用量fieldを含
 
 usedCharsは最終JSONのUTF-16長、usedBytesはそのUTF-8長である。estimatedTokensは文字数からの推定で、tokenizerの厳密な制限ではない。取消と時間枠は探索、source読取境界、最終wire構築で検査し、CANCELLED/QUERY_TIMEOUTを返す。同期SQLite/serializer/filesystem呼出そのものを強制中断するOS sandboxではない。
 
+未リリースの開発版CLIの`explore --prepare-max-milliseconds N`は明示的な有限のreader準備期限（10〜30000ms、0は不可）を追加するtransport側のopt-inである。全snapshot検証を維持し、その完了後に既存の`QueryBudget.MaxMilliseconds`を探索用の派生データ準備と探索へ適用する。指定なしの共有期限、typed Query API、MCP、既存の公開overloadは変えない。caller取消、source trust、現在入力／configurationの証明、coverageの意味を変更しない。別準備枠の期限切れはCLIの`PREPARATION_TIMEOUT`（exit 4）となる。
+
 ## Exploreの根拠とprovenance
 
 現行の`explore`は名前・exact ID・source pathを入口に、scope内の保存済み実装と参照根拠をまとめる。曖昧なproject／variantを自動統合せず、明示scopeと`unique`／`prefer-debug`の選択に従う。`http-get-literal`は保存されたHttpGet宣言断片との完全一致であり、実効URLの解決ではない。`pathTo`はexact occurrence間の保存済みcall witnessを扱い、runtime到達性を証明しない。候補、omission、freshness、coverageを保つ。
 
 通常ファイルは現在bytesと保存hashを照合してsnippetを切る。保存済み生成本文は実ファイル位置と区別し、保存snapshot由来のprovenanceを返す。パッケージ本文は明示的な検証を通した保存入力に限定する。生成本文やパッケージ本文を含む索引にはclosed-input reuse proofを発行せず、現在入力と一致する鮮度を推測しない。ReadSaved自体はsource本文を読まず、trustedなsourceアクセスの境界と件数・時間・出力予算を維持する。詳しい返却形式は[Exploreの案内](../mcp.md)を参照する。
-
-## 初期実装時の検証記録
-
-以下はSD2-06と2026-10-10当時の記録であり、後続のhost接続有無や0.4.0の検証結果ではない。
-
-9つの限定Factに実SQLite reader/writerを使った世代cursor、scope/exact/Japanese、certainty/cycle/予算、variant別occurrenceの経路整合性、最終wire/strict complete、同size同mtime差替え、untrusted saved read、inventory/config証明、橋渡しspan unionを記録した。occurrence経路修正の独立静的レビューは限定PASS。2026-10-10に返却された検証枠でWindowsのRelease solution build、Index 9/9とQuery 9/9を確認した。xUnit assertの書式警告を修正した後、Queryの限定Release buildは警告0、Query 9/9を再確認した。full suite、CLI/provider/coordinator接続、Unix/macOSのQuery実行、SDK-free Quick、host integrationは未検証である。

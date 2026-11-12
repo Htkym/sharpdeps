@@ -85,6 +85,7 @@ jobs:
           version="$(node -p "require('./package.json').version")-ci.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
           dotnet pack analyzer/src/SharpDeps.Mcp/SharpDeps.Mcp.csproj -c Release -p:Version="$version" --artifacts-path "$RUNNER_TEMP/sharpdeps-mcp" -o artifacts/mcp
           node scripts/check-release.js --mcp-package "artifacts/mcp/SharpDeps.Mcp.$version.nupkg" --mcp-version "$version" > artifacts/mcp/candidate-identity.json
+          node scripts/check-mcp-mutation.js "artifacts/mcp/SharpDeps.Mcp.$version.nupkg" "$version" > artifacts/mcp/mutation-helper.json
 
       - name: Upload optional MCP candidate
         uses: actions/upload-artifact@v7.0.2
@@ -104,6 +105,13 @@ jobs:
         env:
           SHARPDEPTS_E2E_MODE: vsix
 
+      - name: End-to-end (packaged saved-source encodings)
+        run: xvfb-run -a npm run test:e2e
+        env:
+          SHARPDEPTS_E2E_MODE: vsix
+          SHARPDEPTS_E2E_SCENARIO: saved-source
+          SHARPDEPTS_E2E_PROFILE: .local/e2e-vsix-saved-source
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -120,11 +128,12 @@ jobs:
             .local/verification/sd-027-e2e*.json
             .local/verification/sd-028-browser.json
             .local/verification/sd-029-vsix.json
+            .local/verification/sd-030-saved-source.json
             .local/browser-results/
 
   macos-smoke:
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -132,6 +141,9 @@ jobs:
           node-version: 20
           cache: npm
       - uses: actions/setup-dotnet@v6.0.0
+        env:
+          # Keep the bounded reuse proof independent of unrelated preinstalled SDKs/runtimes.
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/sharpdeps-dotnet
         with:
           dotnet-version: 10.0.x
       - name: Record environment
@@ -165,10 +177,52 @@ jobs:
           dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release --logger trx --results-directory .local/ci/dotnet
       - name: Quick and Semantic golden and contract tests
         run: npx vitest run tests/analyzer tests/contract --reporter=default --reporter=json --outputFile=.local/ci/analyzers.json
+      - name: Record reuse proof inputs
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ["DOTNET_ROOT"])
+          sdks = sorted((p for p in (root / "sdk").iterdir() if p.name.startswith("10.") and all(x.isdigit() for x in p.name.split("."))), key=lambda p: tuple(map(int, p.name.split("."))))
+          groups = [("sdk", sdks[-1]), ("packs", root / "packs" / "Microsoft.NETCore.App.Ref")]
+          groups += [(name, root / name) for name in ("shared", "host", "sdk-manifests", "metadata")]
+          groups += [("tool", pathlib.Path("analyzer/tests/SharpDeps.Cli.Tests/bin/Release/net10.0"))]
+          result = []
+          for name, path in groups:
+              files = size = entries = 0
+              links = []
+              largest = []
+              pending = [path]
+              while pending:
+                  current = pending.pop()
+                  if current.is_symlink():
+                      links.append(str(current))
+                      continue
+                  if not current.exists():
+                      continue
+                  if current.is_dir():
+                      children = list(current.iterdir())
+                      entries += len(children)
+                      pending.extend(children)
+                  else:
+                      length = current.stat().st_size
+                      files += 1
+                      size += length
+                      largest.append((length, str(current)))
+              result.append(dict(group=name, path=str(path), files=files, entries=entries, bytes=size,
+                                 links=links, largest=sorted(largest, reverse=True)[:5]))
+          output = dict(groups=result, totalBytes=sum(x["bytes"] for x in result),
+                        totalEntries=sum(x["entries"] for x in result),
+                        limits="Diagnostic inventory only; no proof admission or budget is changed.")
+          pathlib.Path(".local/ci/proof-input-inventory.json").write_text(json.dumps(output, indent=2) + "\n")
+          PY
       - name: Upload macOS verification evidence
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
           name: macos-verification
-          path: .local/ci/
+          path: |
+            .local/ci/
+            ${{ runner.temp }}/sharpdeps-tests/sharpdeps-full-oracle/
+            ${{ runner.temp }}/sharpdeps-tests/sde-cli/
           if-no-files-found: error

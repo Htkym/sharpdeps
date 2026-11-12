@@ -20,4 +20,12 @@
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(SharpDepsUseMarkdownSessionCandidate)' == 'true'">
+    <DefineConstants>$(DefineConstants);SHARPDEPS_MARKDOWN_SESSION_CANDIDATE</DefineConstants>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)../.local/markdown-session-candidate</ArtifactsPath>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath>$(ArtifactsPath)/locks/$(MSBuildProjectName).packages.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+
 </Project>

@@ -1,0 +1,44 @@
+{
+  "format": "sharpdeps-markdown-runtime-pin",
+  "schemaVersion": 1,
+  "developmentOnly": true,
+  "componentVersion": "2.0.0-preview.217731285591823",
+  "sourceCommit": "c60683ef270e9a1cb451610425621363d0072dcf",
+  "canonicalSourceHash": "5aeb32eff8dfa9741f4c44856be0f2db377c65592435ccee2a378824374cff42",
+  "parserVersion": "1/5aeb32eff8dfa9741f4c44856be0f2db377c65592435ccee2a378824374cff42",
+  "contractVersion": "1.0",
+  "profileId": "lithosharp-markdown/1",
+  "dependencies": [
+    {
+      "packageId": "YamlDotNet",
+      "version": "18.1.0",
+      "range": "[18.1.0]",
+      "assemblyFullName": "YamlDotNet, Version=18.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e",
+      "informationalVersion": "18.1.0",
+      "identityRole": "expected; actual loaded metadata must be verified by consumer"
+    }
+  ],
+  "artifacts": {
+    "runtime": {
+      "packageId": "Syntamark",
+      "componentVersion": "2.0.0-preview.217731285591823",
+      "fileName": "Syntamark.2.0.0-preview.217731285591823.nupkg",
+      "sha256": "df0f9ec21e63d7cd58dde3226febdcdcb93311e142203a1bd41bba57da368df4",
+      "byteLength": 570651,
+      "assemblySha256": "24523554d8f2067310543527071762ad0190197ba5f70800118b6266b8a98542"
+    },
+    "source": {
+      "packageId": "Syntamark.Source",
+      "componentVersion": "2.0.0-preview.217731285591823",
+      "fileName": "Syntamark.Source.2.0.0-preview.217731285591823.nupkg",
+      "sha256": "aa64bd22d6acf969c92bb7ca9ae0b0124bbd5656d375dcd08e19969237ad525f",
+      "byteLength": 530394
+    }
+  },
+  "sourceRepository": {
+    "kind": "git",
+    "url": "https://github.com/Htkym/syntamark",
+    "component": "Syntamark",
+    "historyMap": "eng/markdown/source-history.json"
+  }
+}

@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Security.Cryptography;
 using System.Text;
 using Syntamark;
@@ -17,22 +19,34 @@ public sealed record CliIndexOptions(string Root, string Target, string IndexPat
     string Configuration = "Debug", string? Platform = null, IReadOnlyList<string>? ProjectPaths = null,
     string? TargetFramework = null, int TimeoutSeconds = CliIndexOptions.DefaultTimeoutSeconds, bool AllowSemanticReuse = false)
 {
+    internal string? MetricsDirectory { get; init; }
     internal const int DefaultTimeoutSeconds = 1800;
     internal const int MaximumTimeoutSeconds = 3600;
 }
 public sealed record CliIndexBuild(IndexSnapshot Snapshot, Action VerifySelection)
 {
     internal Func<CancellationToken, QueryInputInventory>? VerifyQueryInputs { get; init; }
+    internal Action? AdoptCommittedState { get; init; }
+    internal Action? DiscardPreparedState { get; init; }
+    internal int MarkdownPrepareCalls { get; init; }
+    internal int MarkdownPreparedCacheHits { get; init; }
 }
 
 public sealed class CliIndexException : Exception
 {
     public CliIndexException(string code, int exitCode = 4) : this(code, code, exitCode) { }
     public CliIndexException(string code, string message, int exitCode = 4, Exception? inner = null)
-        : base(message, inner) { Code = code; ExitCode = exitCode; }
+        : base(message, inner)
+    {
+        Code = code;
+        ExitCode = exitCode;
+    }
     public string Code { get; }
     public int ExitCode { get; }
 }
+
+internal sealed record CliProofAdmission(bool NoGenerated, bool NoPackage, bool ClosedReferences,
+    bool FullFingerprint, bool AfterFingerprint, bool FingerprintEqual, bool StableInputs, bool InputHash);
 
 /// <summary>
 /// Trusted extraction with closed-input Markdown and project collector reuse. The caller validates trust and holds the writer lease from before
@@ -54,9 +68,25 @@ public static class CliIndexer
         => BuildForPublicationAsync(options, previous, token, null);
 
     // A scoped test observer changes real dependencies after partial extraction; fingerprints are never substituted.
-    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+    internal static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
         CancellationToken token, Action<int, int>? afterPartialExtraction)
+        => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, null);
+
+    internal static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity)
+        => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, allocateIdentity, null);
+
+    internal static Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
+        Action<CliProofAdmission>? observeProof)
+        => BuildForPublicationAsync(options, previous, token, afterPartialExtraction, allocateIdentity, observeProof, null);
+
+    internal static async Task<CliIndexBuild> BuildForPublicationAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
+        Action<CliProofAdmission>? observeProof, MarkdownPreparedCache.Candidate? preparedCache,
+        CliSemanticSession.Update? semanticUpdate = null)
     {
+        using var buildMetrics = PhaseMetrics.Measure("index.build");
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
         if (options.TimeoutSeconds is < 0 or > CliIndexOptions.MaximumTimeoutSeconds
@@ -83,7 +113,7 @@ public static class CliIndexer
         if (options.TimeoutSeconds != 0)
             timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
         token = timeout.Token;
-        var snapshotId = Guid.NewGuid().ToString("N");
+        var snapshotId = (allocateIdentity?.Invoke() ?? Guid.NewGuid()).ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);
         var manifest = new Dictionary<string, InputText>(StringComparer.OrdinalIgnoreCase);
         var packageVerifiers = new List<Action<CancellationToken>>();
@@ -94,7 +124,8 @@ public static class CliIndexer
         foreach (var path in WalkInputs(root, options.IndexPath, token))
             await Capture(path, IsMarkdown(path) ? "markdown" : "configuration");
         await Capture(target, "configuration");
-        foreach (var path in selectedPaths) await Capture(path, "configuration");
+        foreach (var path in selectedPaths)
+            await Capture(path, "configuration");
         var initialInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
 
@@ -125,15 +156,24 @@ public static class CliIndexer
                     throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                 manifest[old.RelativePath] = captured with { File = old with { Reuse = null } };
             }
+            PhaseMetrics.Decision("reuse.semantic", "reused");
             graph = SemanticGraph(previous.Graph, snapshotId, generation);
             catalogSymbols = savedProof.Catalog.Select(s => new MarkdownSymbolCandidate(s.NodeId, s.FullName,
                 s.ShortName, s.DocumentationId, s.Project, s.Namespace, s.VariantId, s.SourceId)).ToArray();
             diagnostics = (graph.Diagnostics ?? []).ToDictionary(d => d.Code, d => d.Count, StringComparer.Ordinal);
             diagnostics["cli.semanticGraphReused"] = 1;
             reuseProof = savedProof;
+            semanticUpdate?.Retain(new(optionsHash, savedProof.Projects!.StructureHash,
+                currentFingerprint!.DependencyHash, currentFingerprint.EnvironmentHash, currentFingerprint.SdkPath), previous.Graph.Generation);
         }
         else
         {
+            if (PhaseMetrics.Enabled)
+                PhaseMetrics.Decision("reuse.semantic", excludedTarget ? "excluded-target"
+                : !options.AllowSemanticReuse ? "disabled" : previous is null ? "no-previous-snapshot"
+                : previous.Files.Any(QueryWorkspace.IsStored) ? "stored-generated-or-package-input"
+                : savedProof?.Projects?.Version != CliProjectReuse.Version ? "missing-or-unsupported-project-proof"
+                : currentInputHash is null ? "input-inventory-unavailable" : "proof-mismatch");
             if (!SemanticEnvironment.TryRegister(Path.GetDirectoryName(target)!, out var registrationFailure))
                 throw new CliIndexException("CLI_TARGET_SDK_UNAVAILABLE",
                     registrationFailure ?? "No target MSBuild SDK is available.");
@@ -149,8 +189,27 @@ public static class CliIndexer
                     Identity.ProjectLogicalId(Identity.WorkspaceRootId(loaderRoot), Path.GetRelativePath(loaderRoot, path)),
                     options.TargetFramework!)).ToArray();
             }
-            var loaded = await SemanticLoader.LoadAsync(new(target, options.Configuration, options.Platform,
-                options.TimeoutSeconds, selections), token);
+            SemanticLoadResult? warmed = null;
+            if (semanticUpdate is { CanUpdate: true } && options.AllowSemanticReuse && previous is not null
+                && savedProof?.Projects is { } savedProjects && savedProjects.Version == CliProjectReuse.Version && fullFingerprint is not null
+                && !previous.Files.Any(QueryWorkspace.IsStored)
+                && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash))
+            {
+                var owned = previous.Files.Where(f => !f.Deleted && f.Kind == "source").ToArray();
+                var paths = owned.Select(f => f.RelativePath).ToHashSet(PathComparer);
+                var structure = await FingerprintInputs(root, options.IndexPath, true, token,
+                    includeMarkdown: true, ownedSourcePaths: paths);
+                if (structure is not null && structure == savedProjects.StructureHash)
+                {
+                    foreach (var file in owned)
+                        await Capture(Path.Combine(root, file.RelativePath), "source");
+                    warmed = await semanticUpdate.TryUpdateAsync(new(optionsHash, structure, fullFingerprint.DependencyHash,
+                        fullFingerprint.EnvironmentHash, fullFingerprint.SdkPath), previous.Graph.Generation, SemanticSources(), token);
+                }
+            }
+            using var coldLoad = warmed is null ? await SemanticLoader.LoadCandidateAsync(new(target, options.Configuration,
+                options.Platform, options.TimeoutSeconds, selections), token) : null;
+            var loaded = warmed ?? coldLoad!.Result;
             var variants = loaded.Report.Variants.Where(v => selectedPaths.Count == 0
                     || selectedPaths.Contains(Path.GetFullPath(v.ProjectPath)))
                 .Where(v => options.TargetFramework is null || v.TargetFramework == options.TargetFramework).ToArray();
@@ -205,7 +264,8 @@ public static class CliIndexer
             foreach (var reference in inputs.SelectMany(i => i.Compilation.References)
                 .OfType<Microsoft.CodeAnalysis.PortableExecutableReference>())
             {
-                if (reference.FilePath is not { } path || !Path.IsPathFullyQualified(path)) continue;
+                if (reference.FilePath is not { } path || !Path.IsPathFullyQualified(path))
+                    continue;
                 var full = Path.GetFullPath(path);
                 var relative = Path.GetRelativePath(root, full);
                 if (relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
@@ -246,10 +306,12 @@ public static class CliIndexer
                         project.TargetFramework, project.Configuration, project.Platform, project.RuntimeIdentifier);
                     foreach (var tree in loaded.Compilations[variant.VariantKey].SyntaxTrees)
                     {
-                        if (documents.IsGeneratedTree(variant.VariantKey, tree) || string.IsNullOrWhiteSpace(tree.FilePath)) continue;
+                        if (documents.IsGeneratedTree(variant.VariantKey, tree) || string.IsNullOrWhiteSpace(tree.FilePath))
+                            continue;
                         var relative = Path.GetRelativePath(root, tree.FilePath);
                         if (relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-                            && !Path.IsPathRooted(relative)) continue;
+                            && !Path.IsPathRooted(relative))
+                            continue;
                         var text = tree.GetText(token).ToString();
                         var path = tree.FilePath;
                         var info = CliPackageSource.Bind(variant.ProjectPath, variant.TargetFramework!, path, text, token);
@@ -266,13 +328,17 @@ public static class CliIndexer
                                     throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                             }
                             catch (PackageDocumentRegistrationException error)
-                            { throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", error.Message); }
+                            {
+                                throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING", error.Message);
+                            }
                         });
                     }
                 }
             }
             catch (PackageDocumentRegistrationException error)
-            { throw new CliIndexException(error.Code, error.Message); }
+            {
+                throw new CliIndexException(error.Code, error.Message);
+            }
             var hasPackage = packageInfoByDocumentId.Count != 0;
             var sourceOffsets = new Dictionary<string, int>(StringComparer.Ordinal);
             var projectSources = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
@@ -340,7 +406,8 @@ public static class CliIndexer
                     if (string.IsNullOrWhiteSpace(tree.FilePath))
                         throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED");
                     var sourcePath = InsideRoot(root, tree.FilePath);
-                    if (!File.Exists(sourcePath)) throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
+                    if (!File.Exists(sourcePath))
+                        throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
                         "Every syntax input must be a verifiable physical file inside the selected root.");
                     var captured = await Capture(sourcePath, "source");
                     var compilationText = tree.GetText(token).ToString();
@@ -358,7 +425,7 @@ public static class CliIndexer
                         || (registered.ContentHash != captured.File.ContentHash && captured.File.ByteLength != 0))
                         throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
                     manifest[captured.File.RelativePath] = captured with
-                        { File = captured.File with { SourceId = registered.Id, Kind = "source" } };
+                    { File = captured.File with { SourceId = registered.Id, Kind = "source" } };
                     ownedSources.Add(registered.Id);
                 }
                 projectSources.Add(input.VariantId, ownedSources);
@@ -374,6 +441,12 @@ public static class CliIndexer
                 && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
                 && projectSelections is not null
                 ? CliProjectReuse.Select(previous, savedProof.Projects, structureHash, projectSelections, capturedFiles, token) : null;
+            if (projectPlan is null && PhaseMetrics.Enabled)
+                PhaseMetrics.Decision("reuse.project-admission", !options.AllowSemanticReuse ? "disabled"
+                    : previous is null ? "no-previous-snapshot" : savedProof is null ? "no-saved-proof"
+                    : hasGenerated ? "generated-input" : hasPackage ? "package-input"
+                    : previous.Files.Any(QueryWorkspace.IsStored) ? "stored-generated-or-package-input"
+                    : projectSelections is null ? "unsupported-selection" : "no-project-plan");
             var extracted = new HashSet<string>(StringComparer.Ordinal);
             var reused = new HashSet<string>(StringComparer.Ordinal);
             var symbolParts = new Dictionary<string, CliProjectReuse.Symbols>(StringComparer.Ordinal);
@@ -387,6 +460,7 @@ public static class CliIndexer
                 }
                 else
                 {
+                    using var symbolMetrics = PhaseMetrics.Measure("collector.symbol-index");
                     symbolParts.Add(input.VariantId, CliProjectReuse.CaptureSymbols(SymbolIndexBuilder.Build(documents, [input], token)));
                     extracted.Add(input.VariantId);
                 }
@@ -403,11 +477,16 @@ public static class CliIndexer
                     extractions.Add(input.VariantId, projectPlan!.Saved[input.VariantId]);
                     continue;
                 }
+                using var collectorMetrics = PhaseMetrics.Measure("collector.declaration-operation");
                 var external = new ExternalTypeRegistry();
                 var declaration = new DeclarationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
                 var operation = new OperationDependencyCollector(resolver, documents, symbols, loaded.Report.Profile.ProfileHash, external);
-                var collected = operation.Collect([input], token);
-                var declared = declaration.CollectWithHarness([input], token);
+                OperationCollectionResult collected;
+                using (PhaseMetrics.Measure("collector.operation"))
+                    collected = operation.Collect([input], token);
+                DeclarationCollectionResult declared;
+                using (PhaseMetrics.Measure("collector.declaration"))
+                    declared = declaration.CollectWithHarness([input], token);
                 var ownEvidence = (declared.HarnessEvidence ?? declared.Evidence)
                     .Concat(collected.HarnessEvidence ?? collected.Evidence).ToArray();
                 extractions.Add(input.VariantId, new(symbolParts[input.VariantId], ownEvidence, collected.Stats));
@@ -418,37 +497,54 @@ public static class CliIndexer
                     checked(sum.DynamicReferences + part.Stats.DynamicReferences), checked(sum.CandidateOnlySymbols + part.Stats.CandidateOnlySymbols)));
             // Re-project all retained and fresh facts together. Old dirty symbols, external occurrences,
             // edges, legacy mappings and diagnostics cannot survive by incident-edge filtering.
-            graph = HarnessGraphProjector.Project(options.WorkspaceUuid, snapshotId, generation,
-                HarnessCoverage.Partial, projects, symbols, evidence, stats, token);
+            using (PhaseMetrics.Measure("graph.project"))
+                graph = HarnessGraphProjector.Project(options.WorkspaceUuid, snapshotId, generation,
+                    HarnessCoverage.Partial, projects, symbols, evidence, stats, token);
             graph = AlignCompilationLocations(graph, sourceOffsets);
             diagnostics = (graph.Diagnostics ?? []).ToDictionary(d => d.Code, d => d.Count, StringComparer.Ordinal);
             diagnostics["cli.configurationInventoryUnverified"] = 1;
             diagnostics["cli.semanticVariantsLoaded"] = inputs.Length;
+            if (semanticUpdate?.Warm == true)
+                diagnostics["cli.semanticWorkspaceReused"] = 1;
             diagnostics["cli.projectCollectorsExtracted"] = extracted.Count;
-            if (reused.Count > 0) diagnostics["cli.projectCollectorsReused"] = reused.Count;
+            if (reused.Count > 0)
+                diagnostics["cli.projectCollectorsReused"] = reused.Count;
             foreach (var project in projects)
             {
                 var variant = HarnessIdentity.VariantId(options.WorkspaceUuid, project.ProjectId, project.TargetFramework,
                     project.Configuration, project.Platform, project.RuntimeIdentifier);
                 diagnostics[(reused.Contains(project.Key) ? "cli.projectReused." : "cli.projectExtracted.") + variant] = 1;
             }
-            if (loaded.Report.Diagnostics.Count != 0) diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
-            if (loaded.Report.Limitations.Count != 0) diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
+            if (loaded.Report.Diagnostics.Count != 0)
+                diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
+            if (loaded.Report.Limitations.Count != 0)
+                diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
             var compilerErrors = variants.Sum(v => v.ErrorDiagnosticCount);
-            if (compilerErrors != 0) diagnostics["cli.compilerErrors"] = compilerErrors;
-            graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
-                .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
+            if (compilerErrors != 0)
+                diagnostics["cli.compilerErrors"] = compilerErrors;
+            graph = graph with
+            {
+                Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
+                .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray())
+            };
 
-            catalogSymbols = MakeCatalog(graph, symbols, evidence, manifest.Values.Where(i => i.File.Kind == "project")
-                .ToDictionary(i => i.File.SourceId, i => i.File.RelativePath, StringComparer.Ordinal));
-            if (reused.Count > 0) afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
+            PhaseMetrics.Count("projects.extracted", extracted.Count);
+            PhaseMetrics.Count("projects.reused", reused.Count);
+            using (PhaseMetrics.Measure("catalog.build"))
+                catalogSymbols = MakeCatalog(graph, symbols, evidence, manifest.Values.Where(i => i.File.Kind == "project")
+                    .ToDictionary(i => i.File.SourceId, i => i.File.RelativePath, StringComparer.Ordinal));
+            if (reused.Count > 0)
+                afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
             var afterFingerprint = fullFingerprint is null ? null : CliReuseProof.Capture(root, fullFingerprint.SdkPath, token);
             var stableInputsAfter = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
             var inputHash = afterFingerprint is null ? null : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token);
             var closedReferences = fullFingerprint is not null && inputs.All(i => i.Compilation.References.All(reference =>
                 reference is Microsoft.CodeAnalysis.CompilationReference
                 || reference is Microsoft.CodeAnalysis.PortableExecutableReference { FilePath: { } path }
-                    && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot)));
+                    && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot, fullFingerprint.PackageRootSet)));
+            observeProof?.Invoke(new(!hasGenerated, !hasPackage, closedReferences, fullFingerprint is not null,
+                afterFingerprint is not null, fullFingerprint is not null && fullFingerprint == afterFingerprint,
+                initialInputs == stableInputsAfter, inputHash is not null));
             // No reuse proof is issued for a run with generated/package inputs: their currency
             // cannot be proven from fingerprints, so later queries stay unverified.
             if (!hasGenerated && !hasPackage && closedReferences && fullFingerprint is not null && afterFingerprint is not null
@@ -460,6 +556,9 @@ public static class CliIndexer
                 { Projects = CliProjectReuse.Capture(structureHash, projectSelections, extractions, capturedFiles) };
             if (reused.Count > 0 && reuseProof is null)
                 throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+            if (semanticUpdate is not null && coldLoad is not null && reuseProof?.Projects is { } closedProjects)
+                await semanticUpdate.PrepareColdAsync(coldLoad, new(optionsHash, closedProjects.StructureHash,
+                    afterFingerprint!.DependencyHash, afterFingerprint.EnvironmentHash, afterFingerprint.SdkPath), SemanticSources(), token);
         }
 
         // SourceFile nodes expose actual manifest metadata and retain project-path to persisted-ID binding.
@@ -471,12 +570,14 @@ public static class CliIndexer
         // Document projection coverage must not change the completeness of the supplied code catalog.
         var codeCatalog = graph;
         var adapter = new LithoSharpMarkdownAdapter();
+        var prepareCalls = 0;
+        var preparedCacheHits = 0;
         var markdown = new List<(InputText Input, MarkdownPreparedInput Prepared, string? ExplicitId)>();
         foreach (var input in manifest.Values.Where(i => i.File.Kind == "markdown").OrderBy(i => i.File.RelativePath, StringComparer.Ordinal))
         {
             var request = new MarkdownGraphRequest(input.Text, options.WorkspaceUuid, Guid.NewGuid(), workspaceId,
                 input.File.SourceId, input.File.ContentHash, snapshotId, generation);
-            var prepared = adapter.Prepare(request, isTrusted: true, token);
+            var prepared = PrepareMarkdown(request);
             RequireIndexableMarkdownFacts(prepared.Facts, input.File.RelativePath);
             var ids = prepared.Attributes.Where(a => a.Key == "sharpdeps.id").ToArray();
             if (ids.Length > 1 || (ids.Length == 1 && string.IsNullOrWhiteSpace(ids[0].Source.Scalar.Text)))
@@ -487,53 +588,80 @@ public static class CliIndexer
             d.RelativePath, d.ExplicitId, d.ContentHash)).ToArray();
         var matches = MarkdownIdentityMatcher.MatchDocuments(oldDocuments, markdown.Select(m =>
             new MarkdownDocumentMatchInput(m.Input.File.RelativePath, m.ExplicitId, m.Input.File.ContentHash)).ToArray(), token);
+        var matchesByPath = matches.ToDictionary(m => m.RelativePath, StringComparer.Ordinal);
+        var previousByUuid = (previous?.Documents ?? []).ToDictionary(d => d.DocumentUuid);
+        CliGraphAccumulator? accumulator = null;
         var identities = new List<IndexDocumentIdentity>();
         var projections = new List<(InputText Input, MarkdownGraphProjection Projection, MarkdownPreparedInput Prepared)>();
         foreach (var item in markdown)
         {
+            using var markdownMetrics = PhaseMetrics.Measure("markdown.identity-project-merge");
             token.ThrowIfCancellationRequested();
-            var match = matches.Single(m => m.RelativePath == item.Input.File.RelativePath);
-            if (match.Reason == "duplicate-explicit-id") throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
-            var uuid = match.DocumentUuid ?? Guid.NewGuid();
-            var old = previous?.Documents.SingleOrDefault(d => d.DocumentUuid == uuid);
+            var match = matchesByPath[item.Input.File.RelativePath];
+            if (match.Reason == "duplicate-explicit-id")
+                throw new CliIndexException("CLI_MARKDOWN_ID_AMBIGUOUS");
+            var uuid = match.DocumentUuid ?? (allocateIdentity?.Invoke() ?? Guid.NewGuid());
+            var old = previousByUuid.GetValueOrDefault(uuid);
             var scope = old?.ScopeId ?? workspaceId;
             var request = new MarkdownGraphRequest(item.Input.Text, options.WorkspaceUuid, uuid, scope,
                 item.Input.File.SourceId, item.Input.File.ContentHash, snapshotId, generation);
-            var prepared = scope == workspaceId ? item.Prepared : adapter.Prepare(request, true, token);
+            var prepared = scope == workspaceId ? item.Prepared : PrepareMarkdown(request);
             var facts = prepared.Facts;
             var oldSections = old is null ? null : new MarkdownSectionIdentitySnapshot(
                 HarnessIdentity.DocumentId(options.WorkspaceUuid, uuid), old.ScopeId, old.ContentHash,
                 old.ParserVersion, old.ContractVersion, old.ProfileId, old.OptionsHash,
                 old.Sections.Select(s => new MarkdownSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray());
             var sections = MarkdownIdentityMatcher.MatchSections(options.WorkspaceUuid, uuid, item.Input.Text,
-                facts, oldSections, () => Guid.NewGuid().ToString("N"), token);
-            var projection = adapter.Project(request with { SectionTokens = sections.SectionTokens,
-                SectionIdentityTextHash = sections.TextHash }, prepared, true, token);
+                facts, oldSections, () => (allocateIdentity?.Invoke() ?? Guid.NewGuid()).ToString("N"), token);
+            var projection = adapter.Project(request with
+            {
+                SectionTokens = sections.SectionTokens,
+                SectionIdentityTextHash = sections.TextHash
+            }, prepared, true, token);
             identities.Add(new(uuid, item.Input.File.RelativePath, item.ExplicitId, item.Input.File.ContentHash,
                 scope, sections.Snapshot.ParserVersion, sections.Snapshot.ContractVersion, sections.Snapshot.ProfileId,
                 sections.Snapshot.OptionsHash, sections.Snapshot.Sections.Select(s =>
                     new IndexSectionIdentity(s.LocalKey, s.Token, s.HeadingKey, s.BodyHash)).ToArray()));
-            graph = Merge(graph, projection.Graph);
+            accumulator ??= new CliGraphAccumulator(graph);
+            accumulator.Add(projection.Graph);
             projections.Add((item.Input, projection, prepared));
             if (match.DocumentUuid is null && match.Candidates.Count != 0)
                 diagnostics["cli.documentIdentityAmbiguous"] = diagnostics.GetValueOrDefault("cli.documentIdentityAmbiguous") + 1;
         }
+        using (PhaseMetrics.Measure("markdown.graph-freeze"))
+            graph = accumulator?.Freeze() ?? graph;
+        var sources = projections.Count == 0 ? Array.Empty<InputText>()
+            : manifest.Values.Where(i => i.File.Kind == "source").ToArray();
+        var aliasesByDirectory = new Dictionary<string, IReadOnlyDictionary<string, string>>(PathComparer);
         foreach (var (input, projection, prepared) in projections)
         {
-            var aliases = CodeAliases(Path.GetDirectoryName(input.AbsolutePath)!, manifest.Values.Where(i => i.File.Kind == "source"));
+            using var mentionMetrics = PhaseMetrics.Measure("markdown.mentions");
+            var directory = Path.GetDirectoryName(input.AbsolutePath)!;
+            if (!aliasesByDirectory.TryGetValue(directory, out var aliases))
+            {
+                aliases = CodeAliases(directory, sources);
+                aliasesByDirectory.Add(directory, aliases);
+            }
             var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, new(codeCatalog, catalogSymbols, aliases),
                 cancellationToken: token);
             graph = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
             foreach (var reason in projection.ProjectionReasons.Concat(resolution.Reasons).Distinct(StringComparer.Ordinal))
                 diagnostics["markdown." + reason] = diagnostics.GetValueOrDefault("markdown." + reason) + 1;
         }
-        graph = graph with { Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
-            .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray()) };
-        var search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
+        graph = graph with
+        {
+            Diagnostics = Array.AsReadOnly(diagnostics.OrderBy(d => d.Key, StringComparer.Ordinal)
+            .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray())
+        };
+        IReadOnlyList<IndexSearchText> search;
+        using (PhaseMetrics.Measure("search-text.build"))
+            search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
         foreach (var input in manifest.Values)
         {
-            if (QueryWorkspace.IsStored(input.File)) VerifyStored(input);
-            else await Verify(input, root, token);
+            if (QueryWorkspace.IsStored(input.File))
+                VerifyStored(input);
+            else
+                await Verify(input, root, token);
         }
         if (reuseProof is not null)
         {
@@ -551,9 +679,17 @@ public static class CliIndexer
             verifyPackage(token);
         var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
             identities.ToArray(), [], search, generatedBodies, packageBodies);
-        IndexSnapshotValidator.Validate(snapshot);
+        using (PhaseMetrics.Measure("snapshot.validate"))
+            IndexSnapshotValidator.Validate(snapshot);
+        PhaseMetrics.Count("markdown.prepare.calls", prepareCalls);
+        PhaseMetrics.Count("markdown.prepared-cache.hits", preparedCacheHits);
+        PhaseMetrics.Count("files", snapshot.Files.Count);
+        PhaseMetrics.Count("input.bytes", inputBytes);
+        PhaseMetrics.Count("graph.nodes", snapshot.Graph.Nodes.Count);
+        PhaseMetrics.Count("graph.edges", snapshot.Graph.Edges.Count);
         var finalInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
-        if (initialInputs != finalInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+        if (initialInputs != finalInputs)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var publicationInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         token.ThrowIfCancellationRequested();
@@ -567,8 +703,30 @@ public static class CliIndexer
         {
             // Only a production extraction with a closed dependency/SDK proof may attest freshness.
             // Retain file metadata/options, not the graph or compiler workspace.
-            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs)
+            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs),
+            MarkdownPrepareCalls = prepareCalls,
+            MarkdownPreparedCacheHits = preparedCacheHits
         };
+
+        MarkdownPreparedInput PrepareMarkdown(MarkdownGraphRequest request)
+        {
+            using var prepareMetrics = PhaseMetrics.Measure("markdown.prepare");
+            if (preparedCache is null)
+            {
+                prepareCalls++;
+                return adapter.Prepare(request, true, token);
+            }
+            var prepared = preparedCache.Prepare(adapter, request, true, out var hit, token);
+            if (hit)
+                preparedCacheHits++;
+            else
+                prepareCalls++;
+            return prepared;
+        }
+
+        IReadOnlyDictionary<string, SemanticSourceInput> SemanticSources()
+            => manifest.Values.Where(i => i.File.Kind == "source" && !i.File.Deleted).ToDictionary(i => i.AbsolutePath,
+                i => new SemanticSourceInput(i.Text, i.File.ContentHash, i.EncodingName), PathComparer);
 
         async Task<InputText> Capture(string path, string kind)
         {
@@ -577,15 +735,17 @@ public static class CliIndexer
             IndexSnapshotValidator.ValidateRelativePath(relative);
             if (manifest.TryGetValue(relative, out var old))
             {
-                if (!PathComparer.Equals(old.AbsolutePath, path)) throw new CliIndexException("CLI_PATH_ALIAS");
+                if (!PathComparer.Equals(old.AbsolutePath, path))
+                    throw new CliIndexException("CLI_PATH_ALIAS");
                 return old;
             }
+            using var inputMetrics = PhaseMetrics.Measure("input.capture-read-hash");
             var text = await ReadInput(path, token);
             inputBytes = checked(inputBytes + text.Bytes);
             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
                 throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
             var input = new InputText(path, new("cli-input:" + relative, relative, kind, text.Hash,
-                text.Bytes, text.Text.Length), text.Text, text.HasBom);
+                text.Bytes, text.Text.Length), text.Text, text.HasBom, text.EncodingName);
             manifest.Add(relative, input);
             return input;
         }
@@ -613,30 +773,44 @@ public static class CliIndexer
         if (!markdownPaths.SetEquals(files.Where(f => !f.Deleted && f.Kind == "markdown").Select(f => f.RelativePath)))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var hash = FingerprintInputs(root, options.IndexPath, includeOutputs: true, token).GetAwaiter().GetResult();
-        if (hash is null || hash != expectedInputs) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+        if (hash is null || hash != expectedInputs)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         var proof = files.SingleOrDefault(f => PathComparer.Equals(f.RelativePath,
             Path.GetRelativePath(root, InsideRoot(root, options.Target)).Replace('\\', '/')))?.Reuse;
-        if (proof is null) return;
+        if (proof is null)
+            return;
         var current = CliReuseProof.Capture(root, proof.SdkPath, token);
         if (hash is null || !CliReuseProof.Matches(proof, current, OptionsHash(options, root, InsideRoot(root, options.Target)), hash))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
     }
 
     private static string OptionsHash(CliIndexOptions options, string root, string target)
-        => Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new {
-            root, target, options.WorkspaceUuid, options.Configuration, options.Platform, options.TargetFramework,
+        => Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            root,
+            target,
+            options.WorkspaceUuid,
+            options.Configuration,
+            options.Platform,
+            options.TargetFramework,
             projects = (options.ProjectPaths ?? []).Select(p => InsideRoot(root, p)).Order(StringComparer.Ordinal).ToArray()
         })))).ToLowerInvariant();
 
-    private static bool ReferenceInsideProof(string path, string root, string sdk, string? packageRoot)
+    private static bool ReferenceInsideProof(string path, string root, string sdk, string? packageRoot, string? packageRootSet = null)
     {
-        if (!Path.IsPathFullyQualified(path)) return false;
+        if (!Path.IsPathFullyQualified(path))
+            return false;
         var full = Path.GetFullPath(path);
         var dotnet = Directory.GetParent(sdk)?.Parent?.FullName;
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (full.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison)) return true;
-        if (packageRoot is not null && full.StartsWith(packageRoot + Path.DirectorySeparatorChar, comparison)) return true;
-        if (dotnet is null) return false;
+        if (full.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison))
+            return true;
+        if (packageRoot is not null && full.StartsWith(packageRoot + Path.DirectorySeparatorChar, comparison))
+            return true;
+        if (CliReuseProof.PackageRootSetContains(full, packageRootSet))
+            return true;
+        if (dotnet is null)
+            return false;
         return new[] { sdk, Path.Combine(dotnet, "packs", "Microsoft.NETCore.App.Ref"), Path.Combine(dotnet, "shared"),
             Path.Combine(dotnet, "host"), Path.Combine(dotnet, "sdk-manifests"), Path.Combine(dotnet, "metadata") }
             .Any(directory => full.StartsWith(Path.TrimEndingDirectorySeparator(directory) + Path.DirectorySeparatorChar, comparison));
@@ -654,8 +828,13 @@ public static class CliIndexer
             .ToDictionary(g => g.Key, g => g.Select(n => n.Id).ToArray(), StringComparer.Ordinal);
         var queue = new Queue<string>(removed);
         while (queue.TryDequeue(out var id))
-            foreach (var child in children.GetValueOrDefault(id) ?? []) if (removed.Add(child)) queue.Enqueue(child);
-        return saved with { SnapshotId = snapshotId, Generation = generation,
+            foreach (var child in children.GetValueOrDefault(id) ?? [])
+                if (removed.Add(child))
+                    queue.Enqueue(child);
+        return saved with
+        {
+            SnapshotId = snapshotId,
+            Generation = generation,
             Nodes = saved.Nodes.Where(n => !removed.Contains(n.Id)).ToArray(),
             Edges = saved.Edges.Where(e => !removed.Contains(e.SourceNodeId) && !removed.Contains(e.TargetNodeId)).ToArray(),
             Markdown = null,
@@ -694,13 +873,18 @@ public static class CliIndexer
     private static async Task<string?> FingerprintInputs(string root, string indexPath, bool includeOutputs, CancellationToken token,
         bool includeMarkdown = false, IReadOnlySet<string>? ownedSourcePaths = null)
     {
+        using var fingerprintMetrics = PhaseMetrics.Measure(ownedSourcePaths is not null ? "input.fingerprint-structure"
+            : includeOutputs ? "input.fingerprint-with-outputs" : "input.fingerprint-selected");
         try
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var paths = new List<string>(); var directoryPaths = new List<string>();
+            var paths = new List<string>();
+            var directoryPaths = new List<string>();
             var foundSources = new HashSet<string>(PathComparer);
-            var directories = new Stack<string>(); directories.Push(root);
-            var count = 0; long total = 0;
+            var directories = new Stack<string>();
+            directories.Push(root);
+            var count = 0;
+            long total = 0;
             var absoluteIndex = InsideRoot(root, indexPath);
             while (directories.TryPop(out var directory))
             {
@@ -708,7 +892,8 @@ public static class CliIndexer
                 foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                 {
                     token.ThrowIfCancellationRequested();
-                    if (++count > MaximumWalkEntries) return null;
+                    if (++count > MaximumWalkEntries)
+                        return null;
                     var attributes = File.GetAttributes(path);
                     var name = Path.GetFileName(path);
                     if ((attributes & FileAttributes.Directory) != 0)
@@ -716,30 +901,39 @@ public static class CliIndexer
                         if (name.Equals(".git", StringComparison.OrdinalIgnoreCase)
                             || name.Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)
                             || !includeOutputs && (name.Equals("obj", StringComparison.OrdinalIgnoreCase)
-                                || name.Equals("bin", StringComparison.OrdinalIgnoreCase))) continue;
-                        if ((attributes & FileAttributes.ReparsePoint) != 0) return null;
+                                || name.Equals("bin", StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                        if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            return null;
                         directoryPaths.Add(path);
                         directories.Push(path);
                     }
                     else
                     {
-                        if (IsIndexOutput(path, absoluteIndex)) continue;
-                        if ((attributes & FileAttributes.ReparsePoint) != 0) return null;
-                        if (includeMarkdown || !IsMarkdown(path)) paths.Add(path);
+                        if (IsIndexOutput(path, absoluteIndex))
+                            continue;
+                        if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            return null;
+                        if (includeMarkdown || !IsMarkdown(path))
+                            paths.Add(path);
                     }
                 }
             }
             foreach (var path in directoryPaths.Order(StringComparer.Ordinal))
             {
-                token.ThrowIfCancellationRequested(); RejectLinks(path);
+                token.ThrowIfCancellationRequested();
+                RejectLinks(path);
                 var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
                 var bytes = StrictUtf8.GetBytes("directory:" + relative);
-                var size = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(size, bytes.Length);
-                hash.AppendData(size); hash.AppendData(bytes);
+                var size = new byte[8];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(size, bytes.Length);
+                hash.AppendData(size);
+                hash.AppendData(bytes);
             }
             foreach (var path in paths.Order(StringComparer.Ordinal))
             {
-                token.ThrowIfCancellationRequested(); RejectLinks(path);
+                token.ThrowIfCancellationRequested();
+                RejectLinks(path);
                 var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
                 if (ownedSourcePaths?.Contains(relative) == true)
                 {
@@ -749,37 +943,50 @@ public static class CliIndexer
                     continue;
                 }
                 var pathBytes = StrictUtf8.GetBytes("file:" + relative);
-                var pathLength = new byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
-                hash.AppendData(pathLength); hash.AppendData(pathBytes);
+                var pathLength = new byte[8];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(pathLength, pathBytes.Length);
+                hash.AppendData(pathLength);
+                hash.AppendData(pathBytes);
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
-                if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes) return null;
+                using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
+                if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes)
+                    return null;
                 total = checked(total + stream.Length);
-                if (total > IndexSnapshotValidator.MaximumInputTotalBytes) return null;
+                if (total > IndexSnapshotValidator.MaximumInputTotalBytes)
+                    return null;
                 using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-                var expectedLength = stream.Length; long read = 0;
+                var expectedLength = stream.Length;
+                long read = 0;
                 var buffer = new byte[65536];
                 for (int bytes; (bytes = await stream.ReadAsync(buffer, token)) != 0;)
                 {
                     read = checked(read + bytes);
-                    if (read > expectedLength) return null;
+                    if (read > expectedLength)
+                        return null;
                     content.AppendData(buffer, 0, bytes);
                 }
-                if (read != expectedLength || stream.Length != expectedLength) return null;
-                hash.AppendData(content.GetHashAndReset()); RejectLinks(path);
+                if (read != expectedLength || stream.Length != expectedLength)
+                    return null;
+                hash.AppendData(content.GetHashAndReset());
+                RejectLinks(path);
             }
-            if (ownedSourcePaths is not null && !foundSources.SetEquals(ownedSourcePaths)) return null;
+            if (ownedSourcePaths is not null && !foundSources.SetEquals(ownedSourcePaths))
+                return null;
             return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or OverflowException or CliFailure)
-        { return null; }
+        {
+            return null;
+        }
     }
 
-    private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasBom);
+    private sealed record InputText(string AbsolutePath, IndexFile File, string Text, bool HasBom, string EncodingName = "utf8");
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static IEnumerable<string> WalkInputs(string root, string indexPath, CancellationToken token)
     {
-        var directories = new Stack<string>(); directories.Push(root);
+        var directories = new Stack<string>();
+        directories.Push(root);
         var count = 0;
         while (directories.TryPop(out var directory))
         {
@@ -787,13 +994,19 @@ public static class CliIndexer
             foreach (var path in Directory.EnumerateFileSystemEntries(directory))
             {
                 token.ThrowIfCancellationRequested();
-                if (++count > MaximumWalkEntries) throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
-                if (IsIndexOutput(path, indexPath)) continue;
+                if (++count > MaximumWalkEntries)
+                    throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                if (IsIndexOutput(path, indexPath))
+                    continue;
                 var attributes = File.GetAttributes(path);
-                if ((attributes & FileAttributes.Directory) != 0 && ExcludedDirectories.Contains(Path.GetFileName(path))) continue;
-                if ((attributes & FileAttributes.ReparsePoint) != 0) throw new CliIndexException("CLI_LINK_INPUT_REJECTED");
-                if ((attributes & FileAttributes.Directory) != 0) directories.Push(path);
-                else if (IsMarkdown(path) || IsConfiguration(path)) yield return path;
+                if ((attributes & FileAttributes.Directory) != 0 && ExcludedDirectories.Contains(Path.GetFileName(path)))
+                    continue;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new CliIndexException("CLI_LINK_INPUT_REJECTED");
+                if ((attributes & FileAttributes.Directory) != 0)
+                    directories.Push(path);
+                else if (IsMarkdown(path) || IsConfiguration(path))
+                    yield return path;
             }
         }
     }
@@ -805,21 +1018,30 @@ public static class CliIndexer
         ".csproj" or ".fsproj" or ".vbproj" or ".sln" or ".slnx" or ".props" or ".targets" or ".editorconfig"
         || Path.GetFileName(path).ToLowerInvariant() is "global.json" or "nuget.config" or "packages.lock.json" or ".editorconfig";
 
-    private static async Task<(string Text, string Hash, long Bytes, bool HasBom)> ReadInput(string path, CancellationToken token)
+    private static async Task<(string Text, string Hash, long Bytes, bool HasBom, string EncodingName)> ReadInput(string path, CancellationToken token)
     {
         RejectLinks(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
         if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes)
             throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         var bytes = new byte[checked((int)stream.Length)];
         await stream.ReadExactlyAsync(bytes, token);
-        if (await stream.ReadAsync(new byte[1], token) != 0) throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+        if (await stream.ReadAsync(new byte[1], token) != 0)
+            throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
         string text;
-        try { text = SourceTextEncoding.Decode(bytes); }
+        try
+        {
+            text = SourceTextEncoding.Decode(bytes);
+        }
         catch (DecoderFallbackException error)
-        { throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require UTF-8 or BOM-marked UTF-16 text.", inner: error); }
+        {
+            throw new CliIndexException("CLI_ENCODING_UNSUPPORTED", "Index inputs require UTF-8 or BOM-marked UTF-16 text.", inner: error);
+        }
         RejectLinks(path);
-        return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, text.StartsWith('\uFEFF'));
+        return (text, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.LongLength, text.StartsWith('\uFEFF'),
+            bytes.Length >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe ? "utf16le"
+                : bytes.Length >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff ? "utf16be" : "utf8");
     }
 
     private static async Task Verify(InputText input, string root, CancellationToken token)
@@ -849,30 +1071,21 @@ public static class CliIndexer
     private static string InsideRoot(string root, string path) => CliPaths.InRoot(root, path);
     private static void RejectLinks(string path) => CliPaths.RejectLinks(path);
 
-    private static HarnessGraphEnvelope Merge(HarnessGraphEnvelope left, HarnessGraphEnvelope right)
-    {
-        if (left.WorkspaceId != right.WorkspaceId || left.SnapshotId != right.SnapshotId || left.Generation != right.Generation
-            || (left.Markdown is not null && right.Markdown is not null && left.Markdown != right.Markdown))
-            throw new CliIndexException("CLI_GRAPH_MERGE_CONFLICT");
-        return left with { Nodes = MergeById(left.Nodes, right.Nodes, n => n.Id),
-            Variants = MergeById(left.Variants, right.Variants, v => v.Id),
-            SymbolOccurrences = MergeById(left.SymbolOccurrences, right.SymbolOccurrences, o => o.Id),
-            Edges = MergeById(left.Edges, right.Edges, e => e.Id),
-            LegacyReferences = Array.AsReadOnly(left.LegacyReferences.Concat(right.LegacyReferences).Distinct().ToArray()),
-            Markdown = left.Markdown ?? right.Markdown,
-            Coverage = left.Coverage == HarnessCoverage.Failed || right.Coverage == HarnessCoverage.Failed ? HarnessCoverage.Failed
-                : left.Coverage == HarnessCoverage.Partial || right.Coverage == HarnessCoverage.Partial ? HarnessCoverage.Partial : HarnessCoverage.CompleteWithinScope };
-    }
-
     private static HarnessGraphEnvelope AlignCompilationLocations(HarnessGraphEnvelope graph, IReadOnlyDictionary<string, int> offsets)
     {
         // Roslyn may consume a real UTF-8 BOM, whereas the saved-source reader retains U+FEFF.
         // Only the exact byte-BOM + compilation-text comparison above permits this one-code-unit shift.
-        return graph with { Nodes = Array.AsReadOnly(graph.Nodes.Select(n => n with { Location = Align(n.Location) }).ToArray()),
-            SymbolOccurrences = Array.AsReadOnly(graph.SymbolOccurrences.Select(o => o with {
-                Location = Align(o.Location), Declarations = o.Declarations is null ? null
-                    : Array.AsReadOnly(o.Declarations.Select(l => Align(l)!).ToArray()) }).ToArray()),
-            Edges = Array.AsReadOnly(graph.Edges.Select(AlignEdge).ToArray()) };
+        return graph with
+        {
+            Nodes = Array.AsReadOnly(graph.Nodes.Select(n => n with { Location = Align(n.Location) }).ToArray()),
+            SymbolOccurrences = Array.AsReadOnly(graph.SymbolOccurrences.Select(o => o with
+            {
+                Location = Align(o.Location),
+                Declarations = o.Declarations is null ? null
+                    : Array.AsReadOnly(o.Declarations.Select(l => Align(l)!).ToArray())
+            }).ToArray()),
+            Edges = Array.AsReadOnly(graph.Edges.Select(AlignEdge).ToArray())
+        };
 
         HarnessLocation? Align(HarnessLocation? location) => location is { RawSpan: { } span }
             && offsets.TryGetValue(location.SourceId, out var offset) && offset == 1
@@ -884,25 +1097,16 @@ public static class CliIndexer
                 return edge;
             if (edge.SourceOccurrenceId is null || edge.TargetOccurrenceId is null || evidence?.ContentHash is null)
                 throw new CliIndexException("CLI_SOURCE_COORDINATES_INCONSISTENT");
-            return edge with { Evidence = evidence,
+            return edge with
+            {
+                Evidence = evidence,
                 HttpGetDeclaration = edge.HttpGetDeclaration is { TemplateSpan: { } literal } declaration
                     ? declaration with { TemplateSpan = new(checked(literal.Start + 1), literal.Length) } : edge.HttpGetDeclaration,
                 Id = HarnessIdentity.EdgeId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
                 edge.SourceOccurrenceId, edge.TargetOccurrenceId, edge.Kind, evidence.SourceId, evidence.ContentHash,
-                evidence.RawSpan, edge.Producer) };
+                evidence.RawSpan, edge.Producer)
+            };
         }
-    }
-
-    private static IReadOnlyList<T> MergeById<T>(IEnumerable<T> left, IEnumerable<T> right, Func<T, string> id) where T : notnull
-    {
-        var merged = left.ToDictionary(id, StringComparer.Ordinal);
-        foreach (var item in right)
-        {
-            if (merged.TryGetValue(id(item), out var old) && !EqualityComparer<T>.Default.Equals(old, item))
-                throw new CliIndexException("CLI_GRAPH_MERGE_CONFLICT");
-            merged[id(item)] = item;
-        }
-        return Array.AsReadOnly(merged.Values.OrderBy(id, StringComparer.Ordinal).ToArray());
     }
 
     private static IReadOnlyList<MarkdownSymbolCandidate> MakeCatalog(HarnessGraphEnvelope graph, SymbolIndex index,
@@ -914,6 +1118,9 @@ public static class CliIndexer
         var projects = graph.Variants.ToDictionary(v => v.Id, v => projectPaths[v.ProjectId], StringComparer.Ordinal);
         var types = index.Types.ToDictionary(t => t.Id, StringComparer.Ordinal);
         var namespaces = index.Namespaces.ToDictionary(n => n.Id, n => n.Name, StringComparer.Ordinal);
+        var externalIds = graph.Nodes.Where(n => n.Kind == HarnessNodeKind.ExternalSymbol)
+            .Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+        var workspaceUuid = Guid.ParseExact(graph.WorkspaceId[3..], "N");
         var result = new List<MarkdownSymbolCandidate>();
         foreach (var type in index.Types)
             Add(type.Id, type.FullName, type.Name, type.DocumentationId, type.NamespaceId is { } ns ? namespaces.GetValueOrDefault(ns) : null);
@@ -928,9 +1135,9 @@ public static class CliIndexer
             var typeName = symbol.TypeName.StartsWith("global::", StringComparison.Ordinal) ? symbol.TypeName[8..] : symbol.TypeName;
             var shortName = typeName.Split('.').Last().Split('<')[0];
             // A member call also creates a proven type node, even without its own occurrence/legacy row.
-            var typeId = HarnessIdentity.ExternalSymbolId(Guid.ParseExact(graph.WorkspaceId[3..], "N"),
+            var typeId = HarnessIdentity.ExternalSymbolId(workspaceUuid,
                 symbol.AssemblyIdentity, "type", symbol.TypeCanonicalSignature);
-            if (graph.Nodes.Any(n => n.Id == typeId && n.Kind == HarnessNodeKind.ExternalSymbol)
+            if (externalIds.Contains(typeId)
                 && !(legacy.GetValueOrDefault(symbol.LegacyTypeId)?.Length > 0))
                 result.Add(new(typeId, typeName, shortName,
                     symbol.TypeCanonicalSignature.StartsWith("doc:", StringComparison.Ordinal) ? symbol.TypeCanonicalSignature[4..] : null));
@@ -950,14 +1157,17 @@ public static class CliIndexer
         {
             foreach (var reference in legacy.GetValueOrDefault(oldId) ?? [])
             {
-                if (reference.OccurrenceId is null) continue;
+                if (reference.OccurrenceId is null)
+                    continue;
                 var occurrence = occurrences[reference.OccurrenceId];
                 var locations = occurrence.Declarations ?? (occurrence.Location is { } primary ? [primary] : []);
-                if (locations.Count == 0) result.Add(new(reference.NodeId, fullName, shortName, documentationId,
-                    projects[occurrence.VariantId], ns, occurrence.VariantId));
-                else foreach (var location in locations)
+                if (locations.Count == 0)
                     result.Add(new(reference.NodeId, fullName, shortName, documentationId,
-                        projects[occurrence.VariantId], ns, occurrence.VariantId, location.SourceId));
+                    projects[occurrence.VariantId], ns, occurrence.VariantId));
+                else
+                    foreach (var location in locations)
+                        result.Add(new(reference.NodeId, fullName, shortName, documentationId,
+                            projects[occurrence.VariantId], ns, occurrence.VariantId, location.SourceId));
             }
         }
     }
@@ -969,7 +1179,9 @@ public static class CliIndexer
         {
             // The shared link target is relative to this document, not implicitly to workspace root.
             var local = Path.GetRelativePath(documentDirectory, input.AbsolutePath).Replace('\\', '/');
-            Add(local); if (!local.StartsWith("../", StringComparison.Ordinal)) Add("./" + local);
+            Add(local);
+            if (!local.StartsWith("../", StringComparison.Ordinal))
+                Add("./" + local);
             void Add(string alias)
             {
                 if (result.TryGetValue(alias, out var old) && old != input.File.SourceId)

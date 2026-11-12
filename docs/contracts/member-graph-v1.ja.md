@@ -10,7 +10,7 @@ accessorのownerはassociated property/eventです。lambdaとlocal functionのb
 
 外部symbolはassemblyの完全identityと正規signatureで識別します。外部memberには所属する外部型nodeを付け、参照したvariantでoccurrenceを保持します。NuGet packageやprojectを推測しません。既存16桁hashはLegacyReferencesの対応keyであり、正規signatureの代わりには使いません。外部ID・edge IDもidentityVersionを含む長さ付きUTF-8のfull SHA256で生成します。
 
-同じ論理nodeが複数variantで現れてもoccurrenceと辺は別々に保持します。異なる世代で同じsource hash・位置・束縛なら同じedge IDです。file-local型の既存SymbolKeyはファイルscopeを含むため、移動・aliasによるidentity保持はSD2-04/05/09で扱います。
+同じ論理nodeが複数variantで現れてもoccurrenceと辺は別々に保持します。異なる世代で同じsource hash・位置・束縛なら同じedge IDです。file-local型の既存SymbolKeyはファイルscopeを含むため、移動・aliasによるidentity保持は文書・節ID、索引保存、差分更新で扱います。
 
 ## 根拠とread/write
 
@@ -30,10 +30,4 @@ receiverやindex引数を代入先のwriteへ昇格させません。tuple代入
 
 Resolvedは与えられたcompilationの静的束縛を表します。virtual/interface dispatchのruntime実装やdynamic/reflectionの結果を確定しません。candidate/inferredはCandidate、未知confidenceはUnresolvedです。duplicate根拠のcertaintyは強めません。dynamic/unresolved/candidate-onlyの統計、owner/target欠落やsource根拠不足をDiagnosticsへ返し、loaderがCompleteWithinScopeでもこれらがあればPartialです。loaderのPartial/FailedをCompleteへ変えません。
 
-Harness DTOのSignature、Declarations、Origin、Diagnosticsは追加の任意項目です。null時にはJSONへ出力しないため、既存のSD2-01/03 JSONはこれらを付けずに使えます。旧report v2のDTO/serializer/schemaは変更しません。Graph全体の保存入力検証、source hashの再確認、trust・transaction・Query budgetはSD2-05/06の責務です。
-
-## 導入時の確認記録
-
-この節はSD2-02当時の記録です。検証枠待ちや未実施の記述は、その時点の状態を示し、現行の接続有無や0.4.0の検証結果ではありません。
-
-実収集からの投影、TFM別occurrence、原文hash、外部assembly、candidate非昇格を確認する小fixtureと、既存collectorのowner/read-write/partialテストを作成しました。検証枠待ちのため、build、テスト実行、serializer生成の型確認、実host/CLIからの保存は未実施です。静的確認と親の実差分レビューを実行結果と区別します。既存corpusのC07とQuick/report-v2互換checkを後続の限定検証で再利用します。
+Harness DTOのSignature、Declarations、Origin、Diagnosticsは追加の任意項目です。null時にはJSONへ出力しないため、既存のJSONはこれらを付けずに使えます。旧report v2のDTO/serializer/schemaは変更しません。Graph全体の保存入力検証、source hashの再確認、trust・transaction・Query budgetは索引保存とQueryの責務です。

@@ -18,7 +18,9 @@ public sealed class McpTests
         Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
         Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal("agent", tool.InputSchema.GetProperty("properties").GetProperty("format").GetProperty("default").GetString());
-        Assert.Equal("unique", tool.InputSchema.GetProperty("properties").GetProperty("scopePolicy").GetProperty("default").GetString());
+        var scopePolicy = tool.InputSchema.GetProperty("properties").GetProperty("scopePolicy");
+        Assert.False(scopePolicy.TryGetProperty("default", out _));
+        Assert.Equal(new[] { "discover", "unique", "prefer-debug" }, scopePolicy.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal("boolean", tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("type").GetString());
         Assert.False(tool.InputSchema.GetProperty("properties").GetProperty("ownerStatus").GetProperty("default").GetBoolean());
         Assert.Throws<ArgumentException>(() => McpHostOptions.Parse(["--root", root, "--allow-mutations"]));
@@ -34,6 +36,32 @@ public sealed class McpTests
         }));
         Assert.False(Directory.Exists(root));
         Assert.Equal(3, new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true)).ListTools().Count);
+    }
+
+    [Fact]
+    public async Task NestedQueryGetsActionableRecoveryWithoutOpeningTheWorkspaceOrEchoingInput()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
+        var adapter = new McpQueryAdapter(new(root));
+        var tool = Assert.Single(adapter.ListTools());
+        var properties = tool.InputSchema.GetProperty("properties");
+        Assert.Equal("string", properties.GetProperty("query").GetProperty("type").GetString());
+        Assert.Equal(1000, properties.GetProperty("maxMilliseconds").GetProperty("default").GetInt32());
+        Assert.Contains("flat arguments", tool.Description, StringComparison.Ordinal);
+        var example = tool.InputSchema.GetProperty("examples")[0];
+        Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
+        Assert.Equal(8000, example.GetProperty("maxMilliseconds").GetInt32());
+
+        const string failed = """{"query":{"query":"GrainFactory GetGrain GrainReferenceActivator","maxMilliseconds":8000}}""";
+        var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+        {
+            Name = "explore", Arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(failed)!
+        }));
+        Assert.StartsWith("MCP_ARGUMENT_INVALID:", error.Message, StringComparison.Ordinal);
+        Assert.Contains("query must be a string", error.Message, StringComparison.Ordinal);
+        Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("GrainFactory", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(root));
     }
 
     [Fact]
@@ -87,6 +115,9 @@ public sealed class McpTests
             "{\"query\":\"Service\",\"scopePolicy\":\"PreferDebug\"}",
             "{\"query\":\"Service\",\"scopePolicy\":true}",
             "{\"query\":\"Service\",\"scopePolicy\":null}",
+            JsonSerializer.Serialize(new { query = "Service hocc_" + new string('a', 64), scopePolicy = "discover" }),
+            JsonSerializer.Serialize(new { query = "Service", pathTo = "hocc_" + new string('a', 64), scopePolicy = "discover" }),
+            "{\"query\":\"items/{id}\",\"queryKind\":\"http-get-literal\",\"scopePolicy\":\"discover\"}",
             "{\"query\":\"Service\",\"ownerStatus\":null}",
             "{\"query\":\"Service\",\"ownerStatus\":\"true\"}",
             "{\"query\":\"Service\",\"ownerStatus\":1}",

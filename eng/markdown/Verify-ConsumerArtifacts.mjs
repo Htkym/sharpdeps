@@ -5,13 +5,13 @@ import { fileURLToPath } from 'node:url';
 
 // Read-only artifact gate; no restore, copy, packing, publishing or executing source.
 const args = process.argv.slice(2);
-if (args.length !== 3)
+if (args.length !== 3 && args.length !== 4)
   throw new Error(
-    'Usage: node eng/markdown/Verify-ConsumerArtifacts.mjs <pair-manifest.json> <feed> <project.assets.json>'
+    'Usage: node eng/markdown/Verify-ConsumerArtifacts.mjs <pair-manifest.json> <feed> <project.assets.json> [pin.json]'
   );
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
-const pin = read(path.join(root, 'docs/contracts/markdown-runtime-pin.json'));
+const pin = read(args[3] ?? path.join(root, 'docs/contracts/markdown-runtime-pin.json'));
 const pair = read(args[0]);
 const hash = (b) => createHash('sha256').update(b).digest('hex');
 for (const key of [
@@ -85,6 +85,36 @@ for (const folder of Object.keys(assets.packageFolders)) {
   break;
 }
 if (!restored) throw new Error('Restored runtime package bytes unavailable');
+if (pin.developmentOnly === true) {
+  const sourceId = pin.artifacts.source.packageId;
+  const sourceKey = sourceId + '/' + pin.componentVersion;
+  if (
+    !assets.libraries[sourceKey] ||
+    Object.keys(assets.libraries).filter((k) => k.startsWith(sourceId + '/')).length !== 1
+  )
+    throw new Error('Restored source exact version missing or ambiguous');
+  const sourcePath = assets.libraries[sourceKey].path;
+  if (sourcePath !== 'syntamark.source/' + pin.componentVersion)
+    throw new Error('Unexpected restored source package path');
+  let verified = false;
+  for (const folder of Object.keys(assets.packageFolders)) {
+    const file = path.join(
+      folder,
+      sourcePath,
+      'syntamark.source.' + pin.componentVersion + '.nupkg'
+    );
+    if (!fs.existsSync(file)) continue;
+    const bytes = fs.readFileSync(file);
+    if (
+      bytes.length !== pin.artifacts.source.byteLength ||
+      hash(bytes) !== pin.artifacts.source.sha256
+    )
+      throw new Error('Restored source package hash mismatch');
+    verified = true;
+    break;
+  }
+  if (!verified) throw new Error('Restored source package bytes unavailable');
+}
 process.stdout.write(
   JSON.stringify({
     task: 'SD2-03',

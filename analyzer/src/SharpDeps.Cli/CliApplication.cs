@@ -1,10 +1,13 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Reflection;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using SharpDeps.Index;
 using SharpDeps.Query;
 
@@ -13,17 +16,19 @@ public static class CliApplication
     public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, CancellationToken token = default)
     {
         CliArguments? options = null;
+        PhaseMetrics.Run? metrics = null;
         try
         {
             options = CliArguments.Parse(args);
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
                 return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall" },
-                    root = "--root absolute-directory",
+                    root = "--root absolute-directory; optional only for explore, which uses the absolute current directory without ancestor search",
                     index = "--target root-contained.slnx|.sln|.csproj --trusted [--timeout-seconds 0 for exclusive execution without a deadline]",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh; --max-milliseconds 0 disables the computation deadline",
-                    explore = "--term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --scope-policy unique|prefer-debug --path-to occurrence-id --owner-status]; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
+                    explore = "names-or-file-paths | --term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --scope-policy discover|unique|prefer-debug --path-to occurrence-id --owner-status]; ordinary names/paths default to discover unless project or variant is explicit; exact saved IDs, path-to and http-get-literal default to unique and reject discover; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions",
+                    explorePreparation = "--prepare-max-milliseconds 10..30000 (explore CLI only; finite, no 0): opt in to a separate saved-index reader preparation deadline, then start --max-milliseconds for exploration; absent keeps the shared computation deadline (default 1000ms). Full snapshot validation and caller cancellation remain required.",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
@@ -46,8 +51,9 @@ public static class CliApplication
             var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
             if (exploration is not null)
             {
-                var result = await ExploreAsync(options.Require("root"), options.Get("index") ?? ".sharpdeps/index.sqlite",
-                    options.Has("trusted"), exploration, options.RequestId, token);
+                var result = await ExploreWithMetricsCoreAsync(options.Get("root") ?? Path.GetFullPath(Environment.CurrentDirectory), options.Get("index") ?? ".sharpdeps/index.sqlite",
+                    options.Has("trusted"), exploration, options.Get("metrics-directory"), options.RequestId, token, reusePreparation: false,
+                    preparationMilliseconds: options.ExplorePreparationMilliseconds());
                 await stdout.WriteLineAsync(result.Text);
                 return result.ExitCode;
             }
@@ -60,32 +66,53 @@ public static class CliApplication
                 return await IndexAsync(options, root, indexPath, stdout, stderr, token);
             if (options.Command == "serve") return await ServeAsync(options, root, indexPath, stdout, stderr, token);
             if (options.Command == "coordinator-status") return await CoordinatorStatusAsync(options, root, indexPath, stdout, token);
+            metrics = PhaseMetrics.TryStart(options.Get("metrics-directory"), "query", root);
             var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(indexPath)) throw new CliFailure("INDEX_MISSING", 3);
             var queryToken = token;
             queryToken.ThrowIfCancellationRequested();
             using var reader = IndexReader.Open(indexPath, state.WorkspaceUuid, queryToken);
-            var pinned = new PinnedQueryIndex(reader, queryToken);
+            var pinned = new PinnedQueryIndex(reader, queryToken, root);
             var sourceWorkspace = options.Has("trusted") ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, indexPath, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             var service = new QueryService(pinned, sourceWorkspace, options.Has("trusted"), Convert.FromBase64String(state.CursorKey));
             var reply = service.Execute(request!, token);
+            if (reply.Succeeded)
+                metrics?.Complete();
+            else
+                metrics?.Fail(reply.Envelope.Errors.Any(error => error.Code == "CANCELLED"));
             await stdout.WriteLineAsync(reply.Json);
             return reply.Succeeded ? 0 : ExitFor(reply.Envelope.Errors[0].Code);
         }
         catch (Exception error)
         {
             var failure = Failure(error);
+            metrics?.Fail(failure.Code == "CANCELLED");
             return await Error(stdout, options, failure.Code, failure.ExitCode);
+        }
+        finally
+        {
+            metrics?.Dispose();
         }
     }
 
     /// <summary>Executes saved exploration with a fresh reader and returns text without the CLI transport newline.</summary>
     public static Task<(string Text, int ExitCode)> ExploreAsync(string root, string index, bool trusted,
         ExploreRequest request, string requestId = "cli", CancellationToken token = default)
+        => ExploreWithMetricsAsync(root, index, trusted, request, null, requestId, token);
+
+    internal static Task<(string Text, int ExitCode)> ExploreWithMetricsAsync(string root, string index, bool trusted,
+        ExploreRequest request, string? metricsDirectory, string requestId = "cli", CancellationToken token = default)
+        => ExploreWithMetricsCoreAsync(root, index, trusted, request, metricsDirectory, requestId, token, reusePreparation: true, preparationMilliseconds: null);
+
+    private static Task<(string Text, int ExitCode)> ExploreWithMetricsCoreAsync(string root, string index, bool trusted,
+        ExploreRequest request, string? metricsDirectory, string requestId, CancellationToken token, bool reusePreparation,
+        int? preparationMilliseconds)
     {
+        PhaseMetrics.Run? metrics = null;
         CancellationTokenSource? deadline = null;
         var hostParsed = false;
+        var queryStage = "saved-index preparation";
         try
         {
             CliArguments.ValidateValue(root);
@@ -98,16 +125,32 @@ public static class CliApplication
             var budget = request.Budget!;
             var clock = Stopwatch.StartNew();
             deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            if (budget.MaxMilliseconds != 0) deadline.CancelAfter(budget.MaxMilliseconds);
+            var initialMilliseconds = preparationMilliseconds ?? budget.MaxMilliseconds;
+            if (initialMilliseconds != 0) deadline.CancelAfter(initialMilliseconds);
             root = CliPaths.Root(root);
+            metrics = PhaseMetrics.TryStart(metricsDirectory, "explore", root);
             index = CliPaths.InRoot(root, index);
             foreach (var sidecar in new[] { index + "-wal", index + "-shm", index + ".writer.lock" }) CliPaths.RejectLinks(sidecar);
-            var state = CliWorkspaceState.Open(root, create: false);
             if (!File.Exists(index)) throw new CliFailure("INDEX_MISSING", 3);
+            var state = CliWorkspaceState.Open(root, create: false);
             var queryToken = deadline.Token;
             queryToken.ThrowIfCancellationRequested();
             using var reader = IndexReader.Open(index, state.WorkspaceUuid, queryToken);
-            var pinned = new PinnedQueryIndex(reader, queryToken);
+            // A one-shot CLI cannot reuse a cross-reader cache after process exit.
+            var pinned = reusePreparation ? new PinnedQueryIndex(reader, queryToken, root)
+                : new PinnedQueryIndex(reader, queryToken);
+            if (preparationMilliseconds is { } preparationBudget)
+            {
+                token.ThrowIfCancellationRequested();
+                queryToken.ThrowIfCancellationRequested();
+                if (clock.ElapsedMilliseconds >= preparationBudget) throw new CliFailure("PREPARATION_TIMEOUT", 4);
+                deadline.Dispose();
+                deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                if (budget.MaxMilliseconds != 0) deadline.CancelAfter(budget.MaxMilliseconds);
+                queryToken = deadline.Token;
+                queryStage = "exploration preparation or execution";
+                clock.Restart();
+            }
             var sourceWorkspace = trusted ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, index, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
             if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
@@ -116,18 +159,40 @@ public static class CliApplication
                 OwnerStatusProvider = request.ObserveOwner
                     ? ownerToken => ObserveQueryOwner(root, index, state.WorkspaceUuid, ownerToken) : null
             };
+            queryStage = "exploration preparation or execution";
             var explored = service.Execute(request, token, queryToken);
             token.ThrowIfCancellationRequested();
             if (budget.MaxMilliseconds != 0 && clock.ElapsedMilliseconds >= budget.MaxMilliseconds) throw new CliFailure("QUERY_TIMEOUT", 4);
             var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
+            if (exit == 0)
+                metrics?.Complete();
+            else
+                metrics?.Fail(explored.Errors.Any(error => error.Code == "CANCELLED"));
             return Task.FromResult((explored.Text, exit));
         }
         catch (Exception error)
         {
             var failure = Failure(error, deadline?.IsCancellationRequested == true && !token.IsCancellationRequested);
-            return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code), failure.ExitCode));
+            if (preparationMilliseconds is not null && queryStage == "saved-index preparation" && failure.Code == "QUERY_TIMEOUT")
+                failure = ("PREPARATION_TIMEOUT", 4);
+            metrics?.Fail(failure.Code == "CANCELLED");
+            var recovery = failure.Code switch
+            {
+                "PREPARATION_TIMEOUT" => $"The configured {preparationMilliseconds} ms preparation deadline expired during saved-index preparation. No source evidence was returned. Full snapshot integrity validation is still required; select an appropriate finite --prepare-max-milliseconds value (10-30000).",
+                "QUERY_TIMEOUT" => $"The configured {request.Budget!.MaxMilliseconds} ms computation deadline expired during {queryStage}. No source evidence was returned. "
+                    + (preparationMilliseconds is null
+                        ? "Opening and validating the saved index counts against this deadline. The explore CLI can opt in to a separate finite preparation deadline with --prepare-max-milliseconds (10-30000); the exploration budget then starts after reader preparation."
+                        : "The completed reader preparation used a separate deadline; --prepare-max-milliseconds does not extend the exploration budget."),
+                "INDEX_MISSING" or "WORKSPACE_STATE_MISSING" => $"No usable saved index at '{index}' for selected root '{root}'. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command.",
+                _ => null
+            };
+            return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode));
         }
-        finally { deadline?.Dispose(); }
+        finally
+        {
+            deadline?.Dispose();
+            metrics?.Dispose();
+        }
     }
 
     private static (string Code, int ExitCode) Failure(Exception error, bool timedOut = false) => error switch
@@ -138,6 +203,7 @@ public static class CliApplication
         OperationCanceledException when timedOut => ("QUERY_TIMEOUT", 4),
         OperationCanceledException => ("CANCELLED", 130),
         ArgumentException => ("ARGUMENT_INVALID", 2),
+        SqliteException { SqliteErrorCode: SQLitePCL.raw.SQLITE_CANTOPEN } => ("INDEX_OPEN_FAILED", 5),
         IOException or UnauthorizedAccessException => ("ROOT_ACCESS_DENIED", 5),
         _ => ("INTERNAL_ERROR", 7)
     };
@@ -238,13 +304,16 @@ public static class CliApplication
         TextWriter stdout, TextWriter stderr, CancellationToken token)
     {
         var selection = update.Options;
+        using var metrics = PhaseMetrics.TryStart(selection.MetricsDirectory, "index.exclusive", selection.Root);
         using var writer = IndexWriter.Open(selection.Root, selection.IndexPath, selection.WorkspaceUuid, isTrusted: true);
         if (!options.Has("quiet")) await stderr.WriteLineAsync("sharpdeps: exclusive extraction started (no deadline; no automatic restore)");
-        var built = await new CoordinatorExecutor(writer).BuildExclusiveAsync(update, token);
+        using var executor = new CoordinatorExecutor(writer);
+        var built = await executor.BuildExclusiveAsync(update, token);
         token.ThrowIfCancellationRequested();
         var stage = IndexStage.Create(built.Snapshot);
         token.ThrowIfCancellationRequested();
         writer.Commit(stage, token, built.VerifySelection);
+        metrics?.Complete();
         var snapshot = built.Snapshot;
         var mode = snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.semanticGraphReused" && d.Count == 1) == true
             ? "markdown-incremental" : snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.projectCollectorsReused" && d.Count > 0) == true
@@ -306,11 +375,11 @@ public static class CliApplication
     internal static int ExitFor(string code) => code switch
     {
         "CANCELLED" => 130,
-        "WORKSPACE_UNTRUSTED" or "INDEX_UNTRUSTED" or "ROOT_ACCESS_DENIED" or "INVALID_SOURCE_ENCODING" => 5,
+        "WORKSPACE_UNTRUSTED" or "INDEX_UNTRUSTED" or "ROOT_ACCESS_DENIED" or "INDEX_OPEN_FAILED" or "INVALID_SOURCE_ENCODING" => 5,
         "UPDATE_REQUIRED" or "FRESHNESS_UNVERIFIED" or "FRESHNESS_REQUIREMENT_NOT_MET" or "SOURCE_CHANGED_SINCE_SNAPSHOT"
             or "INDEX_NO_SNAPSHOT" or "INDEX_NOT_FOUND" => 3,
         "SYMBOL_NOT_FOUND" or "HTTP_GET_DECLARATION_NOT_FOUND" => 2,
-        "QUERY_TIMEOUT" or "INCOMPLETE_RESULT" or "OUTPUT_BUDGET_TOO_SMALL" => 4,
+        "QUERY_TIMEOUT" or "PREPARATION_TIMEOUT" or "INCOMPLETE_RESULT" or "OUTPUT_BUDGET_TOO_SMALL" => 4,
         "COORDINATOR_SUPERSEDED" => 3,
         _ when code.StartsWith("COORDINATOR_", StringComparison.Ordinal) => 6,
         _ when code.Contains("CURSOR", StringComparison.Ordinal) || code.StartsWith("INDEX_", StringComparison.Ordinal) => 6,
@@ -329,11 +398,14 @@ public static class CliApplication
         return exitCode;
     }
 
-    private static string ErrorText(string command, string requestId, string code)
+    private static string ErrorText(string command, string requestId, string code, string? recovery = null)
     {
-        var message = code == "CLI_MARKDOWN_FACTS_INCOMPLETE"
-            ? "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying."
-            : "See CLI contract for the recovery action.";
+        var message = recovery ?? (code switch
+        {
+            "INDEX_OPEN_FAILED" => "SQLite could not open the saved index or a required file. Check for missing or invalid index/WAL/SHM and runtime temporary paths within existing permissions. Only when paths are valid and evidence indicates a sandbox restriction, request the client's normal scoped permission review for an authorized operation within retry limits. Otherwise report the path/access blocker or use permitted source search. No source evidence was returned.",
+            "CLI_MARKDOWN_FACTS_INCOMPLETE" => "Markdown facts contain invalid, truncated, or unsupported source structure; no new generation was published. Review the Markdown input and parser limits before retrying.",
+            _ => "See CLI contract for the recovery action."
+        });
         return JsonSerializer.Serialize(new { apiVersion = "1", command,
             requestId, errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options);
     }

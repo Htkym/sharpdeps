@@ -1,10 +1,10 @@
 # 保存済みソースからの復帰
 
-現行の保存Query providerから元コードを開き、同じ保存世代の表示へ戻る契約である。providerの読取り境界は[保存Query契約](saved-query-provider-v1.ja.md)、利用手順は[操作ガイド](../guide.ja.md)を参照する。以下の個別受入項目は、導入時の検証範囲と現在の実装契約を区別して読む。
+現行の保存Query providerから元コードを開き、同じ保存世代の表示へ戻る契約である。providerの読取り境界は[保存Query契約](saved-query-provider-v1.ja.md)、利用手順は[操作ガイド](../guide.ja.md)を参照する。読取りと画面復帰の条件を以下に示す。
 
 同じlive analysisの宣言・根拠からeditorを開く直前に、既存の小さいview stateを即時送信する。300msの永続化待ちには依存せず、panel内のsanitize済み状態を切り離して保持する。sourceの入力は引き続きopaque entity/evidence IDであり、表示path、source本文、任意DOM selectorを受け取らない。returnUiは固定したsource-button role/opaque ID、navigation tab、boundedなscroll値と検索の返却件数だけを持つ。
 
-editorのopenは直列に進め、待機中は最新1件へまとめる。新要求で古いticketを失効し、既存openSavedLocationのcurrent条件へticketを合成する。古い要求はawait後に選択を設定せず、新しいopenがその後に進むため、先に開始したshowTextDocumentが新しいopenの後に完了してeditorを上書きする順序を避ける。既に開始したOS/UI操作を巻き戻す保証ではない。trust、root、raw hash、strict UTF-8、dirty、元UTF-16 spanの検査は従来どおりである。
+editorのopenは直列に進め、待機中は最新1件へまとめる。新要求で古いticketを失効し、既存openSavedLocationのcurrent条件へticketを合成する。古い要求はawait後に選択を設定せず、新しいopenがその後に進むため、先に開始したshowTextDocumentが新しいopenの後に完了してeditorを上書きする順序を避ける。既に開始したOS/UI操作を巻き戻す保証ではない。sourceはraw hashを照合してから、BOMなし／BOM付きUTF-8、またはBOM付きUTF-16 LE/BEとして厳密に復号する。不正な符号列とNULを拒否する。復号したtextでは実際のBOMをU+FEFFとして残し、元のUTF-16 spanの座標を維持する。editorとの座標差は先頭BOMの除去による1文字分だけを補正する。trust、root、dirty、元UTF-16 spanの検査は従来どおりであり、CRLFやサロゲートペアを分割する位置も拒否する。
 
 成功した最新要求だけを一度復帰へ使う。復帰はanalysis/request IDへ結び付け、後のopen開始後に到着した旧応答を使わない。この小さいoperation tokenだけはwebview local stateに保持し、hostのview stateでは無視する。別analysisへは適用しない。最新要求の失敗、analysis交換、dispose、画面での新しい明示操作は旧復帰を失効させる。新webviewのreadyがopen完了より先の場合も、同じvisible panelで完了後に処理する。openEvidenceは前に選んだrelationへ戻し、evidence IDをentityとして扱わない。contextを送らない旧webviewは宣言のroot/type再選択を続ける。
 
@@ -14,6 +14,6 @@ sourceReturnはanalysisCompleteの後にscope/granularity/選択/search/filter/h
 
 Candidateの表示とsource位置の有無は別であり、この復帰は位置のない候補へ任意occurrenceを選んだり、certaintyをResolvedへ変えたりしない。全原6課題、installed exact CI VSIX、restore、Trust revoke、旧操作回数baselineの受入れは個別の証拠に従う。
 
-期待するoperation tokenがないsourceReturnは適用しない。明示操作で失効するとき、および成功応答を一度消費するときには、tokenを消してlocal stateを即時更新する。frame再生成後も失効済みの応答を再生しない。検索の空文字は、検索専用の長さ検査を通して履歴と現在の検索値にそのまま保持する。IDやtarget nameに使う空文字拒否は維持する。
+期待するoperation tokenがないsourceReturnは適用しない。明示操作で失効するとき、および成功応答を一度消費するときには、tokenを消してlocal stateを即時更新する。frame再生成後も失効済みの応答を再生しない。検索の空文字は検索専用の長さ検査を通して履歴と現在の検索値にそのまま保持する。IDやtarget nameに使う空文字拒否は維持する。
 
 復帰の再読込待ちにもanalysis IDとworkspace/snapshot/generation/variantのpinを保持する。analysisの開始・完了時、または現在pinが変わった時には待機UIを破棄する。元検索件数による自動ページ読込と、遅延したfocus/scrollの適用は同じpinに限る。

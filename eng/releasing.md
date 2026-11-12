@@ -30,8 +30,8 @@ the same verified tool packages preserved by the release job.
 The extension includes its own Quick, Semantic, and saved-index Query hosts.
 Updating a NuGet tool does not update those bundled hosts. The 0.4.0 reader accepts
 SQLite index schemas 1/2/3; the 0.2.1 extension accepts schema 1 only. Syntamark 1.2.0 is
-pinned in the CLI/MCP tools, not in the VSIX. Review the [upgrade instructions](mcp.md#upgrade-from-030)
-and [extension setup](guide.md#read-a-saved-index) with the release notes.
+pinned in the CLI/MCP tools, not in the VSIX. Review the [upgrade instructions](../docs/mcp.md#upgrade-from-030)
+and [extension setup](../docs/guide.md#read-a-saved-index) with the release notes.
 
 ## Prepare and verify a candidate
 

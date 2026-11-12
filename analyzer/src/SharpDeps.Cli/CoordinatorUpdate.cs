@@ -3,6 +3,7 @@ namespace SharpDeps.Cli;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using SharpDeps.Analysis.Markdown;
 using SharpDeps.Analysis.Roslyn;
 using SharpDeps.Index;
 
@@ -26,12 +27,12 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
         if (timeout == 0 && arguments.Command == "serve") throw new CliFailure("ARGUMENT_UNSUPPORTED", 2);
         return new(new(root, target, indexPath, uuid, arguments.Get("configuration") ?? "Debug", arguments.Get("platform"),
             projects, arguments.Get("tfm"), timeout,
-            AllowSemanticReuse: arguments.Command == "update"), arguments.Command == "index");
+            AllowSemanticReuse: arguments.Command == "update") { MetricsDirectory = arguments.Get("metrics-directory") }, arguments.Command == "index");
     }
 
     // Client timeout/request ID/quiet do not affect the requested extraction. The owner imposes its own deadline.
     internal string Key => System.Text.Json.JsonSerializer.Serialize(new { Target = KeyPath(Options.Target), Options.Configuration,
-        Options.Platform, Projects = Options.ProjectPaths?.Select(KeyPath).Order(StringComparer.Ordinal).ToArray(), Options.TargetFramework, Full });
+        Options.Platform, Projects = Options.ProjectPaths?.Select(KeyPath).Order(StringComparer.Ordinal).ToArray(), Options.TargetFramework, Full, Options.MetricsDirectory });
 
     private static string KeyPath(string path) => OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
 
@@ -42,13 +43,28 @@ internal sealed record CoordinatorUpdate(CliIndexOptions Options, bool Full)
         if (Options.Platform is { } platform) args.AddRange(["--platform", platform]);
         foreach (var project in Options.ProjectPaths ?? []) args.AddRange(["--project", project]);
         if (Options.TargetFramework is { } framework) args.AddRange(["--tfm", framework]);
+        if (Options.MetricsDirectory is { } metrics)
+            args.AddRange(["--metrics-directory", metrics]);
         return args.ToArray();
     }
 }
 
-internal sealed class CoordinatorExecutor(IndexWriter writer)
+internal sealed class CoordinatorExecutor(IndexWriter writer) : IDisposable
 {
     private CliSdkSelection? selection;
+    private readonly MarkdownPreparedCache preparedCache = new();
+    private readonly CliSemanticSession semanticSession = new();
+    public void Dispose()
+    {
+        try
+        {
+            semanticSession.Dispose();
+        }
+        finally
+        {
+            preparedCache.Clear();
+        }
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal Task<CliIndexBuild> BuildAsync(CoordinatorUpdate update, CancellationToken token)
@@ -84,13 +100,43 @@ internal sealed class CoordinatorExecutor(IndexWriter writer)
             previous = reader.Snapshot(token);
         }
         catch (IndexStoreException error) when (error.Code == "INDEX_NO_SNAPSHOT" && full) { }
-        var build = await CliIndexer.BuildForPublicationAsync(options, previous, token);
-        var directory = Path.GetDirectoryName(options.Target)!;
-        return build with
+        var candidate = preparedCache.BeginUpdate();
+        try
         {
-            VerifySelection = PublicationGuard(current, directory, build.VerifySelection),
-            VerifyQueryInputs = build.VerifyQueryInputs is not { } verify ? null : QueryGuard(current, directory, verify)
-        };
+            using var semantic = semanticSession.BeginUpdate(full);
+            if (full)
+                options = options with { AllowSemanticReuse = false };
+            var build = await CliIndexer.BuildForPublicationAsync(options, previous, token, null, null, null, candidate, semantic);
+            var directory = Path.GetDirectoryName(options.Target)!;
+            var prepared = build with
+            {
+                VerifySelection = PublicationGuard(current, directory, build.VerifySelection),
+                AdoptCommittedState = () =>
+                {
+                    semantic.Adopt(build.Snapshot.Graph.Generation);
+                    candidate.Adopt();
+                },
+                DiscardPreparedState = () =>
+                {
+                    try
+                    {
+                        semantic.Discard();
+                    }
+                    finally
+                    {
+                        candidate.Dispose();
+                    }
+                },
+                VerifyQueryInputs = build.VerifyQueryInputs is not { } verify ? null : QueryGuard(current, directory, verify)
+            };
+            semantic.Detach();
+            return prepared;
+        }
+        catch
+        {
+            candidate.Dispose();
+            throw;
+        }
     }
 
     private static Func<CancellationToken, SharpDeps.Query.QueryInputInventory> QueryGuard(CliSdkSelection current,

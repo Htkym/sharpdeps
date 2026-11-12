@@ -1,5 +1,7 @@
 namespace SharpDeps.Cli;
 
+using SharpDeps.Analysis.Core.Diagnostics;
+
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections;
@@ -11,7 +13,7 @@ using System.Xml;
 using System.Xml.Linq;
 using SharpDeps.Index;
 
-internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHash, string DependencyHash, string? PackageRoot = null);
+internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHash, string DependencyHash, string? PackageRoot = null, string? PackageRootSet = null);
 
 /// <summary>
 /// Trusted update input proof only. This helper never registers MSBuild, loads Roslyn, runs a process,
@@ -19,7 +21,7 @@ internal sealed record CliReuseFingerprint(string SdkPath, string EnvironmentHas
 /// </summary>
 internal static partial class CliReuseProof
 {
-    internal const string OwnerVersion = "sharpdeps-cli-reuse/2";
+    internal const string OwnerVersion = "sharpdeps-cli-reuse/4";
     private const int MaximumEntries = 100_000;
     private const long MaximumBytes = 2L * 1024 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -60,6 +62,7 @@ internal static partial class CliReuseProof
     /// <summary>SdkPath may come from a saved proof; it is constrained to the current host's dotnet SDK tree before reading.</summary>
     internal static CliReuseFingerprint? Capture(string root, string? sdkPath, CancellationToken token = default)
     {
+        using var metrics = PhaseMetrics.Measure("reuse.proof-capture");
         token.ThrowIfCancellationRequested();
         try
         {
@@ -68,42 +71,50 @@ internal static partial class CliReuseProof
             var framework = Directory.GetParent(runtime);
             var shared = framework?.Parent;
             var dotnet = shared?.Parent;
-            if (dotnet is null || shared!.Name != "shared" || framework!.Name != "Microsoft.NETCore.App") return null;
+            if (dotnet is null || shared!.Name != "shared" || framework!.Name != "Microsoft.NETCore.App")
+                return NoProof("unsupported-runtime");
             var dotnetRoot = CliPaths.Root(dotnet.FullName);
-            if (string.IsNullOrWhiteSpace(sdkPath) || !Path.IsPathFullyQualified(sdkPath)) return null;
+            if (string.IsNullOrWhiteSpace(sdkPath) || !Path.IsPathFullyQualified(sdkPath))
+                return NoProof("unsupported-sdk-path");
             var sdk = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sdkPath));
             var sdkParent = Path.Combine(dotnetRoot, "sdk");
             // Check containment before following a saved path or examining its ancestors.
             if (!PathComparer.Equals(Path.GetDirectoryName(sdk), sdkParent)
-                || !Path.GetFileName(sdk).StartsWith("10.", StringComparison.Ordinal)) return null;
+                || !Path.GetFileName(sdk).StartsWith("10.", StringComparison.Ordinal))
+                return NoProof("unsupported-sdk");
             _ = CliPaths.InRoot(dotnetRoot, sdk);
-            if (!Directory.Exists(sdk) || !File.Exists(Path.Combine(sdk, "MSBuild.dll"))) return null;
+            if (!Directory.Exists(sdk) || !File.Exists(Path.Combine(sdk, "MSBuild.dll")))
+                return NoProof("sdk-unavailable");
             CliPaths.RejectLinks(Path.Combine(sdk, "MSBuild.dll"));
 
             var budget = new ProofBudget(token);
             var environment = NormalizeEnvironment(Environment.GetEnvironmentVariables(), sdk);
-            if (environment is null || HasUserHooks() || HasAncestorConfiguration(root)) return null;
+            if (environment is null || HasUserHooks() || HasAncestorConfiguration(root))
+                return NoProof("environment-hooks-or-ancestor-configuration");
             var git = CaptureGit(root, sdk, budget);
             if (git is null || !PlainProjects(root, sdk, budget, git.Value.Present, out var localGitScope, out var package)
-                || (git.Value.Present && !localGitScope && !ExternalGitConfigurationAbsent())) return null;
+                || (git.Value.Present && !localGitScope && !ExternalGitConfigurationAbsent()))
+                return NoProof("project-git-or-package-closure");
             var environmentHash = HashEnvironment(environment, token);
             using var dependencies = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             Append(dependencies, OwnerVersion);
             Append(dependencies, dotnetRoot);
             Append(dependencies, sdk);
             Append(dependencies, git.Value.Hash);
-            if (package is not null) Append(dependencies, package.Value.Hash);
-            AddTree(sdk, "sdk", dependencies, budget);
+            if (package is not null)
+                Append(dependencies, package.Hash);
+            AddTree(sdk, "sdk", dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             if (Environment.GetEnvironmentVariable("MSBuildEnableWorkloadResolver") == "false")
-                AddTree(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"), "dotnet/packs/Microsoft.NETCore.App.Ref", dependencies, budget);
-            else AddTree(Path.Combine(dotnetRoot, "packs"), "dotnet/packs", dependencies, budget);
+                AddTree(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"), "dotnet/packs/Microsoft.NETCore.App.Ref", dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
+            else
+                AddTree(Path.Combine(dotnetRoot, "packs"), "dotnet/packs", dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             foreach (var name in new[] { "shared", "host", "sdk-manifests", "metadata" })
-                AddTree(Path.Combine(dotnetRoot, name), "dotnet/" + name, dependencies, budget);
+                AddTree(Path.Combine(dotnetRoot, name), "dotnet/" + name, dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             foreach (var entry in Entries(dotnetRoot, budget))
             {
                 var attributes = Attributes(entry);
                 if ((attributes & FileAttributes.Directory) == 0)
-                    AddFile(entry, "dotnet/" + Path.GetFileName(entry), dependencies, budget);
+                    AddFile(entry, "dotnet/" + Path.GetFileName(entry), dependencies, budget, PhaseMetrics.ReadCategory.Sdk);
             }
             Append(dependencies, "sdk-directory-inventory");
             foreach (var entry in Entries(sdkParent, budget))
@@ -114,31 +125,58 @@ internal static partial class CliReuseProof
             }
             var payload = CliPaths.Root(Path.GetFullPath(AppContext.BaseDirectory));
             Append(dependencies, payload);
-            AddTree(payload, "tool", dependencies, budget);
+            AddTree(payload, "tool", dependencies, budget, PhaseMetrics.ReadCategory.Tool);
             token.ThrowIfCancellationRequested();
-            return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant(), package?.Root);
+            PhaseMetrics.Decision("reuse.proof-capture", "captured");
+            return new(sdk, environmentHash, Convert.ToHexString(dependencies.GetHashAndReset()).ToLowerInvariant(), package?.Root, package?.RootSet);
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception) { token.ThrowIfCancellationRequested(); return null; }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            token.ThrowIfCancellationRequested();
+            return NoProof("unavailable-or-invalid-input");
+        }
+    }
+
+    private static CliReuseFingerprint? NoProof(string reason)
+    {
+        PhaseMetrics.Decision("reuse.proof-capture", reason);
+        return null;
     }
 
     internal static bool Matches(IndexReuseProof proof, CliReuseFingerprint? current,
         string optionsHash, string inputHash)
-        => current is not null && proof.OwnerVersion == OwnerVersion
+    {
+        using var metrics = PhaseMetrics.Measure("reuse.proof-match");
+        var matched = current is not null && proof.OwnerVersion == OwnerVersion
             && proof.OptionsHash == optionsHash && proof.InputHash == inputHash
             && proof.EnvironmentHash == current.EnvironmentHash && proof.DependencyHash == current.DependencyHash
             && PathComparer.Equals(proof.SdkPath, current.SdkPath);
+        if (PhaseMetrics.Enabled)
+            PhaseMetrics.Decision("reuse.proof-match", matched ? "matched" : current is null ? "no-current-proof"
+                : proof.OwnerVersion != OwnerVersion ? "owner-version" : proof.OptionsHash != optionsHash ? "selection-changed"
+                : proof.InputHash != inputHash ? "input-changed" : proof.EnvironmentHash != current.EnvironmentHash ? "environment-changed"
+                : proof.DependencyHash != current.DependencyHash ? "dependency-changed" : "sdk-changed");
+        return matched;
+    }
 
     private static bool PlainProjects(string root, string sdk, ProofBudget budget, bool git, out bool localGitScope,
-        out (string Root, string Hash)? package)
+        out PackageClosure? package)
     {
         localGitScope = true;
         package = null;
         var projectPaths = new List<string>();
+        var projectReferences = new Dictionary<string, string[]>(PathComparer);
+        var frameworkFreeProjects = new HashSet<string>(PathComparer);
         var packages = new List<PackageSpec>();
         var imports = new List<string>();
+        var importedProps = new HashSet<string>(StringComparer.Ordinal);
         var assets = new List<string>();
-        var directories = new Stack<string>(); directories.Push(root);
+        var directories = new Stack<string>();
+        directories.Push(root);
         var projects = 0;
         while (directories.TryPop(out var directory))
         {
@@ -148,45 +186,76 @@ internal static partial class CliReuseProof
                 if (Path.GetFileName(entry).Equals(".git", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!git || !CliPaths.SamePath(entry, Path.Combine(root, ".git"))
-                        || (attributes & FileAttributes.Directory) == 0) return false;
+                        || (attributes & FileAttributes.Directory) == 0)
+                        return false;
                     continue;
                 }
-                if (Path.GetFileName(entry).Equals(".gitmodules", StringComparison.OrdinalIgnoreCase)) return false;
+                if (Path.GetFileName(entry).Equals(".gitmodules", StringComparison.OrdinalIgnoreCase))
+                    return false;
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    if (!Path.GetFileName(entry).Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)) directories.Push(entry);
+                    if (!Path.GetFileName(entry).Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase))
+                        directories.Push(entry);
                     continue;
                 }
                 var name = Path.GetFileName(entry);
-                if (ImplicitConfiguration.Any(candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase))) return false;
+                if (name.Equals("Directory.Build.props", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PlainDirectoryBuildProps(entry, root, budget, importedProps))
+                        return false;
+                    continue;
+                }
+                if (ImplicitConfiguration.Any(candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)))
+                    return false;
                 if (Path.GetExtension(entry).Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
-                    || Path.GetExtension(entry).Equals(".vbproj", StringComparison.OrdinalIgnoreCase)) return false;
+                    || Path.GetExtension(entry).Equals(".vbproj", StringComparison.OrdinalIgnoreCase))
+                    return false;
                 if (Path.GetExtension(entry).Equals(".props", StringComparison.OrdinalIgnoreCase)
                     || Path.GetExtension(entry).Equals(".targets", StringComparison.OrdinalIgnoreCase))
                 {
                     imports.Add(entry);
                     continue;
                 }
-                if (name == "project.assets.json") assets.Add(entry);
-                if (!Path.GetExtension(entry).Equals(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!PlainProject(entry, root, budget, out var local, out var reference)) return false;
+                if (name == "project.assets.json")
+                    assets.Add(entry);
+                if (!Path.GetExtension(entry).Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!PlainProjectPackages(entry, root, budget, out var local, out var references, out var referencedProjects, out var frameworkFree))
+                    return false;
                 projectPaths.Add(entry);
-                if (reference is not null) packages.Add(reference);
+                projectReferences.Add(entry, referencedProjects.ToArray());
+                if (frameworkFree)
+                    frameworkFreeProjects.Add(Path.GetFullPath(entry));
+                packages.AddRange(references);
                 localGitScope &= local;
                 projects++;
             }
         }
-        if (projects == 0 || imports.Any(path => !PlainRestoreImport(path, budget))) return false;
-        if (packages.Count == 0) return assets.All(path => PlainAssets(path, root, sdk, budget));
-        return packages.Count == 1 && CapturePackage(root, sdk, packages[0], projectPaths, imports, assets, budget, out package);
+        if (projects == 0 || imports.Any(path => !importedProps.Contains(path) && !PlainRestoreImport(path, budget)))
+            return false;
+        if (packages.Count == 0)
+            return assets.All(path => PlainAssets(path, root, sdk, budget, projectPaths, frameworkFreeProjects));
+        if (packages.Count == 1)
+        {
+            if (!CapturePackage(root, sdk, packages[0], projectPaths, imports, assets, budget, out var single) || single is null)
+                return false;
+            package = new(single.Value.Root, single.Value.Hash);
+            return true;
+        }
+        return frameworkFreeProjects.Count == 0
+            && CapturePackageSet(root, sdk, packages, projectPaths, projectReferences, imports, assets, budget, out package);
     }
 
-    private static bool PlainProject(string path, string root, ProofBudget budget, out bool localGitScope, out PackageSpec? package)
+    private static bool PlainProjectPackages(string path, string root, ProofBudget budget, out bool localGitScope,
+        out List<PackageSpec> packages, out List<string> projectReferences, out bool frameworkFree)
     {
         localGitScope = false;
-        package = null;
+        packages = [];
+        projectReferences = [];
+        frameworkFree = false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var reader = XmlReader.Create(input, new XmlReaderSettings
         {
@@ -197,25 +266,41 @@ internal static partial class CliReuseProof
         var document = XDocument.Load(reader);
         var project = document.Root;
         if (project?.Name != "Project" || project.Attributes().Count() != 1
-            || (string?)project.Attribute("Sdk") != "Microsoft.NET.Sdk") return false;
+            || (string?)project.Attribute("Sdk") != "Microsoft.NET.Sdk")
+            return false;
+        frameworkFree = new[]
+        {
+            ("DisableImplicitFrameworkReferences", "true"), ("EnableNETAnalyzers", "false"),
+            ("GenerateAssemblyInfo", "false"), ("GenerateTargetFrameworkAttribute", "false")
+        }.All(setting =>
+        {
+            var values = project.Elements("PropertyGroup").Elements(setting.Item1).ToArray();
+            return values.Length == 1 && values[0].Value.Trim().Equals(setting.Item2, StringComparison.OrdinalIgnoreCase);
+        });
         var frameworks = 0;
         foreach (var child in project.Elements())
         {
-            if (child.HasAttributes) return false;
+            if (child.HasAttributes)
+                return false;
             if (child.Name == "PropertyGroup")
             {
                 foreach (var property in child.Elements())
                 {
-                    if (property.Name.Namespace != XNamespace.None || !PlainProperties.Contains(property.Name.LocalName)
-                        || property.HasAttributes || property.HasElements || !Static(property.Value)) return false;
+                    if (property.Name.Namespace != XNamespace.None
+                        || !(PlainProperties.Contains(property.Name.LocalName) || frameworkFree
+                            && (property.Name.LocalName is "DisableImplicitFrameworkReferences" or "GenerateTargetFrameworkAttribute"))
+                        || property.HasAttributes || property.HasElements || !Static(property.Value))
+                        return false;
                     if (property.Name.LocalName == "TargetFramework")
                     {
                         frameworks++;
-                        if (property.Value.Trim() != "net10.0") return false;
+                        if (property.Value.Trim() != "net10.0")
+                            return false;
                     }
                     if (property.Name.LocalName == "GitRepositoryConfigurationScope")
                     {
-                        if (localGitScope || !property.Value.Equals("local", StringComparison.OrdinalIgnoreCase)) return false;
+                        if (localGitScope || !property.Value.Equals("local", StringComparison.OrdinalIgnoreCase))
+                            return false;
                         localGitScope = true;
                     }
                 }
@@ -226,7 +311,11 @@ internal static partial class CliReuseProof
                 {
                     if (reference.Name == "PackageReference")
                     {
-                        if (package is not null || !PlainPackageReference(reference, path, out package)) return false;
+                        if (!PlainPackageReference(reference, path, out var package)
+                            || packages.Count >= MaximumPackageSetDirectReferences
+                            || packages.Any(existing => existing.Id.Equals(package!.Id, StringComparison.OrdinalIgnoreCase)))
+                            return false;
+                        packages.Add(package!);
                         continue;
                     }
                     var include = (string?)reference.Attribute("Include");
@@ -234,14 +323,19 @@ internal static partial class CliReuseProof
                         || reference.HasElements || !string.IsNullOrWhiteSpace(reference.Value)
                         || string.IsNullOrWhiteSpace(include) || !Static(include) || include.Contains(';')
                         || (!OperatingSystem.IsWindows() && include.Contains('\\'))
-                        || Path.IsPathRooted(include)) return false;
+                        || Path.IsPathRooted(include))
+                        return false;
                     var full = Path.GetFullPath(include, Path.GetDirectoryName(path)!);
                     full = CliPaths.InRoot(root, full);
-                    if (ExcludedProject(root, full)) return false;
-                    if (!full.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) return false;
+                    if (ExcludedProject(root, full))
+                        return false;
+                    if (!full.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
+                        return false;
+                    projectReferences.Add(full);
                 }
             }
-            else return false;
+            else
+                return false;
         }
         CliPaths.RejectLinks(path);
         return frameworks == 1;
@@ -255,9 +349,11 @@ internal static partial class CliReuseProof
         if (Path.GetFileName(directory) != "obj" || project is null
             || (!name.EndsWith(".csproj.nuget.g.props", StringComparison.Ordinal)
                 && !name.EndsWith(".csproj.nuget.g.targets", StringComparison.Ordinal))
-            || !File.Exists(Path.Combine(project, name[..name.IndexOf(".nuget.g.", StringComparison.Ordinal)]))) return false;
+            || !File.Exists(Path.Combine(project, name[..name.IndexOf(".nuget.g.", StringComparison.Ordinal)])))
+            return false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var reader = XmlReader.Create(input, new XmlReaderSettings
         { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = IndexSnapshotValidator.MaximumInputFileBytes });
@@ -265,87 +361,127 @@ internal static partial class CliReuseProof
         var ns = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
         var element = document.Root;
         if (element?.Name != ns + "Project" || (string?)element.Attribute("ToolsVersion") != "14.0"
-            || element.Attributes().Any(a => !a.IsNamespaceDeclaration && a.Name != "ToolsVersion")) return false;
+            || element.Attributes().Any(a => !a.IsNamespaceDeclaration && a.Name != "ToolsVersion"))
+            return false;
         // A package-free SDK restore has no imports/tasks. Only its inert conventional metadata is accepted.
         var names = new HashSet<string>(StringComparer.Ordinal)
         { "RestoreSuccess", "RestoreTool", "ProjectAssetsFile", "NuGetPackageRoot", "NuGetPackageFolders", "NuGetProjectStyle", "NuGetToolVersion" };
         foreach (var group in element.Elements())
         {
-            if (group.Attributes().Count() != 1 || (string?)group.Attribute("Condition") != " '$(ExcludeRestorePackageImports)' != 'true' ") return false;
+            if (group.Attributes().Count() != 1 || (string?)group.Attribute("Condition") != " '$(ExcludeRestorePackageImports)' != 'true' ")
+                return false;
             if (group.Name == ns + "PropertyGroup")
             {
                 foreach (var property in group.Elements())
                 {
                     var key = property.Name.LocalName;
                     if (property.Name.Namespace != ns || !names.Contains(key) || property.HasElements
-                        || property.Attributes().Count() != 1 || (string?)property.Attribute("Condition") != $" '$({key})' == '' ") return false;
+                        || property.Attributes().Count() != 1 || (string?)property.Attribute("Condition") != $" '$({key})' == '' ")
+                        return false;
                     if (key == "ProjectAssetsFile")
-                    { if (property.Value != "$(MSBuildThisFileDirectory)project.assets.json") return false; }
-                    else if (!Static(property.Value)) return false;
+                    {
+                        if (property.Value != "$(MSBuildThisFileDirectory)project.assets.json")
+                            return false;
+                    }
+                    else if (!Static(property.Value))
+                        return false;
                 }
             }
             else if (group.Name == ns + "ItemGroup")
             {
                 foreach (var item in group.Elements())
                     if (item.Name != ns + "SourceRoot" || item.HasElements || !string.IsNullOrWhiteSpace(item.Value)
-                        || item.Attributes().Count() != 1 || !Static((string?)item.Attribute("Include") ?? "")) return false;
+                        || item.Attributes().Count() != 1 || !Static((string?)item.Attribute("Include") ?? ""))
+                        return false;
             }
-            else return false;
+            else
+                return false;
         }
         return true;
     }
 
-    private static bool PlainAssets(string path, string root, string sdk, ProofBudget budget)
+    private static bool PlainAssets(string path, string root, string sdk, ProofBudget budget, IReadOnlyList<string> projectPaths, IReadOnlySet<string> frameworkFreeProjects)
     {
-        if (Path.GetFileName(Path.GetDirectoryName(path)) != "obj") return false;
+        if (Path.GetFileName(Path.GetDirectoryName(path)) != "obj")
+            return false;
         CliPaths.RejectLinks(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, input);
         budget.Bytes(input.Length);
         using var document = JsonDocument.Parse(input, new JsonDocumentOptions { MaxDepth = 64 });
-        return PlainAssetDocument(document.RootElement, path, root, sdk, budget);
+        var assets = document.RootElement;
+        var directory = Directory.GetParent(Path.GetDirectoryName(path)!)!.FullName;
+        var owners = projectPaths.Where(project => PathComparer.Equals(Path.GetDirectoryName(project), directory)).ToArray();
+        var frameworkFree = owners.Any(project => frameworkFreeProjects.Contains(Path.GetFullPath(project)));
+        if (frameworkFree && (owners.Length != 1 || !assets.TryGetProperty("project", out var owner)
+            || !owner.TryGetProperty("restore", out var restore)
+            || !restore.TryGetProperty("projectPath", out var projectPath)
+            || projectPath.GetString() is not { } ownerPath || !Path.IsPathFullyQualified(ownerPath)
+            || !PathComparer.Equals(Path.GetFullPath(ownerPath), Path.GetFullPath(owners[0]))))
+            return false;
+        return PlainAssetDocument(assets, path, root, sdk, budget, frameworkFree);
     }
 
-    private static bool PlainAssetDocument(JsonElement assets, string path, string root, string sdk, ProofBudget budget)
+    private static bool PlainAssetDocument(JsonElement assets, string path, string root, string sdk, ProofBudget budget, bool frameworkFree = false)
     {
         if (!assets.TryGetProperty("libraries", out var libraries) || libraries.ValueKind != JsonValueKind.Object
             || !assets.TryGetProperty("targets", out var targets) || targets.ValueKind != JsonValueKind.Object
             || targets.EnumerateObject().Count() != 1 || !targets.TryGetProperty("net10.0", out var target)
-            || target.ValueKind != JsonValueKind.Object) return false;
+            || target.ValueKind != JsonValueKind.Object)
+            return false;
         foreach (var library in libraries.EnumerateObject())
         {
             budget.Token.ThrowIfCancellationRequested();
-            if (library.Value.EnumerateObject().Any(field => field.Name is not ("type" or "path" or "msbuildProject"))) return false;
+            if (library.Value.EnumerateObject().Any(field => field.Name is not ("type" or "path" or "msbuildProject")))
+                return false;
             if (!library.Value.TryGetProperty("type", out var type) || type.GetString() != "project"
-                || !library.Value.TryGetProperty("path", out var projectPath) || projectPath.GetString() is not { } relative) return false;
+                || !library.Value.TryGetProperty("path", out var projectPath) || projectPath.GetString() is not { } relative)
+                return false;
             var project = CliPaths.InRoot(root, Path.GetFullPath(relative, Directory.GetParent(Path.GetDirectoryName(path)!)!.FullName));
             if (ExcludedProject(root, project) || !project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
-                || !File.Exists(project)) return false;
+                || !File.Exists(project))
+                return false;
         }
         foreach (var item in target.EnumerateObject())
         {
             budget.Token.ThrowIfCancellationRequested();
             if (!libraries.TryGetProperty(item.Name, out _) || item.Value.ValueKind != JsonValueKind.Object
-                || !item.Value.TryGetProperty("type", out var type) || type.GetString() != "project") return false;
+                || !item.Value.TryGetProperty("type", out var type) || type.GetString() != "project")
+                return false;
             foreach (var field in item.Value.EnumerateObject())
-                if (field.Name is not ("type" or "framework" or "dependencies" or "compile" or "runtime")) return false;
+                if (field.Name is not ("type" or "framework" or "dependencies" or "compile" or "runtime"))
+                    return false;
         }
         if (target.EnumerateObject().Count() != libraries.EnumerateObject().Count()
             || !assets.TryGetProperty("project", out var owner)
             || !owner.TryGetProperty("frameworks", out var frameworks) || frameworks.ValueKind != JsonValueKind.Object
             || frameworks.EnumerateObject().Count() != 1 || !frameworks.TryGetProperty("net10.0", out var framework)
-            || framework.ValueKind != JsonValueKind.Object) return false;
+            || framework.ValueKind != JsonValueKind.Object)
+            return false;
         if (framework.EnumerateObject().Any(field => field.Name is not ("framework" or "targetAlias" or "imports"
                 or "assetTargetFallback" or "warn" or "frameworkReferences" or "runtimeIdentifierGraphPath"
-                or "packagesToPrune" or "dependencies" or "downloadDependencies"))) return false;
+                or "packagesToPrune" or "dependencies" or "downloadDependencies")))
+            return false;
         if (!framework.TryGetProperty("framework", out var targetFramework) || targetFramework.GetString() != "net10.0"
-            || (framework.TryGetProperty("targetAlias", out var alias) && alias.GetString() != "net10.0")) return false;
-        if (framework.TryGetProperty("dependencies", out var dependencies) && dependencies.EnumerateObject().Any()) return false;
-        if (framework.TryGetProperty("downloadDependencies", out var downloads) && downloads.EnumerateArray().Any()) return false;
-        if (!framework.TryGetProperty("frameworkReferences", out var references) || references.ValueKind != JsonValueKind.Object
-            || references.EnumerateObject().Count() != 1 || !references.TryGetProperty("Microsoft.NETCore.App", out _)) return false;
+            || (framework.TryGetProperty("targetAlias", out var alias) && alias.GetString() != "net10.0"))
+            return false;
+        if (framework.TryGetProperty("dependencies", out var dependencies) && dependencies.EnumerateObject().Any())
+            return false;
+        if (framework.TryGetProperty("downloadDependencies", out var downloads) && downloads.EnumerateArray().Any())
+            return false;
+        if (frameworkFree)
+        {
+            if (framework.TryGetProperty("frameworkReferences", out var freeReferences)
+                && (freeReferences.ValueKind != JsonValueKind.Object || freeReferences.EnumerateObject().Any()))
+                return false;
+        }
+        else if (!framework.TryGetProperty("frameworkReferences", out var references) || references.ValueKind != JsonValueKind.Object
+            || references.EnumerateObject().Count() != 1 || !references.TryGetProperty("Microsoft.NETCore.App", out _))
+            return false;
         if (framework.TryGetProperty("runtimeIdentifierGraphPath", out var graphPath))
         {
-            if (graphPath.GetString() is not { } value || !Path.IsPathFullyQualified(value)) return false;
+            if (graphPath.GetString() is not { } value || !Path.IsPathFullyQualified(value))
+                return false;
             _ = CliPaths.InRoot(sdk, value);
         }
         return true;
@@ -369,17 +505,25 @@ internal static partial class CliReuseProof
         };
         foreach (DictionaryEntry entry in environment)
         {
-            if (entry.Key is not string name || entry.Value is not string value) return null;
+            if (entry.Key is not string name || entry.Value is not string value)
+                return UnsupportedEnvironment();
             if (registered.TryGetValue(name, out var expected))
             {
                 if (value.Length != 0 && (!Path.IsPathFullyQualified(value)
-                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expected))) return null;
+                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expected)))
+                    return UnsupportedEnvironment();
                 continue;
             }
             if (name.Equals("MSBUILDDISABLENODEREUSE", StringComparison.OrdinalIgnoreCase))
-            { if (value != "1") return null; }
+            {
+                if (value != "1")
+                    return UnsupportedEnvironment();
+            }
             else if (name.Equals("MSBuildEnableWorkloadResolver", StringComparison.OrdinalIgnoreCase))
-            { if (value != "false") return null; }
+            {
+                if (value != "false")
+                    return UnsupportedEnvironment();
+            }
             else if (name.Equals("DOTNET_ROOT", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("DOTNET_ROOT_X64", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("DOTNET_ROOT_ARM64", StringComparison.OrdinalIgnoreCase)
@@ -389,14 +533,23 @@ internal static partial class CliReuseProof
                 var expectedHost = name.Equals("DOTNET_HOST_PATH", StringComparison.OrdinalIgnoreCase)
                     ? Path.Combine(dotnet!, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet") : dotnet;
                 if (expectedHost is null || !Path.IsPathFullyQualified(value)
-                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expectedHost)) return null;
+                    || !PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), expectedHost))
+                    return UnsupportedEnvironment();
             }
-            else if (!PlainEnvironment.Contains(name)) return null;
+            else if (!PlainEnvironment.Contains(name))
+                return UnsupportedEnvironment();
             values.Add(name, value);
         }
         // Only these known registration paths are normalized. Every other environment value is hashed verbatim.
-        foreach (var (name, value) in registered) values.Add(name, value);
+        foreach (var (name, value) in registered)
+            values.Add(name, value);
         return values;
+    }
+
+    private static IDictionary? UnsupportedEnvironment()
+    {
+        PhaseMetrics.Decision("reuse.environment", "unsupported");
+        return null;
     }
 
     private static bool HasUserHooks()
@@ -405,20 +558,24 @@ internal static partial class CliReuseProof
         foreach (var folder in new[] { Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolder.ApplicationData })
         {
             var directory = Environment.GetFolderPath(folder);
-            if (!string.IsNullOrWhiteSpace(directory)) paths.Add(Path.Combine(directory, "Microsoft", "MSBuild"));
+            if (!string.IsNullOrWhiteSpace(directory))
+                paths.Add(Path.Combine(directory, "Microsoft", "MSBuild"));
         }
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(home)) paths.Add(Path.Combine(home, ".local", "share", "Microsoft", "MSBuild"));
+        if (!string.IsNullOrWhiteSpace(home))
+            paths.Add(Path.Combine(home, ".local", "share", "Microsoft", "MSBuild"));
         foreach (var name in new[] { "APPDATA", "LOCALAPPDATA" })
             if (Environment.GetEnvironmentVariable(name) is { Length: > 0 } value)
             {
-                if (!Path.IsPathFullyQualified(value)) return true;
+                if (!Path.IsPathFullyQualified(value))
+                    return true;
                 paths.Add(Path.Combine(value, "Microsoft", "MSBuild"));
             }
         foreach (var name in new[] { "HOME", "USERPROFILE" })
             if (Environment.GetEnvironmentVariable(name) is { Length: > 0 } value)
             {
-                if (!Path.IsPathFullyQualified(value)) return true;
+                if (!Path.IsPathFullyQualified(value))
+                    return true;
                 paths.Add(Path.Combine(value, ".local", "share", "Microsoft", "MSBuild"));
             }
         return paths.Any(Exists);
@@ -428,15 +585,27 @@ internal static partial class CliReuseProof
     {
         for (var directory = Directory.GetParent(root); directory is not null; directory = directory.Parent)
             foreach (var name in ImplicitConfiguration)
-                if (Exists(Path.Combine(directory.FullName, name))) return true;
+                if (Exists(Path.Combine(directory.FullName, name)))
+                    return true;
         return false;
     }
 
     private static bool Exists(string path)
     {
-        try { CliPaths.RejectLinks(path); _ = Attributes(path); return true; }
-        catch (FileNotFoundException) { return false; }
-        catch (DirectoryNotFoundException) { return false; }
+        try
+        {
+            CliPaths.RejectLinks(path);
+            _ = Attributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
     }
 
     private static string HashEnvironment(IDictionary environment, CancellationToken token)
@@ -445,7 +614,8 @@ internal static partial class CliReuseProof
         foreach (var name in environment.Keys.Cast<string>().Order(StringComparer.Ordinal))
         {
             token.ThrowIfCancellationRequested();
-            Append(hash, name); Append(hash, (string)environment[name]!);
+            Append(hash, name);
+            Append(hash, (string)environment[name]!);
         }
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
@@ -456,7 +626,8 @@ internal static partial class CliReuseProof
         var entries = new List<string>();
         foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
         {
-            budget.Entry(); entries.Add(entry);
+            budget.Entry();
+            entries.Add(entry);
         }
         entries.Sort(StringComparer.Ordinal);
         return entries.ToArray();
@@ -465,28 +636,38 @@ internal static partial class CliReuseProof
     private static FileAttributes Attributes(string path)
     {
         var attributes = File.GetAttributes(path);
-        if ((attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("Reuse proof does not follow links.");
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Reuse proof does not follow links.");
         return attributes;
     }
 
-    internal static void AddTree(string directory, string label, IncrementalHash hash, ProofBudget budget)
+    internal static void AddTree(string directory, string label, IncrementalHash hash, ProofBudget budget,
+        PhaseMetrics.ReadCategory category = PhaseMetrics.ReadCategory.Workspace)
     {
         Append(hash, label);
-        if (!Exists(directory)) { Append(hash, "absent"); return; }
+        if (!Exists(directory))
+        {
+            Append(hash, "absent");
+            return;
+        }
         Append(hash, "present");
-        var directories = new Stack<string>(); directories.Push(directory);
+        var directories = new Stack<string>();
+        directories.Push(directory);
         while (directories.TryPop(out var current))
         {
             Append(hash, Path.GetRelativePath(directory, current));
             var files = new List<string>();
             foreach (var entry in Entries(current, budget))
             {
-                if ((Attributes(entry) & FileAttributes.Directory) != 0) directories.Push(entry);
-                else files.Add(entry);
+                if ((Attributes(entry) & FileAttributes.Directory) != 0)
+                    directories.Push(entry);
+                else
+                    files.Add(entry);
             }
             if (files.Count <= 1)
             {
-                foreach (var file in files) AddFile(file, Path.GetRelativePath(directory, file), hash, budget);
+                foreach (var file in files)
+                    AddFile(file, Path.GetRelativePath(directory, file), hash, budget, category);
                 continue;
             }
             var fingerprints = new (long Length, string Digest)[files.Count];
@@ -494,7 +675,7 @@ internal static partial class CliReuseProof
                 () => ArrayPool<byte>.Shared.Rent(65536),
                 (index, _, buffer) =>
                 {
-                    fingerprints[index] = ReadFile(files[index], budget, buffer);
+                    fingerprints[index] = ReadFile(files[index], budget, category, buffer);
                     return buffer;
                 }, buffer => ArrayPool<byte>.Shared.Return(buffer));
             // Only the owning thread appends to the ordered proof hash.
@@ -503,9 +684,10 @@ internal static partial class CliReuseProof
         }
     }
 
-    private static string AddFile(string path, string label, IncrementalHash hash, ProofBudget budget)
+    private static string AddFile(string path, string label, IncrementalHash hash, ProofBudget budget,
+        PhaseMetrics.ReadCategory category = PhaseMetrics.ReadCategory.Workspace)
     {
-        var fingerprint = ReadFile(path, budget);
+        var fingerprint = ReadFile(path, budget, category);
         AppendFile(hash, label, fingerprint);
         return fingerprint.Digest;
     }
@@ -517,11 +699,13 @@ internal static partial class CliReuseProof
         Append(hash, fingerprint.Digest);
     }
 
-    private static (long Length, string Digest) ReadFile(string path, ProofBudget budget, byte[]? buffer = null)
+    private static (long Length, string Digest) ReadFile(string path, ProofBudget budget,
+        PhaseMetrics.ReadCategory category, byte[]? buffer = null)
     {
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var readMetrics = PhaseMetrics.ObserveRead(category, input);
         var length = input.Length;
         budget.Bytes(length);
         using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -531,10 +715,12 @@ internal static partial class CliReuseProof
         {
             budget.Check();
             read = checked(read + count);
-            if (read > length) throw new IOException("Reuse input changed.");
+            if (read > length)
+                throw new IOException("Reuse input changed.");
             content.AppendData(buffer, 0, count);
         }
-        if (read != length || input.Length != length) throw new IOException("Reuse input changed.");
+        if (read != length || input.Length != length)
+            throw new IOException("Reuse input changed.");
         CliPaths.RejectLinks(path);
         _ = Attributes(path);
         return (length, Convert.ToHexString(content.GetHashAndReset()).ToLowerInvariant());
@@ -545,7 +731,8 @@ internal static partial class CliReuseProof
         var bytes = StrictUtf8.GetBytes(text);
         Span<byte> size = stackalloc byte[8];
         BinaryPrimitives.WriteInt64BigEndian(size, bytes.LongLength);
-        hash.AppendData(size); hash.AppendData(bytes);
+        hash.AppendData(size);
+        hash.AppendData(bytes);
     }
 
     internal sealed class ProofBudget(CancellationToken token, ProofBudget? parent = null, bool git = false)
@@ -560,13 +747,26 @@ internal static partial class CliReuseProof
         internal void Check()
         {
             Token.ThrowIfCancellationRequested();
-            if (git && elapsed.ElapsedMilliseconds >= 5000) throw new IOException("Git proof time budget exceeded.");
+            if (git && elapsed.ElapsedMilliseconds >= 5000)
+            {
+                PhaseMetrics.Decision("reuse.proof-budget", "git-time");
+                throw new IOException("Git proof time budget exceeded.");
+            }
         }
-        internal void NextGitPass() { entries = 0; bytes = 0; Check(); }
+        internal void NextGitPass()
+        {
+            entries = 0;
+            bytes = 0;
+            Check();
+        }
         internal void Entry()
         {
             Check();
-            if (++entries > (git ? 10_000 : MaximumEntries)) throw new IOException("Reuse proof entry budget exceeded.");
+            if (++entries > (git ? 10_000 : MaximumEntries))
+            {
+                PhaseMetrics.Decision("reuse.proof-budget", "entries");
+                throw new IOException("Reuse proof entry budget exceeded.");
+            }
             parent?.Entry();
         }
         internal void Bytes(long length)
@@ -575,7 +775,11 @@ internal static partial class CliReuseProof
             lock (this)
             {
                 if (length < 0 || length > IndexSnapshotValidator.MaximumInputFileBytes
-                    || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes)) throw new IOException("Reuse proof byte budget exceeded.");
+                    || (bytes = checked(bytes + length)) > (git ? 64L * 1024 * 1024 : MaximumBytes))
+                {
+                    PhaseMetrics.Decision("reuse.proof-budget", "bytes");
+                    throw new IOException("Reuse proof byte budget exceeded.");
+                }
                 parent?.Bytes(length);
             }
         }

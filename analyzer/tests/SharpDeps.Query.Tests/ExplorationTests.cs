@@ -11,7 +11,468 @@ using Xunit;
 
 public sealed class ExplorationTests
 {
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void ExactSavedIdentityDefersLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
+    {
+        using var fixture = new Fixture(format: format);
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var path = Path.Combine(fixture.Root, ".sharpdeps", "lazy.sqlite");
+        using var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true);
+        writer.Commit(IndexStage.Create(fixture.Snapshot));
+        using var reader = IndexReader.Open(path, workspace);
+        var engine = new ExplorationService(new PinnedQueryIndex(reader), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "exact-metrics");
+        ExploreReply exact;
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            exact = engine.Execute(request);
+            metrics.Complete();
+        }
+        Assert.Equal("source-returned", exact.Outcome);
+        Assert.DoesNotContain(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+        Assert.True(engine.Execute(fixture.Request("Pump") with { Budget = Generous with { MaxMilliseconds = 0 } }).Succeeded);
+        Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(request)));
+    }
+
+    [Fact]
+    public void CancelledLexicalPreparationDoesNotPoisonTheValidatedSnapshot()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var reads = 0;
+        var saved = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        {
+            Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, () =>
+            {
+                if (++reads > fixture.Snapshot.Graph.Nodes.Count) cancellation.Cancel();
+            })
+        } };
+        var prepared = new ExplorationSnapshot(saved, default);
+        Assert.Throws<OperationCanceledException>(() => prepared.GetSearchIndex(cancellation.Token));
+        var recovered = prepared.GetSearchIndex(default);
+        Assert.True(recovered.Names.ContainsKey("Pump"));
+        Assert.Same(recovered, prepared.GetSearchIndex(default));
+        Assert.Throws<OperationCanceledException>(() => prepared.GetSearchIndex(cancellation.Token));
+    }
+
+    [Fact]
+    public void ExplorationMetricsReportExistingCacheBranchesAndPreserveCancellation()
+    {
+        using var fixture = new Fixture();
+        var cache = new ExplorationSnapshotCache();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var engine = fixture.Engine();
+        var request = new ExploreRequest("Pump", Budget: Generous with { MaxMilliseconds = 0 });
+        var expected = engine.Execute(request);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var expectedCancelled = engine.Execute(request, cancelled.Token);
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "fixture")!)
+        {
+            var first = cache.GetOrCreate(fixture.Snapshot, default);
+            Assert.Same(first, cache.GetOrCreate(fixture.Snapshot, default));
+            Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(fixture.Snapshot, cancelled.Token));
+            Assert.Equal(expected.Text, engine.Execute(request).Text);
+            Assert.Equal(expectedCancelled.Text, engine.Execute(request, cancelled.Token).Text);
+            metrics.Complete();
+        }
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        var text = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        Assert.Contains("payload-cache-miss", text);
+        Assert.Contains("payload-cache-hit", text);
+        Assert.Contains("explore.fingerprint", text);
+        Assert.Contains("explore.freeze", text);
+        Assert.Contains("explore.validate", text);
+        Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pump", text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void DiscoveryMetricsPreserveRepliesAndKeepScopeLeavesSeparateFromSource(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true, format: format);
+        var engine = fixture.Engine();
+        var request = new ExploreRequest("Pump Run", Budget: Generous with { MaxMilliseconds = 0 },
+            Format: format, ScopePolicy: ExploreScopePolicy.Discover);
+        var expected = engine.Execute(request);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(engine.Execute(request)));
+            metrics.Complete();
+        }
+        Assert.Equal("source-returned", expected.Outcome);
+        var phases = ReadMetricPhases(directory);
+        AssertDiscoveryMetricLeaves(phases);
+        var selection = phases.Single(phase => phase.GetProperty("phase").GetString() == "explore.discovery-select");
+        var end = selection.GetProperty("startedMilliseconds").GetDouble() + selection.GetProperty("inclusiveMilliseconds").GetDouble();
+        Assert.All(phases.Where(phase => phase.GetProperty("phase").GetString() is "source.read" or "explore.render"),
+            phase => Assert.True(phase.GetProperty("startedMilliseconds").GetDouble() >= end));
+        var text = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "*.jsonl")));
+        foreach (var value in new[] { fixture.Root, request.Query, fixture.Project, fixture.Variant })
+            Assert.DoesNotContain(value, text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DiscoveryMetricsLeaveUnreachedScopeSelectionAbsent()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            var reply = fixture.Engine().Execute(new ExploreRequest("MissingDiscoveryName", Budget: Generous with { MaxMilliseconds = 0 },
+                ScopePolicy: ExploreScopePolicy.Discover));
+            Assert.Equal("no-match", reply.Outcome);
+            metrics.Complete();
+        }
+        var phases = ReadMetricPhases(directory);
+        Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == "explore.discovery-rank");
+        Assert.DoesNotContain(phases, phase => phase.GetProperty("phase").GetString() == "explore.discovery-select");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void DiscoveryMetricsKeepClosedScopeLeavesOnSourceProofFailureOrCancellation(int interruption)
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var replies = new List<ExploreReply>();
+        foreach (var enabled in new[] { false, true })
+        {
+            using var cancellation = new CancellationTokenSource();
+            var proofs = 0;
+            var workspace = new QueryWorkspace(fixture.Root, _ =>
+            {
+                if (++proofs == 2 && interruption != 0)
+                    cancellation.Cancel();
+                return new(fixture.Sources.Keys.Order(StringComparer.Ordinal).ToArray(), proofs != 2 || interruption != 0);
+            });
+            using (var metrics = enabled ? SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore") : null)
+            {
+                var reply = fixture.Engine(workspace).Execute(new ExploreRequest("Pump Run", Budget: Generous with { MaxMilliseconds = 0 },
+                    ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh),
+                    interruption == 1 ? cancellation.Token : default, interruption == 2 ? cancellation.Token : default);
+                Assert.Equal(2, proofs);
+                Assert.Equal("failed", reply.Outcome);
+                Assert.Empty(reply.Units);
+                Assert.Contains(reply.Errors, error => error.Code == (interruption == 0 ? "FRESHNESS_REQUIREMENT_NOT_MET"
+                    : interruption == 1 ? "CANCELLED" : "QUERY_TIMEOUT"));
+                replies.Add(reply);
+                metrics?.Fail(interruption != 0);
+            }
+        }
+        Assert.Equal(JsonSerializer.Serialize(replies[0]), JsonSerializer.Serialize(replies[1]));
+        AssertDiscoveryMetricLeaves(ReadMetricPhases(directory));
+    }
+
+    private static JsonElement[] ReadMetricPhases(string directory)
+    {
+        var phases = File.ReadAllLines(Assert.Single(Directory.GetFiles(directory, "*.jsonl"))).Select(line =>
+        {
+            using var document = JsonDocument.Parse(line);
+            return document.RootElement.GetProperty("payload").Clone();
+        }).Where(payload => payload.GetProperty("type").GetString() == "phase").ToArray();
+        Assert.All(phases, phase =>
+        {
+            Assert.False(phase.GetProperty("unfinishedChildren").GetBoolean());
+            Assert.True(double.IsFinite(phase.GetProperty("inclusiveMilliseconds").GetDouble()));
+            Assert.NotEqual(JsonValueKind.Null, phase.GetProperty("measuredChildExclusiveMilliseconds").ValueKind);
+        });
+        return phases;
+    }
+
+    private static void AssertDiscoveryMetricLeaves(JsonElement[] phases)
+    {
+        var discovery = Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == "explore.discover");
+        foreach (var label in new[] { "explore.discovery-rank", "explore.discovery-select" })
+        {
+            var leaf = Assert.Single(phases, phase => phase.GetProperty("phase").GetString() == label);
+            Assert.Equal(discovery.GetProperty("spanId").GetInt64(), leaf.GetProperty("parentSpanId").GetInt64());
+            Assert.DoesNotContain(phases, phase => phase.GetProperty("parentSpanId").ValueKind == JsonValueKind.Number
+                && phase.GetProperty("parentSpanId").GetInt64() == leaf.GetProperty("spanId").GetInt64());
+        }
+    }
+
     private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent, ExploreScopePolicy.RequireUnique)]
+    [InlineData(ExploreFormat.Audit, ExploreScopePolicy.RequireUnique)]
+    [InlineData(ExploreFormat.Agent, ExploreScopePolicy.Discover)]
+    [InlineData(ExploreFormat.Audit, ExploreScopePolicy.Discover)]
+    public void UnknownProjectKeepsItsScopeErrorInEveryFormat(ExploreFormat format, ExploreScopePolicy policy)
+    {
+        using var fixture = new Fixture(format: format);
+        var reply = fixture.Engine().Execute(new ExploreRequest("Pump", ProjectId: "hpr_" + new string('f', 64),
+            Budget: Generous, Format: format, ScopePolicy: policy));
+        Assert.False(reply.Succeeded);
+        Assert.Equal("failed", reply.Outcome);
+        Assert.Equal("SCOPE_NOT_FOUND", Assert.Single(reply.Errors).Code);
+        Assert.Empty(reply.Units);
+        Assert.Contains("SCOPE_NOT_FOUND", reply.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("INTERNAL_ERROR", reply.Text, StringComparison.Ordinal);
+        AssertWireBudget(reply, Generous);
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void DiscoveryUsesOneSnapshotAndKeepsStrictScopesAndSourceIdentity(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true, dense: true, format: format);
+        var reads = 0;
+        var engine = new ExplorationService(new ObservedIndex(() => { reads++; return fixture.Snapshot; }), new QueryWorkspace(fixture.Root), true);
+        var request = new ExploreRequest("Pump Run", Budget: Generous, Format: format);
+        var strict = engine.Execute(request);
+        Assert.True(strict.Succeeded);
+        Assert.Equal("scope-choices", strict.Outcome);
+        Assert.Empty(strict.Units);
+        Assert.Contains("SCOPE_AMBIGUOUS", strict.OmissionReasons);
+        reads = 0;
+        var reply = engine.Execute(request with { ScopePolicy = ExploreScopePolicy.Discover });
+        Assert.True(reply.Succeeded);
+        Assert.Equal(1, reads);
+        Assert.Equal("source-returned", reply.Outcome);
+        Assert.Contains("groups=3 omittedGroups=0", reply.Text);
+        Assert.Equal(new[] { fixture.Variant, fixture.AlternateVariant, fixture.OtherVariant }.Order(StringComparer.Ordinal),
+            reply.Units.Select(unit => unit.VariantId!).Distinct().Order(StringComparer.Ordinal));
+        Assert.All(reply.Units, unit =>
+        {
+            Assert.NotNull(unit.ProjectId);
+            Assert.True(unit.CompleteSavedRange);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+        });
+        Assert.DoesNotContain("SCOPE_AMBIGUOUS", reply.OmissionReasons);
+        AssertWireBudget(reply, Generous);
+        var ordinaryBudget = Generous with { MaxChars = 12000, MaxBytes = 48000 };
+        var bounded = engine.Execute(request with { ScopePolicy = ExploreScopePolicy.Discover, Budget = ordinaryBudget });
+        Assert.True(bounded.Succeeded);
+        Assert.NotEmpty(bounded.Units);
+        AssertWireBudget(bounded, ordinaryBudget);
+        var selected = engine.Execute(request with { ScopePolicy = ExploreScopePolicy.Discover, VariantId = fixture.OtherVariant });
+        Assert.Equal("source-returned", selected.Outcome);
+        Assert.All(selected.Units, unit => Assert.Equal(fixture.OtherVariant, unit.VariantId));
+        Assert.Contains("groups=1", selected.Text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DiscoverySharesGlobalWireLimitsAndOffersCompleteMembersWhenATypeDoesNotFit(bool legacyLocations)
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true, huge: true, format: ExploreFormat.Agent);
+        var request = new ExploreRequest("Pump", Budget: Generous with { MaxChars = 12000, MaxBytes = 48000 },
+            Format: ExploreFormat.Agent, ScopePolicy: ExploreScopePolicy.Discover);
+        var snapshot = fixture.Snapshot;
+        if (legacyLocations)
+        {
+            var members = snapshot.Graph.Nodes.Where(node => node.Kind == HarnessNodeKind.Member)
+                .Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+            snapshot = snapshot with { Graph = snapshot.Graph with
+            {
+                SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(occurrence => members.Contains(occurrence.LogicalSymbolId)
+                    ? occurrence with { Declarations = null } : occurrence).ToArray()
+            } };
+        }
+        var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.True(reply.Succeeded);
+        Assert.Equal("source-returned", reply.Outcome);
+        Assert.Contains(reply.Units, unit => unit.Path == Fixture.OtherProjectPath);
+        Assert.Contains(reply.Units, unit => unit.SymbolIds.Contains(fixture.Helper));
+        Assert.Contains("OMITTED_UNITS", reply.OmissionReasons);
+        Assert.Contains("selector=" + fixture.Occurrence(fixture.Pump), reply.Text);
+        Assert.All(reply.Units, unit =>
+        {
+            Assert.True(unit.CompleteSavedRange);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+            Assert.Contains(fixture.Snapshot.Graph.SymbolOccurrences.Where(item => item.VariantId == unit.VariantId)
+                .SelectMany(item => item.Declarations ?? [])
+                .Concat(fixture.Snapshot.Graph.Nodes.Select(node => node.Location).OfType<HarnessLocation>()),
+                location => location.SourceId == unit.SourceId && location.RawSpan == unit.Span);
+        });
+        AssertWireBudget(reply, request.Budget!);
+        var tight = fixture.Engine().Execute(request with { Budget = request.Budget! with { MaxChars = 2048, MaxBytes = 8192 } });
+        AssertWireBudget(tight, request.Budget! with { MaxChars = 2048, MaxBytes = 8192 });
+        Assert.Empty(tight.Units);
+        Assert.Contains(tight.Outcome, new[] { "failed", "budget-limited" });
+    }
+
+    [Fact]
+    public void DiscoveryOutcomeUsesTheSamePriorityForMixedGroupOrders()
+    {
+        foreach (var outcomes in new[] { new[] { "budget-limited", "scope-choices" }, new[] { "scope-choices", "budget-limited" } })
+        {
+            Assert.Equal("scope-choices", ExplorationService.AggregateDiscoveryOutcome(false, 0, outcomes));
+            Assert.Equal("source-returned", ExplorationService.AggregateDiscoveryOutcome(false, 1, outcomes));
+            Assert.Equal("failed", ExplorationService.AggregateDiscoveryOutcome(true, 1, outcomes));
+        }
+        Assert.Equal("budget-limited", ExplorationService.AggregateDiscoveryOutcome(false, 0, ["source-unavailable", "budget-limited"]));
+        Assert.Equal("source-unavailable", ExplorationService.AggregateDiscoveryOutcome(false, 0, ["source-unavailable"]));
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void DiscoveryKeepsAGroupDirtyWhenSourceChangesAfterTheInitialProof(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, format: format);
+        var proofs = 0;
+        var workspace = new QueryWorkspace(fixture.Root, _ =>
+        {
+            proofs++;
+            File.AppendAllText(fixture.CoreFullPath, "\n// changed after initial hashes\n", new UTF8Encoding(false));
+            return new(fixture.Inventory(), true);
+        });
+        var reply = fixture.Engine(workspace).Execute(new ExploreRequest("Pump Run", Budget: Generous, Format: format,
+            ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh));
+        Assert.Equal(1, proofs);
+        Assert.False(reply.Succeeded);
+        Assert.Equal("failed", reply.Outcome);
+        Assert.Contains(reply.Errors, error => error.Code == "SOURCE_CHANGED_SINCE_SNAPSHOT");
+        Assert.Empty(reply.Units);
+        Assert.Contains("Freshness=dirty", reply.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Freshness=verified-current", reply.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\tpublic ", reply.Text);
+        AssertWireBudget(reply, Generous);
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void DiscoveryUsesOneBeforeAndAfterFreshnessProofAndClearsEveryGroupOnFailure(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, format: format);
+        var proofs = 0;
+        var failAfter = false;
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(fixture.Inventory(), ++proofs != 2 || !failAfter));
+        var engine = fixture.Engine(workspace);
+        var request = new ExploreRequest("Pump Run", Budget: Generous, Format: format,
+            ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh);
+        var reply = engine.Execute(request);
+        Assert.True(reply.Succeeded);
+        Assert.NotEmpty(reply.Units);
+        Assert.Equal(2, proofs);
+        proofs = 0; failAfter = true;
+        var failed = engine.Execute(request);
+        Assert.Equal(2, proofs);
+        Assert.Equal("failed", failed.Outcome);
+        Assert.False(failed.Succeeded);
+        Assert.Empty(failed.Units);
+        Assert.Contains(failed.Errors, error => error.Code == "FRESHNESS_REQUIREMENT_NOT_MET");
+        Assert.DoesNotContain("\tpublic ", failed.Text);
+        Assert.DoesNotContain("Freshness=verified-current", failed.Text, StringComparison.Ordinal);
+        Assert.Contains("Freshness=unverified", failed.Text, StringComparison.Ordinal);
+        AssertWireBudget(failed, Generous);
+        foreach (var caller in new[] { false, true })
+        {
+            using var cancellation = new CancellationTokenSource();
+            var checkedInventories = 0;
+            var cancellingWorkspace = new QueryWorkspace(fixture.Root, _ =>
+            {
+                if (++checkedInventories == 2)
+                    cancellation.Cancel();
+                return new(fixture.Inventory(), true);
+            });
+            var interrupted = fixture.Engine(cancellingWorkspace).Execute(request,
+                caller ? cancellation.Token : default, caller ? default : cancellation.Token);
+            Assert.Equal(2, checkedInventories);
+            Assert.Contains(interrupted.Errors, error => error.Code == (caller ? "CANCELLED" : "QUERY_TIMEOUT"));
+            Assert.Equal("failed", interrupted.Outcome);
+            Assert.Empty(interrupted.Units);
+            Assert.DoesNotContain("\tpublic ", interrupted.Text);
+            Assert.DoesNotContain("Freshness=verified-current", interrupted.Text, StringComparison.Ordinal);
+            Assert.Contains("Freshness=unverified", interrupted.Text, StringComparison.Ordinal);
+            AssertWireBudget(interrupted, Generous);
+        }
+        foreach (var exact in new[] { fixture.RunInt, "Pump " + fixture.Occurrence(fixture.RunInt), fixture.Section })
+            Assert.Throws<ArgumentException>(() => engine.Execute(request with { Query = exact }));
+        Assert.Throws<ArgumentException>(() => engine.Execute(request with { Query = "value", QueryKind = ExploreQueryKind.HttpGetLiteral }));
+        Assert.Throws<ArgumentException>(() => engine.Execute(request with { PathTo = fixture.Occurrence(fixture.Helper) }));
+    }
+
+    [Fact]
+    public void DiscoveryCapsGroupsAndKeepsLinkedSourcesAndActualVariantDimensionsSeparate()
+    {
+        using var fixture = new Fixture(addScopes: true, format: ExploreFormat.Agent);
+        var graph = fixture.Snapshot.Graph;
+        var workspace = Guid.ParseExact(graph.WorkspaceId[3..], "N");
+        var thirdProject = HarnessIdentity.ProjectId(workspace, "third/Third.csproj");
+        var thirdVariant = HarnessIdentity.VariantId(workspace, thirdProject, "net9.0", "Release", "x64", "linux-x64");
+        var thirdType = HarnessIdentity.LogicalSymbolId(workspace, thirdProject, "type", "T:Demo.Pump");
+        var thirdRun = HarnessIdentity.LogicalSymbolId(workspace, thirdProject, "method", "M:Demo.Pump.Run(System.Int32)");
+        var otherType = graph.Nodes.Single(node => node.Kind == HarnessNodeKind.Type && node.ParentId == fixture.OtherProject);
+        var otherRun = graph.Nodes.Single(node => node.Kind == HarnessNodeKind.Member && node.ParentId == otherType.Id);
+        var tfmVariant = HarnessIdentity.VariantId(workspace, fixture.Project, "net9.0", "Debug");
+        var linked = graph.SymbolOccurrences.Single(item => item.LogicalSymbolId == otherRun.Id);
+        var occurrences = graph.SymbolOccurrences.Concat(graph.SymbolOccurrences.Where(item => item.VariantId == fixture.Variant)
+            .Select(item => item with { VariantId = tfmVariant, Id = HarnessIdentity.SymbolOccurrenceId(workspace, item.LogicalSymbolId, tfmVariant) }))
+            .Concat(new[]
+            {
+                graph.SymbolOccurrences.Single(item => item.LogicalSymbolId == otherType.Id) with
+                { LogicalSymbolId = thirdType, VariantId = thirdVariant, Id = HarnessIdentity.SymbolOccurrenceId(workspace, thirdType, thirdVariant) },
+                linked with { LogicalSymbolId = thirdRun, VariantId = thirdVariant, Id = HarnessIdentity.SymbolOccurrenceId(workspace, thirdRun, thirdVariant) }
+            }).ToArray();
+        var snapshot = fixture.Snapshot with { Graph = graph with
+        {
+            Nodes = [.. graph.Nodes, new(thirdProject, HarnessNodeKind.Project, "Third", graph.WorkspaceId, null),
+                otherType with { Id = thirdType, ParentId = thirdProject }, otherRun with { Id = thirdRun, ParentId = thirdType }],
+            Variants = [.. graph.Variants, new(tfmVariant, fixture.Project, "net9.0", "Debug", null, null, Fixture.Hash("net9")),
+                new(thirdVariant, thirdProject, "net9.0", "Release", "x64", "linux-x64", Fixture.Hash("third"))],
+            SymbolOccurrences = occurrences,
+            Edges = [.. graph.Edges, new("cross-project", fixture.RunInt, thirdRun, fixture.Occurrence(fixture.RunInt),
+                HarnessIdentity.SymbolOccurrenceId(workspace, thirdRun, thirdVariant), fixture.Variant, "calls", HarnessCertainty.Resolved,
+                "fixture", graph.SymbolOccurrences.Single(item => item.Id == fixture.Occurrence(fixture.RunInt)).Location)]
+        } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = new ExploreRequest("Pump Run", Budget: Generous, Format: ExploreFormat.Agent, ScopePolicy: ExploreScopePolicy.Discover);
+        var capped = engine.Execute(request);
+        Assert.True(capped.Succeeded);
+        Assert.Contains("groups=4 omittedGroups=1", capped.Text);
+        Assert.Contains("SCOPE_GROUP_LIMIT", capped.OmissionReasons);
+        Assert.InRange(capped.Units.Select(unit => unit.VariantId).Distinct().Count(), 1, 4);
+        AssertWireBudget(capped, Generous);
+        var scoped = engine.Execute(request with { VariantId = thirdVariant });
+        Assert.True(scoped.Succeeded);
+        Assert.Contains("name=Third net9.0 Release platform=x64 rid=linux-x64", scoped.Text);
+        Assert.All(scoped.Units, unit =>
+        {
+            Assert.Equal(thirdVariant, unit.VariantId);
+            Assert.Equal(thirdProject, unit.ProjectId);
+            Assert.Equal(Fixture.OtherProjectPath, unit.Path);
+        });
+        Assert.DoesNotContain(scoped.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+        var small = engine.Execute(request with { Budget = Generous with { MaxNodes = 2, MaxEdges = 2 } });
+        Assert.Contains("groups=2 omittedGroups=3", small.Text);
+        AssertWireBudget(small, Generous with { MaxNodes = 2, MaxEdges = 2 });
+    }
+
+    [Fact]
+    public void ExplorationOutcomesSeparateNoMatchAccessAndBudgetFromExecutionSuccess()
+    {
+        using var fixture = new Fixture(huge: true, format: ExploreFormat.Agent);
+        var request = fixture.Request(fixture.RunInt);
+        var unavailable = new ExplorationService(new FixedIndex(fixture.Snapshot)).Execute(request);
+        Assert.True(unavailable.Succeeded);
+        Assert.Equal("source-unavailable", unavailable.Outcome);
+        var noMatch = fixture.Engine().Execute(request with { Query = "NoSuchSavedSymbol" });
+        Assert.Equal("no-match", noMatch.Outcome);
+        var isolated = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = [] } };
+        var budget = new ExplorationService(new FixedIndex(isolated), new QueryWorkspace(fixture.Root), true)
+            .Execute(request with { Budget = Generous with { MaxChars = 2048, MaxBytes = 8192 } });
+        Assert.True(budget.Succeeded);
+        Assert.Equal("budget-limited", budget.Outcome);
+        var source = fixture.Engine().Execute(request);
+        Assert.Equal("source-returned", source.Outcome);
+        Assert.Contains("range=complete-saved-declaration executableBody=unclassified", source.Text);
+        Assert.True(source.Text.IndexOf("Source F", StringComparison.Ordinal) < source.Text.IndexOf("Saved relations", StringComparison.Ordinal));
+    }
 
     [Fact]
     public void PinnedPreparationReusesTheValidatedReadOnlySnapshotAndHonorsReaderLifetime()
@@ -22,7 +483,7 @@ public sealed class ExplorationTests
         using (var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true))
             writer.Commit(IndexStage.Create(fixture.Snapshot));
         using var reader = IndexReader.Open(path, workspace);
-        var pinned = new PinnedQueryIndex(reader);
+        var pinned = new PinnedQueryIndex(reader, default, fixture.Root);
         var prepared = pinned.PrepareExploration(default);
         Assert.Same(reader.Snapshot(), prepared.saved);
         Assert.Same(prepared, pinned.PrepareExploration(default));
@@ -36,6 +497,129 @@ public sealed class ExplorationTests
         Assert.Throws<OperationCanceledException>(() => pinned.PrepareExploration(cancellation.Token));
         reader.Dispose();
         Assert.Throws<ObjectDisposedException>(() => pinned.PrepareExploration(default));
+        using var reopened = IndexReader.Open(path, workspace);
+        var replacement = new PinnedQueryIndex(reopened, default, fixture.Root);
+        Assert.Same(prepared, replacement.PrepareExploration(default));
+        Assert.Equal(expected.Text, new ExplorationService(replacement, new QueryWorkspace(fixture.Root), true).Execute(request).Text);
+    }
+
+    [Fact]
+    public async Task SharedPreparationKeepsFourReaderPinsAndTheirFtsGenerationTogether()
+    {
+        using var fixture = new Fixture(dense: true);
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var path = Path.Combine(fixture.Root, ".sharpdeps", "shared.sqlite");
+        using var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true);
+        writer.Commit(IndexStage.Create(fixture.Snapshot));
+        var cache = new ValidatedExplorationSnapshotCache(maximumEntries: 1);
+        using var originalReader = IndexReader.Open(path, workspace);
+        var original = new PinnedQueryIndex(originalReader, fixture.Root, cache);
+        var first = original.PrepareExploration(default);
+        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var expected = new ExplorationService(original, new QueryWorkspace(fixture.Root), true).Execute(request);
+        using var barrier = new Barrier(4);
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            using var reader = IndexReader.Open(path, workspace);
+            var pinned = new PinnedQueryIndex(reader, fixture.Root, cache);
+            Assert.True(barrier.SignalAndWait(TimeSpan.FromSeconds(20)));
+            var prepared = pinned.PrepareExploration(default);
+            var reply = new ExplorationService(pinned, new QueryWorkspace(fixture.Root), true).Execute(request);
+            return (prepared, reply.Text);
+        })));
+        foreach (var (prepared, text) in results)
+        {
+            Assert.Same(first, prepared);
+            Assert.Equal(expected.Text, text);
+        }
+
+        var changedText = fixture.Sources[Fixture.CorePath].Replace("value + count", "value - count", StringComparison.Ordinal);
+        File.WriteAllText(fixture.CoreFullPath, changedText, Fixture.Utf8);
+        var next = fixture.NewGeneration(changedText);
+        next = next with
+        {
+            Graph = next.Graph with { Edges = next.Graph.Edges.Where(edge => edge.Id != "direct-helper").ToArray() },
+            SearchText = next.SearchText.Select(row => row.NodeId == fixture.Pump
+                ? row with { Body = "NewGenerationSearchToken" } : row).ToArray()
+        };
+        writer.Commit(IndexStage.Create(next));
+        using var currentReader = IndexReader.Open(path, workspace);
+        var current = new PinnedQueryIndex(currentReader, fixture.Root, cache);
+        var replacement = current.PrepareExploration(default);
+        Assert.NotSame(first, replacement);
+        Assert.Equal(2, replacement.saved.Graph.Generation);
+        Assert.DoesNotContain(replacement.outgoing[fixture.RunInt], edge => edge.Id == "direct-helper");
+        Assert.Contains(current.Search("NewGenerationSearchToken", 100), hit => hit.NodeId == fixture.Pump);
+        Assert.Empty(original.Search("NewGenerationSearchToken", 100));
+        var rebuilt = new PinnedQueryIndex(originalReader, fixture.Root, cache).PrepareExploration(default);
+        Assert.NotSame(first, rebuilt);
+        Assert.Equal(JsonSerializer.Serialize(first.saved, QueryJson.Options), JsonSerializer.Serialize(rebuilt.saved, QueryJson.Options));
+        Assert.Contains(rebuilt.outgoing[fixture.RunInt], edge => edge.Id == "direct-helper");
+        var stale = new ExplorationService(original, new QueryWorkspace(fixture.Root), true).Execute(request);
+        Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", stale.OmissionReasons);
+        Assert.DoesNotContain(stale.Units, unit => unit.SourceId == Fixture.CorePath);
+        originalReader.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => original.PrepareExploration(default));
+        Assert.True(new ExplorationService(current, new QueryWorkspace(fixture.Root), true).Execute(request).Succeeded);
+    }
+
+    [Fact]
+    public void SharedPreparationSeparatesPayloadRootIndexAndSchemaAndBoundsRetention()
+    {
+        using var fixture = new Fixture();
+        var path = Path.Combine(fixture.Root, "index.sqlite");
+        var cache = new ValidatedExplorationSnapshotCache(maximumEntries: 8);
+        var saved = fixture.Snapshot;
+        ExplorationSnapshot Prepare(IndexSnapshot snapshot, string? root = null, string? index = null, int schema = 3)
+            => cache.GetOrCreate(snapshot, root ?? fixture.Root, index ?? path, schema, default);
+        var first = Prepare(saved);
+        Assert.Same(first, Prepare(saved, fixture.Root + Path.DirectorySeparatorChar, Path.Combine(fixture.Root, ".", "index.sqlite")));
+        Assert.NotSame(first, Prepare(saved, root: Path.Combine(fixture.Root, "other")));
+        Assert.NotSame(first, Prepare(saved, index: Path.Combine(fixture.Root, "other.sqlite")));
+        Assert.NotSame(first, Prepare(saved, schema: 2));
+        Assert.NotSame(first, Prepare(saved, index: Path.Combine(fixture.Root, "INDEX.sqlite")));
+        var changedGraph = saved with { Graph = saved.Graph with { Edges = [] } };
+        var changedSearch = saved with { SearchText = saved.SearchText.Select(row => row with { Body = "changed search payload" }).ToArray() };
+        IndexSnapshotValidator.Validate(changedGraph);
+        IndexSnapshotValidator.Validate(changedSearch);
+        Assert.NotSame(first, Prepare(changedGraph));
+        Assert.NotSame(first, Prepare(changedSearch));
+        Assert.Same(first, Prepare(saved));
+        var bytes = ExplorationSnapshotCache.Serialize(saved, Stream.Null, default).Bytes;
+        var bounded = new ValidatedExplorationSnapshotCache(maximumPayloadBytes: bytes);
+        var retained = bounded.GetOrCreate(saved, fixture.Root, path, 3, default);
+        var oversized = bounded.GetOrCreate(changedSearch, fixture.Root, path, 3, default);
+        Assert.NotSame(oversized, bounded.GetOrCreate(changedSearch, fixture.Root, path, 3, default));
+        Assert.Same(retained, bounded.GetOrCreate(saved, fixture.Root, path, 3, default));
+        bounded.GetOrCreate(changedGraph, fixture.Root, path, 3, default);
+        Assert.NotSame(retained, bounded.GetOrCreate(saved, fixture.Root, path, 3, default));
+    }
+
+    [Fact]
+    public void SharedPreparationDoesNotPublishCancelledDerivedDataOrEvictThePriorEntry()
+    {
+        using var fixture = new Fixture();
+        var cache = new ValidatedExplorationSnapshotCache(maximumEntries: 1);
+        var path = Path.Combine(fixture.Root, "index.sqlite");
+        var first = cache.GetOrCreate(fixture.Snapshot, fixture.Root, path, 3, default);
+        var changed = fixture.Snapshot with { SearchText = fixture.Snapshot.SearchText.Select(row => row with { Body = "changed" }).ToArray() };
+        var reads = 0;
+        using var cancellation = new CancellationTokenSource();
+        var interrupted = changed with { Graph = changed.Graph with
+        {
+            Nodes = new ObservedNodes(changed.Graph.Nodes, () =>
+            {
+                if (++reads > changed.Graph.Nodes.Count)
+                    cancellation.Cancel();
+            })
+        } };
+        Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(interrupted, fixture.Root, path, 3, cancellation.Token));
+        Assert.True(reads > changed.Graph.Nodes.Count);
+        Assert.Same(first, cache.GetOrCreate(fixture.Snapshot, fixture.Root, path, 3, default));
+        var recovered = cache.GetOrCreate(changed, fixture.Root, path, 3, default);
+        Assert.NotSame(first, recovered);
+        Assert.Same(recovered, cache.GetOrCreate(changed, fixture.Root, path, 3, default));
+        Assert.Throws<OperationCanceledException>(() => cache.GetOrCreate(changed, fixture.Root, path, 3, cancellation.Token));
     }
 
     [Theory]

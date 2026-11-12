@@ -8,9 +8,11 @@ using SharpDeps.Query;
 
 public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/index.sqlite", bool Trusted = false, bool AllowMutations = false)
 {
+    public string? MetricsDirectory { get; init; }
+
     public static McpHostOptions Parse(string[] args)
     {
-        string? root = null, index = null;
+        string? root = null, index = null, metrics = null;
         var trusted = false; var mutations = false;
         for (var i = 0; i < args.Length; i++)
         {
@@ -20,6 +22,7 @@ public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/inde
                 case "--allow-mutations" when !mutations: mutations = true; break;
                 case "--root" when root is null: root = Value(); break;
                 case "--index" when index is null: index = Value(); break;
+                case "--metrics-directory" when metrics is null: metrics = Value(); break;
                 default: throw new ArgumentException("MCP_HOST_ARGUMENT_INVALID");
             }
             string Value()
@@ -31,7 +34,7 @@ public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/inde
         }
         if (root is null || !Path.IsPathFullyQualified(root) || mutations && !trusted)
             throw new ArgumentException("MCP_HOST_ARGUMENT_INVALID");
-        return new(root, index ?? ".sharpdeps/index.sqlite", trusted, mutations);
+        return new(root, index ?? ".sharpdeps/index.sqlite", trusted, mutations) { MetricsDirectory = metrics };
     }
 }
 
@@ -40,7 +43,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
 {
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"Names, exact identities, or source paths by default; exact saved HttpGet declaration text in http-get-literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["unique","prefer-debug"],"default":"unique","description":"Optionally prefer the single saved Debug variant within one matching project; explicit scopes take precedence."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","anyOf":[{"const":0},{"minimum":10,"maximum":30000}],"description":"Zero disables the computation deadline; caller cancellation and output limits still apply."}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"A plain string, not an object. Put scope and budget fields beside query in one flat arguments object. Names, exact identities, or source paths by default; exact saved HttpGet text in literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"When omitted, ordinary unscoped names/paths use discover; explicit project or variant uses unique. Exact saved IDs, pathTo and http-get-literal use unique and reject discover. Discover returns separate saved project/variant groups; prefer-debug chooses only a single saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","default":1000,"anyOf":[{"const":0},{"minimum":10,"maximum":30000}],"description":"Shared computation budget includes opening and fully validating the saved index, then exploration. Omitted: 1000 ms. For a large/cold index choose an explicit finite value, for example 8000. Zero disables only the computation deadline; cancellation and output limits remain."}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"examples":[{"query":"Service","format":"agent","maxMilliseconds":8000}],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
@@ -49,7 +52,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
     public IList<Tool> ListTools()
     {
         var tools = new List<Tool> { MakeTool("explore",
-            "Find related .NET implementations and reference evidence for names or paths in one request. Returns bounded source ranges, certainty, freshness and omissions; defaults to concise agent format. Set format=audit for full saved identities and provenance. Source text requires host trust.",
+            "Use for indexed .NET symbols, dependencies and cross-file implementation paths. Send flat arguments, for example {\"query\":\"Service\",\"maxMilliseconds\":8000}; query is a string, not an object. For a large/cold index choose a finite maxMilliseconds: the omitted 1000 ms includes full index validation. Start with short names or paths; keep saved project/variant groups separate and follow exact returned selectors. Returns bounded source, certainty, freshness and omissions; source needs host trust. Use normal read/search for simple text or out-of-scope work and respect user opt-out.",
             ExploreSchema, readOnly: true) };
         if (host.AllowMutations && host.Trusted)
             foreach (var name in new[] { "index", "update" })
@@ -75,6 +78,8 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             arguments = [request.Name, "--root", host.Root, "--index", host.Index, "--quiet"];
             if (host.Trusted) arguments.Add("--trusted");
             AddMutationArguments(request, arguments);
+            if (host.MetricsDirectory is { } directory)
+                arguments.AddRange(["--metrics-directory", directory]);
         }
         else exploration = ParseExploreRequest(request);
         if (!await slots.WaitAsync(0, token))
@@ -91,7 +96,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                     StructuredContent = document.RootElement.Clone(), IsError = exit != 0
                 };
             }
-            var explored = await CliApplication.ExploreAsync(host.Root, host.Index, host.Trusted, exploration!, token: token);
+            var explored = await CliApplication.ExploreWithMetricsAsync(host.Root, host.Index, host.Trusted, exploration!, host.MetricsDirectory, token: token);
             return new() { Content = [new TextContentBlock { Text = explored.Text }], IsError = explored.ExitCode != 0 };
         }
         finally { slots.Release(); }
@@ -117,6 +122,10 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                 if (name == "queryKind") continue;
                 if (name == "query")
                 {
+                    if (value.ValueKind == JsonValueKind.Object)
+                        throw new McpProtocolException(
+                            """MCP_ARGUMENT_INVALID: explore arguments must be flat. query must be a string, for example {"query":"Service","maxMilliseconds":8000}. Put scope and budget fields beside query, not inside it. Correct the arguments only if another call is authorized.""",
+                            McpErrorCode.InvalidParams);
                     if (value.ValueKind != JsonValueKind.String) throw Invalid();
                     query = value.GetString();
                     ExploreRequestFactory.QueryText(query, queryKind);
@@ -158,7 +167,8 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             return ExploreRequestFactory.Validate(new(query!, project, variant, pathPrefix,
                 ExploreRequestFactory.Freshness(freshness),
                 ExploreRequestFactory.Budget(maxMilliseconds: maxMilliseconds, maxChars: maxChars, maxBytes: maxBytes),
-                ExploreRequestFactory.Format(format, ExploreFormat.Agent), ExploreRequestFactory.ScopePolicy(scopePolicy), pathTo)
+                ExploreRequestFactory.Format(format, ExploreFormat.Agent),
+                ExploreRequestFactory.ScopePolicy(scopePolicy, query!, project, variant, pathTo, queryKind), pathTo)
                 { ObserveOwner = observeOwner, QueryKind = queryKind });
         }
         catch (Exception error) when (error is CliFailure or JsonException or InvalidOperationException) { throw Invalid(); }
@@ -174,7 +184,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
             {
                 if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text
                     || text.Length is 0 or > 8192 || text.Any(char.IsControl)
-                    || text is "--root" or "--index" or "--trusted" or "--quiet") throw Invalid();
+                    || text is "--root" or "--index" or "--trusted" or "--quiet" or "--metrics-directory") throw Invalid();
                 arguments.Add(text);
             }
         }

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Analysis.Markdown;
@@ -14,6 +15,123 @@ using Xunit;
 
 public sealed class CliTests
 {
+    [Theory]
+    [InlineData("search")]
+    [InlineData("context")]
+    [InlineData("explore")]
+    public async Task QueryMetricsAreOutOfBandAndCannotChangeSavedResponses(string command)
+    {
+        using var fixture = new Fixture();
+        var args = new[] { command, "--root", fixture.Root, "--trusted", "--term", "Service", "--max-milliseconds", "0" };
+        var expected = await Run(args);
+        Assert.Equal(0, expected.Exit);
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var measured = await Run([.. args, "--metrics-directory", directory]);
+        Assert.Equal(expected, measured);
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        var metricsPath = Assert.Single(Directory.GetFiles(directory, "*.jsonl"));
+        var text = File.ReadAllText(metricsPath);
+        Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Service", text, StringComparison.Ordinal);
+        var events = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        Assert.Equal(Path.GetFileNameWithoutExtension(metricsPath),
+            Assert.Single(events.Select(e => e.GetProperty("runId").GetString()).Distinct()));
+        var payloads = events.Select(e => e.GetProperty("payload")).ToArray();
+        Assert.Equal("run.start", payloads[0].GetProperty("type").GetString());
+        Assert.Equal(command == "explore" ? "explore" : "query", payloads[0].GetProperty("operation").GetString());
+        Assert.Equal("run.end", payloads[^1].GetProperty("type").GetString());
+        Assert.Equal("completed", payloads[^1].GetProperty("outcome").GetString());
+        var phases = payloads.Where(p => p.GetProperty("type").GetString() == "phase")
+            .Select(p => p.GetProperty("phase").GetString()).ToArray();
+        Assert.Contains("reader.open", phases);
+        Assert.Contains("reader.snapshot", phases);
+        Assert.Contains(command == "explore" ? "explore.render" : "query.render", phases);
+        if (command == "explore")
+        {
+            Assert.Contains("explore.prepare", phases);
+            Assert.DoesNotContain("explore.fingerprint", phases);
+            Assert.DoesNotContain(payloads, p => p.GetProperty("type").GetString() == "decision"
+                && p.GetProperty("reason").GetString() is "validated-cache-hit" or "validated-cache-miss");
+            Assert.Equal(1, phases.Count(phase => phase == "explore.derived-index"));
+            var hosted = await CliApplication.ExploreAsync(fixture.Root, ".sharpdeps/index.sqlite", true,
+                CliArguments.Parse(args).ExplorationRequest());
+            Assert.Equal(expected.Exit, hosted.ExitCode);
+            Assert.Equal(hosted.Text + Environment.NewLine, expected.Json);
+        }
+        else
+        {
+            Assert.Contains("query.derived-index", phases);
+        }
+        if (command != "search")
+        {
+            Assert.Contains("source.read", phases);
+            Assert.Contains("source.hash", phases);
+        }
+        var refused = Path.Combine(fixture.Root, "refused");
+        Assert.Equal(expected, await Run([.. args, "--metrics-directory", refused]));
+        Assert.False(Directory.Exists(refused));
+        var broken = Path.Combine(fixture.Root, ".sharpdeps", "blocked");
+        File.WriteAllText(broken, "keep");
+        Assert.Equal(expected, await Run([.. args, "--metrics-directory", broken]));
+        Assert.Equal("keep", File.ReadAllText(broken));
+        using (var sink = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("broken-sink", "query", new StreamWriter(new FailedMetricsStream())))
+        {
+            Assert.Equal(expected, await Run(args));
+            sink.Complete();
+        }
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+        using var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(1, reader.Snapshot().Graph.Generation);
+    }
+
+    [Fact]
+    public async Task ParallelQueryMetricsKeepRunScopesAndErrorsSeparate()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
+        var requests = new[] { new[] { "search", "--term", "Service" }, new[] { "symbol", "--id", "missing" } };
+        var expected = new List<(int Exit, string Json, string Progress)>();
+        foreach (var request in requests)
+            expected.Add(await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0"]));
+        var actual = await Task.WhenAll(requests.Select(request => Task.Run(async () =>
+        {
+            var reply = await Run([.. request, "--root", fixture.Root, "--max-milliseconds", "0", "--metrics-directory", directory]);
+            Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
+            return reply;
+        })));
+        Assert.Equal(expected, actual);
+        var files = Directory.GetFiles(directory, "*.jsonl");
+        Assert.Equal(2, files.Length);
+        var outcomes = new List<string>();
+        foreach (var file in files)
+        {
+            var events = File.ReadLines(file).Select(line => JsonDocument.Parse(line)).ToArray();
+            try
+            {
+                Assert.Single(events.Select(e => e.RootElement.GetProperty("runId").GetString()).Distinct());
+                Assert.Equal(Enumerable.Range(1, events.Length).Select(n => (long)n), events.Select(e => e.RootElement.GetProperty("sequence").GetInt64()));
+                var phases = events.Select(e => e.RootElement.GetProperty("payload")).Where(p => p.GetProperty("type").GetString() == "phase").ToArray();
+                Assert.Single(phases, p => p.GetProperty("phase").GetString() == "run");
+                var ids = phases.Select(p => p.GetProperty("spanId").GetInt64()).ToHashSet();
+                Assert.All(phases.Where(p => p.GetProperty("parentSpanId").ValueKind != JsonValueKind.Null),
+                    p => Assert.Contains(p.GetProperty("parentSpanId").GetInt64(), ids));
+                outcomes.Add(events[^1].RootElement.GetProperty("payload").GetProperty("outcome").GetString()!);
+            }
+            finally
+            {
+                foreach (var value in events)
+                    value.Dispose();
+            }
+        }
+        Assert.Equal(new[] { "completed", "failed" }, outcomes.Order());
+    }
+
+    private sealed class FailedMetricsStream : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count) => throw new IOException("unavailable");
+        public override void Write(ReadOnlySpan<byte> buffer) => throw new IOException("unavailable");
+    }
     [Fact]
     public async Task IndexTimeoutDefaultsAndRangeSupportLargeWorkspaces()
     {
@@ -205,7 +323,7 @@ public sealed class CliTests
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Agent, CliArguments.Parse(["explore", "--term", "Service", "--format", "agent"]).ExplorationRequest().Format);
         Assert.Equal(ExploreFormat.Audit, CliArguments.Parse(["explore", "--term", "Service", "--format", "audit"]).ExplorationRequest().Format);
-        Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
+        Assert.Equal(ExploreScopePolicy.Discover, CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.RequireUnique, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "unique"]).ExplorationRequest().ScopePolicy);
         Assert.Equal(ExploreScopePolicy.PreferDebug, CliArguments.Parse(["explore", "--term", "Service", "--scope-policy", "prefer-debug"]).ExplorationRequest().ScopePolicy);
         Assert.False(CliArguments.Parse(["explore", "--term", "Service"]).ExplorationRequest().ObserveOwner);
@@ -282,6 +400,87 @@ public sealed class CliTests
         var selectionWithoutWatch = await Run("serve", "--root", fixture.Root, "--trusted", "--target", "absent.csproj");
         Assert.Equal("ARGUMENT_UNSUPPORTED", Code(selectionWithoutWatch.Json));
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".sharpdeps")));
+    }
+
+    [Fact]
+    public void ExploreDefaultsPreserveExplicitScopeAndExactSelectorIntent()
+    {
+        ExploreRequest Request(params string[] arguments) => CliArguments.Parse(["explore", .. arguments]).ExplorationRequest();
+        Assert.Equal(ExploreScopePolicy.RequireUnique, new ExploreRequest("Service").ScopePolicy);
+        foreach (var query in new[] { "Service", "src/Service.cs" })
+        {
+            Assert.Equal(Request("--term", query), Request(query));
+            Assert.Equal(ExploreScopePolicy.Discover, Request(query).ScopePolicy);
+            foreach (var flag in new[] { "--project-id", "--variant" })
+            {
+                Assert.Equal(ExploreScopePolicy.RequireUnique, Request(query, flag, "saved-scope").ScopePolicy);
+                Assert.Equal(ExploreScopePolicy.Discover, Request(query, flag, "saved-scope", "--scope-policy", "discover").ScopePolicy);
+            }
+        }
+        var occurrence = "hocc_" + new string('a', 64);
+        foreach (var arguments in new[]
+        {
+            new[] { occurrence },
+            new[] { "Service " + occurrence },
+            new[] { occurrence, "--path-to", occurrence },
+            new[] { "--term", "items/{id}", "--query-kind", "http-get-literal" }
+        })
+        {
+            Assert.Equal(ExploreScopePolicy.RequireUnique, Request(arguments).ScopePolicy);
+            Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => Request([.. arguments, "--scope-policy", "discover"])).Code);
+        }
+        foreach (var arguments in new[]
+        {
+            new[] { "Service", "Other" }, new[] { "Service", "--term", "Other" },
+            new[] { "--term", "Service", "Other" }
+        })
+            Assert.Equal("ARGUMENT_DUPLICATE", Assert.Throws<CliFailure>(() => Request(arguments)).Code);
+        Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => CliArguments.Parse(["search", "Service"])).Code);
+    }
+
+    [Fact]
+    public async Task ExploreUsesCurrentDirectoryWithoutSearchingForAnAncestorIndex()
+    {
+        using var fixture = new Fixture();
+        var selectedRoot = Directory.CreateDirectory(Path.Combine(fixture.Root, "nested")).FullName;
+        var testAssembly = typeof(CliTests).Assembly.Location;
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            WorkingDirectory = selectedRoot, UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "exec", "--runtimeconfig", Path.ChangeExtension(testAssembly, ".runtimeconfig.json"),
+            "--depsfile", Path.ChangeExtension(testAssembly, ".deps.json"), typeof(CliApplication).Assembly.Location,
+            "explore", "Service" })
+            start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+        Assert.Equal(3, process.ExitCode);
+        Assert.Empty(await stderr);
+        using var result = JsonDocument.Parse(await stdout);
+        var error = Assert.Single(result.RootElement.GetProperty("errors").EnumerateArray());
+        Assert.Equal("INDEX_MISSING", error.GetProperty("code").GetString());
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains(selectedRoot, message, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFullPath(".sharpdeps/index.sqlite", selectedRoot), message, StringComparison.Ordinal);
+        Assert.Contains("--root/--index", message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(selectedRoot, ".sharpdeps")));
+        Assert.Equal(0, (await Run("explore", "Service", "--root", fixture.Root)).Exit);
+        Assert.Equal("ARGUMENT_REQUIRED", Code((await Run("status")).Json));
     }
 
     [Fact]
@@ -418,6 +617,193 @@ public sealed class CliTests
         Assert.Contains("Owner observation state=unavailable generation=unknown pin=unknown", unavailable.Json);
     }
 
+    [Theory]
+    [InlineData("explore", 14, 14, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("search", 14, 14, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("explore", 14, 270, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("search", 14, 270, "INDEX_OPEN_FAILED", 5)]
+    [InlineData("explore", 1, 1, "INTERNAL_ERROR", 7)]
+    [InlineData("search", 1, 1, "INTERNAL_ERROR", 7)]
+    public async Task SavedQueryCannotOpenErrorsAreActionableWithoutLeakingExceptionDetails(
+        string command, int primaryCode, int extendedCode, string expectedCode, int expectedExit)
+    {
+        using var fixture = new Fixture();
+        const string privateDetail = "private exception detail";
+        using var writer = new PhaseCallbackWriter("reader.snapshot",
+            () => throw new SqliteException(privateDetail + fixture.Root, primaryCode, extendedCode));
+        using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("open-failure", command, writer);
+        var reply = await Run(command, "--root", fixture.Root, "--term", "Service", "--max-milliseconds", "3000");
+        Assert.True(writer.Invoked);
+        Assert.Equal(expectedExit, reply.Exit);
+        Assert.Equal(expectedCode, Code(reply.Json));
+        Assert.Empty(reply.Progress);
+        Assert.DoesNotContain(privateDetail, reply.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Root, reply.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(nameof(SqliteException), reply.Json, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(reply.Json);
+        Assert.Single(document.RootElement.GetProperty("errors").EnumerateArray());
+        Assert.False(document.RootElement.TryGetProperty("result", out _));
+        if (expectedCode == "INDEX_OPEN_FAILED")
+        {
+            Assert.Equal(5, CliApplication.ExitFor(expectedCode));
+            Assert.Contains("index/WAL/SHM", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("missing or invalid", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("paths are valid and evidence indicates a sandbox restriction", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("normal scoped permission review", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("authorized operation within retry limits", reply.Json, StringComparison.Ordinal);
+            Assert.Contains("No source evidence was returned", reply.Json, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("audit")]
+    [InlineData("agent")]
+    public async Task ExplorePreparationTimeoutReportsBudgetWithoutReturningEvidence(string format)
+    {
+        using var fixture = new Fixture();
+        IndexSnapshot saved;
+        using (var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid)) saved = reader.Snapshot();
+        var expanded = saved with { Graph = saved.Graph with { Generation = saved.Graph.Generation + 1,
+            SnapshotId = "timeout-preparation", Nodes = [.. saved.Graph.Nodes,
+            .. Enumerable.Range(0, 50000).Select(i => new HarnessNode("timeout-node-" + i,
+                HarnessNodeKind.SourceFile, "Unrelated", saved.Graph.WorkspaceId, null))] } };
+        using (var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true))
+            writer.Commit(IndexStage.Create(expanded));
+
+        var reply = await Run("explore", "--root", fixture.Root, "--trusted", "--term", "Service",
+            "--format", format, "--max-milliseconds", "10");
+        Assert.Equal(4, reply.Exit);
+        Assert.Empty(reply.Progress);
+        using var document = JsonDocument.Parse(reply.Json);
+        Assert.Equal("explore", document.RootElement.GetProperty("command").GetString());
+        var error = Assert.Single(document.RootElement.GetProperty("errors").EnumerateArray());
+        Assert.Equal("QUERY_TIMEOUT", error.GetProperty("code").GetString());
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains("10 ms computation deadline", message, StringComparison.Ordinal);
+        Assert.Contains("saved-index preparation", message, StringComparison.Ordinal);
+        Assert.Contains("No source evidence was returned", message, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Root, reply.Json, StringComparison.Ordinal);
+        Assert.False(document.RootElement.TryGetProperty("result", out _));
+    }
+
+    [Theory]
+    [InlineData(null, "QUERY_TIMEOUT")]
+    [InlineData("5000", null)]
+    [InlineData("100", "PREPARATION_TIMEOUT")]
+    public async Task ExplorePreparationBudgetIsOptInAndStartsExplorationAfterTheReader(string? preparation, string? errorCode)
+    {
+        using var fixture = new Fixture();
+        using var writer = new PhaseCallbackWriter("reader.open", () => Thread.Sleep(1100));
+        using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("preparation-deadline", "explore", writer);
+        string[] arguments = ["explore", "--root", fixture.Root, "--term", "Service", "--trusted", "--format", "agent"];
+        if (preparation is not null) arguments = [.. arguments, "--prepare-max-milliseconds", preparation];
+        var reply = await Run(arguments);
+        if (errorCode is null)
+        {
+            Assert.True(writer.Invoked);
+            Assert.Equal(0, reply.Exit);
+            Assert.Contains("Service", reply.Json, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(4, reply.Exit);
+            Assert.Equal(errorCode, Code(reply.Json));
+            Assert.Contains("saved-index preparation", reply.Json, StringComparison.Ordinal);
+            Assert.Contains(errorCode == "PREPARATION_TIMEOUT" ? "100 ms preparation deadline" : "1000 ms computation deadline", reply.Json, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(reply.Json);
+            Assert.False(document.RootElement.TryGetProperty("result", out _));
+        }
+        Assert.Empty(reply.Progress);
+    }
+
+    [Fact]
+    public async Task ExplorePreparationBudgetDoesNotExtendExplorationDeadline()
+    {
+        using var fixture = new Fixture();
+        using var writer = new PhaseCallbackWriter("explore.execute", () => Thread.Sleep(1100));
+        using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("exploration-deadline", "explore", writer);
+        var reply = await Run("explore", "--root", fixture.Root, "--term", "Service", "--trusted",
+            "--prepare-max-milliseconds", "5000", "--format", "agent");
+        Assert.True(writer.Invoked);
+        Assert.Equal(4, reply.Exit);
+        Assert.Equal("QUERY_TIMEOUT", Code(reply.Json));
+        Assert.Contains("1000 ms computation deadline", reply.Json, StringComparison.Ordinal);
+        Assert.Contains("exploration preparation or execution", reply.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain("PREPARATION_TIMEOUT", reply.Json, StringComparison.Ordinal);
+        Assert.Empty(reply.Progress);
+        using var document = JsonDocument.Parse(reply.Json);
+        Assert.False(document.RootElement.TryGetProperty("result", out _));
+    }
+
+    [Theory]
+    [InlineData("reader.open")]
+    [InlineData("explore.execute")]
+    public async Task ExplorePreparationBudgetPreservesCallerCancellationAcrossBothPhases(string phase)
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        using var writer = new PhaseCallbackWriter(phase, cancellation.Cancel);
+        using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("preparation-cancellation", "explore", writer);
+        var output = new StringWriter();
+        var progress = new StringWriter();
+        var exit = await CliApplication.RunAsync(["explore", "--root", fixture.Root, "--term", "Service", "--trusted",
+            "--prepare-max-milliseconds", "5000"], output, progress, cancellation.Token);
+        Assert.True(writer.Invoked);
+        Assert.Equal(130, exit);
+        Assert.Equal("CANCELLED", Code(output.ToString()));
+        Assert.DoesNotContain("PREPARATION_TIMEOUT", output.ToString(), StringComparison.Ordinal);
+        Assert.Empty(progress.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        Assert.False(document.RootElement.TryGetProperty("result", out _));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("9")]
+    [InlineData("30001")]
+    [InlineData("-1")]
+    [InlineData("2147483648")]
+    [InlineData("Infinity")]
+    [InlineData("1e3")]
+    [InlineData("+10")]
+    public async Task ExploreRejectsInvalidPreparationBudgetsBeforeWorkspaceAccess(string value)
+    {
+        using var fixture = new Fixture(seed: false);
+        var reply = await Run("explore", "--root", fixture.Root, "--term", "Service", "--prepare-max-milliseconds", value);
+        Assert.Equal(2, reply.Exit);
+        Assert.Equal("ARGUMENT_INVALID", Code(reply.Json));
+        Assert.Empty(reply.Progress);
+        Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
+    }
+
+    [Fact]
+    public void ExplorePreparationBudgetUsesFiniteBoundsAndIsExploreOnly()
+    {
+        Assert.Null(CliArguments.Parse(["explore", "Service"]).ExplorePreparationMilliseconds());
+        foreach (var value in new[] { 10, 30000 })
+            Assert.Equal(value, CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", value.ToString(System.Globalization.CultureInfo.InvariantCulture)]).ExplorePreparationMilliseconds());
+        var zeroExploration = CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", "5000", "--max-milliseconds", "0"]);
+        Assert.Equal(5000, zeroExploration.ExplorePreparationMilliseconds());
+        Assert.Equal(0, zeroExploration.ExplorationRequest().Budget!.MaxMilliseconds);
+        Assert.Equal("ARGUMENT_UNKNOWN", Assert.Throws<CliFailure>(() => CliArguments.Parse(["search", "--term", "Service", "--prepare-max-milliseconds", "5000"])).Code);
+        Assert.Equal("ARGUMENT_DUPLICATE", Assert.Throws<CliFailure>(() => CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", "100", "--prepare-max-milliseconds", "200"])).Code);
+        Assert.Equal("ARGUMENT_REQUIRED", Assert.Throws<CliFailure>(() => CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds"])).Code);
+    }
+
+    private sealed class PhaseCallbackWriter(string phase, Action callback) : StreamWriter(Stream.Null)
+    {
+        public bool Invoked { get; private set; }
+        public override void WriteLine(string? value)
+        {
+            if (!Invoked && value?.Contains("\"phase\":\"" + phase + "\"", StringComparison.Ordinal) == true)
+            {
+                Invoked = true;
+                callback();
+            }
+            base.WriteLine(value);
+        }
+    }
+
     [Fact]
     public async Task ZeroQueryBudgetWorksAtTheCliBoundaryAndRejectsSubMinimumPositiveValues()
     {
@@ -457,6 +843,8 @@ public sealed class CliTests
         var help = await Run("help");
         Assert.Equal(0, help.Exit);
         Assert.Empty(help.Progress);
+        Assert.Contains("--prepare-max-milliseconds", help.Json, StringComparison.Ordinal);
+        Assert.Contains("finite, no 0", help.Json, StringComparison.Ordinal);
         using var helpDoc = JsonDocument.Parse(help.Json);
         Assert.Contains("index", helpDoc.RootElement.GetProperty("result").GetProperty("commands").EnumerateArray().Select(x => x.GetString()));
         var doctor = await Run("doctor");
@@ -478,6 +866,8 @@ public sealed class CliTests
         var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var builds = 0;
         var publications = 0;
+        var discarded = 0;
+        var adopted = 0;
         var remoteAdmissions = 0;
         using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
         var original = pinned.Snapshot();
@@ -497,8 +887,18 @@ public sealed class CliTests
             }
             using var latest = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
             var previous = latest.Snapshot();
-            return new(previous with { Graph = previous.Graph with { Generation = previous.Graph.Generation + 1,
-                SnapshotId = Guid.NewGuid().ToString("N") } }, () => Interlocked.Increment(ref publications));
+            return new(previous with
+            {
+                Graph = previous.Graph with
+                {
+                    Generation = previous.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            }, () => Interlocked.Increment(ref publications))
+            {
+                AdoptCommittedState = () => Interlocked.Increment(ref adopted),
+                DiscardPreparedState = () => Interlocked.Increment(ref discarded)
+            };
         });
         owner.RequestAccepted = id =>
         {
@@ -528,6 +928,8 @@ public sealed class CliTests
         Assert.Equal(survivor.Result.Generation, (await shortOwner).Result!.Generation);
         Assert.Equal(2, builds); // superseded extraction + one coalesced fresh extraction
         Assert.Equal(1, publications);
+        Assert.Equal(1, Volatile.Read(ref adopted));
+        Assert.Equal(2, Volatile.Read(ref discarded));
         Assert.Equal(original.Graph.Generation, pinned.Snapshot().Graph.Generation);
         Assert.Contains(pinned.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
         using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
@@ -543,6 +945,318 @@ public sealed class CliTests
             await owner.DisposeAsync();
             return reply;
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActualCliDeadlineAndCallerCancellationDoNotCancelSharedOwner(bool cancelCaller)
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        var building = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        await using var owner = new CliCoordinator(writer, async (_, token) =>
+        {
+            building.TrySetResult(token);
+            await release.Task.WaitAsync(token);
+            using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var previous = current.Snapshot();
+            return new(previous with
+            {
+                Graph = previous.Graph with
+                {
+                    Generation = previous.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            }, () => { });
+        });
+        owner.RequestAccepted = id =>
+        {
+            if (id == "deadline-survivor")
+                admitted.TrySetResult();
+        };
+        var arguments = new[] { "update", "--root", fixture.Root, "--index", fixture.IndexPath,
+            "--trusted", "--target", "App.csproj" };
+        var output = new StringWriter();
+        var expired = CliApplication.RunAsync([.. arguments, "--request-id", "deadline-client", "--timeout-seconds",
+            cancelCaller ? "3600" : "1"], output, TextWriter.Null, caller.Token);
+        var sharedToken = await building.Task.WaitAsync(deadline.Token);
+        var survivor = Run([.. arguments, "--request-id", "deadline-survivor", "--timeout-seconds", "1800"]);
+        await admitted.Task.WaitAsync(deadline.Token);
+        if (cancelCaller)
+            caller.Cancel();
+        Assert.Equal(cancelCaller ? 130 : 4, await expired.WaitAsync(deadline.Token));
+        Assert.Equal(cancelCaller ? "CANCELLED" : "TIMEOUT", Code(output.ToString()));
+        Assert.False(sharedToken.IsCancellationRequested);
+        Assert.False(survivor.IsCompleted);
+        Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+            IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+        release.TrySetResult();
+        var completed = await survivor.WaitAsync(deadline.Token);
+        Assert.Equal(0, completed.Exit);
+        using var reply = JsonDocument.Parse(completed.Json);
+        Assert.Equal(2, reply.RootElement.GetProperty("result").GetProperty("generation").GetInt64());
+        Assert.False(sharedToken.IsCancellationRequested);
+        await owner.DrainAsync().WaitAsync(deadline.Token);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task ActualCliShortOwnerDrainsSharedPublicationAfterItsDeadlineOrCallerCancellation(bool cancelCaller)
+    {
+        using var fixture = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        using var survivorCancellation = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        var mutexName = "sharpdeps-drain-" + Guid.NewGuid().ToString("N");
+        var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Named mutex ownership must stay on this dedicated thread across the asynchronous test.
+        var held = Task.Factory.StartNew(() =>
+        {
+            using var mutex = new Mutex(true, mutexName, out var created);
+            try
+            {
+                Assert.True(created);
+                acquired.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                if (created)
+                    mutex.ReleaseMutex();
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        using var progress = new OwnerStartGateWriter();
+        Task<int>? shortOwner = null;
+        Task<int>? survivor = null;
+        try
+        {
+            await acquired.Task.WaitAsync(deadline.Token);
+            var (sdkRoot, _) = SemanticBaselineFixture();
+            Assert.True(SharpDeps.Analysis.Roslyn.SemanticEnvironment.TryRegister(sdkRoot, out var reason), reason);
+            var sdk = SharpDeps.Analysis.Roslyn.SemanticEnvironment.Describe(fixture.Root).SdkVersion;
+            Assert.NotNull(sdk);
+            File.WriteAllText(Path.Combine(fixture.Root, "global.json"), JsonSerializer.Serialize(new
+            { sdk = new { version = sdk, rollForward = "disable" } }));
+            var target = Path.Combine(fixture.Root, "App.csproj");
+            File.WriteAllText(target, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+                  </PropertyGroup>
+                  <UsingTask TaskName="HoldSharedPublication" TaskFactory="RoslynCodeTaskFactory"
+                             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+                    <ParameterGroup>
+                      <MutexName ParameterType="System.String" Required="true" />
+                      <ReadyFile ParameterType="System.String" Required="true" />
+                    </ParameterGroup>
+                    <Task>
+                      <Code Type="Fragment" Language="cs"><![CDATA[
+                        using (var mutex = new System.Threading.Mutex(false, MutexName))
+                        {
+                            System.IO.File.WriteAllText(ReadyFile, "waiting");
+                            if (!mutex.WaitOne(System.TimeSpan.FromSeconds(90)))
+                                throw new System.TimeoutException("Shared publication gate was not released.");
+                            mutex.ReleaseMutex();
+                        }
+                      ]]></Code>
+                    </Task>
+                  </UsingTask>
+                  <Target Name="HoldSharedPublicationBeforeCompile" BeforeTargets="CoreCompile"
+                          Condition="'$(DesignTimeBuild)' == 'true'">
+                    <HoldSharedPublication MutexName="{{mutexName}}"
+                        ReadyFile="$(MSBuildProjectDirectory)/.sharpdeps/drain.ready" />
+                  </Target>
+                </Project>
+                """);
+            var config = Path.Combine(fixture.Root, "restore.config");
+            File.WriteAllText(config, "<configuration><packageSources><clear /></packageSources></configuration>");
+            await OracleProcess.ExecuteAsync(fixture.Root, ["restore", target, "--configfile", config, "--verbosity", "quiet"],
+                deadline.Token, packageRoot: Path.Combine(fixture.Root, "packages"));
+            using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var original = pinned.Snapshot();
+            Assert.Null(CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid));
+            var arguments = new[] { "update", "--root", fixture.Root, "--index", fixture.IndexPath,
+                "--trusted", "--target", target };
+            var output = new StringWriter();
+            shortOwner = CliApplication.RunAsync([.. arguments, "--request-id", "short-owner", "--timeout-seconds",
+                cancelCaller ? "3600" : "30"], output, progress, caller.Token);
+            await progress.Started.Task.WaitAsync(deadline.Token);
+            var owner = Assert.IsType<CoordinatorOwner>(CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid));
+            Assert.Equal(Environment.ProcessId, owner.ProcessId);
+            var survivorOutput = new StringWriter();
+            survivor = CliApplication.RunAsync([.. arguments, "--request-id", "drain-survivor", "--timeout-seconds", "1800"],
+                survivorOutput, TextWriter.Null, survivorCancellation.Token);
+            CoordinatorReply status;
+            // Admit the survivor before cold SDK/workspace startup can consume the owner's deadline.
+            do
+            {
+                status = Assert.IsType<CoordinatorReply>(await StatusAsync(deadline.Token));
+                if (status.DesiredRevision != 1 || status.State != "updating")
+                    await Task.Delay(20, deadline.Token);
+            } while (status.DesiredRevision != 1 || status.State != "updating");
+            progress.Resume.TrySetResult();
+            do
+            {
+                status = Assert.IsType<CoordinatorReply>(await StatusAsync(deadline.Token));
+                if (status.DesiredRevision < 2)
+                    await Task.Delay(20, deadline.Token);
+            } while (status.DesiredRevision < 2);
+            while (!File.Exists(Path.Combine(fixture.Root, ".sharpdeps", "drain.ready")))
+            {
+                Assert.False(shortOwner.IsCompleted, output.ToString());
+                Assert.False(survivor.IsCompleted, survivorOutput.ToString());
+                await Task.Delay(20, deadline.Token);
+            }
+            Assert.False(shortOwner.IsCompleted);
+            Assert.Equal(owner.Instance, status.Instance);
+            Assert.Equal(0, status.Revision);
+            Assert.Equal(2, status.DesiredRevision);
+            Assert.Equal("updating", status.State);
+            Assert.Null(status.ErrorCode);
+            if (cancelCaller)
+                caller.Cancel();
+            // Observe status admission, not socket connectivity: Unix shares a listener across admitted sessions.
+            while (true)
+            {
+                using var probeDeadline = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+                probeDeadline.CancelAfter(TimeSpan.FromSeconds(2));
+                try
+                {
+                    var probe = await StatusAsync(probeDeadline.Token);
+                    if (probe is null)
+                    {
+                        break;
+                    }
+                    Assert.Equal(owner.Instance, probe.Instance);
+                    Assert.Equal(0, probe.Revision);
+                    Assert.Equal(2, probe.DesiredRevision);
+                    Assert.Equal("updating", probe.State);
+                    Assert.Null(probe.ErrorCode);
+                }
+                catch (OperationCanceledException) when (probeDeadline.IsCancellationRequested && !deadline.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (CliFailure failure) when (failure.Code == "COORDINATOR_RESULT_UNKNOWN")
+                {
+                    // A connection raced admission shutdown; retry without treating transport failure as proof.
+                }
+                await Task.Delay(20, deadline.Token);
+            }
+            Assert.False(shortOwner.IsCompleted);
+            Assert.False(survivor.IsCompleted);
+            Assert.Empty(output.ToString());
+            Assert.Contains("extraction started", progress.ToString(), StringComparison.Ordinal);
+            Assert.Equal(owner.Instance, CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid)!.Instance);
+            Assert.Equal("INDEX_BUSY", Assert.Throws<IndexStoreException>(() =>
+                IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true)).Code);
+            using (var unchanged = IndexReader.Open(fixture.IndexPath, fixture.Uuid))
+                Assert.Equal(original.Graph.SnapshotId, unchanged.Snapshot().Graph.SnapshotId);
+            release.TrySetResult();
+            await held.WaitAsync(deadline.Token);
+            var survivorExit = await survivor.WaitAsync(deadline.Token);
+            Assert.True(survivorExit == 0, $"Exit={survivorExit}; {survivorOutput}");
+            Assert.Equal(cancelCaller ? 130 : 4, await shortOwner.WaitAsync(deadline.Token));
+            Assert.Equal(cancelCaller ? "CANCELLED" : "TIMEOUT", Code(output.ToString()));
+            using var reply = JsonDocument.Parse(survivorOutput.ToString());
+            var result = reply.RootElement.GetProperty("result");
+            Assert.Equal(owner.Instance, result.GetProperty("ownerInstance").GetGuid());
+            Assert.Equal(2, result.GetProperty("revision").GetInt64());
+            Assert.Equal(2, result.GetProperty("desiredRevision").GetInt64());
+            Assert.Equal(original.Graph.Generation + 1, result.GetProperty("generation").GetInt64());
+            using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+            var published = current.Snapshot().Graph;
+            Assert.Equal(result.GetProperty("snapshotId").GetString(), published.SnapshotId);
+            Assert.Equal(original.Graph.Generation + 1, published.Generation);
+            var service = Assert.Single(published.Nodes, node => node.Kind == HarnessNodeKind.Type && node.Name == "Service");
+            Assert.Equal(HarnessIdentity.LogicalSymbolId(fixture.Uuid,
+                HarnessIdentity.ProjectId(fixture.Uuid, "App.csproj"), "type", "doc:T:Service"), service.Id);
+            Assert.Contains(current.Search("Service"), hit => hit.NodeId == service.Id);
+            Assert.Equal(original.Graph.SnapshotId, pinned.Snapshot().Graph.SnapshotId);
+            Assert.Contains(pinned.Search("Service"), hit => hit.NodeId == fixture.Symbol("Service"));
+            Assert.Equal(owner.Instance, CoordinatorProtocol.Discover(fixture.Root, fixture.IndexPath, fixture.Uuid)!.Instance);
+            Assert.Null(await StatusAsync(deadline.Token));
+            using var available = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+            Assert.Equal(fixture.Uuid, available.WorkspaceUuid);
+            Task<CoordinatorReply?> StatusAsync(CancellationToken token) => CoordinatorProtocol.TrySendAsync(owner, new(CoordinatorProtocol.Version,
+                owner.Instance, fixture.Uuid, "drain-status", "status", fixture.Root, fixture.IndexPath, false, []), token);
+        }
+        finally
+        {
+            progress.Resume.TrySetResult();
+            release.TrySetResult();
+            caller.Cancel();
+            survivorCancellation.Cancel();
+            await Task.WhenAll(new Task?[] { held, shortOwner, survivor }.OfType<Task>()).WaitAsync(TimeSpan.FromMinutes(2));
+        }
+    }
+
+    [Fact]
+    public async Task PreparedStateIsDiscardedOnRollbackAndAdoptionFailureCannotUndoCommit()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project />");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var pinned = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        var original = pinned.Snapshot();
+        using var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true);
+        var reject = true;
+        var adopted = 0;
+        var discarded = 0;
+        await using var owner = new CliCoordinator(writer, (_, _) => Task.FromResult(new CliIndexBuild(
+            original with
+            {
+                Graph = original.Graph with
+                {
+                    Generation = original.Graph.Generation + 1,
+                    SnapshotId = Guid.NewGuid().ToString("N")
+                }
+            },
+            () =>
+            {
+                if (reject)
+                    throw new CliFailure("TEST_PUBLICATION_REJECTED", 3);
+            })
+        {
+            AdoptCommittedState = () =>
+            {
+                Interlocked.Increment(ref adopted);
+                throw new InvalidOperationException("Optional state adoption failed.");
+            },
+            DiscardPreparedState = () =>
+            {
+                Interlocked.Increment(ref discarded);
+                throw new InvalidOperationException("Optional state cleanup failed.");
+            }
+        }));
+        var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root,
+            "--trusted", "--target", "App.csproj"]), fixture.Root, fixture.IndexPath, fixture.Uuid);
+        var failed = await owner.UpdateAsync(update, "reject-prepared", deadline.Token);
+        Assert.Equal("TEST_PUBLICATION_REJECTED", failed.ErrorCode);
+        await WaitUntilAsync(() => Volatile.Read(ref discarded) == 1, deadline.Token);
+        Assert.Equal(0, Volatile.Read(ref adopted));
+        using (var unchanged = IndexReader.Open(fixture.IndexPath, fixture.Uuid))
+            Assert.Equal(original.Graph.Generation, unchanged.Snapshot().Graph.Generation);
+        reject = false;
+        var committed = await owner.UpdateAsync(update, "commit-despite-cache", deadline.Token);
+        Assert.Null(committed.ErrorCode);
+        Assert.Equal(original.Graph.Generation + 1, committed.Result!.Generation);
+        await WaitUntilAsync(() => Volatile.Read(ref discarded) == 2, deadline.Token);
+        Assert.Equal(1, Volatile.Read(ref adopted));
+        using var current = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(committed.Result.SnapshotId, current.Snapshot().Graph.SnapshotId);
+        Assert.Equal(original.Graph.Generation, pinned.Snapshot().Graph.Generation);
+        Assert.Equal(pinned.Search("Service").Select(h => h.NodeId), current.Search("Service").Select(h => h.NodeId));
     }
 
     [Fact]
@@ -731,8 +1445,10 @@ public sealed class CliTests
         Assert.Contains("unverified", saved.Json, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task WatchHashGuardRollsBackLostEventAndStoppedStageCannotPublish()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WatchHashGuardRollsBackLostEventAndStoppedStageCannotPublish(bool measured)
     {
         using var fixture = new Fixture();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -750,8 +1466,11 @@ public sealed class CliTests
             await release.Task.WaitAsync(token);
             return new(original with { Graph = original.Graph with { Generation = 2, SnapshotId = "watch-staged" } }, () => { });
         });
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "watch-metrics");
         var update = CoordinatorUpdate.Parse(CliArguments.Parse(["update", "--root", fixture.Root,
             "--trusted", "--target", "App.csproj"]), fixture.Root, fixture.IndexPath, fixture.Uuid);
+        if (measured)
+            update = update with { Options = update.Options with { MetricsDirectory = directory } };
         owner.StartWatch(update, TimeSpan.FromSeconds(30));
         await entered.Task.WaitAsync(deadline.Token);
         owner.Watch!.SetNotificationsEnabled(false);
@@ -778,21 +1497,42 @@ public sealed class CliTests
         Assert.Equal(original.Graph.Generation, final.Snapshot().Graph.Generation);
         Assert.Equal(original.Graph.Nodes.Select(node => node.Id), final.Snapshot().Graph.Nodes.Select(node => node.Id));
         Assert.Equal(pinned.Search("Service").Select(hit => hit.NodeId), final.Search("Service").Select(hit => hit.NodeId));
+        if (measured)
+        {
+            var records = Directory.GetFiles(directory, "*.jsonl").Select(file => File.ReadAllText(file)).ToArray();
+            Assert.All(records, text => Assert.DoesNotContain(fixture.Root, text, StringComparison.Ordinal));
+            var cycles = records.Select(text => text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => JsonSerializer.Deserialize<JsonElement>(line).GetProperty("payload")).ToArray())
+                .Where(events => events[0].GetProperty("operation").GetString() == "watch-cycle").ToArray();
+            Assert.Equal(2, cycles.Length);
+            Assert.Contains(cycles, events => events[^1].GetProperty("outcome").GetString() == "failed");
+            Assert.Contains(cycles, events => events[^1].GetProperty("outcome").GetString() == "cancelled");
+            Assert.All(cycles, events => Assert.Contains(events, value => value.GetProperty("type").GetString() == "phase"
+                && value.GetProperty("phase").GetString() == "watch.input-scan"));
+            Assert.Contains(cycles.SelectMany(events => events), value => value.GetProperty("type").GetString() == "phase"
+                && value.GetProperty("phase").GetString() == "watch.idle-wait");
+        }
+        else
+            Assert.False(Directory.Exists(directory));
+        Assert.False(SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Enabled);
     }
 
     [Fact]
     [Trait("Category", "Integration")]
     public async Task GeneratedDomainVariantsSurviveIndexingAndTheStoreRoundTrip()
     {
-        var (root, target) = SemanticBaselineFixture();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        await RestoreAndBuildAsync(root, target, deadline.Token);
-
-        var workspace = Guid.NewGuid();
-        var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
-        var indexPath = Path.Combine(outputDirectory, "index.sqlite");
+        var (fixtureRoot, _) = SemanticBaselineFixture();
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-generated-" + Guid.NewGuid().ToString("N"));
         try
         {
+            CopyFixture(fixtureRoot, root);
+            var target = Path.Combine(root, "SemanticBaseline.sln");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            await RestoreAndBuildAsync(root, target, deadline.Token);
+
+            var workspace = Guid.NewGuid();
+            var outputDirectory = Path.Combine(root, ".sharpdeps", "generated-test-" + Guid.NewGuid().ToString("N"));
+            var indexPath = Path.Combine(outputDirectory, "index.sqlite");
             using var writer = IndexWriter.Open(root, indexPath, workspace, true);
             var snapshot = await CliIndexer.BuildAsync(new(root, target, indexPath, workspace), null, deadline.Token);
             var generated = snapshot.Files.Where(file => file.Kind == IndexFileKinds.GeneratedSource).ToArray();
@@ -815,7 +1555,10 @@ public sealed class CliTests
             Assert.Equal(snapshot.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal),
                 saved.StoredGeneratedBodies.OrderBy(body => body.SourceId, StringComparer.Ordinal));
         }
-        finally { if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true); }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Fact]
@@ -1003,6 +1746,18 @@ public sealed class CliTests
         var output = new StringWriter(); var progress = new StringWriter();
         var exit = await CliApplication.RunAsync(arguments, output, progress);
         return (exit, output.ToString(), progress.ToString());
+    }
+
+    private sealed class OwnerStartGateWriter : StringWriter
+    {
+        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async Task WriteLineAsync(string? value)
+        {
+            await base.WriteLineAsync(value);
+            Started.TrySetResult();
+            await Resume.Task;
+        }
     }
 
     private sealed class Fixture : IDisposable
