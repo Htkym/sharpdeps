@@ -1,10 +1,10 @@
 # SharpDeps user guide
 
-English · [日本語](guide.ja.md) · [README](https://github.com/Htkym/sharpdeps/blob/main/README.md)
+English · [日本語](guide.ja.md) · [README](../README.md)
 
-This guide describes version 0.4.0. Its distribution targets are the VSIX and Visual Studio Marketplace extension, NuGet CLI/MCP tools, and GitHub Release downloads; Open VSX is excluded. Check the registry or release page for actual version availability. To install a supplied VSIX, check its version, commit, and hash, then choose **Install from VSIX** in the VS Code Extensions menu. Quick does not require a separate CLI installation.
+Install the extension from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) or select a downloaded VSIX with **Extensions: Install from VSIX…**. The latest released version is 0.4.0. Quick does not require a separate CLI installation. Features marked **Unreleased** describe this source tree; use the [tagged 0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/guide.md) for that release.
 
-The screenshots show the older 0.1.0 workbench analyzing `tests/fixtures/semantic-baseline/SemanticBaseline.sln`; external types are hidden for clarity. They illustrate the workbench controls rather than a new 0.4.0 capture. The controls remain as in 0.2.1; this VSIX updates the bundled analysis and saved-index reader hosts.
+The screenshots show the 0.1.0 workbench with external types hidden. They illustrate navigation and graph controls; saved-index compatibility depends on the installed reader version.
 
 ## Open a solution or project
 
@@ -48,7 +48,7 @@ Set `sharpdeps.resultProvider` to `savedIndex` to read the workspace's `.sharpde
 
 The 0.4.0 VSIX bundles a reader for SQLite index schemas 1/2/3. The published 0.2.1 extension reads only schema 1. Upgrading the NuGet CLI or changing `sharpdeps.savedIndexCliPath` does not replace the extension's bundled reader: update the VSIX as well before using schema-2/3 indexes. The 0.4.0 tools create schema-3 indexes and do not convert old indexes in place. See [CLI/MCP upgrade instructions](mcp.md#upgrade-from-030) for compatibility and offline backup requirements. Their separate-path examples are for CLI/MCP; to try a new default index in VS Code while preserving an older workspace and index, use a separate source checkout and create its default index.
 
-**Refresh** rereads stored results. To create or update an index, set `sharpdeps.savedIndexCliPath` to the absolute path of a compatible `SharpDeps.Cli.dll`, then explicitly run **SharpDeps: Update Saved Index** in a trusted workspace. This external CLI supplies explicit writes and owner-status observation; the bundled QueryHost still supplies reads. Updating requires the target SDK and restored dependencies. Running the CLI DLL directly and querying stored results require a .NET 10 runtime; local tool installation/restore, `dotnet tool run`, and `dnx` require an SDK. See the [CLI/MCP guide](mcp.md) for candidate capabilities and the [CLI contract](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/cli-skill-v1.ja.md) for trust and source requirements.
+**Refresh** rereads stored results. To create or update an index, set `sharpdeps.savedIndexCliPath` to the absolute path of a compatible `SharpDeps.Cli.dll`, then explicitly run **SharpDeps: Update Saved Index** in a trusted workspace. This external CLI supplies explicit writes and owner-status observation; the bundled QueryHost still supplies reads. Updating requires the target SDK and restored dependencies. Running the CLI DLL directly and querying stored results require a .NET 10 runtime; local tool installation/restore, `dotnet tool run`, and `dnx` require an SDK. See the [CLI/MCP guide](mcp.md) for supported capabilities and the [CLI contract](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/cli-skill-v1.ja.md) for trust and source requirements.
 
 `sharpdeps.savedIndexAutoRefresh` defaults to `false`. To enable it, use savedIndex in one trusted workspace folder, configure the same compatible CLI, and explicitly start its watch with a chosen target. Replace the paths in this PowerShell example with your prepared paths. This starts analysis and index writes.
 

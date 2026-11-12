@@ -56,7 +56,6 @@ const REQUIRED = [
   'docs/guide.md',
   'docs/guide.ja.md',
   'docs/mcp.md',
-  'docs/releasing.md',
   ...['overview', 'evidence', 'spacing', 'table'].flatMap((name) =>
     ['en', 'ja'].map((language) => `images/${name}-${language}.png`)
   ),
@@ -68,6 +67,10 @@ const FORBIDDEN = [
   'src/',
   'tests/',
   'schemas/',
+  'docs/releasing.md',
+  'docs/development/',
+  'docs/contracts/',
+  'eng/',
   'docs/implementation/',
   'docs/adr/',
   '.local/',

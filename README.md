@@ -1,101 +1,55 @@
 # SharpDeps — .NET Dependency Map
 
-English · [日本語](README.ja.md) · [User guide](docs/guide.md)
+English · [日本語](README.ja.md) · [VS Code guide](docs/guide.md) · [CLI and MCP](docs/mcp.md)
 
-SharpDeps helps you explore dependencies in a .NET solution from a VS Code editor tab. Start with projects, drill down to namespaces and types, and select a connection to inspect its source references.
+SharpDeps shows .NET project, namespace and type dependencies in VS Code, with source locations for the relationships it collected. The separate CLI saves an index for repeatable queries; the optional MCP server lets an AI client explore that index.
 
 ![Project dependencies in SharpDeps](images/overview-en.png)
 
-The screenshots show the **0.1.0 workbench**. The [user guide](docs/guide.md) describes version 0.4.0 and its saved-index compatibility.
+The images show the 0.1.0 workbench. See the guides for current controls and saved-index compatibility.
 
 ## Install
 
-This documentation describes version 0.4.0 of the VS Code extension, CLI, and optional MCP tool. Its distribution targets are Visual Studio Marketplace, NuGet, and GitHub Release downloads; Open VSX is excluded. Check the registry or release page for the versions actually available before choosing one.
+Install **SharpDeps — .NET Dependency Map** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps), or download the VSIX from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) and choose **Extensions: Install from VSIX…** in VS Code. Version 0.4.0 is the latest released version.
 
-Install a `.vsix` with **Extensions: Install from VSIX…** in the Command Palette. Published versions are available from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) and [GitHub Releases](https://github.com/Htkym/sharpdeps/releases); check the version in VS Code's Extensions view.
+VS Code 1.90 or later is required. Trust the workspace before running analysis.
 
-VS Code 1.90 or later and a trusted workspace are required to run analysis.
-
-| Mode | What it shows | Requirements |
+| Mode | Use it for | Requirements |
 | --- | --- | --- |
-| Quick | Declared project references, C# type declarations, and syntax references, including namespace dependencies inferred from `using` directives. | .NET 10 runtime; no SDK or MSBuild evaluation. The .NET Install Tool can acquire the runtime. |
-| Semantic | Evaluated C# project references and code references resolved with MSBuild and Roslyn, including types and reference locations. | .NET 10 runtime and an installed SDK compatible with the target and its `global.json`. Restore the target's packages yourself. |
+| Quick | Project references, C# declarations and syntax-based relationships. | .NET 10 runtime; no SDK, MSBuild evaluation or package restore. |
+| Semantic | Evaluated C# references, symbol-resolved relationships and source evidence. | .NET 10 runtime, a target-compatible SDK and restored target dependencies. |
 
-The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) is installed as an extension dependency. SharpDeps does not acquire an SDK or restore project packages automatically.
+The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) supplies the extension's runtime when needed. SharpDeps does not install an SDK or restore your project's packages.
 
-The 0.4.0 VSIX keeps the 0.2.1 workbench controls and updates the bundled Quick, Semantic, and saved-index Query hosts. Its saved-index reader supports SQLite schemas 1/2/3; the published 0.2.1 extension reads schema 1 only. Installing a newer NuGet CLI does not update that bundled reader. See [saved-index setup and upgrade](docs/guide.md#read-a-saved-index) before using a new index in VS Code.
+The extension bundles its own analysis and saved-index reader hosts. Installing a newer CLI does not update those hosts. The 0.4.0 reader supports index schemas 1/2/3; see [saved-index setup](docs/guide.md#read-a-saved-index) before using an index from another tool version.
 
-## CLI and optional MCP
-
-Version 0.3.0 introduced a breaking MCP interface: one typed `explore` tool replaced the separate query tools. The CLI also accepts `explore --term "related names or paths"`. See [CLI and MCP exploration](docs/mcp.md) for version 0.4.0's agent/audit output, scope selection, source provenance, trust, freshness, response limits, and upgrade instructions. Versions through 0.2.3 retain their earlier MCP interface.
-
-The 0.4.0 CLI and MCP tools use the pinned Syntamark 1.2.0 Markdown runtime. This is a dependency of the separate tools; it is not bundled into the VSIX.
-
-Use an available exact package version in place of `<version>`. Both tools require the .NET 10 runtime. Install them from NuGet, or use the nupkg downloads from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) with a local NuGet feed.
-
-```bash
-dotnet tool install --global SharpDeps.Cli --version <version>
-dotnet tool install --global SharpDeps.Mcp --version <version>
-```
-
-[dnx](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-exec) runs a tool without permanent installation and requires .NET SDK 10.0.100 or later:
-
-```bash
-dnx SharpDeps.Cli@<version> --verbosity quiet -- help
-dnx SharpDeps.Mcp@<version> --verbosity quiet -- --root /absolute/workspace
-```
-
-For unattended use with .NET SDK 11 or later, add `--yes` before `--`. The .NET 10 launcher does not accept that option.
-
-An MCP client can launch the optional read-only host with:
-
-```json
-{
-  "mcpServers": {
-    "sharpdeps": {
-      "command": "dnx",
-      "args": ["SharpDeps.Mcp@<version>", "--verbosity", "quiet", "--", "--root", "/absolute/workspace"],
-      "env": { "DOTNET_NOLOGO": "1" }
-    }
-  }
-}
-```
-
-## AI agent setup
-
-For indexed .NET symbol and dependency questions, use the [agent setup and opt-out guide](docs/mcp.md#agent-routing-and-opt-out). It covers dedicated MCP/instruction files, a portable CLI guide, ordinary-search fallback, and disabling or re-enabling the integration without replacing existing user settings.
-
-## Open your first map
+## Open a map
 
 1. Open your solution folder in VS Code.
-2. Right-click a `.sln`, `.slnx`, or supported project file in Explorer and choose **SharpDeps: Show Dependency Map**.
-3. Select a node or connection. Use **Dependencies** or **Dependents** to narrow the graph, and open reference evidence from **Details**.
+2. Right-click a `.sln`, `.slnx` or supported project file and choose **SharpDeps: Show Dependency Map**.
+3. Select a node or connection to inspect **Details**. Use **Dependencies** or **Dependents** to narrow the view.
 
-You can also use the Command Palette. Quick supports `.csproj`, `.fsproj`, `.vbproj`, and `.vcxproj` targets; Semantic is intended for SDK-style C# projects. A project target follows its transitive project references.
+Quick accepts `.csproj`, `.fsproj`, `.vbproj` and `.vcxproj`; Semantic targets SDK-style C# projects. A project target includes its transitive project references. Choose **Semantic** and **Analyze** for symbol-resolved results.
 
-For symbol-resolved type references, select **Semantic** and choose **Analyze**. See the [user guide](docs/guide.md) for setup, filters, evidence, cycles, exports, and troubleshooting.
+Search, filters, the graph and the table share the current scope. Display limits restrict the picture, not the analyzed data or cycle detection. Quick/Semantic views export Mermaid, JSON, SVG or PNG; the saved-index view exports JSON. **Copy for agent** writes context to the clipboard and does not send it to an AI service.
 
-## Explore and share
+Analysis and rendering run locally. A failed or cancelled analysis retains the last successful view. Read coverage, certainty and limitations before interpreting a missing or inferred relationship. See the [VS Code guide](docs/guide.md) for settings, source navigation and troubleshooting.
 
-- Use the hierarchy or search to find projects, namespaces, and types. Graph and table views share the same scope.
-- Use the **bottom bar** for horizontal/vertical direction, zoom, and **Fit**. **Spacing** opens above the bar to adjust node and rank spacing.
-- A directed node pair has one line: solid when a declared, evaluated, or resolved relation exists; dashed when only inferred. Quick's solid lines show declarations, not proof of compiled code usage. Underlying relations remain available in Details.
-- Export the current scope as Mermaid, JSON, SVG, or PNG. **Copy for agent** copies an evidence-backed context to the clipboard; it does not contact a service.
-- Switch the UI with **日本語** or **English** in the top menu. Language, orientation, filters, selection, pane sizes, and camera are saved with the view.
+## CLI and MCP
 
-Analysis and graph rendering run locally. A failed or cancelled analysis keeps the last successful result. Display limits restrict the picture, not discovery, search, or cycle detection.
-
-## Build from source
-
-Use Node.js 20 or later and .NET SDK 10:
+Install the separate [.NET CLI tool](https://www.nuget.org/packages/SharpDeps.Cli) and, when needed, the [MCP server](https://www.nuget.org/packages/SharpDeps.Mcp):
 
 ```bash
-npm ci
-npm run package
+dotnet tool install --global SharpDeps.Cli --version 0.4.0
+dotnet tool install --global SharpDeps.Mcp --version 0.4.0
 ```
 
-This builds the Quick, Semantic, and saved-index Query hosts and the webview, then creates `sharpdeps-<package.json version>.vsix`. To run a development host, use `npm run build:analyzer` and `npm run build`, then press **F5** in VS Code. Packaging creates a local candidate; see [release preparation](docs/releasing.md) for channel selection and publication requirements.
+Tool installation requires an SDK; running an installed tool requires the .NET 10 runtime. Indexing additionally requires the target's SDK and restored dependencies. The CLI/MCP tools use Syntamark 1.2.0 for Markdown; that parser is not bundled in the VSIX.
+
+The [CLI/MCP guide](docs/mcp.md) covers indexing, source queries, normal MCP connection, scope selection, trust, finite time budgets and recovery. It marks unreleased additions separately from published 0.4.0 behavior. For the released implementation, use the [0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
+
+For AI clients, follow [agent setup and opt-out](docs/mcp.md#agent-routing-and-opt-out). Use indexed tools for structural questions and ordinary search for simple text or unindexed work. A connection does not grant source access or permission to update an index. Partial coverage and unverified freshness remain visible; fewer reads, lower token use and universal one-second completion are not guaranteed.
 
 ## License
 
-[MIT](https://github.com/Htkym/sharpdeps/blob/main/LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for bundled components.
+[MIT](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for bundled components.

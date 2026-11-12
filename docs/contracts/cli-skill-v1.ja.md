@@ -49,7 +49,7 @@ watchなしの`serve`には解析選択を付けない。watchの解析期限も
 
 Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids`を同時指定しない。
 
-`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy discover|unique|prefer-debug`を使う。通常の名前／pathでの`--scope-policy`の既定は、project／variantを明示しなければ`discover`、明示した場合は`unique`となる。exactな保存ID、`--path-to`、HttpGet literalでは`unique`を既定とし、`discover`の明示を拒否する。typed Query API自体の既定は`unique`のままである。`explore Service`と`explore --term Service`は同じ入口であり、併用しない。`explore`だけは`--root`を省略でき、その場合は絶対化した現在directoryを使い、祖先directoryを検索しない。indexがなければ選択したroot／indexと回復手順を返し、自動作成しない。
+`explore`はこの表とは別のtyped探索で、`--project-id`、単一`--variant`、`--path-prefix`、`--scope-policy discover|unique|prefer-debug`を使う。通常の名前／pathでの`--scope-policy`の既定はproject／variantを明示しなければ`discover`、明示した場合は`unique`となる。exactな保存ID、`--path-to`、HttpGet literalでは`unique`を既定とし、`discover`の明示を拒否する。typed Query API自体の既定は`unique`のままである。`explore Service`と`explore --term Service`は同じ入口であり、併用しない。`explore`だけは`--root`を省略でき、その場合は絶対化した現在directoryを使い、祖先directoryを検索しない。indexがなければ選択したroot／indexと回復手順を返し、自動作成しない。
 
 `discover`は同一snapshotからproject／variant別のgroupを最大4件返し、全体で件数・出力・計算の予算を共有する。group間の関係を一つのcall chainへまとめない。aliasはgroup内だけで有効であり、後続要求には対象scopeと保存IDを使う。予算に入らない巨大typeでは、完全に返せる関連memberの保存範囲を候補とし、source返却と省略理由を区別する。
 
@@ -97,7 +97,7 @@ Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま
 
 exitとJSONのerrorsをともに確認する。candidate/unresolvedやPartialをResolved/Completeへ補完せず、複数TFMのoccurrenceを混ぜない。truncatedなら返却件数を全件数と呼ばない。errorや打切りを、stdoutにJSONがあることだけで成功扱いしない。
 
-`CLI_MARKDOWN_FACTS_INCOMPLETE`（exit 4）は、不正、打切り、未対応のMarkdown原文構造を拒否する。index／updateは新世代を公開せず、既存のcommitted snapshotを保持する。原文構造が完全な、対応済みopaque／decoded mappingのPartial factsは索引へ取り込み、Partial coverageを保つ。見出しをdecoded identity keyに使うには、その見出し自体の投影が信頼できる必要がある。errorには長さを制限した復旧案内を含め、parserの例外文字列やsource本文をIPCへ転送しない。入力を黙って除外せず、exact hash、runtime pin、durable section identityの検査を維持する。
+`CLI_MARKDOWN_FACTS_INCOMPLETE`（exit 4）は不正、打切り、未対応のMarkdown原文構造を拒否する。index／updateは新世代を公開せず、既存のcommitted snapshotを保持する。原文構造が完全な、対応済みopaque／decoded mappingのPartial factsは索引へ取り込み、Partial coverageを保つ。見出しをdecoded identity keyに使うには、その見出し自体の投影が信頼できる必要がある。errorには長さを制限した復旧案内を含め、parserの例外文字列やsource本文をIPCへ転送しない。入力を黙って除外せず、exact hash、runtime pin、durable section identityの検査を維持する。
 
 [応答schema](../schemas/cli-response-v1.schema.json)はCLI envelopeと実Query DTOのwire構造を記述する。command別result内部は拡張可能なJSON objectで、各commandの成功条件、hash/spanの整合、状態の正しさ、最終JSONのUTF-8 byte予算はschemaだけで証明しない。JSON Schemaの文字長とQueryのUTF-16計測も区別する。
 

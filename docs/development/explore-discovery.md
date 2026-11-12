@@ -1,6 +1,6 @@
 # Omission-sensitive exploration discovery
 
-Status: unreleased v0.5 development. Package versions remain unchanged.
+Status: unreleased implementation reference. For user-facing behavior, see [CLI/MCP exploration](../mcp.md).
 
 ## Decision
 

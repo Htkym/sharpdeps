@@ -10,7 +10,7 @@ Syntamark 1.2.0の公開factsを使う純粋な照合・解決APIを記述する
 
 `MatchSections`は、固定facts契約によるexactな原文hashと、完全な原文の節構造を要求する。Complete factsと、対応済みのmapping／opaque Partial（LMD006のdecodedMapping／rawHtmlOrMdx理由）を受理し、Failed、打切り、不正、未対応の構造factsを拒否する。Partial状態と未知のdecoded領域はPartial／unknownのまま保つ。空でない見出しをdecoded identity keyへ使うのは、その見出し全体の投影がExact／CoveringTokensのときだけとし、既知の空見出しは既存keyを保つ。本文hashには元のDirectBodySpanを使う。保存snapshotは文書・scopeと、一致するparser、contract、profile、optionsへ結び付ける。
 
-原文hashと上記の版がすべて同じ再解析では、LocalKeyと見出し・本文のdescriptor一致を検証し、重複節を含めて保存済みtokenを再bindする。原文が変わったときは、見出しと直接本文hashの組、一意な見出し、一意な直接本文hashの順で照合する。弱い見出し・本文の一意性は、照合済みの節を除く前の一覧全体で確認する。見出しと本文が両方変わった場合や、重複して識別できない場合は新しいtokenと候補・理由を返す。
+原文hashと上記の版がすべて同じ再解析では、LocalKeyと見出し・本文のdescriptor一致を検証し、重複節を含めて保存済みtokenを再bindする。原文が変わったときは、見出しと直接本文hashの組、一意な見出し、一意な直接本文hashの順で照合する。弱い見出し・本文の一意性は照合済みの節を除く前の一覧全体で確認する。見出しと本文が両方変わった場合や、重複して識別できない場合は新しいtokenと候補・理由を返す。
 
 編集時のLocalKey、行番号、自動anchorを永続IDの根拠にしない。見出しはdecoded textとlevel、本文は共有factsの`DirectBodySpan`で指された原文bytesのUTF-8 SHA256を使う。節の順序に基づく推測はしないため、複数の親の下に同じ節がある場合も不確かな照合は確定しない。
 
@@ -18,7 +18,7 @@ tokenは空値・前後空白・過去tokenとの重複を拒否する。採番�
 
 ## mentionと再解決
 
-`MarkdownSymbolResolver.Resolve`は、adapterの投影、正確な原文、ownerが実際のHarness graphから用意したsymbol catalog、任意のproject・namespace・variant scopeを受け取る。catalogは同一workspaceの実在symbol nodeを要求し、variantを指定した別名には実在occurrenceを要求する。短縮名だけからprojectやassemblyを推測しない。Roslynからの投影では、member graphの`HarnessEvidence ?? Evidence`を使い、旧`Evidence`を重ねて連結しない。
+`MarkdownSymbolResolver.Resolve`は、adapterの投影、正確な原文、ownerが実際のHarness graphから用意したsymbol catalog、任意のproject・namespace・variant scopeを受け取る。catalogは同一workspaceの実在symbol nodeを要求し、variantを指定した別名には実在occurrenceを要求する。短縮名だけからprojectやassemblyを推測しない。Roslynからの投影ではmember graphの`HarnessEvidence ?? Evidence`を使い、旧`Evidence`を重ねて連結しない。
 
 明示metadataではsymbol ID、documentation ID、FQN、短縮名を扱い、project等のscopeを適用する。explicit IDが削除された場合は、同じ名前の別symbolへfallbackしない。コード例や本文の名前から`calls`・`conforms`を作らない。明示metadataの根拠は`documents_symbol`、名前への言及は`mentions_symbol`として区別する。
 
@@ -35,9 +35,3 @@ CLIは文書の投影をmergeする前のcode catalog coverageを渡す。文書
 `ReResolve`は保存した抽出根拠からsymbol候補を再計算し、Markdownを再parseしない。確定済みmention、候補mention、未解決mentionをすべて再解決の対象にできる。token・旧target・scopeの逆索引を持ち、ownerが変更前後のselector、target、影響scopeを完全に提示できる場合だけ対象を絞る。情報が不足する場合は全mentionを再解決する。同名候補の追加で旧確定を候補へ戻し、削除やrenameで旧targetを残さない。
 
 `ProjectGraph`は同じ原文・snapshot・generationのgraphへ結果を投影する。ownerが候補symbol nodeを先にmergeし、dangling edgeを作らない。sourceが変わった新generationへ古い根拠を流用しない。現行CLIは同じ準備済みfactsを節照合・投影・mention解決へ渡す。ownerのtoken採番・alias・metadata取得・変更通知・永続化は、このpure APIの外側で行う。
-
-## 導入時の検証記録
-
-この節の未実行・待機条件はSD2-04当時の記録である。現行CLIへの接続有無や0.4.0の検証結果を示すものではない。
-
-追加したfocused testsは、文書copyと移動、重複ID、節の挿入・編集・無変更再解析・重複本文、候補増減時の再解決、位置根拠と取消を対象とする。現段階では親の重い検証枠を待っており、build/testを実行していない。構文解析・実差分レビューの結果はrun成果物へ別に記録する。全suite、CLI golden、store/Query接続、host動作を証明したとは扱わない。

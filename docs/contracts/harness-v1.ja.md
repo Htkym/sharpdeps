@@ -1,16 +1,12 @@
 # SharpDeps harness契約 v1
 
-現行のHarness graphは旧report v2から独立したidentity、graph envelope、read/write trustを使います。CLIの索引作成、保存QueryとMCPへ接続済みです。現在の入口は[CLI契約](cli-skill-v1.ja.md)、保存形式と再索引条件は[索引保存契約](index-storage-v1.ja.md)を参照します。以下の基準SHAと検証件数は、導入時の履歴です。
-
-## 採用時の基準
-
-SD2-01では、既存report v2から独立したharnessのidentity、graph envelope、read/write trustを追加します。基準SHAは19f2e1993bd24828b61a922a2f719c72be441776、branchはfeature/0.2.0です。IN-01の前提SD2-03がSD2-01へ依存するため、SharpDeps側の先行契約を優先します。MD-05は15edc2765198e48ba9200bae8d3fd6d4ae127eb8の全11ファイルをBocchiがレビューし、合格しました。既存2.0.0-preview.1のartifact bytesは保持します。
+現行のHarness graphは旧report v2から独立したidentity、graph envelope、read/write trustを使います。CLIの索引作成、保存QueryとMCPへ接続済みです。現在の入口は[CLI契約](cli-skill-v1.ja.md)、保存形式と再索引条件は[索引保存契約](index-storage-v1.ja.md)を参照します。
 
 ## 新旧の境界
 
 既存Identity、TypeScript identity、AnalysisSnapshot、CodeMapJsonContext、report-v2.schema.json、legacyAdapterと旧providerは変更しません。旧wrk/prj/var/ty/mb/docなどの16桁hashは現在の意味を保ちます。新graphのformatはsharpdeps-harness-graph、schemaVersionは1、identityVersionはsharpdeps-harness/1です。旧reportのschemaVersion 2や旧CodeMapReportと同じserializerへ混ぜません。
 
-DTOはContracts/Harness、pure identity helperはCore/Identity/HarnessIdentityに置きます。Contracts/Core/QuickへMarkdown、MSBuild、SQLite、VS CodeやNode依存を追加しません。旧reportの形式とQuick／Semanticの実行境界を維持します。保存とUIの現在の接続は[保存Query provider契約](saved-query-provider-v1.ja.md)に従います。採用時のextension版0.1.0は履歴上の基準です。
+DTOはContracts/Harness、pure identity helperはCore/Identity/HarnessIdentityに置きます。Contracts/Core/QuickへMarkdown、MSBuild、SQLite、VS CodeやNode依存を追加しません。旧reportの形式とQuick／Semanticの実行境界を維持します。保存とUIの現在の接続は[保存Query provider契約](saved-query-provider-v1.ja.md)に従います。
 
 ## durable identity
 
@@ -55,14 +51,8 @@ ReadSavedは保存済みの検証された結果だけを対象にします。wo
 
 trust gateはOS sandboxではありません。信頼して実行するMSBuild/analyzer/generatorのnetworkやroot外アクセスを防ぐ機構ではありません。root/path検証、保存snapshot検証、各processの権限はそれぞれの入口で別に扱います。workspace trustを外部AIへのsource送信許可とみなしません。
 
-## 導入時の確認と引継ぎの履歴
+## 読込みと検証
 
-この節のタスク予定、待機条件、成功件数と未実施項目はSD2-01当時の記録です。0.4.0の検証結果や現在の作業承認を示しません。
+HarnessGraphContract.ValidateHeader は format／schema／identity version、UUID、generation、必要な配列を確認します。この header 検査だけでは graph 全体の root／path、node 参照、payload の検証を代替しません。保存 snapshot の検証は[索引保存](index-storage-v1.ja.md)、Query の検査は[Query context](query-context-v1.ja.md)を参照してください。harness-v1.fixtures.json は identity と graph の機械可読な契約例として保持します。
 
-新identityのUUID/root移動、同signatureのlogical ID、TFM別occurrence、別workspace、未指定/空の選択値の一致、旧ID goldenを小fixtureへ記録します。new graphのserializer roundtrip、unknown/既知空span、trustのread/writeと未知操作拒否を少数のcheckで確認します。旧report読取は既存QuickV2Mapper/legacyAdapterの小checkを再利用します。
-
-Bocchiの検証枠許可後、restore、限定C# test、tsc、限定Vitestが初回で成功しました。C# testは16件・warning 0、Vitestは指定3ファイルの14件です。4コマンドの実行時間合計は約18秒でした。全suite、pack、Semantic MSBuild integrationは実行していません。Bocchiの実差分レビューに合格するまでSD2-02/03へ進みません。IN-01の実Roslyn host/両repo matrixとMD-06の移管は未完了です。
-
-HarnessGraphContract.ValidateHeaderでformat/schema/identity version、UUID、generation、必要な配列を確認します。これはgraph全体のroot/path、node参照やpayloadの検証を代替しません。保存・Queryの完全入力検証はSD2-05/06で扱います。harness-v1.fixtures.jsonは独立したNode計算の契約例です。限定C# testではproject/symbol/net10 variant・occurrenceと旧IDのgolden、別TFM/別workspace、未指定選択値、graph読込、trustを確認しました。fixture全項目をC#のgolden assertionへ含めたとは主張しません。
-
-読込はHarnessGraphContract.Readを使い、必須constructor項目の欠落、header不一致、不正spanをJsonExceptionとして拒否します。coverageやcertaintyの欠落をComplete/Resolvedへ補完しません。nullのnullable項目もJSONに明示し、未指定と欠落を混同しません。
+読込みは HarnessGraphContract.Read を使い、必須 constructor 項目の欠落、header 不一致、不正 span を JsonException として拒否します。coverage や certainty の欠落を Complete／Resolved へ補完しません。nullable 項目の null も JSON に明示します。

@@ -45,7 +45,3 @@ webviewのcopyContext/exportは受信済みprojectionのrequest IDをprojectionR
 `prepareSavedExportFor`はデータとassertCurrentを返す。hostのcurrent provider identity、root membership、analysis ID、pinned workspace/snapshot/generation/variant、準備したprojection identity/subset、観測変更理由を、clipboard直前またはsave dialog後のfile出力直前に再照合する。切替・dispose・新projection・対象差異なら古い準備値を出力しない。webviewから結果本体/path/argvを採用せず、hostがpinned providerから組み立てる。JSONはUTF8で保存する。保存取消は書込みを行わず、宛先はfile schemeのローカルURIだけとし、remote authority/UNCは拒否する。
 
 照合は出力API呼出し直前までの保証であり、非同期clipboard/file APIの開始後に起きた切替を遡って取消・復元する保証ではない。入力変更理由を保持しても、保存済みsnapshot freshnessを再検証したとは扱わない。clipboard/fileはユーザーのlocal操作としてのみ行い、外部共有やAI送信を行わない。
-
-## 導入時の検証記録
-
-導入時は実clipboard/file、UIボタン、installed VSIX、trust設定を維持した実操作が未検証だった。host回帰のsave dialog/clipboard/file APIはstubであり、実出力ではない。この記録を0.4.0の実操作確認へ転用しない。同hostでのtrust revokeのlistener gapやpublic visibility制約を、この接続から解消したとは扱わない。

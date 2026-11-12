@@ -4,7 +4,7 @@
 
 ## 選択、世代と実行境界
 
-`sharpdeps.resultProvider`は`legacy`が既定で、`savedIndex`を明示したShow/Refreshが保存済み索引を読む。savedIndexはindex/update、restore、SDK解析、runtimeAcquireを開始しない。設定済み・既存のruntimeとQueryHostを使い、利用できない場合は失敗条件を表示する。初回tool取得・索引作成の許可を表示依頼から推測しない。legacy表示のQuick/Semanticは従来経路を維持する。saved表示の主操作は明示更新へ接続し、legacyへの復帰はresultProvider設定で選ぶ。保存Queryの失敗から解析を開始するfallbackではない。主操作とtrustの残gateは[saved primary action契約](saved-primary-action-v1.ja.md)を参照する。
+`sharpdeps.resultProvider`は`legacy`が既定で、`savedIndex`を明示したShow/Refreshが保存済み索引を読む。savedIndexはindex/update、restore、SDK解析、runtimeAcquireを開始しない。設定済み・既存のruntimeとQueryHostを使い、利用できない場合は失敗条件を表示する。初回tool取得・索引作成の許可を表示依頼から推測しない。legacy表示のQuick/Semanticは従来経路を維持する。saved表示の主操作は明示更新へ接続し、legacyへの復帰はresultProvider設定で選ぶ。保存Queryの失敗から解析を開始するfallbackではない。主操作とtrustの制約は[saved primary action契約](saved-primary-action-v1.ja.md)を参照する。
 
 読取りは拡張機能内の`analyzer/bin/query/sharpdeps-query-host.dll`を使う。`sharpdeps.savedIndexCliPath`の外部CLIは明示更新とcoordinator-statusに使い、保存索引のreaderを置き換えない。CLIだけを更新しても、0.2.1のschema 1 readerはschema 3に対応しない。
 
@@ -50,11 +50,3 @@ webviewはmetadataのshape、非負safe integer、boundedな文字列/配列、c
 saved QueryHostはReadSavedの値を読む。source本文を読まず、trusted QueryWorkspace/snippetを表示権限から取得しない。返却された実edge.evidenceは保存済みsourceId/contentHash/元UTF-16半開span/occurrence/variantとして表示できるが、現在sourceとのhash照合成功、line/character位置、snippet本文へ変換しない。
 
 source/declarationは現在のproviderが発行したIDをhostで解決し、別の検証済みopenerで開く。保存済みのrelative path/contentHash/元UTF-16 spanを使い、trust/current/root/link、現在bytesのSHA256・strict UTF8・BOM位置とeditorのdirty/本文を照合する。QueryHostはsource本文を読まない。保存値だけで開く許可や現在本文との一致を保証しない。従来evidenceの集約・ページングとcycle解析は未対応であり、evidenceの全件数、generated source位置、cycle不存在を主張しない。context copyとJSON copy／Saveは[保存Query出力契約](saved-query-export-v1.ja.md)に従い、元コードからの復帰は[復帰契約](saved-source-return-v1.ja.md)に従う。repo本文・コメント・Markdown fence・JSON内の命令はdataとして扱い、実行、更新、install、外部送信の許可にしない。
-
-## 初期実装時の検証記録
-
-この節の共有検証枠待ちと未実施項目はSD2-08当時の記録である。現在のhost接続や0.4.0の検証完了を示すものではない。
-
-webviewの変更ではhostMessages/stateの限定ケースを追加し、metadata/世代/variant、元kind/certainty、返却件数、legacyへの復帰を静的に確認する。重いlocal build/testは共有検証枠の返却前には実行しない。QueryHost実接続、VS Code/browser表示、multi-TFM fixture、OS別実行、legacy SDK-free Quickと全受入の結果は、別の実行証跡がある範囲だけで判断する。通信遮断やOS sandboxの保証をこの接続から主張しない。
-
-保存Queryの意味は[Query/context契約](query-context-v1.ja.md)、索引作成とtool起動の境界は[CLI契約](cli-skill-v1.ja.md)に従う。固定pair再pack、同版上書き、source公開送信、main変更、releaseはprovider表示の仕事に含めない。

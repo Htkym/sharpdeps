@@ -1,25 +1,25 @@
-# 保存表示の主操作とtrustの検証境界
+# 保存表示の操作と信頼の制約
 
-この文書は現行の主操作と、導入時から残るtrustの制約を記述する。0.4.0の利用手順は[操作ガイド](../guide.ja.md)、同梱readerと外部CLIの役割は[保存Query provider契約](saved-query-provider-v1.ja.md)を参照する。過去の実画面観測や未実施項目は、0.4.0を検証した証拠として扱わない。
+この文書は拡張機能の保存表示と更新処理の技術的な参照資料です。利用手順は[操作ガイド](../guide.ja.md)、同梱 reader と外部 CLI の役割は[保存 Query provider](saved-query-provider-v1.ja.md)を参照してください。
 
-SD2-13の主操作は、表示中のproviderに応じて一つのボタンから操作する。legacyはAnalyze、staleではUpdate analysis、失敗ではRetry analysis、実行中はCancelを示す。Quick/Semanticの選択はlegacyのまま維持する。saved表示はUpdate saved index、更新失敗後はRetry update、選択中・更新中はCancel update、取消を要求してからhelper終了までは操作を無効にしてCancellingを示す。
+## 表示と更新
 
-saved更新はhostの明示target/configuration/platform/project/TFM選択と、既存のCLI callerへ接続する。protocol v2へanalysisId付きupdateSavedIndexとsavedUpdateStateを追加した。主ボタンとcommand paletteは同じhost経路を使う。古いanalysisIdの更新・取消要求は現在のproviderへ適用しない。ホストのworkspace trustと別の実行中saved updateの有無から更新可否を決め、view stateから実行状態・権限を復元しない。
+主ボタンは表示中の provider に応じて動作します。legacy は Analyze、stale では Update analysis、失敗時は Retry analysis、実行中は Cancel を表示します。Quick／Semantic の選択は legacy に適用します。
 
-saved表示でQuick/Semanticやlegacy Profileの入力を隠す。保存variantから更新configuration/TFMを推測しない。旧providerへ戻す場合は既存のresultProvider設定でlegacyを選ぶ。Refreshは保存Queryの再読取であり、更新を開始しない。context copyとJSON copy／Saveは[保存Query出力契約](saved-query-export-v1.ja.md)で別に扱う。
+saved 表示は Update saved index、更新失敗後は Retry update、選択中・更新中は Cancel update を表示します。取消要求後から helper の終了までは操作を無効にして Cancelling を表示します。Refresh は保存 Query の再読取りであり、更新を開始しません。
 
-取消はこのcallerのAbortSignalから既存CLI stdin EOFへ接続する。短命ownerが共有処理をDrainしている間も、現在のpinned reader・projection・stale表示を保持する。root除去・provider交換・panel disposalは既存の解放経路を維持する。取消をrollbackや世代の不変とは扱わない。取消・未確認の更新後はRefreshで保存世代を再確認するよう示す。成功時はhelper終了後のworkspace/snapshot/generationの完全一致を確認した新readerだけを採用する。
+更新では host が明示的に target、configuration、platform、project、TFM を選択します。保存 variant から更新条件を推測しません。主ボタンとコマンドパレットは同じ host の経路を使い、古い analysisId の要求を現在の provider へ適用しません。保存した画面状態から実行状態や権限を復元することもありません。
 
-## 即時trust revokeの保留
+## 取消と世代
 
-2026-10-11のVS Code 1.139.1実証では、隔離profileのWorkbenchをRestricted Modeへ変更した後も、同じextension hostのpublic workspace.isTrustedが15秒trueを返した。安定公開APIで使えるのはisTrustedとonDidGrantWorkspaceTrustであり、同じhost内でfalse変化を通知される契約を確認できていない。
+取消はこの caller の AbortSignal から CLI の stdin EOF へ伝えます。共有処理の終了を待つ間も、現在の reader と stale 表示を保持します。取消は rollback や保存世代の不変を保証しません。取消や結果未確認の更新後は、Refresh で保存世代を確認してください。
 
-製品側にも制限がある。runSavedUpdateのcurrentはspawn前とchild close後に照合し、待機中のtrust変化をEOF取消へ接続するlistenerは未実装である。onDidGrantWorkspaceTrustは主操作の可否を再表示するためだけに使う。公開APIの観測制約と、この実装上の未接続を分けて記録する。同host即時revokeのactive取消、新writer・source操作の即時拒否はBLOCKEDのままである。cached flagをtimerで再読取する修正、private/proposed APIの有効化は行わない。
+更新成功時は helper の終了後に workspace／snapshot／generation の完全一致を確認し、新しい reader の結果を採用します。root の除去、provider の切替、panel の破棄は既存の解放処理を使います。コピーと JSON 出力の範囲は[保存 Query 出力](saved-query-export-v1.ja.md)を参照してください。
 
-将来の別gateは、検証専用windowと所有した外部controllerでrevoke→標準Reload→旧host終了/EOF→新hostRestrictedを観測するものとする。controllerが有限MSBuild停止点と別の既受理clientを所有し、旧host終了後も記録を保持する。旧callerのEOF・同ownerの受理済client生存・独立Queryの保存tuple、新hostのpublic trust=falseとwriter/source操作の拒否、旧結果の不採用を確認する。この試験は同host即時revokeの代替PASSにはならない。
+## 実行中に信頼を取り消す場合
 
-当時の検証では、trust/security設定操作は親からのユーザー確認待ちとして保留した。利用者の通常windowをreloadせず、自動grantしなかった。この履歴は現在の作業承認や設定変更の依頼を意味しない。
+saved 更新は起動前と child 終了後に現在の workspace trust を確認します。待機中の trust 変更を EOF 取消へ接続する listener はありません。`onDidGrantWorkspaceTrust` は操作の可否を再表示するために使います。
 
-## 導入時に記録した受入gate
+同じ extension host 内で信頼を取り消した直後に、実行中の更新が必ず止まるとは扱わないでください。取消、明示的に起動した owner／watch の停止、ウィンドウの再読み込みを行い、新しい host の信頼状態と保存世代を確認してください。別の client が既に受理された共有更新を利用している場合もあります。
 
-主操作の限定検証と、原SD-025/026全体の完了を区別する。当時、saved copy/exportには保存世代・variant・kind/certainty・returned/truncation・元IDを維持する契約が必要と記録した。現行の契約は[保存Query出力](saved-query-export-v1.ja.md)を参照する。installed VSIXのQueryHost/CLI配置・worker/CSP・activation/reopenはdevelopment extensionの成功から推論しない。code/docsの共通操作、狭幅・keyboard/theme/zoom・祖先設定/current-root変更・再起動、性能と利用者のtask acceptanceは個別の結果がある範囲だけを受け入れる。
+workspace trust は OS の sandbox や外部 AI への送信許可ではありません。保存表示だけでソースの読取り、MSBuild や generator の実行、索引への書込みが許可されるわけではありません。

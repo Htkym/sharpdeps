@@ -1,6 +1,6 @@
 # 保存済みIndexの保守的な差分更新 v1
 
-SD2-09は明示的なtrusted CLI `update`を既存IndexWriterのlease内で処理する。`index`はfull rebuildを行う。旧Quick/Semantic provider、Queryのread-only契約、固定Markdown runtime/source pairを維持する。watch/coordinatorによる自動更新はこの契約に含めない。
+明示的なtrusted CLI `update`を既存IndexWriterのlease内で処理する。`index`はfull rebuildを行う。旧Quick/Semantic provider、Queryのread-only契約、固定Markdown runtime/source pairを維持する。watch/coordinatorによる自動更新はこの契約に含めない。
 
 ## 選択と無効化
 
@@ -32,14 +32,10 @@ proofはselected targetのIndexFileに追加するoptional typed fieldで、既�
 
 公開には完全なnext snapshotを既存transactionで書き、graphとFTSのactive generationを一度だけ切り替える。reuse proofの有無にかかわらず、抽出前後のnon-Markdown入力path集合と内容を照合し、公開用の内容hashを一時保持する。評価前後は生成されるbin/objを除き、公開guardにはbin/objも含む。root内のPE参照が.git/.sharpdeps/bin/objに入る場合は、評価前の内容を証明できないためfullでもCLI_REFERENCE_INPUT_UNSUPPORTEDとして拒否する。active更新直前のowner callbackで新規Markdown集合とnon-Markdown内容を再照合する。reuse proofがある場合はSDK/tool/環境も再照合する。検査不能・途中変更・取消・proof喪失はrollbackし、前のcommitted世代を維持する。既存readerは旧世代を保持し、新readerは成功公開後の世代を読む。
 
-Git入力proof版1では、Windowsの通常fileを扱えるfilesystemと固定SDK10.0.402の確認済みGit task payloadに限り、root直下の実`.git` directoryを扱う。Git taskのDLL/props/targetsのbytesが確認済みpayloadと異なるSDKと、他OSではfullへ戻す。`.git` file、祖先/nested repository、submodule、commondir/worktrees、リンク/reparse/device、未知layout/config、config include/includeIf、外部ignore/worktree設定、objects alternates/http-alternatesは追わずproofを作らない。configはrepositoryformatversion=0/bare=falseと限定したcore/user/HTTP(S) remote/branchの単純な非escape形式だけを受け入れ、extensions、SSH remote、URL書換え等もfullへ戻す。
+Git入力proof版1ではWindowsの通常fileを扱えるfilesystemと固定SDK10.0.402の確認済みGit task payloadに限り、root直下の実`.git` directoryを扱う。Git taskのDLL/props/targetsのbytesが確認済みpayloadと異なるSDKと、他OSではfullへ戻す。`.git` file、祖先/nested repository、submodule、commondir/worktrees、リンク/reparse/device、未知layout/config、config include/includeIf、外部ignore/worktree設定、objects alternates/http-alternatesは追わずproofを作らない。configはrepositoryformatversion=0/bare=falseと限定したcore/user/HTTP(S) remote/branchの単純な非escape形式だけを受け入れ、extensions、SSH remote、URL書換え等もfullへ戻す。
 
 固定Git taskの既定scopeはユーザー/システムのGit設定も読む。このため既定scopeでは、そのSDKが探索する外部設定pathの不在を確認し、一つでも存在・検査不能ならfullへ戻す。全projectが明示する`GitRepositoryConfigurationScope=local`も認める。CLIからscopeや環境を強制変更せず、外部config本文やinclude先を読み込まない。未知環境名の拒否も維持する。
 
 HEAD、loose refs、packed-refs、objectsのloose/pack/idxと付随索引、index/sharedindex、shallow、info、logs、hooks等の許可layout内全entryについて、相対path/type/存在集合とfile長/raw bytes SHA256を順序固定でhashする。二回のinventoryが一致することを求め、Git capture全体5秒、各pass10,000 entries・64MiB合計と既存依存proof予算/取消を併用する。上限超過や読取不能はfullへ戻す。Gitの有無とdigestはowner版2のDependencyHashへ含め、再利用選択前、部分再利用後、公開直前に既存Capture/Matchesで照合する。初期不一致はfull、部分再利用後または公開直前の変化/証拠喪失は`SOURCE_CHANGED_SINCE_STAGING`で公開拒否する。Gitなしの閉集合は維持し、通常Git全般や3OSでの増分性能を達成したとは称さない。
 
 検索text、reuse catalog、project collector proofの保持上限は独立しており、それぞれ32 × 1024 × 1024 UTF-16 code unitsである。検索textの上限は公開snapshot内の全検索fieldの合計に、catalogの上限は一つのreuse proof内の全catalog fieldの合計に、collector proofの上限は一つのreuse proof内の全projectのJSON合計に適用する。入力のraw bytes上限やQueryのwire予算とは別に数える。
-
-## 導入時の候補と検証範囲の履歴
-
-差分更新の導入時のCLI候補版は`0.2.0-preview.3`だった。このソース変更だけでpack/install/公開済みとは判断せず、preview.2や固定Markdown pairの同版上書きは行わなかった。当時、新providerのVSCode画面／VSIX install／cross-OS実挙動、watch／coordinator、未変更Markdown parse cacheは別の未実施項目として記録した。現行のwatch接続は[watch契約](saved-input-watch-v1.ja.md)、0.4.0の利用方法は[操作ガイド](../guide.ja.md)を参照する。未変更Markdownのparse cacheを実装済みとするものではない。

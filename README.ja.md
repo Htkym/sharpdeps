@@ -1,61 +1,55 @@
 # SharpDeps — .NET 依存関係マップ
 
-[English](https://github.com/Htkym/sharpdeps/blob/main/README.md) · 日本語 · [操作ガイド](docs/guide.ja.md)
+[English](README.md) · 日本語 · [VS Code 操作ガイド](docs/guide.ja.md) · [CLI／MCP](docs/mcp.md)
 
-SharpDeps は、.NET ソリューションの依存関係を VS Code のエディタータブで確認できる拡張機能です。プロジェクト全体から名前空間や型へと絞り込め、接続線を選ぶとその依存の根拠となるソースコードを確認できます。
+SharpDeps は .NET のプロジェクト・名前空間・型の依存関係を VS Code で表示し、収集した関係のソース位置を確認できる拡張機能です。別途提供する CLI では索引を保存して繰り返し検索でき、MCP サーバーを接続すると AI クライアントからその索引を調べられます。
 
 ![SharpDeps でプロジェクトの依存関係を表示した画面](images/overview-ja.png)
 
-画像は **0.1.0 の画面** です。操作ガイドは 0.4.0 の実装に合わせています。対応する VSIX を使うか、ソースコードからビルドしてください。実際の提供状況は配布先で確認してください。
+画像は 0.1.0 の画面です。現在の操作と保存索引の互換性は、各ガイドで説明しています。
 
 ## インストール
 
-コマンドパレットの **Extensions: Install from VSIX…** から `.vsix` を選択します。公開済みのバージョンは [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) や [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) から入手できます。インストールされたバージョンは、VS Code の拡張機能ビューで確認してください。
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) から **SharpDeps — .NET Dependency Map** をインストールします。[GitHub Releases](https://github.com/Htkym/sharpdeps/releases) の VSIX を使う場合は、VS Code の **Extensions: Install from VSIX…** で選択してください。最新の公開版は 0.4.0 です。
 
-解析には VS Code 1.90 以降と、信頼されたワークスペースが必要です。
+VS Code 1.90 以降が必要です。解析を実行する前に、ワークスペースを信頼済みにしてください。
 
-| モード | 確認できる内容 | 必要な環境 |
+| モード | 調べる内容 | 必要な環境 |
 | --- | --- | --- |
-| クイック | 宣言されたプロジェクト参照と、`using` から推定した名前空間の依存関係。 | .NET 10 ランタイムが必要です。SDK は不要で、MSBuild の評価も行いません。ランタイムは .NET Install Tool から取得できます。 |
-| セマンティック | MSBuild で評価した C# プロジェクト参照と、Roslyn で解決したコード参照。型や参照位置まで確認できます。 | .NET 10 ランタイムと、対象および `global.json` に対応する SDK。対象パッケージは事前に復元しておく必要があります。 |
+| クイック | プロジェクト参照、C# の宣言、構文に基づく関係。 | .NET 10 ランタイム。SDK、MSBuild の評価、パッケージ復元は不要です。 |
+| セマンティック | 評価済みの C# 参照、シンボル解決済みの関係とソース位置。 | .NET 10 ランタイム、対象に対応する SDK、復元済みの対象パッケージ。 |
 
-[.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) は拡張機能の依存関係としてインストールされます。SharpDeps が SDK を取得したり、対象パッケージを自動で復元したりすることはありません。
+拡張機能のランタイムは、必要に応じて [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) から取得します。SharpDeps が SDK をインストールしたり、対象パッケージを自動で復元したりすることはありません。
 
-このREADMEは 0.4.0 を対象とします。配布対象は、NuGet の SharpDeps.Cli と SharpDeps.Mcp、Visual Studio Marketplace の拡張機能、GitHub Release の VSIX・NuGet パッケージ・チェックサムです。Open VSX への初回公開は含みません。実際の提供状況はレジストリ、Marketplace、GitHub Release で確認してください。MCP は 0.3.0 で従来の個別 query tool から typed `explore` へ変更しました。CLI の既存 query command は引き続き利用できます。
+拡張機能には解析プログラムと保存索引の reader を同梱しています。CLI だけを更新しても、同梱プログラムは更新されません。0.4.0 の reader は索引の schema 1／2／3 に対応します。別の版で作った索引を使う際は、[保存索引の設定](docs/guide.ja.md#保存済み索引を使う)を確認してください。
 
-0.4.0 では、拡張機能に同梱する Quick／Semantic と保存索引の QueryHost も更新します。0.2.1 の保存索引 reader は schema 1 のみ、0.4.0 は schema 1／2／3 に対応します。新しい CLI が作る schema 3 の索引を使う場合は、拡張機能も更新してください。索引の自動移行は行わず、拡張機能では別作業コピーの既定パスを使うか、停止後に旧索引と sidecar 一式を退避して再作成します。CLI／MCP では未使用の `--index` パスも指定できます。[操作ガイド](docs/guide.ja.md#保存済み索引を使う)と[索引の再作成条件](docs/mcp.md#upgrade-from-030)を確認してください。
-
-## 最初のマップを開く
+## マップを開く
 
 1. ソリューションのフォルダーを VS Code で開きます。
 2. エクスプローラーで `.sln`、`.slnx`、または対応するプロジェクトファイルを右クリックし、**SharpDeps: Show Dependency Map** を選びます。
-3. ノードや線を選択します。**依存先** や **依存元** で範囲を絞り込み、**詳細** で参照の根拠を確認できます。
+3. ノードや接続線を選ぶと、**詳細**で根拠を確認できます。**依存先**や**依存元**で範囲を絞れます。
 
-コマンドパレットからも開けます。クイックモードは `.csproj`、`.fsproj`、`.vbproj`、`.vcxproj` を対象にできます。セマンティックモードは SDK スタイルの C# プロジェクトを想定しています。プロジェクトファイルを選ぶと、参照先をたどって解析します。
+クイックは `.csproj`、`.fsproj`、`.vbproj`、`.vcxproj` に対応し、セマンティックは SDK スタイルの C# プロジェクトを対象にします。プロジェクトを選ぶと参照先をたどって解析します。シンボル解決済みの結果を調べる場合は、**セマンティック**を選んで**解析**を押してください。
 
-型の参照を調べる場合は、**セマンティック** を選んで **解析** を押してください。環境の準備やフィルター、根拠の確認、循環依存、出力、問題発生時の対処法については [操作ガイド](docs/guide.ja.md) で説明しています。
+検索、フィルター、グラフ、表は同じ表示範囲を使います。表示件数の上限は描画にだけ適用され、解析データや循環依存の検出を制限しません。Quick／Semantic の表示は Mermaid、JSON、SVG、PNG 形式で、保存索引の表示は JSON 形式で出力できます。**エージェント用にコピー**はクリップボードへのコピーであり、AI サービスへ送信する操作ではありません。
 
-## 調べる・共有する
+解析と描画はローカルで実行します。解析が失敗または中断した場合は、直前の成功した表示を残します。関係が見つからない場合や推定の関係を判断する際は、解析範囲、確度、制限事項も確認してください。設定、ソースへの移動、問題への対処は [VS Code 操作ガイド](docs/guide.ja.md)で説明しています。
 
-- 左側のツリーや検索から、プロジェクト、名前空間、型を探せます。グラフと表には連動して同じ範囲が表示されます。
-- **下部のバー** で向きや倍率を変更できます。**全体を表示** でグラフ全体を画面に収め、**間隔** でノードや階層の間隔を調整できます。間隔の設定はバーの上に開きます。
-- ノード間の同じ方向の接続は一本にまとめられます。宣言、評価、シンボル解決済みの依存が含まれる場合は実線、推定のみの場合は破線で表示されます。クイックモードの実線は宣言を示しているだけであり、コンパイル時に実際に使われていることを証明するものではありません。まとめた依存の詳しい根拠は詳細パネルで確認できます。
-- Quick／Semantic の表示範囲は Mermaid、JSON、SVG、PNG 形式で出力できます。保存済み索引の表示は JSON のコピー・保存に対応します。**エージェント用にコピー** を使うと、根拠を含む説明テキストをクリップボードにコピーできます。外部サービスへのデータ送信は行いません。
-- 上部の **日本語** または **English** で表示言語を切り替えられます。言語設定をはじめ、向き、フィルター、選択状態、ペイン幅、表示位置、倍率は自動で保存されます。
+## CLI と MCP
 
-解析とグラフの描画はローカルで実行されます。解析が失敗または中断した場合でも、直前の成功した結果はそのまま保持されます。表示件数の上限は画面描画にのみ適用され、依存関係の検出、検索、循環検出の対象を制限するものではありません。
-
-## ソースからビルドする
-
-Node.js 20 以降と .NET SDK 10 を用意します。
+[CLI ツール](https://www.nuget.org/packages/SharpDeps.Cli)と、必要に応じて [MCP サーバー](https://www.nuget.org/packages/SharpDeps.Mcp)をインストールします。
 
 ```bash
-npm ci
-npm run package
+dotnet tool install --global SharpDeps.Cli --version 0.4.0
+dotnet tool install --global SharpDeps.Mcp --version 0.4.0
 ```
 
-解析プログラムと画面をビルドし、`sharpdeps-<version>.vsix` を作成します。開発用ウィンドウで動かす場合は、`npm run build:analyzer` と `npm run build` を実行したあと、VS Code で **F5** を押してください。
+ツールのインストールには SDK、インストール済みツールの実行には .NET 10 ランタイムが必要です。索引の作成には、対象に対応する SDK と復元済みの依存関係も必要です。CLI／MCP は Markdown の解析に Syntamark 1.2.0 を使います。このパーサーは VSIX には同梱しません。
+
+[CLI／MCP ガイド](docs/mcp.md)では、索引の作成、ソース検索、MCP 接続、範囲の選択、信頼、有限の時間予算とエラーへの対処を説明しています。未公開の追加機能は、公開済み 0.4.0 の動作と分けて記載しています。公開版の実装に対応する説明は [0.4.0 のガイド](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md)を参照してください。
+
+AI クライアントで使う場合は、[導入とオプトアウト](docs/mcp.md#agent-routing-and-opt-out)を確認してください。構造に関する質問には索引を使い、単純な文字列や索引の範囲外は通常検索で調べます。接続だけでソースの読取りや索引更新が許可されるわけではありません。Partial coverage や鮮度未検証の状態はそのまま示します。取得回数やトークン使用量の削減、すべての操作が 1 秒以内に終わることは保証しません。
 
 ## ライセンス
 
-ライセンスは [MIT](https://github.com/Htkym/sharpdeps/blob/main/LICENSE) です。同梱ライブラリについては [ライセンス情報](THIRD-PARTY-NOTICES.md) を参照してください。
+[MIT](LICENSE)。同梱コンポーネントについては[ライセンス情報](THIRD-PARTY-NOTICES.md)を参照してください。
