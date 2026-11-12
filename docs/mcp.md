@@ -100,6 +100,16 @@ Launch `sharpdeps-mcp --root /absolute/workspace --trusted` to permit source rea
 }
 ```
 
+Pass a **flat arguments object** to the connected MCP tool. The required `query` value is a string; budget and scope fields are its siblings:
+
+```json
+{"query":"Service","format":"agent","maxMilliseconds":8000}
+```
+
+Do not send `{"query":{"query":"Service","maxMilliseconds":8000}}`. That places an object where a string is required and returns `MCP_ARGUMENT_INVALID` before opening the index. The error supplies a fixed flat example without echoing submitted text. Correct the arguments only when another call is authorized; never restart an interrupted answer or bypass a retry limit.
+
+For a large/cold index, explicitly choose a finite `maxMilliseconds` when needed. The omitted 1000 ms includes opening and fully validating the saved snapshot as well as exploration. The 8000 ms example is a limited-case operating value, not a completion guarantee or a change to the one-second default. Keep returned timeout stages; a larger deadline does not repair access or schema errors. MCP has no separate preparation-budget field: do not pass CLI-only `prepare-max-milliseconds` here.
+
 Optional arguments are `queryKind`, `projectId`, `variantId`, `scopePolicy`, `pathPrefix`, `pathTo`, `freshness`, `format`, `ownerStatus`, `maxChars`, `maxBytes`, and `maxMilliseconds`. MCP defaults to `format: "agent"`; pass `"audit"` for the full evidence profile. Other format values are rejected. `query` is required and accepts up to 1,024 UTF-16 code units; `pathTo` accepts up to 128 characters. The CLI accepts one positional query or `--term`, and uses `--query-kind`, `--project-id`, `--variant`, `--path-prefix`, `--path-to`, and hyphenated budget flags for the corresponding values.
 
 To find methods by a captured HttpGet declaration fragment, explicitly select `queryKind: "http-get-literal"` (CLI `--query-kind http-get-literal`). The default `symbol` mode keeps name, identity and saved-path matching. Literal mode compares the complete decoded saved template exactly, preserving case, slashes, whitespace and the valid empty string. It does not interpret route parameters, wildcards or effective URLs: `items/42` does not match `items/{id}`, and `*` is ordinary text.

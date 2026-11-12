@@ -367,16 +367,21 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
                 Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
+                Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", instructions, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
                 Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);
             }
             await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
+            JsonElement example;
             using (var listed = await Reply(2))
             {
                 var tools = listed.RootElement.GetProperty("result").GetProperty("tools");
                 Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
+                var explore = Assert.Single(tools.EnumerateArray(), tool => tool.GetProperty("name").GetString() == "explore");
+                example = explore.GetProperty("inputSchema").GetProperty("examples")[0].Clone();
+                Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
                 if (!allowMutations)
                 {
                     var schema = Assert.Single(tools.EnumerateArray()).GetProperty("inputSchema");
@@ -387,8 +392,21 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                     Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
                 }
             }
-            // This checks RPC lifecycle, not cold-start latency; deadline behavior has separate tests.
-            await Send("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Service","maxMilliseconds":10000}}}""");
+            await Send("""{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"explore","arguments":{"query":{"query":"GrainFactory GetGrain GrainReferenceActivator","maxMilliseconds":8000}}}}""");
+            using (var rejected = await Reply(8))
+            {
+                var error = rejected.RootElement.GetProperty("error");
+                Assert.Equal(-32602, error.GetProperty("code").GetInt32());
+                var message = error.GetProperty("message").GetString()!;
+                Assert.Contains("query must be a string", message, StringComparison.Ordinal);
+                Assert.DoesNotContain("GrainFactory", message, StringComparison.Ordinal);
+            }
+            // Exercise the advertised flat example over real stdio, not cold-start latency.
+            await Send(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 3, method = "tools/call",
+                @params = new { name = "explore", arguments = example }
+            }));
             using (var query = await Reply(3))
             {
                 var result = query.RootElement.GetProperty("result");

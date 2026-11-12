@@ -15,7 +15,7 @@ Query／exploreの時間予算0は計算期限だけを外し、MCP requestの�
 
 | field | 契約 |
 | --- | --- |
-| `query` | 必須。名前、exact ID、source pathを入口とし、最大1024 UTF-16 code units |
+| `query` | 必須の文字列。名前、exact ID、source pathを入口とし、最大1024 UTF-16 code units。引数objectをこのfieldの中へ入れない |
 | `queryKind` | 既定`symbol`。`http-get-literal`は保存済みHttpGet宣言断片との完全一致で、空文字も扱う。実効URLの一致ではない |
 | `projectId`, `variantId`, `pathPrefix` | 保存済みscopeを明示する。異なるvariantを自動統合しない |
 | `scopePolicy` | 通常の名前／pathでの既定は、project／variantの明示がなければ`discover`、明示があれば`unique`。exact ID、`pathTo`、HttpGet literalでは`unique`を既定とし、`discover`の明示を拒否する。`prefer-debug`は一つの対応project内に保存されたDebug variantが一つの場合だけ優先する |
@@ -24,6 +24,17 @@ Query／exploreの時間予算0は計算期限だけを外し、MCP requestの�
 | `ownerStatus` | 既定false。既存ownerの観測だけで、起動や鮮度の証明をしない |
 | `format` | 既定`agent`。`audit`は保存IDとprovenanceを詳しく返す |
 | `maxChars`, `maxBytes`, `maxMilliseconds` | 出力と計算の予算。文字数2048〜1000000、UTF-8 bytes 2048〜4000000、時間10〜30000msまたは0。MCPはCLIのnode／edge／depth flagを受け取らない |
+
+toolの引数はflatなobjectで渡す。例は `{"query":"Service","maxMilliseconds":8000}`。
+`query`は文字列であり、scope／budgetは同じ階層に置く。
+`{"query":{"query":"Service","maxMilliseconds":8000}}`の形はindexを開く前に
+InvalidParams（-32602）／`MCP_ARGUMENT_INVALID`で拒否し、入力本文を転記しない固定の修正例を返す。
+修正して再呼出しする場合も利用者の許可／retry上限に従う。
+
+省略時の共有計算予算は1000msで、保存indexの読取り／全snapshot検証と探索を含む。
+大きなindexやcold読取りでは目的に合う有限の`maxMilliseconds`を明示する。
+8000msは限定ケースの例であり、完了保証や既定1秒での性能達成ではない。
+CLI-onlyの別準備予算fieldは追加しない。
 
 未知fieldや不正な組合せを拒否し、曖昧な短名を一つの実装へ確定しない。source本文にはhostのtrustが必要であり、
 通常ファイル、保存された生成本文、検証済みパッケージ本文のprovenanceを区別する。候補をruntime callの確定へ強めず、

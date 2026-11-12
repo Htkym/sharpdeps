@@ -39,6 +39,32 @@ public sealed class McpTests
     }
 
     [Fact]
+    public async Task NestedQueryGetsActionableRecoveryWithoutOpeningTheWorkspaceOrEchoingInput()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
+        var adapter = new McpQueryAdapter(new(root));
+        var tool = Assert.Single(adapter.ListTools());
+        var properties = tool.InputSchema.GetProperty("properties");
+        Assert.Equal("string", properties.GetProperty("query").GetProperty("type").GetString());
+        Assert.Equal(1000, properties.GetProperty("maxMilliseconds").GetProperty("default").GetInt32());
+        Assert.Contains("flat arguments", tool.Description, StringComparison.Ordinal);
+        var example = tool.InputSchema.GetProperty("examples")[0];
+        Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
+        Assert.Equal(8000, example.GetProperty("maxMilliseconds").GetInt32());
+
+        const string failed = """{"query":{"query":"GrainFactory GetGrain GrainReferenceActivator","maxMilliseconds":8000}}""";
+        var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+        {
+            Name = "explore", Arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(failed)!
+        }));
+        Assert.StartsWith("MCP_ARGUMENT_INVALID:", error.Message, StringComparison.Ordinal);
+        Assert.Contains("query must be a string", error.Message, StringComparison.Ordinal);
+        Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("GrainFactory", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
     public async Task TypedExploreArgumentsAreValidatedBeforeOpeningTheWorkspace()
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
