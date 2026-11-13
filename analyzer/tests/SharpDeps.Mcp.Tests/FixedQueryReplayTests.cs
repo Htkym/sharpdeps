@@ -20,6 +20,65 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         Assert.Equal(1, capture.WallMilliseconds);
     }
 
+    [Theory]
+    [InlineData("different", "SharpDeps.Query.dll")]
+    [InlineData("missing-cli", "SharpDeps.Analysis.Markdown.dll")]
+    [InlineData("missing-mcp", "SharpDeps.Analysis.Markdown.dll")]
+    [InlineData("missing-both", "SharpDeps.Analysis.Core.dll")]
+    public async Task SharedEngineMismatchOrMissingDllRejectsBeforeStartingQueryHosts(string fault, string name)
+    {
+        using var fixture = new ReplayFixture();
+        var input = Input(fixture, [new("must-not-run", fixture.Member)]);
+        var cliDirectory = Path.Combine(fixture.Root, "payloads", "cli");
+        var mcpDirectory = Path.Combine(fixture.Root, "payloads", "mcp");
+        foreach (var payload in new[] { cliDirectory, mcpDirectory })
+        {
+            Directory.CreateDirectory(payload);
+            foreach (var file in new[] { "SharpDeps.Cli.dll", "SharpDeps.Index.dll", "SharpDeps.Query.dll",
+                "SharpDeps.Analysis.Contracts.dll", "SharpDeps.Analysis.Core.dll", "SharpDeps.Analysis.Markdown.dll" })
+                File.WriteAllBytes(Path.Combine(payload, file), [1, 2, 3]);
+        }
+        File.WriteAllBytes(Path.Combine(mcpDirectory, "SharpDeps.Mcp.dll"), [1, 2, 3]);
+        if (fault == "different")
+            File.WriteAllBytes(Path.Combine(mcpDirectory, name), [1, 2, 4]);
+        else
+        {
+            if (fault != "missing-cli")
+                File.Delete(Path.Combine(mcpDirectory, name));
+            if (fault != "missing-mcp")
+                File.Delete(Path.Combine(cliDirectory, name));
+        }
+        var directory = ReceiptDirectory("engine-" + fault);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => FixedQueryReplay.RunAsync(input with
+        {
+            CliDll = Path.Combine(cliDirectory, "SharpDeps.Cli.dll"),
+            McpDll = Path.Combine(mcpDirectory, "SharpDeps.Mcp.dll")
+        }, directory, deadline.Token));
+        Assert.Contains("shared engine DLLs", error.Message, StringComparison.Ordinal);
+        var identityBytes = File.ReadAllBytes(Path.Combine(directory, "identity.json"));
+        using var identity = JsonDocument.Parse(identityBytes);
+        var comparison = identity.RootElement.GetProperty("sharedEngine");
+        Assert.Equal("rejected", comparison.GetProperty("status").GetString());
+        var rejected = Assert.Single(comparison.GetProperty("files").EnumerateArray(), file => file.GetProperty("name").GetString() == name);
+        Assert.Equal(fault == "different" ? "different" : "missing", rejected.GetProperty("status").GetString());
+        if (fault == "different")
+        {
+            Assert.Equal(rejected.GetProperty("cliBytes").GetInt64(), rejected.GetProperty("mcpBytes").GetInt64());
+            Assert.NotEqual(rejected.GetProperty("cliSha256").GetString(), rejected.GetProperty("mcpSha256").GetString());
+        }
+        else
+            Assert.Equal(JsonValueKind.Null, rejected.GetProperty(fault == "missing-cli" ? "cliSha256" : "mcpSha256").ValueKind);
+        if (fault == "missing-both")
+            Assert.Equal(JsonValueKind.Null, rejected.GetProperty("cliSha256").ValueKind);
+        Assert.True(File.Exists(Path.Combine(directory, "failure.json")));
+        using var manifest = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "artifact-manifest.json")));
+        var retainedIdentity = Assert.Single(manifest.RootElement.EnumerateArray(), file => file.GetProperty("path").GetString() == "identity.json");
+        Assert.Equal(FixedQueryReplay.Hash(identityBytes), retainedIdentity.GetProperty("sha256").GetString());
+        Assert.False(File.Exists(Path.Combine(directory, "mcp-argv.json")));
+        Assert.False(Directory.Exists(Path.Combine(directory, "must-not-run")));
+    }
+
     [Fact]
     public async Task PublicProcessesKeepWholeSourceScopesEncodingsAndWireBudgets()
     {
@@ -68,11 +127,17 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             Assert.DoesNotContain("--metrics-directory", File.ReadAllText(Path.Combine(withoutMetricsDirectory, "mcp-argv.json")), StringComparison.Ordinal);
             Assert.DoesNotContain("--metrics-directory", File.ReadAllText(Path.Combine(Path.GetDirectoryName(disabled.ReceiptPath)!, "cli-argv.json")), StringComparison.Ordinal);
         }
+        var exploreRequestOrdinal = 0;
         foreach (var observation in observations)
         {
+            exploreRequestOrdinal++;
             using var receipt = JsonDocument.Parse(File.ReadAllBytes(observation.ReceiptPath));
             foreach (var host in new[] { "cli", "mcp" })
             {
+                var process = receipt.RootElement.GetProperty(host);
+                Assert.Equal(host == "cli" || exploreRequestOrdinal == 1 ? "fresh" : "reused", process.GetProperty("processState").GetString());
+                Assert.Equal(host == "cli" ? 1 : exploreRequestOrdinal, process.GetProperty("exploreRequestOrdinal").GetInt32());
+                Assert.Equal("unknown", process.GetProperty("osCacheState").GetString());
                 var phases = receipt.RootElement.GetProperty("phaseMetrics").GetProperty(host);
                 if (observation.Id == "unsupported-selection")
                 {
@@ -497,6 +562,8 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         var directory = ReceiptDirectory(label);
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var result = await FixedQueryReplay.RunAsync(Input(fixture, cases, trusted), directory, deadline.Token);
+        using var identity = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "identity.json")));
+        Assert.Equal("identical", identity.RootElement.GetProperty("sharedEngine").GetProperty("status").GetString());
         output.WriteLine("Replay receipts: {0}", directory);
         return result;
     }

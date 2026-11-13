@@ -21,7 +21,7 @@ internal sealed class ReplayPhaseMetrics(string? directory)
     internal static readonly IReadOnlyDictionary<string, string[]> Groups = new Dictionary<string, string[]>
     {
         ["readerPreparation"] = ["reader.open", "reader.snapshot", "explore.prepare", "explore.freeze", "explore.validate",
-            "explore.derived-index", "explore.fingerprint", "explore.http-declarations"],
+            "explore.derived-index", "explore.fingerprint", "explore.http-declarations", "explore.lexical-index"],
         ["searchAndScope"] = ["reader.search", "explore.resolve", "explore.search", "explore.expand",
             "explore.discovery-rank", "explore.discovery-select"],
         ["sourceVerification"] = ["source.read", "source.stored", "source.hash", "source.freshness"],

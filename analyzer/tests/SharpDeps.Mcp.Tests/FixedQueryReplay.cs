@@ -123,6 +123,37 @@ internal static class FixedQueryReplay
         Require(sdk.ExitCode == 0, "SDK identity could not be captured.");
         File.WriteAllBytes(Path.Combine(directory, "sdk-version.stdout"), sdk.Stdout);
         var hosts = new[] { input.CliDll, input.McpDll };
+        var payloads = hosts.Select(path => new
+        {
+            entrypoint = Path.GetFullPath(path),
+            files = Directory.GetFiles(Path.GetDirectoryName(path)!, "*", SearchOption.AllDirectories)
+                .Order(StringComparer.Ordinal).Select(file => new
+                {
+                    path = Path.GetRelativePath(Path.GetDirectoryName(path)!, file),
+                    bytes = new FileInfo(file).Length,
+                    sha256 = Hash(File.ReadAllBytes(file))
+                }).ToArray()
+        }).ToArray();
+        var requiredEngine = new[] { "SharpDeps.Cli.dll", "SharpDeps.Index.dll", "SharpDeps.Query.dll",
+            "SharpDeps.Analysis.Contracts.dll", "SharpDeps.Analysis.Core.dll" };
+        var sharedEngine = requiredEngine.Concat(payloads.SelectMany(payload => payload.files)
+                .Select(file => file.path).Where(path => Path.GetFileName(path) == path
+                    && path.StartsWith("SharpDeps.Analysis.", StringComparison.Ordinal) && path.EndsWith(".dll", StringComparison.Ordinal)))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(name =>
+            {
+                var cliFile = payloads[0].files.SingleOrDefault(file => file.path == name);
+                var mcpFile = payloads[1].files.SingleOrDefault(file => file.path == name);
+                return new
+                {
+                    name,
+                    cliBytes = cliFile?.bytes,
+                    mcpBytes = mcpFile?.bytes,
+                    cliSha256 = cliFile?.sha256,
+                    mcpSha256 = mcpFile?.sha256,
+                    status = cliFile is null || mcpFile is null ? "missing"
+                        : cliFile.bytes == mcpFile.bytes && cliFile.sha256 == mcpFile.sha256 ? "identical" : "different"
+                };
+            }).ToArray();
         WriteJson(Path.Combine(directory, "identity.json"), new
         {
             repositoryRoot = input.RepositoryRoot,
@@ -146,17 +177,8 @@ internal static class FixedQueryReplay
             runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
             operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
             processors = Environment.ProcessorCount,
-            payloads = hosts.Select(path => new
-            {
-                entrypoint = Path.GetFullPath(path),
-                files = Directory.GetFiles(Path.GetDirectoryName(path)!, "*", SearchOption.AllDirectories)
-                .Order(StringComparer.Ordinal).Select(file => new
-                {
-                    path = Path.GetRelativePath(Path.GetDirectoryName(path)!, file),
-                    bytes = new FileInfo(file).Length,
-                    sha256 = Hash(File.ReadAllBytes(file))
-                }).ToArray()
-            }).ToArray(),
+            payloads,
+            sharedEngine = new { status = sharedEngine.All(file => file.status == "identical") ? "identical" : "rejected", files = sharedEngine },
             settings = new[] { "global.json", "NuGet.Config", "analyzer/Directory.Build.props", "analyzer/Directory.Packages.props" }
                 .Select(name => Path.Combine(input.RepositoryRoot, name)).Where(File.Exists)
                 .Select(path => new { path, sha256 = Hash(File.ReadAllBytes(path)) }).ToArray(),
@@ -165,6 +187,8 @@ internal static class FixedQueryReplay
                 "Agent spans are supplied only when uniquely proven by saved declarations; ambiguous candidates are retained.",
                 "A source commit plus payload hashes identifies this replay, not an unbound historical binary or index." }
         });
+        Require(sharedEngine.All(file => file.status == "identical"),
+            "CLI/MCP shared engine DLLs are missing or different; identity.json retains the payload comparison. No query host was started.");
         var metricsRoot = input.PhaseMetrics ? Path.GetFullPath(Path.Combine(input.Root, ".sharpdeps", "replay-phase-" + Guid.NewGuid().ToString("N"))) : null;
         var mcpMetrics = new ReplayPhaseMetrics(metricsRoot is null ? null : Path.Combine(metricsRoot, "mcp"));
         var hostArguments = new List<string> { input.McpDll, "--root", input.Root, "--index", input.Index };
@@ -193,8 +217,10 @@ internal static class FixedQueryReplay
                 .Any(tool => tool.GetProperty("name").GetString() == "explore"), "MCP explore schema was not listed.");
         }
         var observations = new List<ReplayObservation>();
+        var exploreRequestOrdinal = 0;
         foreach (var item in input.Cases)
         {
+            exploreRequestOrdinal++;
             Require(Regex.IsMatch(item.Id, "^[a-z0-9][a-z0-9-]{0,79}$", RegexOptions.CultureInvariant)
                 && input.Cases.Count(value => value.Id == item.Id) == 1, "Case IDs must be unique safe filenames.");
             Require(item.Equivalence is "exact" or "protocol-error" or "deadline-sensitive", "Unknown equivalence rule.");
@@ -295,6 +321,9 @@ internal static class FixedQueryReplay
                 {
                     cli.ExitCode,
                     cli.ProcessId,
+                    processState = "fresh",
+                    exploreRequestOrdinal = 1,
+                    osCacheState = "unknown",
                     cli.WallMilliseconds,
                     cli.CpuMilliseconds,
                     stdoutSha256 = Hash(cli.Stdout),
@@ -304,6 +333,9 @@ internal static class FixedQueryReplay
                 mcp = new
                 {
                     processId = mcp.Id,
+                    processState = exploreRequestOrdinal == 1 ? "fresh" : "reused",
+                    exploreRequestOrdinal,
+                    osCacheState = "unknown",
                     isError,
                     rpcError = root.TryGetProperty("error", out var error) ? error : (JsonElement?)null,
                     reply.WallMilliseconds,

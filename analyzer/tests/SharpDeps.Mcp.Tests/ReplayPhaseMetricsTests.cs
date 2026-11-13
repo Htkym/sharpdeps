@@ -38,17 +38,16 @@ public sealed class ReplayPhaseMetricsTests
             Phase(3, 2, "explore.discovery-rank", 2, 3), Phase(4, 2, "explore.discovery-select", 6, 2),
             Phase(5, 2, "explore.discovery-rank", 7, 4), Phase(6, 2, "explore.search", 1, 3),
             Phase(7, 2, "source.read", 12, 6), Phase(2, 1, "explore.discover", 1, 20, 5, overlaps: true),
-            Phase(1, null, "run", 0, 24, 4), new { type = "run.end", outcome }
+            Phase(8, 1, "explore.lexical-index", 21, 2),
+            Phase(1, null, "run", 0, 24, 2), new { type = "run.end", outcome }
         ]), RunId, outcome);
         Assert.Equal("recorded", capture.Status);
         Assert.Equal(outcome, capture.RunOutcome);
         Assert.Equal(9, capture.PhaseMilliseconds["searchAndScope"]);
         Assert.Equal(6, capture.PhaseMilliseconds["sourceVerification"]);
-        foreach (var group in new[] { "readerPreparation", "rendering" })
-        {
-            Assert.Null(capture.PhaseMilliseconds[group]);
-            Assert.Equal("phase-not-reached", capture.MissingReasons[group]);
-        }
+        Assert.Equal(2, capture.PhaseMilliseconds["readerPreparation"]);
+        Assert.Null(capture.PhaseMilliseconds["rendering"]);
+        Assert.Equal("phase-not-reached", capture.MissingReasons["rendering"]);
     }
 
     [Fact]
