@@ -46,11 +46,19 @@ public sealed class McpTests
         var tool = Assert.Single(adapter.ListTools());
         var properties = tool.InputSchema.GetProperty("properties");
         Assert.Equal("string", properties.GetProperty("query").GetProperty("type").GetString());
-        Assert.Equal(1000, properties.GetProperty("maxMilliseconds").GetProperty("default").GetInt32());
+        foreach (var (name, expectedDefault) in new[] { ("maxMilliseconds", 1000), ("prepareMaxMilliseconds", 30000) })
+        {
+            var budget = properties.GetProperty(name);
+            Assert.Equal("integer", budget.GetProperty("type").GetString());
+            Assert.Equal(10, budget.GetProperty("minimum").GetInt32());
+            Assert.Equal(30000, budget.GetProperty("maximum").GetInt32());
+            Assert.Equal(expectedDefault, budget.GetProperty("default").GetInt32());
+        }
         Assert.Contains("flat arguments", tool.Description, StringComparison.Ordinal);
         var example = tool.InputSchema.GetProperty("examples")[0];
         Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
-        Assert.Equal(8000, example.GetProperty("maxMilliseconds").GetInt32());
+        Assert.Equal(1000, example.GetProperty("maxMilliseconds").GetInt32());
+        Assert.Equal(30000, example.GetProperty("prepareMaxMilliseconds").GetInt32());
 
         const string failed = """{"query":{"query":"GrainFactory GetGrain GrainReferenceActivator","maxMilliseconds":8000}}""";
         var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
@@ -59,8 +67,34 @@ public sealed class McpTests
         }));
         Assert.StartsWith("MCP_ARGUMENT_INVALID:", error.Message, StringComparison.Ordinal);
         Assert.Contains("query must be a string", error.Message, StringComparison.Ordinal);
-        Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", error.Message, StringComparison.Ordinal);
+        Assert.Contains("\"query\":\"Service\"", error.Message, StringComparison.Ordinal);
+        Assert.Contains("\"prepareMaxMilliseconds\":30000", error.Message, StringComparison.Ordinal);
+        Assert.Contains("\"maxMilliseconds\":1000", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("GrainFactory", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"1000\"")]
+    [InlineData("0")]
+    [InlineData("9")]
+    [InlineData("30001")]
+    [InlineData("-1")]
+    [InlineData("1000.5")]
+    [InlineData("2147483648")]
+    public async Task BothTimeBudgetsRequireFiniteIntegersBeforeWorkspaceAccess(string value)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
+        var adapter = new McpQueryAdapter(new(root));
+        foreach (var name in new[] { "maxMilliseconds", "prepareMaxMilliseconds" })
+        {
+            var arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                "{\"query\":\"Service\",\"" + name + "\":" + value + "}")!;
+            var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+            { Name = "explore", Arguments = arguments }));
+            Assert.Equal("MCP_ARGUMENT_INVALID", error.Message);
+        }
         Assert.False(Directory.Exists(root));
     }
 
@@ -103,8 +137,7 @@ public sealed class McpTests
             "{\"query\":\"Service\",\"maxChars\":null}",
             "{\"query\":\"Service\",\"maxBytes\":4000001}",
             "{\"query\":\"Service\",\"maxBytes\":null}",
-            "{\"query\":\"Service\",\"maxMilliseconds\":\"1000\"}",
-            "{\"query\":\"Service\",\"maxMilliseconds\":null}",
+            "{\"query\":\"Service\",\"PrepareMaxMilliseconds\":1000}",
             "{\"query\":\"Service\",\"maxNodes\":1}",
             "{\"query\":\"Service\",\"freshness\":\"current\"}",
             "{\"query\":\"Service\",\"format\":\"verbose\"}",

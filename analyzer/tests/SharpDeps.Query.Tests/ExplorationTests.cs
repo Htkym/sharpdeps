@@ -14,7 +14,7 @@ public sealed class ExplorationTests
     [Theory]
     [InlineData(ExploreFormat.Agent)]
     [InlineData(ExploreFormat.Audit)]
-    public void ExactSavedIdentityDefersLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
+    public void ExactSavedIdentityCompletesStandardLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
     {
         using var fixture = new Fixture(format: format);
         var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
@@ -23,7 +23,7 @@ public sealed class ExplorationTests
         writer.Commit(IndexStage.Create(fixture.Snapshot));
         using var reader = IndexReader.Open(path, workspace);
         var engine = new ExplorationService(new PinnedQueryIndex(reader), new QueryWorkspace(fixture.Root), true);
-        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var request = fixture.Request(fixture.RunInt);
         var directory = Path.Combine(fixture.Root, ".sharpdeps", "exact-metrics");
         ExploreReply exact;
         using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
@@ -32,8 +32,8 @@ public sealed class ExplorationTests
             metrics.Complete();
         }
         Assert.Equal("source-returned", exact.Outcome);
-        Assert.DoesNotContain(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
-        Assert.True(engine.Execute(fixture.Request("Pump") with { Budget = Generous with { MaxMilliseconds = 0 } }).Succeeded);
+        Assert.Single(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+        Assert.True(engine.Execute(fixture.Request("Pump")).Succeeded);
         Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(request)));
     }
 
@@ -42,16 +42,18 @@ public sealed class ExplorationTests
     {
         using var fixture = new Fixture();
         using var cancellation = new CancellationTokenSource();
-        var reads = 0;
+        var cancelLexicalRead = false;
         var saved = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
         {
             Nodes = new ObservedNodes(fixture.Snapshot.Graph.Nodes, () =>
             {
-                if (++reads > fixture.Snapshot.Graph.Nodes.Count) cancellation.Cancel();
+                if (cancelLexicalRead) cancellation.Cancel();
             })
         } };
         var prepared = new ExplorationSnapshot(saved, default);
+        cancelLexicalRead = true;
         Assert.Throws<OperationCanceledException>(() => prepared.GetSearchIndex(cancellation.Token));
+        cancelLexicalRead = false;
         var recovered = prepared.GetSearchIndex(default);
         Assert.True(recovered.Names.ContainsKey("Pump"));
         Assert.Same(recovered, prepared.GetSearchIndex(default));
@@ -65,7 +67,7 @@ public sealed class ExplorationTests
         var cache = new ExplorationSnapshotCache();
         var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
         var engine = fixture.Engine();
-        var request = new ExploreRequest("Pump", Budget: Generous with { MaxMilliseconds = 0 });
+        var request = new ExploreRequest("Pump", Budget: Generous);
         var expected = engine.Execute(request);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
@@ -97,7 +99,7 @@ public sealed class ExplorationTests
     {
         using var fixture = new Fixture(addScopes: true, partial: true, format: format);
         var engine = fixture.Engine();
-        var request = new ExploreRequest("Pump Run", Budget: Generous with { MaxMilliseconds = 0 },
+        var request = new ExploreRequest("Pump Run", Budget: Generous,
             Format: format, ScopePolicy: ExploreScopePolicy.Discover);
         var expected = engine.Execute(request);
         var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
@@ -125,7 +127,7 @@ public sealed class ExplorationTests
         var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
         using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
         {
-            var reply = fixture.Engine().Execute(new ExploreRequest("MissingDiscoveryName", Budget: Generous with { MaxMilliseconds = 0 },
+            var reply = fixture.Engine().Execute(new ExploreRequest("MissingDiscoveryName", Budget: Generous,
                 ScopePolicy: ExploreScopePolicy.Discover));
             Assert.Equal("no-match", reply.Outcome);
             metrics.Complete();
@@ -156,14 +158,14 @@ public sealed class ExplorationTests
             });
             using (var metrics = enabled ? SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore") : null)
             {
-                var reply = fixture.Engine(workspace).Execute(new ExploreRequest("Pump Run", Budget: Generous with { MaxMilliseconds = 0 },
+                var reply = fixture.Engine(workspace).Execute(new ExploreRequest("Pump Run", Budget: Generous,
                     ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh),
                     interruption == 1 ? cancellation.Token : default, interruption == 2 ? cancellation.Token : default);
                 Assert.Equal(2, proofs);
                 Assert.Equal("failed", reply.Outcome);
                 Assert.Empty(reply.Units);
                 Assert.Contains(reply.Errors, error => error.Code == (interruption == 0 ? "FRESHNESS_REQUIREMENT_NOT_MET"
-                    : interruption == 1 ? "CANCELLED" : "QUERY_TIMEOUT"));
+                    : interruption == 1 ? "CANCELLED" : "REQUEST_TIMEOUT"));
                 replies.Add(reply);
                 metrics?.Fail(interruption != 0);
             }
@@ -200,7 +202,7 @@ public sealed class ExplorationTests
         }
     }
 
-    private static readonly QueryBudget Generous = new(MaxMilliseconds: 10000, MaxChars: 100000, MaxBytes: 400000);
+    private static readonly QueryBudget Generous = new(MaxMilliseconds: 30000, MaxChars: 100000, MaxBytes: 400000);
 
     [Theory]
     [InlineData(ExploreFormat.Agent, ExploreScopePolicy.RequireUnique)]
@@ -383,7 +385,7 @@ public sealed class ExplorationTests
             var interrupted = fixture.Engine(cancellingWorkspace).Execute(request,
                 caller ? cancellation.Token : default, caller ? default : cancellation.Token);
             Assert.Equal(2, checkedInventories);
-            Assert.Contains(interrupted.Errors, error => error.Code == (caller ? "CANCELLED" : "QUERY_TIMEOUT"));
+            Assert.Contains(interrupted.Errors, error => error.Code == (caller ? "CANCELLED" : "REQUEST_TIMEOUT"));
             Assert.Equal("failed", interrupted.Outcome);
             Assert.Empty(interrupted.Units);
             Assert.DoesNotContain("\tpublic ", interrupted.Text);
@@ -515,7 +517,7 @@ public sealed class ExplorationTests
         using var originalReader = IndexReader.Open(path, workspace);
         var original = new PinnedQueryIndex(originalReader, fixture.Root, cache);
         var first = original.PrepareExploration(default);
-        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = 0 } };
+        var request = fixture.Request(fixture.RunInt);
         var expected = new ExplorationService(original, new QueryWorkspace(fixture.Root), true).Execute(request);
         using var barrier = new Barrier(4);
         var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
@@ -689,7 +691,7 @@ public sealed class ExplorationTests
             { OwnerStatusProvider = _ => { cancellation.Cancel(); return new("idle"); } };
             var reply = interrupted.Execute(request with { ObserveOwner = true }, caller ? cancellation.Token : default,
                 caller ? default : cancellation.Token);
-            Assert.Contains(reply.Errors, error => error.Code == (caller ? "CANCELLED" : "QUERY_TIMEOUT"));
+            Assert.Contains(reply.Errors, error => error.Code == (caller ? "CANCELLED" : "REQUEST_TIMEOUT"));
             Assert.Empty(reply.Units);
         }
     }
@@ -991,13 +993,23 @@ public sealed class ExplorationTests
         Assert.Same(recovered, cache.GetOrCreate(fixture.Snapshot, default));
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(10000)]
-    public void PreparationIsLazyAndDistinguishesCallerCancellationFromAnExternalDeadline(int milliseconds)
+    [Fact]
+    public void ExplorationRejectsUnboundedPhaseBudgetsBeforeReadingTheIndex()
     {
         using var fixture = new Fixture();
-        var request = fixture.Request(fixture.RunInt) with { Budget = Generous with { MaxMilliseconds = milliseconds } };
+        var reads = 0;
+        var engine = new ExplorationService(new ObservedIndex(() => { reads++; return fixture.Snapshot; }));
+        var request = fixture.Request(fixture.RunInt);
+        Assert.Throws<ArgumentException>(() => engine.Execute(request with { PrepareMaxMilliseconds = 0 }));
+        Assert.Throws<ArgumentException>(() => engine.Execute(request with { Budget = Generous with { MaxMilliseconds = 0 } }));
+        Assert.Equal(0, reads);
+    }
+
+    [Fact]
+    public void PreparationIsLazyAndDistinguishesCallerCancellationFromAnExternalDeadline()
+    {
+        using var fixture = new Fixture();
+        var request = fixture.Request(fixture.RunInt);
         using var caller = new CancellationTokenSource();
         var reads = 0;
         var observed = new ObservedIndex(() => { reads++; return fixture.Snapshot; });
@@ -1013,7 +1025,7 @@ public sealed class ExplorationTests
         var expiring = new ObservedIndex(() => { deadline.Cancel(); return fixture.Snapshot; });
         var expired = new ExplorationService(expiring, new QueryWorkspace(fixture.Root), true)
             .Execute(request, deadlineToken: deadline.Token);
-        Assert.Contains(expired.Errors, error => error.Code == "QUERY_TIMEOUT");
+        Assert.Contains(expired.Errors, error => error.Code == "REQUEST_TIMEOUT");
         Assert.DoesNotContain(expired.Errors, error => error.Code == "CANCELLED");
         Assert.Empty(expired.Units);
 
@@ -2278,6 +2290,41 @@ public sealed class ExplorationTests
         AssertWireBudget(noPreferred, Generous);
     }
 
+    [Fact]
+    public void DocumentScopeFollowsAnIncomingCodeLinkToASectionDescendantOnlyWithinItsSavedScope()
+    {
+        using var fixture = new Fixture(addScopes: true);
+        var graph = fixture.Snapshot.Graph;
+        var section = graph.Nodes.Single(node => node.Id == fixture.Section);
+        var mention = new HarnessNode("scope-mention", HarnessNodeKind.SymbolMention, "Pump mention", section.Id, section.Location);
+        var link = graph.Edges.Single(edge => edge.Id == "doc-link");
+        var snapshot = fixture.Snapshot with { Graph = graph with
+        {
+            Nodes = [.. graph.Nodes, mention],
+            Edges = graph.Edges.Select(edge => edge.Id == link.Id ? edge with
+            {
+                SourceNodeId = link.TargetNodeId, TargetNodeId = mention.Id,
+                SourceOccurrenceId = link.TargetOccurrenceId, TargetOccurrenceId = null
+            } : edge).ToArray()
+        } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(section.Id);
+        var reply = engine.Execute(request);
+        Assert.True(reply.Succeeded);
+        Assert.Contains(reply.Units, unit => unit.SymbolIds.Contains(section.Id));
+        Assert.Equal(reply.Text, engine.Execute(request).Text);
+        foreach (var outside in new[]
+        {
+            request with { VariantId = fixture.AlternateVariant },
+            request with { ProjectId = fixture.OtherProject, VariantId = fixture.OtherVariant }
+        })
+        {
+            var rejected = engine.Execute(outside);
+            Assert.Contains(rejected.Errors, error => error.Code == "SYMBOL_OUTSIDE_SCOPE");
+            Assert.Empty(rejected.Units);
+        }
+    }
+
     [Theory]
     [InlineData(ExploreFormat.Audit)]
     [InlineData(ExploreFormat.Agent)]
@@ -2515,6 +2562,23 @@ public sealed class ExplorationTests
         Assert.DoesNotContain(from + " --calls/Resolved--> " + from + " ", reply.Text);
         AssertWireBudget(reply, budget);
 
+        var reversed = snapshot with
+        {
+            Graph = snapshot.Graph with
+            {
+                Nodes = snapshot.Graph.Nodes.Reverse().ToArray(),
+                SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Reverse().ToArray(),
+                Edges = snapshot.Graph.Edges.Reverse().ToArray()
+            },
+            SearchText = snapshot.SearchText.Reverse().ToArray()
+        };
+        var reorderedEngine = new ExplorationService(new FixedIndex(reversed), new QueryWorkspace(fixture.Root), true);
+        var reordered = reorderedEngine.Execute(fixture.Request("Pump", budget));
+        Assert.Equal(reply.Text, reordered.Text);
+        Assert.Equal(JsonSerializer.Serialize(reply.Units, QueryJson.Options), JsonSerializer.Serialize(reordered.Units, QueryJson.Options));
+        Assert.Equal(reply.OmissionReasons, reordered.OmissionReasons);
+        Assert.Equal(reordered.Text, reorderedEngine.Execute(fixture.Request("Pump", budget)).Text);
+
         string Alias(string id)
         {
             var identity = Assert.Single(reply.Text.Split('\n'), line => line.Contains(" id=" + fixture.Occurrence(id) + " ", StringComparison.Ordinal));
@@ -2619,9 +2683,18 @@ public sealed class ExplorationTests
             Assert.Empty(reply.Units);
             if (withPath)
             {
-                var header = RetainedPathHeader(reply);
-                Assert.Contains("status=incomplete", header);
-                Assert.Contains("reason=query-error", header);
+                if (cancel)
+                {
+                    Assert.Contains(reply.Errors, error => error.Code == "CANCELLED");
+                    Assert.Contains("no source returned", reply.Text, StringComparison.Ordinal);
+                    Assert.DoesNotContain("Retained path ", reply.Text);
+                }
+                else
+                {
+                    var header = RetainedPathHeader(reply);
+                    Assert.Contains("status=incomplete", header);
+                    Assert.Contains("reason=query-error", header);
+                }
                 Assert.DoesNotContain("Path hop ", reply.Text);
                 AssertWireBudget(reply, request.Budget!);
             }

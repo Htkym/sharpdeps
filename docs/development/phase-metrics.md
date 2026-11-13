@@ -47,8 +47,8 @@ or an end-to-end speed improvement.
 
 Saved CLI Query commands and `explore` accept the same opt-in option. The MCP host
 accepts `--metrics-directory` at startup; tool arguments and tool schemas cannot set
-or change it. Mutations use that host-selected destination too. Public positional
-constructors and `CliApplication.ExploreAsync` retain their existing signatures.
+or change it. Mutations use that host-selected destination too. Metrics selection
+does not change the request's computation allowances or source/freshness checks.
 
 Each admitted saved request writes its own run, including reader open/snapshot,
 freeze/validation and derived indexes, search/resolve/expand, source read/hash and
@@ -62,6 +62,23 @@ serialized payload bytes, not a managed-heap cap. Each call still opens its own
 reader, hydrates and validates the full snapshot, and performs the requested source
 and freshness checks. No live reader or transaction is retained by the cache.
 A derived-cache hit does not mean the whole query is warm or faster.
+
+Under unreleased split-v1, `explore.prepare-standard` covers preparation of standard
+derived and lexical indexes after full reader hydration/validation/freezing, including
+the HttpGet projection when requested. Query execution starts only after this phase.
+Replay attributes it to `readerPreparation`; reader, derived and lexical phase groups
+overlap and must not be added together. Phase labels describe measured work, not
+separate deadline owners. One monotonic request owner enforces preparation, query
+and total computation allowances; startup, MCP handshake and transport are separate.
+
+P1 retains the four-entry/64 MiB derived cache and a freshly validated SQLite reader
+per request. Native generation reuse remains an unimplemented P2 design. The EF Core
+P0 diagnostics used three repetitions per entrypoint/budget; all six MCP calls
+recorded capacity bypass. No performance improvement follows from that observation
+or from the budget split. Preserve the original 24-trial, shared 8-second P0 cohort.
+Because `maxMilliseconds` now means query-only time, freeze a new cohort manifest
+before replay and do not compare the new same-named fields directly with old runs.
+
 A completed query run means the saved request
 succeeded, not that freshness was verified. Failed and cancelled requests retain
 their outcome; stages never reached are absent. Setup rejected before admission
@@ -158,9 +175,11 @@ Compilation acquisition includes Roslyn lazy work; no syntax retrieval is moved 
 added. Caller manifests must separately record commit/binary/corpus hashes, SDK,
 configuration, restore/cache state and parallelism before comparing runs.
 
-All existing public signatures and reuse predicates stay unchanged. The shared sink
-is internal in Core, with friend access restricted to CLI, Query, Index, Roslyn, Markdown and
-CLI/Query test assemblies built in this solution. No shipped API baseline,
-multi-targeted library or generated contract is changed. Full-oracle comparisons
+The diagnostics stream itself does not change public signatures or reuse predicates.
+The shared sink is internal in Core, with friend access restricted to CLI, Query,
+Index, Roslyn, Markdown and CLI/Query test assemblies built in this solution. This
+instrumentation changes no shipped API baseline, multi-targeted library or generated
+contract. The separate unreleased split-v1 request contract requires matching newly
+built consumers. Full-oracle comparisons
 should compare the unchanged snapshots/queries and assert branches separately from
 this out-of-band stream. Never discard all saved diagnostics as measurement noise.

@@ -22,7 +22,7 @@ public sealed class CliTests
     public async Task QueryMetricsAreOutOfBandAndCannotChangeSavedResponses(string command)
     {
         using var fixture = new Fixture();
-        var args = new[] { command, "--root", fixture.Root, "--trusted", "--term", "Service", "--max-milliseconds", "0" };
+        var args = new[] { command, "--root", fixture.Root, "--trusted", "--term", "Service", "--max-milliseconds", command == "explore" ? "30000" : "0" };
         var expected = await Run(args);
         Assert.Equal(0, expected.Exit);
         var directory = Path.Combine(fixture.Root, ".sharpdeps", "metrics");
@@ -656,82 +656,73 @@ public sealed class CliTests
     }
 
     [Theory]
-    [InlineData("audit")]
-    [InlineData("agent")]
-    public async Task ExplorePreparationTimeoutReportsBudgetWithoutReturningEvidence(string format)
+    [InlineData("audit", "reader.open")]
+    [InlineData("agent", "explore.derived-index")]
+    [InlineData("audit", "explore.lexical-index")]
+    public async Task ExplorePreparationTimeoutReportsBudgetWithoutReturningEvidence(string format, string phase)
     {
         using var fixture = new Fixture();
-        IndexSnapshot saved;
-        using (var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid)) saved = reader.Snapshot();
-        var expanded = saved with { Graph = saved.Graph with { Generation = saved.Graph.Generation + 1,
-            SnapshotId = "timeout-preparation", Nodes = [.. saved.Graph.Nodes,
-            .. Enumerable.Range(0, 50000).Select(i => new HarnessNode("timeout-node-" + i,
-                HarnessNodeKind.SourceFile, "Unrelated", saved.Graph.WorkspaceId, null))] } };
-        using (var writer = IndexWriter.Open(fixture.Root, fixture.IndexPath, fixture.Uuid, true))
-            writer.Commit(IndexStage.Create(expanded));
-
-        var reply = await Run("explore", "--root", fixture.Root, "--trusted", "--term", "Service",
-            "--format", format, "--max-milliseconds", "10");
-        Assert.Equal(4, reply.Exit);
-        Assert.Empty(reply.Progress);
-        using var document = JsonDocument.Parse(reply.Json);
+        var clock = new ControlledTimeProvider();
+        using var writer = new PhaseCallbackWriter(phase, () => clock.AdvanceMilliseconds(101));
+        using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("preparation-timeout", "explore", writer);
+        var request = CliArguments.Parse(["explore", "--term", "Service", "--format", format,
+            "--prepare-max-milliseconds", "100"]).ExplorationRequest();
+        var reply = await CliApplication.ExploreWithMetricsAsync(fixture.Root, ".sharpdeps/index.sqlite", true,
+            request, null, timeProvider: clock);
+        Assert.True(writer.Invoked);
+        Assert.Equal(4, reply.ExitCode);
+        using var document = JsonDocument.Parse(reply.Text);
         Assert.Equal("explore", document.RootElement.GetProperty("command").GetString());
         var error = Assert.Single(document.RootElement.GetProperty("errors").EnumerateArray());
-        Assert.Equal("QUERY_TIMEOUT", error.GetProperty("code").GetString());
+        Assert.Equal("PREPARATION_TIMEOUT", error.GetProperty("code").GetString());
         var message = error.GetProperty("message").GetString()!;
-        Assert.Contains("10 ms computation deadline", message, StringComparison.Ordinal);
-        Assert.Contains("saved-index preparation", message, StringComparison.Ordinal);
+        Assert.Contains("100 ms preparation deadline", message, StringComparison.Ordinal);
         Assert.Contains("No source evidence was returned", message, StringComparison.Ordinal);
-        Assert.DoesNotContain(fixture.Root, reply.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Root, reply.Text, StringComparison.Ordinal);
         Assert.False(document.RootElement.TryGetProperty("result", out _));
     }
 
     [Theory]
-    [InlineData(null, "QUERY_TIMEOUT")]
-    [InlineData("5000", null)]
-    [InlineData("100", "PREPARATION_TIMEOUT")]
-    public async Task ExplorePreparationBudgetIsOptInAndStartsExplorationAfterTheReader(string? preparation, string? errorCode)
+    [InlineData("reader.open", null)]
+    [InlineData("explore.derived-index", null)]
+    [InlineData("explore.lexical-index", null)]
+    [InlineData("reader.open", "5000")]
+    public async Task ExplorePreparationBudgetAlwaysExcludesPreparationFromTheQueryDeadline(string phase, string? preparation)
     {
         using var fixture = new Fixture();
-        using var writer = new PhaseCallbackWriter("reader.open", () => Thread.Sleep(1100));
+        var clock = new ControlledTimeProvider();
+        using var writer = new PhaseCallbackWriter(phase, () => clock.AdvanceMilliseconds(1100));
         using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("preparation-deadline", "explore", writer);
-        string[] arguments = ["explore", "--root", fixture.Root, "--term", "Service", "--trusted", "--format", "agent"];
+        string[] arguments = ["explore", "--term", "Service", "--format", "agent"];
         if (preparation is not null) arguments = [.. arguments, "--prepare-max-milliseconds", preparation];
-        var reply = await Run(arguments);
-        if (errorCode is null)
-        {
-            Assert.True(writer.Invoked);
-            Assert.Equal(0, reply.Exit);
-            Assert.Contains("Service", reply.Json, StringComparison.Ordinal);
-        }
-        else
-        {
-            Assert.Equal(4, reply.Exit);
-            Assert.Equal(errorCode, Code(reply.Json));
-            Assert.Contains("saved-index preparation", reply.Json, StringComparison.Ordinal);
-            Assert.Contains(errorCode == "PREPARATION_TIMEOUT" ? "100 ms preparation deadline" : "1000 ms computation deadline", reply.Json, StringComparison.Ordinal);
-            using var document = JsonDocument.Parse(reply.Json);
-            Assert.False(document.RootElement.TryGetProperty("result", out _));
-        }
-        Assert.Empty(reply.Progress);
+        var request = CliArguments.Parse(arguments).ExplorationRequest();
+        Assert.Equal(1000, request.Budget!.MaxMilliseconds);
+        var reply = await CliApplication.ExploreWithMetricsAsync(fixture.Root, ".sharpdeps/index.sqlite", true,
+            request, null, timeProvider: clock);
+        Assert.True(writer.Invoked);
+        Assert.Equal(0, reply.ExitCode);
+        Assert.Contains("Service", reply.Text, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task ExplorePreparationBudgetDoesNotExtendExplorationDeadline()
+    [Theory]
+    [InlineData(1100, "QUERY_TIMEOUT", "1000 ms query deadline")]
+    [InlineData(6001, "REQUEST_TIMEOUT", "6000 ms total request deadline")]
+    public async Task ExplorePreparationBudgetPreservesQueryAndTotalDeadlines(int elapsed, string code, string message)
     {
         using var fixture = new Fixture();
-        using var writer = new PhaseCallbackWriter("explore.execute", () => Thread.Sleep(1100));
+        var clock = new ControlledTimeProvider();
+        using var writer = new PhaseCallbackWriter("explore.execute", () => clock.AdvanceMilliseconds(elapsed));
         using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("exploration-deadline", "explore", writer);
-        var reply = await Run("explore", "--root", fixture.Root, "--term", "Service", "--trusted",
-            "--prepare-max-milliseconds", "5000", "--format", "agent");
+        var request = CliArguments.Parse(["explore", "--term", "Service", "--prepare-max-milliseconds", "5000",
+            "--format", "agent"]).ExplorationRequest();
+        var reply = await CliApplication.ExploreWithMetricsAsync(fixture.Root, ".sharpdeps/index.sqlite", true,
+            request, null, timeProvider: clock);
         Assert.True(writer.Invoked);
-        Assert.Equal(4, reply.Exit);
-        Assert.Equal("QUERY_TIMEOUT", Code(reply.Json));
-        Assert.Contains("1000 ms computation deadline", reply.Json, StringComparison.Ordinal);
-        Assert.Contains("exploration preparation or execution", reply.Json, StringComparison.Ordinal);
-        Assert.DoesNotContain("PREPARATION_TIMEOUT", reply.Json, StringComparison.Ordinal);
-        Assert.Empty(reply.Progress);
-        using var document = JsonDocument.Parse(reply.Json);
+        Assert.Equal(4, reply.ExitCode);
+        Assert.Equal(code, Code(reply.Text));
+        Assert.Contains(message, reply.Text, StringComparison.Ordinal);
+        Assert.Contains("No source evidence was returned", reply.Text, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(reply.Text);
         Assert.False(document.RootElement.TryGetProperty("result", out _));
     }
 
@@ -741,19 +732,17 @@ public sealed class CliTests
     public async Task ExplorePreparationBudgetPreservesCallerCancellationAcrossBothPhases(string phase)
     {
         using var fixture = new Fixture();
+        var clock = new ControlledTimeProvider();
         using var cancellation = new CancellationTokenSource();
-        using var writer = new PhaseCallbackWriter(phase, cancellation.Cancel);
+        using var writer = new PhaseCallbackWriter(phase, () => { clock.AdvanceMilliseconds(6001); cancellation.Cancel(); });
         using var metrics = new SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Run("preparation-cancellation", "explore", writer);
-        var output = new StringWriter();
-        var progress = new StringWriter();
-        var exit = await CliApplication.RunAsync(["explore", "--root", fixture.Root, "--term", "Service", "--trusted",
-            "--prepare-max-milliseconds", "5000"], output, progress, cancellation.Token);
+        var request = CliArguments.Parse(["explore", "--term", "Service", "--prepare-max-milliseconds", "5000"]).ExplorationRequest();
+        var reply = await CliApplication.ExploreWithMetricsAsync(fixture.Root, ".sharpdeps/index.sqlite", true,
+            request, null, token: cancellation.Token, timeProvider: clock);
         Assert.True(writer.Invoked);
-        Assert.Equal(130, exit);
-        Assert.Equal("CANCELLED", Code(output.ToString()));
-        Assert.DoesNotContain("PREPARATION_TIMEOUT", output.ToString(), StringComparison.Ordinal);
-        Assert.Empty(progress.ToString());
-        using var document = JsonDocument.Parse(output.ToString());
+        Assert.Equal(130, reply.ExitCode);
+        Assert.Equal("CANCELLED", Code(reply.Text));
+        using var document = JsonDocument.Parse(reply.Text);
         Assert.False(document.RootElement.TryGetProperty("result", out _));
     }
 
@@ -766,28 +755,52 @@ public sealed class CliTests
     [InlineData("Infinity")]
     [InlineData("1e3")]
     [InlineData("+10")]
-    public async Task ExploreRejectsInvalidPreparationBudgetsBeforeWorkspaceAccess(string value)
+    public async Task ExploreRejectsInvalidBudgetsBeforeWorkspaceAccess(string value)
     {
         using var fixture = new Fixture(seed: false);
-        var reply = await Run("explore", "--root", fixture.Root, "--term", "Service", "--prepare-max-milliseconds", value);
-        Assert.Equal(2, reply.Exit);
-        Assert.Equal("ARGUMENT_INVALID", Code(reply.Json));
-        Assert.Empty(reply.Progress);
-        Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
+        foreach (var option in new[] { "--prepare-max-milliseconds", "--max-milliseconds" })
+        {
+            var reply = await Run("explore", "--root", fixture.Root, "--term", "Service", option, value);
+            Assert.Equal(2, reply.Exit);
+            Assert.Equal("ARGUMENT_INVALID", Code(reply.Json));
+            Assert.Empty(reply.Progress);
+            Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
+        }
     }
 
     [Fact]
     public void ExplorePreparationBudgetUsesFiniteBoundsAndIsExploreOnly()
     {
-        Assert.Null(CliArguments.Parse(["explore", "Service"]).ExplorePreparationMilliseconds());
+        var defaults = CliArguments.Parse(["explore", "Service"]).ExplorationRequest();
+        Assert.Equal(30000, defaults.PrepareMaxMilliseconds);
+        Assert.Equal(1000, defaults.Budget!.MaxMilliseconds);
         foreach (var value in new[] { 10, 30000 })
-            Assert.Equal(value, CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", value.ToString(System.Globalization.CultureInfo.InvariantCulture)]).ExplorePreparationMilliseconds());
-        var zeroExploration = CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", "5000", "--max-milliseconds", "0"]);
-        Assert.Equal(5000, zeroExploration.ExplorePreparationMilliseconds());
-        Assert.Equal(0, zeroExploration.ExplorationRequest().Budget!.MaxMilliseconds);
+        {
+            var literal = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var request = CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", literal,
+                "--max-milliseconds", literal]).ExplorationRequest();
+            Assert.Equal(value, request.PrepareMaxMilliseconds);
+            Assert.Equal(value, request.Budget!.MaxMilliseconds);
+        }
+        Assert.Equal(0, CliArguments.Parse(["search", "--term", "Service", "--max-milliseconds", "0"]).QueryRequest().Budget!.MaxMilliseconds);
         Assert.Equal("ARGUMENT_UNKNOWN", Assert.Throws<CliFailure>(() => CliArguments.Parse(["search", "--term", "Service", "--prepare-max-milliseconds", "5000"])).Code);
         Assert.Equal("ARGUMENT_DUPLICATE", Assert.Throws<CliFailure>(() => CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds", "100", "--prepare-max-milliseconds", "200"])).Code);
         Assert.Equal("ARGUMENT_REQUIRED", Assert.Throws<CliFailure>(() => CliArguments.Parse(["explore", "Service", "--prepare-max-milliseconds"])).Code);
+    }
+
+    private sealed class ControlledTimeProvider : TimeProvider
+    {
+        private long ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => ticks;
+        public void AdvanceMilliseconds(int milliseconds) => ticks += TimeSpan.FromMilliseconds(milliseconds).Ticks;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => new ControlledTimer();
+        private sealed class ControlledTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() { }
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class PhaseCallbackWriter(string phase, Action callback) : StreamWriter(Stream.Null)
@@ -805,16 +818,13 @@ public sealed class CliTests
     }
 
     [Fact]
-    public async Task ZeroQueryBudgetWorksAtTheCliBoundaryAndRejectsSubMinimumPositiveValues()
+    public async Task NonExploreQueryKeepsUnlimitedZeroAndRejectsSubMinimumPositiveValues()
     {
         using var fixture = new Fixture();
-        foreach (var command in new[] { "search", "explore" })
-        {
-            var arguments = new[] { command, "--root", fixture.Root, "--term", "Service", "--max-milliseconds" };
-            var actual = await Run([.. arguments, "0"]);
-            Assert.Equal(0, actual.Exit);
-            Assert.Equal("ARGUMENT_INVALID", Code((await Run([.. arguments, "1"])).Json));
-        }
+        var arguments = new[] { "search", "--root", fixture.Root, "--term", "Service", "--max-milliseconds" };
+        var actual = await Run([.. arguments, "0"]);
+        Assert.Equal(0, actual.Exit);
+        Assert.Equal("ARGUMENT_INVALID", Code((await Run([.. arguments, "1"])).Json));
     }
 
     [Fact]

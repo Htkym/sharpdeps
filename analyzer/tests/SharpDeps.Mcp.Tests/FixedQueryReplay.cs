@@ -14,8 +14,8 @@ using SharpDeps.Query;
 internal sealed record ReplayCase(string Id, string Query, string Format = "audit", string? ScopePolicy = null,
     string? ProjectId = null, string? VariantId = null, string? PathPrefix = null,
     string Freshness = "allow-stale", int MaxChars = 12000, int MaxBytes = 48000,
-    int MaxMilliseconds = 0, bool OwnerStatus = false, string Equivalence = "exact",
-    string? Purpose = null);
+    int? MaxMilliseconds = null, bool OwnerStatus = false, string Equivalence = "exact",
+    string? Purpose = null, int? PrepareMaxMilliseconds = null);
 internal sealed record ReplayInput(string Root, string CliDll, string McpDll, string RepositoryRoot,
     IReadOnlyList<ReplayCase> Cases, bool Trusted = true, string Index = ".sharpdeps/index.sqlite", bool PhaseMetrics = false);
 internal sealed record ReplayUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan? Span,
@@ -213,8 +213,11 @@ internal static class FixedQueryReplay
         var listed = await RpcAsync("tools/list", new { }, "tools-list");
         using (var tools = JsonDocument.Parse(listed.Bytes))
         {
-            Require(tools.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
-                .Any(tool => tool.GetProperty("name").GetString() == "explore"), "MCP explore schema was not listed.");
+            var explore = tools.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
+                .SingleOrDefault(tool => tool.GetProperty("name").GetString() == "explore");
+            Require(explore.ValueKind == JsonValueKind.Object, "MCP explore schema was not listed.");
+            Require(SupportsSplitBudget(explore.GetProperty("inputSchema")),
+                "The target host does not advertise the split-v1 exploration budget contract; no replay case was started.");
         }
         var observations = new List<ReplayObservation>();
         var exploreRequestOrdinal = 0;
@@ -296,6 +299,10 @@ internal static class FixedQueryReplay
             var units = ParseUnits(mcpText ?? "", snapshot, input.Root, caseDirectory);
             var cliUnits = equivalent ? units : ParseUnits(cliText, snapshot, input.Root, caseDirectory, "cli-");
             var receiptPath = Path.Combine(caseDirectory, "receipt.json");
+            var queryMilliseconds = item.MaxMilliseconds ?? new QueryBudget().MaxMilliseconds;
+            var preparationMilliseconds = item.PrepareMaxMilliseconds ?? new ExploreRequest(item.Query).PrepareMaxMilliseconds;
+            var cliTimeoutCode = TimeoutCode(cliText);
+            var mcpTimeoutCode = mcpText is null ? null : TimeoutCode(mcpText);
             WriteJson(receiptPath, new
             {
                 requested = item,
@@ -310,7 +317,10 @@ internal static class FixedQueryReplay
                     item.Freshness,
                     item.MaxChars,
                     item.MaxBytes,
-                    item.MaxMilliseconds,
+                    budgetContract = "split-v1",
+                    prepareMaxMilliseconds = preparationMilliseconds,
+                    maxMilliseconds = queryMilliseconds,
+                    totalMaxMilliseconds = preparationMilliseconds + queryMilliseconds,
                     maxNodes = 60,
                     maxEdges = 120,
                     maxDepth = 2,
@@ -353,8 +363,10 @@ internal static class FixedQueryReplay
                     candidateCount = (int?)null,
                     publicErrorCodes = PublicErrorCodes(mcpText ?? cliText),
                     cliPublicErrorCodes = PublicErrorCodes(cliText),
-                    cliDeadlineObserved = item.MaxMilliseconds > 0 ? cliText.Contains("QUERY_TIMEOUT", StringComparison.Ordinal) : (bool?)null,
-                    mcpDeadlineObserved = item.MaxMilliseconds > 0 ? mcpText?.Contains("QUERY_TIMEOUT", StringComparison.Ordinal) : null,
+                    cliTimeoutCode,
+                    mcpTimeoutCode,
+                    cliDeadlineObserved = cliTimeoutCode is not null,
+                    mcpDeadlineObserved = mcpText is null ? (bool?)null : mcpTimeoutCode is not null,
                     matchingScopes = CaptureNumber(mcpText, @"\((\d+) matching scopes"),
                     selectedGroups = CaptureNumber(mcpText, @"\bgroups=(\d+)"),
                     omittedGroups = CaptureNumber(mcpText, @"\bomittedGroups=(\d+)"),
@@ -404,8 +416,11 @@ internal static class FixedQueryReplay
             }
             if (item.Equivalence == "deadline-sensitive")
             {
-                Require(item.MaxMilliseconds > 0 && (equivalent || cliText.Contains("QUERY_TIMEOUT", StringComparison.Ordinal)
-                    || mcpText?.Contains("QUERY_TIMEOUT", StringComparison.Ordinal) == true), "Unexpected deadline comparison difference.");
+                var cliOutcome = RequestOutcome(cliText, cli.ExitCode != 0);
+                var mcpOutcome = mcpText is null ? "failed" : RequestOutcome(mcpText, isError == true);
+                Require(DeadlineCompatible(cliOutcome) && DeadlineCompatible(mcpOutcome)
+                    && (equivalent || cliTimeoutCode is not null || mcpTimeoutCode is not null),
+                    "Unexpected deadline comparison difference or non-timeout failure.");
             }
             if (wire is not null)
             {
@@ -458,8 +473,11 @@ internal static class FixedQueryReplay
         var args = new List<string> { input.CliDll, "explore", "--root", input.Root, "--index", input.Index,
             "--format", item.Format, "--freshness", item.Freshness,
             "--max-chars", item.MaxChars.ToString(CultureInfo.InvariantCulture),
-            "--max-bytes", item.MaxBytes.ToString(CultureInfo.InvariantCulture),
-            "--max-milliseconds", item.MaxMilliseconds.ToString(CultureInfo.InvariantCulture) };
+            "--max-bytes", item.MaxBytes.ToString(CultureInfo.InvariantCulture) };
+        foreach (var (name, value) in new[] { ("--max-milliseconds", item.MaxMilliseconds),
+            ("--prepare-max-milliseconds", item.PrepareMaxMilliseconds) })
+            if (value is { } milliseconds)
+                args.AddRange([name, milliseconds.ToString(CultureInfo.InvariantCulture)]);
         if (input.Trusted)
         {
             args.Add("--trusted");
@@ -489,9 +507,12 @@ internal static class FixedQueryReplay
             ["freshness"] = item.Freshness,
             ["maxChars"] = item.MaxChars,
             ["maxBytes"] = item.MaxBytes,
-            ["maxMilliseconds"] = item.MaxMilliseconds,
             ["ownerStatus"] = item.OwnerStatus
         };
+        foreach (var (name, value) in new[] { ("maxMilliseconds", item.MaxMilliseconds),
+            ("prepareMaxMilliseconds", item.PrepareMaxMilliseconds) })
+            if (value is { } milliseconds)
+                args.Add(name, milliseconds);
         foreach (var pair in new[] { ("scopePolicy", item.ScopePolicy), ("projectId", item.ProjectId),
             ("variantId", item.VariantId), ("pathPrefix", item.PathPrefix) })
         {
@@ -693,13 +714,39 @@ internal static class FixedQueryReplay
             return "response-invalid";
         }
     }
-    private static string RequestOutcome(string text, bool failed)
+    internal static string RequestOutcome(string text, bool failed)
     {
         var errors = PublicErrorCodes(text);
-        return errors.Contains("QUERY_TIMEOUT", StringComparer.Ordinal) ? "timeout"
-            : errors.Contains("CANCELLED", StringComparer.Ordinal) ? "cancelled"
+        if (errors.Length > 0 && errors.All(IsTimeoutCode))
+            return errors[0] switch
+            {
+                "PREPARATION_TIMEOUT" => "preparation-timeout",
+                "QUERY_TIMEOUT" => "query-timeout",
+                _ => "request-timeout"
+            };
+        return errors.Contains("CANCELLED", StringComparer.Ordinal) ? "cancelled"
             : errors.Contains("ARGUMENT_INVALID", StringComparer.Ordinal) ? "rejected"
-            : failed ? "failed" : "completed";
+            : failed || errors.Contains("INTERNAL_ERROR", StringComparer.Ordinal) ? "failed" : "completed";
+    }
+    internal static string? TimeoutCode(string text) => PublicErrorCodes(text).FirstOrDefault(IsTimeoutCode);
+    private static bool IsTimeoutCode(string code) => code is "PREPARATION_TIMEOUT" or "QUERY_TIMEOUT" or "REQUEST_TIMEOUT";
+    private static bool DeadlineCompatible(string outcome)
+        => outcome is "completed" or "preparation-timeout" or "query-timeout" or "request-timeout";
+    internal static bool SupportsSplitBudget(JsonElement schema)
+    {
+        if (schema.ValueKind != JsonValueKind.Object || !schema.TryGetProperty("properties", out var properties)
+            || properties.ValueKind != JsonValueKind.Object) return false;
+        foreach (var (name, expectedDefault) in new[] { ("prepareMaxMilliseconds", 30000), ("maxMilliseconds", 1000) })
+        {
+            if (!properties.TryGetProperty(name, out var budget)
+                || budget.ValueKind != JsonValueKind.Object
+                || !budget.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || type.GetString() != "integer"
+                || !Number("minimum", 10) || !Number("maximum", 30000) || !Number("default", expectedDefault)
+                || budget.TryGetProperty("anyOf", out _)) return false;
+            bool Number(string property, int expected) => budget.TryGetProperty(property, out var value)
+                && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var actual) && actual == expected;
+        }
+        return true;
     }
     private static string RenderSource(string text) => text.EndsWith('\n') ? text : text + "\n";
     private static string[] PublicErrorCodes(string text)

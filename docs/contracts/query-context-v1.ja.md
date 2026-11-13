@@ -40,13 +40,19 @@ refreshは`UPDATE_REQUIRED`を返す。trusted coordinatorで更新し、新し�
 
 ## 出力と実行予算
 
-今回の実装defaultは60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes、pageSize100である。設定範囲はnodes1–500、edges1–1000、depth1–8、time10–30000msまたは0、chars2048–1000000、bytes2048–4000000、pageSize1–500。`QueryBudget.MaxMilliseconds = 0`は計算期限を外す明示指定で、呼出し側の取消とその他の予算・検証は維持する。既定値と正の時間枠の意味は変わらない。宣言itemもnode枠へ数える。snippet本文は文字枠の半分まで先に割り当て、最終JSONでさらに制限する。
+個別Queryの実装defaultは60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes、pageSize100である。設定範囲はnodes1–500、edges1–1000、depth1–8、time10–30000msまたは0、chars2048–1000000、bytes2048–4000000、pageSize1–500。explore以外のtyped Query APIでは`QueryBudget.MaxMilliseconds = 0`が計算期限を外し、呼出し側の取消とその他の予算・検証を維持する。個別Queryの既定値と正の時間枠の意味は変わらない。宣言itemもnode枠へ数える。snippet本文は文字枠の半分まで先に割り当て、最終JSONでさらに制限する。
 
 JSON escape、envelope、coverage/診断、error、cursor、使用量fieldを含む実serialized応答を計測し、自己サイズを安定化してから上限を検査する。必要ならpage末尾を減らし、optional metadataを省略してcountと打切り理由を残す。最小error envelopeが実snapshotの必須metadataを含めて収まらない予算はArgumentExceptionで事前拒否する。不正引数もArgumentExceptionで、hostが共通protocol errorへ変換する責務を持つ。本文の途中切断で壊れたJSONを返さない。
 
 usedCharsは最終JSONのUTF-16長、usedBytesはそのUTF-8長である。estimatedTokensは文字数からの推定で、tokenizerの厳密な制限ではない。取消と時間枠は探索、source読取境界、最終wire構築で検査し、CANCELLED/QUERY_TIMEOUTを返す。同期SQLite/serializer/filesystem呼出そのものを強制中断するOS sandboxではない。
 
-未リリースの開発版CLIの`explore --prepare-max-milliseconds N`は明示的な有限のreader準備期限（10〜30000ms、0は不可）を追加するtransport側のopt-inである。全snapshot検証を維持し、その完了後に既存の`QueryBudget.MaxMilliseconds`を探索用の派生データ準備と探索へ適用する。指定なしの共有期限、typed Query API、MCP、既存の公開overloadは変えない。caller取消、source trust、現在入力／configurationの証明、coverageの意味を変更しない。別準備枠の期限切れはCLIの`PREPARATION_TIMEOUT`（exit 4）となる。
+未公開の開発版exploreはCLI／MCP／API共通のsplit-v1契約を使う。`ExploreRequest.PrepareMaxMilliseconds`は準備予算で既定30000ms、`Budget.MaxMilliseconds`は探索だけの予算で既定1000msである。CLIでは`--prepare-max-milliseconds`／`--max-milliseconds`、MCPではflatな`prepareMaxMilliseconds`／`maxMilliseconds`に対応する。両方とも10〜30000msの有限値とし、0を拒否する。省略時もこの既定値を使い、共有期限には戻らない。
+
+準備には新しい`IndexReader`のopen、全snapshotの読取り／検証／read-only化と、標準の派生index／lexical indexを含む。要求されたHttpGet projectionもこの段階で準備する。探索の計時は準備完了後に始まり、探索、source／鮮度検証、出力に適用する。一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。caller取消は両段階に適用し、期限切れより優先する。協調的な取消であり、process起動、MCP handshake、transportはこの計算時間に含めない。
+
+準備、探索、request全体の期限切れはそれぞれ`PREPARATION_TIMEOUT`／`QUERY_TIMEOUT`／`REQUEST_TIMEOUT`となり、CLIのexitは4である。caller取消は`CANCELLED`でexit 130となる。これらの失敗ではsourceを返さない。source trust、現在入力／configurationの証明、coverageの意味は維持する。各requestは新しいSQLite readerで全snapshotを検証し、既存の派生cacheは4entry／serialized payload 64MiBのままとする。nativeな世代再利用は未実装のP2設計であり、[設計文書](../development/prepared-exploration.md)を参照する。
+
+探索の既定1000msは初期候補であり、`DbContext`全体の完了を保証しない。同名の`maxMilliseconds`が準備を含む共有予算から探索だけの予算へ変わるため、過去の入力は変更せず、新しいcohort manifestを固定して再計測する。元の24trial／共有8秒のP0 cohortと直接比較せず、予算の自動引上げや無断の再試行もしない。この破壊的変更には同じ新しいbuildのCLI／MCP／API利用側が必要であり、公開時には新しいpackage versionを使う。公開済み0.4.0は変更せず、今回のsource変更ではreleaseを行わない。index schema 1／2／3は変更せず、in-place migrationは行わない。
 
 ## Exploreの根拠とprovenance
 

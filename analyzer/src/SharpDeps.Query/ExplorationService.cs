@@ -1,7 +1,6 @@
 namespace SharpDeps.Query;
 
 using SharpDeps.Analysis.Core.Diagnostics;
-using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -30,28 +29,60 @@ public sealed partial class ExplorationService
     public ExploreReply Execute(ExploreRequest request, CancellationToken cancellationToken = default,
         CancellationToken deadlineToken = default)
     {
-        using var metricsScope = PhaseMetrics.Measure("explore.execute");
+        request = Normalize(request);
+        using var execution = new ExplorationExecutionBudget(request, cancellationToken, deadlineToken);
+        try
+        {
+            execution.Check();
+            var saved = PrepareSnapshot(request, execution.Token);
+            execution.StartQuery();
+            var reply = ExecutePrepared(request, saved, execution);
+            execution.CallerToken.ThrowIfCancellationRequested();
+            if (reply.Succeeded) execution.Check();
+            return reply;
+        }
+        catch (OperationCanceledException) { return RequestFailure(execution.Code); }
+        catch (QuerySourceException error) { return RequestFailure(error.Code); }
+        catch (IndexStoreException error) { return RequestFailure(error.Code); }
+    }
+
+    internal static ExploreRequest Normalize(ExploreRequest request)
+    {
         ArgumentNullException.ThrowIfNull(request);
         request = request with { Budget = request.Budget ?? new QueryBudget(MaxChars: 12000, MaxBytes: 48000) };
         Validate(request);
-        var clock = Stopwatch.StartNew();
-        using var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
-        if (request.Budget!.MaxMilliseconds != 0) timer.CancelAfter(request.Budget.MaxMilliseconds);
+        return request;
+    }
+
+    internal ExplorationSnapshot PrepareSnapshot(ExploreRequest request, CancellationToken token)
+    {
+        using var preparation = PhaseMetrics.Measure("explore.prepare-standard");
+        token.ThrowIfCancellationRequested();
+        var saved = index is PinnedQueryIndex pinned ? pinned.PrepareExploration(token)
+            : ExplorationSnapshotCache.Get(index.ReadSnapshot(token), token);
+        _ = saved.GetSearchIndex(token);
+        if (request.QueryKind == ExploreQueryKind.HttpGetLiteral)
+            _ = saved.GetHttpGetDeclarations(request.Query, token);
+        token.ThrowIfCancellationRequested();
+        return saved;
+    }
+
+    internal ExploreReply ExecutePrepared(ExploreRequest request, ExplorationSnapshot saved,
+        ExplorationExecutionBudget execution)
+    {
+        using var metricsScope = PhaseMetrics.Measure("explore.execute");
         Run? run = null;
         try
         {
-            timer.Token.ThrowIfCancellationRequested();
-            var saved = index is PinnedQueryIndex pinned ? pinned.PrepareExploration(timer.Token)
-                : ExplorationSnapshotCache.Get(index.ReadSnapshot(timer.Token), timer.Token);
-            timer.Token.ThrowIfCancellationRequested();
+            execution.Check();
             if (request.ProjectId is not null && request.VariantId is not null
                 && saved.saved.Graph.Variants.Any(v => v.Id == request.VariantId && v.ProjectId != request.ProjectId))
                 throw new ArgumentException("Project and variant scopes disagree.", nameof(request));
-            run = new Run(saved, index, workspace, trusted, request, timer, clock, cancellationToken);
+            run = new Run(saved, index, workspace, trusted, request, execution, execution.CallerToken);
             run.Check();
             if (request.ObserveOwner)
             {
-                run.ObserveOwner(OwnerStatusProvider?.Invoke(timer.Token));
+                run.ObserveOwner(OwnerStatusProvider?.Invoke(execution.Token));
                 run.Check();
             }
             if (request.Freshness == QueryFreshnessPolicy.Refresh)
@@ -71,28 +102,28 @@ public sealed partial class ExplorationService
         }
         catch (OperationCanceledException)
         {
-            if (run is null) return PreparationFailure(cancellationToken.IsCancellationRequested ? "CANCELLED" : "QUERY_TIMEOUT");
-            run.Cancel(cancellationToken.IsCancellationRequested);
+            if (run is null) return RequestFailure(execution.Code);
+            run.Cancel(execution.CallerToken.IsCancellationRequested);
         }
         catch (QuerySourceException error)
         {
-            if (run is null) return PreparationFailure(error.Code);
+            if (run is null) return RequestFailure(error.Code);
             run.Error(error.Code, "Verify source inputs and retry.", error.RelativePath);
         }
         catch (IndexStoreException error)
         {
-            if (run is null) return PreparationFailure(error.Code);
+            if (run is null) return RequestFailure(error.Code);
             run.Error(error.Code, "Reopen the current index through its trusted owner.");
         }
         if (run!.Errors.Count != 0) run.Units.Clear();
         return run.Finish();
     }
 
-    private static ExploreReply PreparationFailure(string code)
+    private static ExploreReply RequestFailure(string code)
     {
-        var text = $"SharpDeps explore outcome=failed\nError {code}: preparation did not complete; no source returned.\n";
+        var text = $"SharpDeps explore outcome=failed\nError {code}: request did not complete; no source returned.\nFreshness=unverified\n";
         var wire = JsonSerializer.Serialize(new { content = new[] { new { type = "text", text } }, isError = true });
-        return new(text, [new(code, "Reopen the index or retry with an appropriate deadline.")], [], [code],
+        return new(text, [new(code, "Inspect the failure code; preserve the agreed scope and finite budgets.")], [], [code],
             wire.Length, Encoding.UTF8.GetByteCount(wire)) { Outcome = "failed" };
     }
 
@@ -102,6 +133,8 @@ public sealed partial class ExplorationService
             || value.Length <= maximum && !string.IsNullOrWhiteSpace(value) && !value.Any(char.IsControl);
         var budget = request.Budget!;
         var literal = request.QueryKind == ExploreQueryKind.HttpGetLiteral;
+        if (request.Query is null)
+            throw new ArgumentException("Exploration requires a query string.", nameof(request));
         if (request.ScopePolicy == ExploreScopePolicy.Discover
             && (literal || request.PathTo is not null || HasSavedIdentity(request.Query)))
             throw new ArgumentException("Discover accepts ordinary names and paths; use unique for exact identities, pathTo or HttpGet literals.", nameof(request));
@@ -111,7 +144,8 @@ public sealed partial class ExplorationService
             || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy) || !Enum.IsDefined(request.QueryKind)
             || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
-            || budget.MaxMilliseconds != 0 && (budget.MaxMilliseconds is < 10 or > 30000)
+            || !ExplorationExecutionBudget.Finite(request.PrepareMaxMilliseconds)
+            || !ExplorationExecutionBudget.Finite(budget.MaxMilliseconds)
             || budget.MaxChars is < 2048 or > 1000000
             || budget.MaxBytes is < 2048 or > 4000000)
             throw new ArgumentException("Invalid exploration arguments or budgets.", nameof(request));
@@ -134,8 +168,7 @@ public sealed partial class ExplorationService
     private static bool IsOccurrenceIdentity(string value) => value.Length == 69 && value.StartsWith("hocc_", StringComparison.Ordinal)
         && !value.AsSpan(5).ContainsAnyExcept("0123456789abcdef");
 
-    private static bool IsDocument(HarnessNode node) => node.Kind is HarnessNodeKind.Document or HarnessNodeKind.Section
-        or HarnessNodeKind.FrontMatter or HarnessNodeKind.CodeFence or HarnessNodeKind.LinkTarget or HarnessNodeKind.SymbolMention;
+    private static bool IsDocument(HarnessNode node) => ExplorationSnapshot.IsDocument(node);
 
     private sealed record Selected(HarnessNode Node, HarnessSymbolOccurrence? Occurrence, int Priority,
         string Reason, HarnessCertainty Certainty, bool IncludeSource)
@@ -163,7 +196,7 @@ public sealed partial class ExplorationService
         private readonly ExploreRequest request;
         private readonly CancellationTokenSource timer;
         private readonly CancellationToken originalToken;
-        private readonly Stopwatch clock;
+        private readonly ExplorationExecutionBudget execution;
         private readonly Dictionary<string, Selected> selected = new(StringComparer.Ordinal);
         private readonly List<Relation> relations = [];
         private readonly List<Selected> roots = [];
@@ -190,39 +223,31 @@ public sealed partial class ExplorationService
         private int omissionDisplayLimit = 8;
         private string? cachedSourceId;
         private string? cachedSourceText;
-        private readonly Dictionary<string, string> storedBodies;
-        private bool cancelled;
+        private readonly IReadOnlyDictionary<string, string> storedBodies;
         private QueryFreshness freshness = new("unverified", null, [], ["complete inventory/configuration not checked"]);
         private ExploreOwnerObservation? ownerObservation;
         public List<QueryIssue> Errors { get; } = [];
         public List<ExploreUnit> Units { get; } = [];
 
         public Run(ExplorationSnapshot owner, IQueryIndex index, QueryWorkspace? workspace, bool trusted,
-            ExploreRequest request, CancellationTokenSource timer, Stopwatch clock, CancellationToken token)
+            ExploreRequest request, ExplorationExecutionBudget execution, CancellationToken token)
         {
             this.owner = owner; this.index = index; this.workspace = workspace; this.trusted = trusted;
-            this.request = request; originalToken = token; this.timer = timer; this.clock = clock;
-            storedBodies = owner.saved.StoredGeneratedBodies.Select(b => (b.SourceId, b.Body))
-                .Concat(owner.saved.StoredPackageBodies.Select(b => (b.SourceId, b.Body)))
-                .ToDictionary(b => b.SourceId, b => b.Body, StringComparer.Ordinal);
+            this.request = request; originalToken = token; this.execution = execution; timer = execution.Source;
+            storedBodies = owner.storedBodies;
             project = request.ProjectId; variant = request.VariantId;
         }
 
-        public void Check()
-        {
-            timer.Token.ThrowIfCancellationRequested();
-            if (request.Budget!.MaxMilliseconds != 0 && clock.ElapsedMilliseconds > request.Budget.MaxMilliseconds)
-                throw new OperationCanceledException();
-        }
+        public void Check() => execution.Check();
         public void Error(string code, string message, string? path = null)
         {
             if (!Errors.Any(e => e.Code == code && e.Path == path)) Errors.Add(new(code, message, path));
         }
         public void Cancel(bool requested)
         {
-            cancelled = true;
-            Error(requested ? "CANCELLED" : "QUERY_TIMEOUT",
-                requested ? "The request was cancelled." : "Narrow the query or increase its time budget.");
+            var code = requested ? "CANCELLED" : execution.Code;
+            Error(code, code == "CANCELLED" ? "The request was cancelled."
+                : "The exploration deadline expired; narrow the query within the agreed budget.");
             Units.Clear();
         }
         public void Verify()
@@ -279,8 +304,9 @@ public sealed partial class ExplorationService
 
         private bool DocumentScopeProven(HarnessNode node, string? selectedVariant, string selectedProject)
         {
+            Check();
             var section = DocumentSection(node).Id;
-            foreach (var edge in owner.saved.Graph.Edges)
+            foreach (var edge in owner.documentEdges.GetValueOrDefault(section) ?? [])
             {
                 Check();
                 if (selectedVariant is not null && edge.VariantId is not null && edge.VariantId != selectedVariant) continue;
@@ -731,7 +757,7 @@ public sealed partial class ExplorationService
             foreach (var root in roots.Where(root => root.Node.Kind == HarnessNodeKind.Type))
             {
                 var members = new SortedSet<HarnessNode>(Comparer<HarnessNode>.Create((left, right) => StringComparer.Ordinal.Compare(left.Id, right.Id)));
-                foreach (var node in owner.saved.Graph.Nodes)
+                foreach (var node in owner.members.GetValueOrDefault(root.Node.Id) ?? [])
                 {
                     Check();
                     if (node.Kind != HarnessNodeKind.Member || node.ParentId != root.Node.Id || !NodeAllowed(node, variant)) continue;
@@ -1256,14 +1282,16 @@ public sealed partial class ExplorationService
         public ExploreReply Finish()
         {
             using var metricsScope = PhaseMetrics.Measure("explore.render");
+            try { Check(); }
+            catch (OperationCanceledException) { return RequestFailure(DeadlineFailureCode()); }
             if (discoveryGroups is not null)
                 return FinishDiscovery();
             var relationCount = Math.Min(relationDisplayLimit, relations.Count);
             var detailCount = omissionDisplayLimit;
             while (true)
             {
-                if (Errors.Count == 0 && !cancelled)
-                    try { Check(); } catch (OperationCanceledException) { Cancel(originalToken.IsCancellationRequested); }
+                try { Check(); }
+                catch (OperationCanceledException) { return RequestFailure(DeadlineFailureCode()); }
                 if (pending.Count > 0) reasons.Add("OMITTED_UNITS");
                 var text = Render(Units, pending, relationCount, detailCount);
                 var wire = Size(text);
@@ -1293,6 +1321,9 @@ public sealed partial class ExplorationService
                 return new(minimal, Errors.ToArray(), [], reasons.Order(StringComparer.Ordinal).ToArray(), size.Chars, size.Bytes) { Outcome = "failed" };
             }
         }
+
+        private string DeadlineFailureCode() => originalToken.IsCancellationRequested ? "CANCELLED"
+            : Errors.FirstOrDefault()?.Code ?? execution.Code;
 
         private (int Chars, int Bytes) Size(string text, int? returnedRanges = null)
         {

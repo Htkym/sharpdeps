@@ -6,7 +6,7 @@ using SharpDeps.Index;
 internal sealed class ValidatedExplorationSnapshotCache(int maximumEntries = 4, long maximumPayloadBytes = 64 * 1024 * 1024)
 {
     internal static readonly ValidatedExplorationSnapshotCache Shared = new();
-    private const int DerivedVersion = 1;
+    private const int DerivedVersion = 2;
     private sealed record Key(string Root, string Index, string Workspace, int IndexSchema, int GraphSchema,
         string Identity, ExplorationSnapshotCache.Fingerprint Payload, int Derived);
     private sealed record Entry(Key Key, ExplorationSnapshot Snapshot);

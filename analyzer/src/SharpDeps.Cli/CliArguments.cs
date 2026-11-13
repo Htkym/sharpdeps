@@ -127,8 +127,7 @@ internal sealed class CliArguments
         return parsed;
     }
 
-    public int? ExplorePreparationMilliseconds() => Has("prepare-max-milliseconds")
-        ? Number("prepare-max-milliseconds", 1000, 10, 30000) : null;
+    public int ExplorePreparationMilliseconds() => Number("prepare-max-milliseconds", 30000, 10, 30000);
 
     public ExploreRequest ExplorationRequest()
     {
@@ -142,7 +141,8 @@ internal sealed class CliArguments
                 OptionalNumber("max-milliseconds"), OptionalNumber("max-chars"), OptionalNumber("max-bytes")),
             ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit),
             ExploreRequestFactory.ScopePolicy(Get("scope-policy"), query, Get("project-id"), Get("variant"), Get("path-to"), queryKind), Get("path-to"))
-            { ObserveOwner = Has("owner-status"), QueryKind = queryKind });
+            { ObserveOwner = Has("owner-status"), QueryKind = queryKind,
+                PrepareMaxMilliseconds = ExplorePreparationMilliseconds() });
     }
 
     public QueryRequest QueryRequest()

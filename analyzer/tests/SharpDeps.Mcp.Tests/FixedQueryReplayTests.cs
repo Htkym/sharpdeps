@@ -2,11 +2,36 @@ namespace SharpDeps.Mcp.Tests;
 
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 using Xunit.Abstractions;
 
 public sealed class FixedQueryReplayTests(ITestOutputHelper output)
 {
+    [Fact]
+    public void SplitBudgetCapabilityRejectsLegacyDeadlinesAndMissingPreparation()
+    {
+        var tool = Assert.Single(new McpQueryAdapter(new(Path.GetTempPath())).ListTools());
+        var schema = JsonNode.Parse(tool.InputSchema.GetRawText())!;
+        Assert.True(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
+        schema["properties"]!["maxMilliseconds"]!["minimum"] = 0;
+        Assert.False(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
+        schema["properties"]!["maxMilliseconds"]!["minimum"] = 10;
+        schema["properties"]!.AsObject().Remove("prepareMaxMilliseconds");
+        Assert.False(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
+    }
+
+    [Theory]
+    [InlineData("Error PREPARATION_TIMEOUT: deadline.", "preparation-timeout")]
+    [InlineData("Error QUERY_TIMEOUT: deadline.", "query-timeout")]
+    [InlineData("Error REQUEST_TIMEOUT: deadline.", "request-timeout")]
+    [InlineData("Error CANCELLED: caller stopped.", "cancelled")]
+    [InlineData("Error INTERNAL_ERROR: failure.", "failed")]
+    [InlineData("Error QUERY_TIMEOUT: deadline.\nError INTERNAL_ERROR: failure.", "failed")]
+    [InlineData("Error NOT_QUERY_TIMEOUT: failure.", "failed")]
+    public void RequestOutcomesKeepTimeoutKindsAndUnrelatedFailuresSeparate(string text, string expected)
+        => Assert.Equal(expected, FixedQueryReplay.RequestOutcome(text, failed: true));
+
     [Fact]
     public void UnavailableProcessCpuRemainsNullWithoutInvalidatingTheCapture()
     {
@@ -91,7 +116,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             new("overloads", "Service.Run", ProjectId: fixture.Project, VariantId: fixture.Variant),
             new("partial-and-huge-type", "Service", ProjectId: fixture.Project, VariantId: fixture.Variant),
             new("partial-path", "Service", ProjectId: fixture.Project, VariantId: fixture.Variant, PathPrefix: "src/Service.Partial.cs"),
-            new("agent-source", fixture.Member, Format: "agent"),
+            new("agent-source", fixture.Member, Format: "agent", MaxMilliseconds: 2000, PrepareMaxMilliseconds: 5000),
             new("escaped-budget", fixture.Huge, MaxChars: 2048, MaxBytes: 2048),
             new("large-budget-retry", fixture.Huge, MaxChars: 1000000, MaxBytes: 4000000),
             new("no-match", "NoSuchSavedSymbol", ScopePolicy: "unique"),
@@ -132,6 +157,20 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         {
             exploreRequestOrdinal++;
             using var receipt = JsonDocument.Parse(File.ReadAllBytes(observation.ReceiptPath));
+            var requested = cases.Single(item => item.Id == observation.Id);
+            var effective = receipt.RootElement.GetProperty("effective");
+            Assert.Equal("split-v1", effective.GetProperty("budgetContract").GetString());
+            Assert.Equal(requested.PrepareMaxMilliseconds ?? 30000, effective.GetProperty("prepareMaxMilliseconds").GetInt32());
+            Assert.Equal(requested.MaxMilliseconds ?? 1000, effective.GetProperty("maxMilliseconds").GetInt32());
+            Assert.Equal((requested.PrepareMaxMilliseconds ?? 30000) + (requested.MaxMilliseconds ?? 1000),
+                effective.GetProperty("totalMaxMilliseconds").GetInt32());
+            var caseDirectory = Path.GetDirectoryName(observation.ReceiptPath)!;
+            using var cliArguments = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(caseDirectory, "cli-argv.json")));
+            using var mcpRequest = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(caseDirectory, "mcp.request.json")));
+            var arguments = cliArguments.RootElement.GetProperty("arguments").EnumerateArray().Select(value => value.GetString()).ToArray();
+            var toolArguments = mcpRequest.RootElement.GetProperty("params").GetProperty("arguments");
+            AssertBudgetArgument("--max-milliseconds", "maxMilliseconds", requested.MaxMilliseconds);
+            AssertBudgetArgument("--prepare-max-milliseconds", "prepareMaxMilliseconds", requested.PrepareMaxMilliseconds);
             foreach (var host in new[] { "cli", "mcp" })
             {
                 var process = receipt.RootElement.GetProperty(host);
@@ -161,6 +200,18 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
                 }
                 else
                     Assert.True(phases.GetProperty("phaseMilliseconds").GetProperty("sourceVerification").GetDouble() >= 0);
+            }
+
+            void AssertBudgetArgument(string option, string property, int? value)
+            {
+                var position = Array.IndexOf(arguments, option);
+                Assert.Equal(value.HasValue, position >= 0);
+                Assert.Equal(value.HasValue, toolArguments.TryGetProperty(property, out var supplied));
+                if (value is { } milliseconds)
+                {
+                    Assert.Equal(milliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture), arguments[position + 1]);
+                    Assert.Equal(milliseconds, supplied.GetInt32());
+                }
             }
         }
         Assert.Contains(member.Units, unit => unit.Text == ReplayFixture.RunInt);
@@ -228,33 +279,46 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task PublicProcessesCaptureColdDeadlineAndGenerationBoundaries()
+    public async Task PublicProcessesCaptureDeadlineAndGenerationBoundaries()
     {
         using var fixture = new ReplayFixture(noise: 5000);
-        var timed = Assert.Single(await RunAsync(fixture, "deadline", [new("cold-deadline", fixture.Member,
+        var timed = Assert.Single(await RunAsync(fixture, "deadline", [new("query-deadline", fixture.Member,
             MaxMilliseconds: 10, Equivalence: "deadline-sensitive")]));
-        var cliTimedOut = timed.CliText.Contains("QUERY_TIMEOUT", StringComparison.Ordinal);
-        var mcpTimedOut = timed.McpText!.Contains("QUERY_TIMEOUT", StringComparison.Ordinal);
-        foreach (var text in new[] { timed.CliText, timed.McpText })
-        {
-            if (text.Contains("QUERY_TIMEOUT", StringComparison.Ordinal))
-            {
-                Assert.DoesNotContain(ReplayFixture.RunInt, text, StringComparison.Ordinal);
-            }
-            else
-            {
-                Assert.Contains(ReplayFixture.RunInt, text, StringComparison.Ordinal);
-                Assert.DoesNotContain(ReplayFixture.Unrelated, text, StringComparison.Ordinal);
-            }
-        }
-        output.WriteLine("Cold deadline observed: CLI={0}, MCP={1}. Non-triggered deadlines are not timeout coverage.", cliTimedOut, mcpTimedOut);
         using (var receipt = JsonDocument.Parse(File.ReadAllBytes(timed.ReceiptPath)))
         {
             var resolution = receipt.RootElement.GetProperty("resolution");
-            foreach (var (host, timedOut) in new[] { ("cli", cliTimedOut), ("mcp", mcpTimedOut) })
+            foreach (var (host, text, codesProperty) in new[]
+                { ("cli", timed.CliText, "cliPublicErrorCodes"), ("mcp", timed.McpText!, "publicErrorCodes") })
             {
+                var errors = resolution.GetProperty(codesProperty).EnumerateArray().Select(code => code.GetString()).ToArray();
+                var timeouts = errors.Where(code => code is "PREPARATION_TIMEOUT" or "QUERY_TIMEOUT" or "REQUEST_TIMEOUT").ToArray();
+                Assert.True(timeouts.Length <= 1);
+                var timeout = timeouts.SingleOrDefault();
+                var expectedOutcome = timeout switch
+                {
+                    "PREPARATION_TIMEOUT" => "preparation-timeout",
+                    "QUERY_TIMEOUT" => "query-timeout",
+                    "REQUEST_TIMEOUT" => "request-timeout",
+                    _ => "completed"
+                };
                 var phases = receipt.RootElement.GetProperty("phaseMetrics").GetProperty(host);
-                Assert.Equal(timedOut ? "timeout" : "completed", phases.GetProperty("requestOutcome").GetString());
+                Assert.Equal(expectedOutcome, phases.GetProperty("requestOutcome").GetString());
+                Assert.Equal(timeout, resolution.GetProperty(host + "TimeoutCode").GetString());
+                if (timeout is not null)
+                {
+                    Assert.All(errors, code => Assert.Contains(code, new[] { "PREPARATION_TIMEOUT", "QUERY_TIMEOUT", "REQUEST_TIMEOUT" }));
+                    Assert.DoesNotContain(ReplayFixture.RunInt, text, StringComparison.Ordinal);
+                }
+                else
+                {
+                    if (host == "cli")
+                        Assert.Equal(0, timed.CliExit);
+                    else
+                        Assert.False(timed.McpIsError);
+                    Assert.Contains(ReplayFixture.RunInt, text, StringComparison.Ordinal);
+                    Assert.DoesNotContain(ReplayFixture.Unrelated, text, StringComparison.Ordinal);
+                }
+                output.WriteLine("Deadline observed: {0}={1}. A completed request is not timeout coverage.", host, timeout ?? "none");
                 foreach (var phase in phases.GetProperty("phaseMilliseconds").EnumerateObject())
                 {
                     if (phase.Value.ValueKind == JsonValueKind.Null)
@@ -262,14 +326,6 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
                     else
                         Assert.True(phase.Value.GetDouble() >= 0);
                 }
-            }
-            if (cliTimedOut)
-            {
-                Assert.Contains("QUERY_TIMEOUT", resolution.GetProperty("cliPublicErrorCodes").EnumerateArray().Select(code => code.GetString()));
-            }
-            if (mcpTimedOut)
-            {
-                Assert.Contains("QUERY_TIMEOUT", resolution.GetProperty("publicErrorCodes").EnumerateArray().Select(code => code.GetString()));
             }
         }
         fixture.Publish(2);
@@ -299,7 +355,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         await Read("initialize");
         await Send("notifications/initialized", new { }, null, "initialized");
         metrics.BeginRequest();
-        await Send("tools/call", new { name = "explore", arguments = new { query = fixture.Member, format = "audit", maxMilliseconds = 0 } }, 2, "call");
+        await Send("tools/call", new { name = "explore", arguments = new { query = fixture.Member, format = "audit", maxMilliseconds = 30000 } }, 2, "call");
         await Send("notifications/cancelled", new { requestId = 2, reason = "fixed replay cancellation" }, null, "cancel");
         await Send("ping", new { }, 3, "ping");
         var classification = "response-suppressed-before-ping; cancellation acceptance not proven";

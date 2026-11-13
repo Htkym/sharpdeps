@@ -27,7 +27,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         var measured = new McpQueryAdapter(host);
         Assert.False(Assert.Single(measured.ListTools()).InputSchema.GetProperty("properties").TryGetProperty("metricsDirectory", out _));
         var request = Explore("Service");
-        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
+        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(30000);
         var cold = await measured.CallAsync(request);
         var expected = await new McpQueryAdapter(host with { MetricsDirectory = null }).CallAsync(request);
         var actual = await measured.CallAsync(request);
@@ -163,14 +163,16 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         var pathArguments = new List<string>(arguments);
         pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
         pathArguments.AddRange(["--project-id", fixture.Project, "--variant", fixture.Variant, "--path-prefix", "App.cs",
-            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "0", "--owner-status"]);
+            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000",
+            "--max-milliseconds", "10000", "--prepare-max-milliseconds", "5000", "--owner-status"]);
         var pathRequest = Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence);
         foreach (var (name, value) in new[] { ("projectId", fixture.Project), ("variantId", fixture.Variant),
             ("pathPrefix", "App.cs"), ("freshness", "allow-stale") })
             pathRequest.Arguments![name] = JsonSerializer.SerializeToElement(value);
         pathRequest.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(10000);
         pathRequest.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(40000);
-        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
+        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+        pathRequest.Arguments["prepareMaxMilliseconds"] = JsonSerializer.SerializeToElement(5000);
         pathRequest.Arguments["ownerStatus"] = JsonSerializer.SerializeToElement(true);
         var (pathExit, pathText, pathResult) = await AssertEquivalent(adapter, pathRequest, pathArguments);
         Assert.Equal(0, pathExit);
@@ -215,16 +217,20 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             var invalidPathArguments = new List<string>(arguments);
             invalidPathArguments[invalidPathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
             invalidPathArguments.AddRange(["--path-to", "Service"]);
-            var (invalidPathExit, invalidPathText, _) = await AssertEquivalent(adapter,
-                Explore(fixture.Occurrence, format, scopePolicy, "Service"), invalidPathArguments);
-            Assert.Equal(2, invalidPathExit);
-            using var invalidPath = JsonDocument.Parse(invalidPathText);
-            Assert.Equal("ARGUMENT_INVALID", invalidPath.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
-            var (precedenceExit, precedenceText, _) = await AssertEquivalent(missingIndex,
-                Explore(fixture.Occurrence, format, scopePolicy, "Service"), [.. invalidPathArguments, "--index", "missing.sqlite"]);
-            Assert.Equal(3, precedenceExit);
-            using var precedence = JsonDocument.Parse(precedenceText);
-            Assert.Equal("INDEX_MISSING", precedence.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
+            foreach (var (invalidAdapter, cliArguments) in new[]
+                { (adapter, invalidPathArguments), (missingIndex, new List<string>(invalidPathArguments) { "--index", "missing.sqlite" }) })
+            {
+                var cliOutput = new StringWriter();
+                var progress = new StringWriter();
+                Assert.Equal(2, await CliApplication.RunAsync(cliArguments.ToArray(), cliOutput, progress));
+                using var invalidPath = JsonDocument.Parse(cliOutput.ToString());
+                Assert.Equal("ARGUMENT_INVALID", invalidPath.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
+                Assert.Empty(progress.ToString());
+                var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await invalidAdapter.CallAsync(
+                    Explore(fixture.Occurrence, format, scopePolicy, "Service")));
+                Assert.Equal(McpErrorCode.InvalidParams, error.ErrorCode);
+                Assert.Equal("MCP_ARGUMENT_INVALID", error.Message);
+            }
 
             var refresh = Explore("Service", format, scopePolicy);
             refresh.Arguments!["freshness"] = JsonSerializer.SerializeToElement("refresh");
@@ -367,7 +373,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
                 Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
-                Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", instructions, StringComparison.Ordinal);
+                Assert.Contains("\"query\":\"Service\"", instructions, StringComparison.Ordinal);
+                Assert.Contains("\"prepareMaxMilliseconds\":30000", instructions, StringComparison.Ordinal);
+                Assert.Contains("\"maxMilliseconds\":1000", instructions, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
                 Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);

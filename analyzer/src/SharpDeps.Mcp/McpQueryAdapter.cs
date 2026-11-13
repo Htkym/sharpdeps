@@ -43,7 +43,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
 {
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"A plain string, not an object. Put scope and budget fields beside query in one flat arguments object. Names, exact identities, or source paths by default; exact saved HttpGet text in literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"When omitted, ordinary unscoped names/paths use discover; explicit project or variant uses unique. Exact saved IDs, pathTo and http-get-literal use unique and reject discover. Discover returns separate saved project/variant groups; prefer-debug chooses only a single saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"maxMilliseconds":{"type":"integer","default":1000,"anyOf":[{"const":0},{"minimum":10,"maximum":30000}],"description":"Shared computation budget includes opening and fully validating the saved index, then exploration. Omitted: 1000 ms. For a large/cold index choose an explicit finite value, for example 8000. Zero disables only the computation deadline; cancellation and output limits remain."}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"examples":[{"query":"Service","format":"agent","maxMilliseconds":8000}],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"A plain string, not an object. Put scope and budget fields beside query in one flat arguments object. Names, exact identities, or source paths by default; exact saved HttpGet text in literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"When omitted, ordinary unscoped names/paths use discover; explicit project or variant uses unique. Exact saved IDs, pathTo and http-get-literal use unique and reject discover. Discover returns separate saved project/variant groups; prefer-debug chooses only a single saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"prepareMaxMilliseconds":{"type":"integer","default":30000,"minimum":10,"maximum":30000,"description":"split-v1: finite preparation budget for full saved-index validation and standard derived/lexical indexes. Omitted: 30000 ms. Does not extend maxMilliseconds."},"maxMilliseconds":{"type":"integer","default":1000,"minimum":10,"maximum":30000,"description":"split-v1: finite query budget after preparation. Omitted: 1000 ms; zero is invalid. The total request upper bound is prepareMaxMilliseconds plus maxMilliseconds. Defaults are not latency guarantees; keep frozen evaluation budgets unchanged."}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"examples":[{"query":"Service","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
@@ -52,7 +52,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
     public IList<Tool> ListTools()
     {
         var tools = new List<Tool> { MakeTool("explore",
-            "Use for indexed .NET symbols, dependencies and cross-file implementation paths. Send flat arguments, for example {\"query\":\"Service\",\"maxMilliseconds\":8000}; query is a string, not an object. For a large/cold index choose a finite maxMilliseconds: the omitted 1000 ms includes full index validation. Start with short names or paths; keep saved project/variant groups separate and follow exact returned selectors. Returns bounded source, certainty, freshness and omissions; source needs host trust. Use normal read/search for simple text or out-of-scope work and respect user opt-out.",
+            "Use for indexed .NET symbols, dependencies and cross-file implementation paths. Send flat arguments, for example {\"query\":\"Service\",\"prepareMaxMilliseconds\":30000,\"maxMilliseconds\":1000}; query is a string, not an object. Budget contract split-v1 separates finite preparation (prepareMaxMilliseconds, default 30000 ms) from query (maxMilliseconds, default 1000 ms); both accept 10..30000, not zero. Total request time is bounded by their sum. Preparation includes full validation and standard derived/lexical indexes. Do not enlarge a frozen budget or retry without authorization. Start with short names or paths; keep saved project/variant groups separate and follow exact returned selectors. Returns bounded source, certainty, freshness and omissions; source needs host trust. Use normal read/search for simple text or out-of-scope work and respect user opt-out.",
             ExploreSchema, readOnly: true) };
         if (host.AllowMutations && host.Trusted)
             foreach (var name in new[] { "index", "update" })
@@ -107,7 +107,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
         if (request.Arguments is not { } properties || !properties.ContainsKey("query")) throw Invalid();
         string? query = null, project = null, variant = null, pathPrefix = null, pathTo = null,
             freshness = null, format = null, scopePolicy = null;
-        int? maxChars = null, maxBytes = null, maxMilliseconds = null;
+        int? maxChars = null, maxBytes = null, maxMilliseconds = null, prepareMaxMilliseconds = null;
         var observeOwner = false;
         try
         {
@@ -124,7 +124,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                 {
                     if (value.ValueKind == JsonValueKind.Object)
                         throw new McpProtocolException(
-                            """MCP_ARGUMENT_INVALID: explore arguments must be flat. query must be a string, for example {"query":"Service","maxMilliseconds":8000}. Put scope and budget fields beside query, not inside it. Correct the arguments only if another call is authorized.""",
+                            """MCP_ARGUMENT_INVALID: explore arguments must be flat. query must be a string, for example {"query":"Service","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}. Put scope and budget fields beside query, not inside it. Correct the arguments only if another call is authorized.""",
                             McpErrorCode.InvalidParams);
                     if (value.ValueKind != JsonValueKind.String) throw Invalid();
                     query = value.GetString();
@@ -138,7 +138,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                     observeOwner = value.GetBoolean();
                     continue;
                 }
-                if (name is "maxChars" or "maxBytes" or "maxMilliseconds")
+                if (name is "maxChars" or "maxBytes" or "maxMilliseconds" or "prepareMaxMilliseconds")
                 {
                     if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var number)) throw Invalid();
                     switch (name)
@@ -146,6 +146,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                         case "maxChars": maxChars = number; break;
                         case "maxBytes": maxBytes = number; break;
                         case "maxMilliseconds": maxMilliseconds = number; break;
+                        case "prepareMaxMilliseconds": prepareMaxMilliseconds = number; break;
                     }
                     continue;
                 }
@@ -169,7 +170,7 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                 ExploreRequestFactory.Budget(maxMilliseconds: maxMilliseconds, maxChars: maxChars, maxBytes: maxBytes),
                 ExploreRequestFactory.Format(format, ExploreFormat.Agent),
                 ExploreRequestFactory.ScopePolicy(scopePolicy, query!, project, variant, pathTo, queryKind), pathTo)
-                { ObserveOwner = observeOwner, QueryKind = queryKind });
+                { ObserveOwner = observeOwner, QueryKind = queryKind, PrepareMaxMilliseconds = prepareMaxMilliseconds ?? 30000 });
         }
         catch (Exception error) when (error is CliFailure or JsonException or InvalidOperationException) { throw Invalid(); }
     }

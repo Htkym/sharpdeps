@@ -1,6 +1,6 @@
 # SharpDeps CLI／repo skill契約 v1
 
-CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。基礎契約は0.4.0に対応し、discoveryとその既定値、およびexploreでのroot省略は未公開のv0.5開発版の仕様である。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。基礎契約は0.4.0に対応し、discoveryとその既定値、exploreでのroot省略、および準備／探索の予算を分けるsplit-v1は未公開の開発版の仕様である。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
 
 候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
 
@@ -64,19 +64,26 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 `--project-id`、`--path-prefix`、繰返し`--variant`、`--node-kind`でscopeを絞る。statusのscopeは`--variant`だけで、実装されていないproject/path/node-kind filterを拒否する。繰返し`--edge-kind`、`--include-candidates`、`--no-documents`、`--max-edges`、`--max-depth`は`callers`/`callees`/`impact`/`context`で使う。候補の取得と文書関係の除外を明示し、search/symbol/statusにはこれらの探索flagを渡さない。Impactの既定はdependentsで、Impact専用の`--dependencies`は依存先方向を選ぶ。`--page-size`は既定100、`--cursor`は同じquery/世代の次pageへ使う。
 
-`--freshness allow-stale|require-fresh|refresh`、`--require-complete`と、`--max-nodes`/`--max-edges`/`--max-depth`/`--max-milliseconds`/`--max-chars`/`--max-bytes`を使える。Query既定は60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes。Queryと`explore`の`--max-milliseconds 0`は計算期限だけを外し、呼出し側の取消、件数・深さ・出力予算、trustと鮮度の検証は維持する。正の時間枠は10〜30000msで、1〜9は拒否する。設定範囲と探索・certainty・cursorの意味は[Query/context契約](query-context-v1.ja.md)に従う。commandに非対応のflagと、繰返し指定を許可したflag以外の重複を拒否する。
+`--freshness allow-stale|require-fresh|refresh`、`--require-complete`と、`--max-nodes`/`--max-edges`/`--max-depth`/`--max-milliseconds`/`--max-chars`/`--max-bytes`を使える。Query既定は60nodes、120edges、depth2、1000ms、18000 UTF-16 JSON文字、64000 UTF-8 bytes。`explore`以外のQueryでは`--max-milliseconds 0`が計算期限だけを外し、呼出し側の取消、件数・深さ・出力予算、trustと鮮度の検証を維持する。正の時間枠は10〜30000msで、1〜9は拒否する。未公開の開発版`explore`は0を拒否し、次節の準備／探索予算を使う。設定範囲と探索・certainty・cursorの意味は[Query/context契約](query-context-v1.ja.md)に従う。commandに非対応のflagと、繰返し指定を許可したflag以外の重複を拒否する。
 
 ### Cold index budgets
 
-未リリースの開発版`explore` CLIだけは`--prepare-max-milliseconds N`を明示して、saved-index readerのopen・全snapshotの読取り／整合性検証／read-only化に別の準備期限を設定できる。Nは10〜30000msの有限値で、0・範囲外・不正数・重複は拒否する。省略時は従来どおり準備を含む共有の計算期限（既定1000ms）であり、既定値を延長しない。準備が期限内に完了した後、`--max-milliseconds`の計算期限を新たに開始し、探索用の派生データ準備、探索、source／鮮度検証、出力をその枠内で行う。caller取消は両段階に適用する。準備期限切れは`PREPARATION_TIMEOUT`（exit 4）、探索期限切れは`QUERY_TIMEOUT`（exit 4）、caller取消は`CANCELLED`（exit 130）でsourceを返さない。既存の`--max-milliseconds 0`は探索の計算期限だけを外し、明示した有限の準備期限は外さない。同期処理の即時停止を保証するOS制限ではない。このflagは他のQuery commandやMCP schema、既存の公開explore overloadには追加しない。
+未公開の開発版`explore`はCLI／MCP／APIで同じsplit-v1契約を使う。準備予算はCLIの`--prepare-max-milliseconds`、MCPのflatな`prepareMaxMilliseconds`、APIの`ExploreRequest.PrepareMaxMilliseconds`で指定し、既定は30000msである。探索だけの予算はCLIの`--max-milliseconds`、MCPの`maxMilliseconds`、APIの`Budget.MaxMilliseconds`で指定し、既定は1000msである。両方とも10〜30000msの有限値で、0・範囲外・不正数・重複は拒否する。両方を省略してもこの既定値を使い、従来の共有期限には戻らない。
 
-大きな保存indexやcold読取りで準備が共有期限に収まらない場合は、対応CLIのhelpを確認し、用途・indexの規模・負荷・呼出し側の期限に応じて準備と探索の有限budgetを利用者が明示選択する。たとえば次は準備5000ms、探索3000msを選ぶ。
+準備にはsaved-index readerのopen、全snapshotの読取り／整合性検証／read-only化と、標準の派生index／lexical indexの準備を含む。HttpGet projectionも要求された場合はこの段階で準備する。探索の計時はその完了後に始まり、探索、source／鮮度検証、出力に適用する。一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。caller取消は両段階で有効であり、期限切れより優先する。取消は協調的で、同期処理の即時停止を保証するOS制限ではない。process起動、MCP handshake、transportはこの計算時間に含めない。
+
+準備期限切れは`PREPARATION_TIMEOUT`、探索期限切れは`QUERY_TIMEOUT`、request全体の期限切れは`REQUEST_TIMEOUT`で、いずれもexit 4となる。caller取消は`CANCELLED`でexit 130となる。これらの失敗ではsourceを返さない。各requestは新しいSQLite readerで全snapshotを検証する。既存の派生cacheは4entry／serialized payload 64MiBのままであり、これはmanaged heapの上限ではない。nativeな世代再利用は未実装のP2設計である。
+
+次の2例はどちらも準備30000ms、探索1000msを使う。値を変える場合は、対応CLIのhelpを確認し、用途・indexの規模・負荷・呼出し側の期限に応じて有限budgetを選ぶ。
 
 ```text
-sharpdeps explore --root /absolute/workspace --term "related names" --format agent --prepare-max-milliseconds 5000 --max-milliseconds 3000
+sharpdeps explore --root /absolute/workspace --term "related names" --format agent
+sharpdeps explore --root /absolute/workspace --term "related names" --format agent --prepare-max-milliseconds 30000 --max-milliseconds 1000
 ```
 
-これは限定したsource読取りで使えた配分例であり、すべてのindex・操作の完了保証ではない。全snapshot検証を省かず、省略時の既定1000ms cold timeoutは残る。明示時の`PREPARATION_TIMEOUT`はreader準備枠、`QUERY_TIMEOUT`はその後の探索枠を示す。省略時の`QUERY_TIMEOUT`は準備も含む共有枠の期限切れなので、返されたstageを確認する。対象scopeを絞るか、目的に合う有限値を明示し、失敗だけを理由に自動再試行・無制限化・上限への引上げをしない。sourceを読む`--trusted`は別途許可が必要で、選択済み`--index`も保持する。この案内は設定変更・opt-out解除・追加アクセスを許可しない。
+探索の既定1000msは初期候補であり、`DbContext`全体やすべてのindex・操作の完了を保証しない。失敗時は返されたstageとerrorを確認し、失敗だけを理由に自動再試行や予算の引上げをしない。sourceを読む`--trusted`は別途許可が必要で、選択済み`--index`も保持する。この案内は設定変更・opt-out解除・追加アクセスを許可しない。
+
+移行時には、同じ名前の`maxMilliseconds`／`--max-milliseconds`が準備を含む共有予算から探索だけの予算へ変わる点を確認する。過去の記録入力は変更せず、新しいcohort manifestを固定してから再計測する。元の24trial／共有8秒のP0 cohortとは値を直接比較しない。従来のexploreの0指定は目的に合う有限値へ明示的に変更する。この破壊的変更には同じ新しいbuildのCLI／MCP／API利用側が必要であり、公開時には新しいpackage versionを使う。公開済み0.4.0は変更せず、今回のsource変更ではreleaseを行わない。index schema 1／2／3も変更せず、in-place migrationは行わない。[準備済み探索の設計](../development/prepared-exploration.md)も参照する。
 
 ## JSONと終了コード
 

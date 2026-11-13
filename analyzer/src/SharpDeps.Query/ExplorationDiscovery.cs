@@ -132,7 +132,7 @@ public sealed partial class ExplorationService
                         MaxEdges = budget.MaxEdges / scopes.Length + (position < budget.MaxEdges % scopes.Length ? 1 : 0)
                     }
                 };
-                var group = new Run(owner, index, workspace, trusted, scoped, timer, clock, originalToken)
+                var group = new Run(owner, index, workspace, trusted, scoped, execution, originalToken)
                 { freshness = freshness, ownerObservation = ownerObservation, relationDisplayLimit = 2, omissionDisplayLimit = 2 };
                 discoveryGroups.Add(group);
                 if (group.Resolve())
@@ -205,17 +205,8 @@ public sealed partial class ExplorationService
                     group.Units.Clear();
             while (true)
             {
-                if (Errors.Count == 0)
-                    try
-                    {
-                        Check();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        Cancel(originalToken.IsCancellationRequested);
-                        foreach (var group in discoveryGroups!)
-                            group.Units.Clear();
-                    }
+                try { Check(); }
+                catch (OperationCanceledException) { return RequestFailure(DeadlineFailureCode()); }
                 ReconcileDiscoveryFreshness();
                 var text = RenderDiscovery();
                 var wire = WireSize(text);

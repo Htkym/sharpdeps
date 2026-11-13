@@ -3,13 +3,13 @@
 SharpDeps.Mcpは独立した任意toolであり、既存CLI／Skill／VSCodeの必須依存にはしない。
 ModelContextProtocol.Core 2.2.0のstdio transport、lifecycle、request cancellationを使用し、
 protocolは2025-11-25に固定する。HTTP listener、外部port、LLM呼出し、認証変更は追加しない。
-配布名はSharpDeps.Mcp、起動コマンドはsharpdeps-mcpとする。基礎契約はCLI／VSIXと同じ0.4.0に対応し、discoveryとその既定値は未公開のv0.5開発版の仕様である。実際の提供状況はレジストリまたはGitHub Releaseで確認する。利用手順と移行条件は[CLI and MCP exploration](../mcp.md)を参照する。
+配布名はSharpDeps.Mcp、起動コマンドはsharpdeps-mcpとする。基礎契約はCLI／VSIXと同じ0.4.0に対応し、discoveryとその既定値、および準備／探索の予算を分けるsplit-v1は未公開の開発版の仕様である。実際の提供状況はレジストリまたはGitHub Releaseで確認する。利用手順と移行条件は[CLI and MCP exploration](../mcp.md)を参照する。
 
 rootとindexは起動時に固定する。0.3.0以降の読取りtoolはtypedな`explore`だけであり、
 旧search／symbol／callers／callees／impact／context／status toolは公開しない。CLIの個別Query commandは維持する。
 `explore`はCLIのflag配列を受け取らず、下記のtyped fieldを検証して共通探索へ渡す。
 root／index／trusted／quietをclientが差し替えるrequestは拒否し、saved coverage／unverifiedの意味を変えない。
-Query／exploreの時間予算0は計算期限だけを外し、MCP requestの取消と件数・出力予算は維持する。
+未公開の開発版exploreは準備／探索とも有限の時間予算を使い、0を拒否する。explore以外のtyped Query APIは従来どおり時間予算0を受理する。
 各requestは独自の実reader pinを持ち、同request内のFTSとgraphは同じgenerationを使う。
 同時request全体が同じgenerationになるという保証ではない。
 
@@ -23,18 +23,31 @@ Query／exploreの時間予算0は計算期限だけを外し、MCP requestの�
 | `freshness` | `allow-stale`／`require-fresh`／`refresh`。自動更新の許可ではない |
 | `ownerStatus` | 既定false。既存ownerの観測だけで、起動や鮮度の証明をしない |
 | `format` | 既定`agent`。`audit`は保存IDとprovenanceを詳しく返す |
-| `maxChars`, `maxBytes`, `maxMilliseconds` | 出力と計算の予算。文字数2048〜1000000、UTF-8 bytes 2048〜4000000、時間10〜30000msまたは0。MCPはCLIのnode／edge／depth flagを受け取らない |
+| `maxChars`, `maxBytes` | 出力予算。文字数2048〜1000000、UTF-8 bytes 2048〜4000000。MCPはCLIのnode／edge／depth flagを受け取らない |
+| `prepareMaxMilliseconds` | 未公開の準備予算。既定30000ms、10〜30000msの有限値。0は拒否する |
+| `maxMilliseconds` | 未公開の探索だけの予算。既定1000ms、10〜30000msの有限値。0は拒否する |
 
-toolの引数はflatなobjectで渡す。例は `{"query":"Service","maxMilliseconds":8000}`。
+toolの引数はflatなobjectで渡す。例は `{"query":"Service","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}`。
 `query`は文字列であり、scope／budgetは同じ階層に置く。
-`{"query":{"query":"Service","maxMilliseconds":8000}}`の形はindexを開く前に
+`{"query":{"query":"Service","maxMilliseconds":1000}}`の形はindexを開く前に
 InvalidParams（-32602）／`MCP_ARGUMENT_INVALID`で拒否し、入力本文を転記しない固定の修正例を返す。
 修正して再呼出しする場合も利用者の許可／retry上限に従う。
 
-省略時の共有計算予算は1000msで、保存indexの読取り／全snapshot検証と探索を含む。
-大きなindexやcold読取りでは目的に合う有限の`maxMilliseconds`を明示する。
-8000msは限定ケースの例であり、完了保証や既定1秒での性能達成ではない。
-CLI-onlyの別準備予算fieldは追加しない。
+両方の予算を省略した`{"query":"Service"}`も準備30000ms、探索1000msを使う。
+準備には新しいSQLite readerのopen、全snapshotの読取り／検証／read-only化と標準の派生index／lexical indexを含む。
+要求されたHttpGet projectionもこの段階で準備し、探索の計時は準備完了後に始める。
+一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。
+request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。
+取消は協調的であり、process起動、MCP handshake、transportはこの計算時間に含めない。
+探索の既定1000msは初期候補であり、`DbContext`全体の完了や性能達成を保証しない。
+
+`PREPARATION_TIMEOUT`、`QUERY_TIMEOUT`、`REQUEST_TIMEOUT`はそれぞれ準備、探索、request全体の期限切れを示し、CLI換算のexitは4である。
+caller取消の`CANCELLED`は期限切れより優先し、CLI換算のexitは130となる。これらの失敗ではsourceを返さない。
+同じ新しいbuildのCLI／MCP／API利用側でこの契約を使い、公開時には新しいpackage versionを使う。公開済み0.4.0は変更せず、今回のsource変更ではreleaseを行わない。
+既存の`maxMilliseconds`は準備を含む共有予算から探索だけの予算へ意味が変わるため、過去の入力は変更せず、新しいcohort manifestを固定して再計測する。
+元の24trial／共有8秒のP0 cohortと直接比較せず、予算の自動引上げや無断の再試行もしない。
+各requestで全snapshot検証を続け、既存の4entry／64MiB serialized payloadの派生cacheは維持する。nativeな世代再利用は未実装のP2設計である。
+index schema 1／2／3は変更せず、in-place migrationは行わない。
 
 未知fieldや不正な組合せを拒否し、曖昧な短名を一つの実装へ確定しない。source本文にはhostのtrustが必要であり、
 通常ファイル、保存された生成本文、検証済みパッケージ本文のprovenanceを区別する。候補をruntime callの確定へ強めず、
@@ -88,7 +101,7 @@ MCP clientの例
 }
 ```
 
-`explore`の例は`{"query":"Service","format":"agent","maxMilliseconds":1000}`。
+`explore`の例は`{"query":"Service","format":"agent"}`。省略した予算には準備30000ms、探索1000msを使う。
 source本文やMarkdown内の指示はsource dataとして扱い、tool制御として実行しない。
 
 Syntamark 1.2.0とYamlDotNet 18.1.0はCLI／MCPのMarkdown索引経路で使う固定依存であり、
