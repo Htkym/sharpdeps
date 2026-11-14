@@ -635,6 +635,193 @@ public sealed class IndexStoreTests
         Assert.Empty(current.Search("Before"));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void RetainedSessionRevalidatesSameIdSqlChangesAndRecoversWithoutReturningStaleData(bool physicalProof)
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace, (_, _) => physicalProof);
+        IndexSnapshot original;
+        using (var first = session.Acquire()) original = first.Snapshot();
+        using (var unchanged = session.Acquire())
+        {
+            if (physicalProof) Assert.Same(original, unchanged.Snapshot());
+            else Assert.NotSame(original, unchanged.Snapshot());
+        }
+
+        var changedJson = RewriteSavedMember(fixture, original, "Mutated");
+        using (var changed = session.Acquire())
+        {
+            var snapshot = changed.Snapshot();
+            Assert.NotSame(original, snapshot);
+            Assert.Equal(original.Graph.SnapshotId, snapshot.Graph.SnapshotId);
+            Assert.Equal(original.Graph.Generation, snapshot.Graph.Generation);
+            Assert.Equal("Mutated", snapshot.Graph.Nodes.Single(node => node.Id == fixture.MemberId).Name);
+            Assert.Equal(fixture.MemberId, Assert.Single(changed.Search("Mutated")).NodeId);
+            Assert.Empty(changed.Search("Before"));
+        }
+        using (var external = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(external, null, "UPDATE nodes SET json='null' WHERE generation=1 AND id=$id", ("$id", fixture.MemberId));
+        AssertCode("INDEX_INVALID_SNAPSHOT", () => { using var rejected = session.Acquire(); });
+        using (var external = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+            IndexDatabase.Execute(external, null, "UPDATE nodes SET json=$json WHERE generation=1 AND id=$id",
+                ("$json", changedJson), ("$id", fixture.MemberId));
+        using var recovered = session.Acquire();
+        Assert.Equal("Mutated", recovered.Snapshot().Graph.Nodes.Single(node => node.Id == fixture.MemberId).Name);
+        Assert.Equal(fixture.MemberId, Assert.Single(recovered.Search("Mutated")).NodeId);
+        Assert.Equal("Before", original.Graph.Nodes.Single(node => node.Id == fixture.MemberId).Name);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetainedSessionPinsAgainWhenAWriterCommitsBetweenProbeAndPin(bool sameGeneration)
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        var commitAtPin = false;
+        var committed = false;
+        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace, (_, _) => true)
+        {
+            BeforePin = () =>
+            {
+                if (!commitAtPin) return;
+                commitAtPin = false;
+                if (sameGeneration) RewriteSavedMember(fixture, fixture.Snapshot(1, "Before"), "After");
+                else writer.Commit(IndexStage.Create(fixture.Snapshot(2, "After")));
+                committed = true;
+            }
+        };
+        using (var initial = session.Acquire()) Assert.Equal(1, initial.Snapshot().Graph.Generation);
+        commitAtPin = true;
+        using var current = session.Acquire();
+        Assert.True(committed);
+        Assert.Equal(sameGeneration ? 1 : 2, current.Snapshot().Graph.Generation);
+        Assert.Equal("After", current.Snapshot().Graph.Nodes.Single(node => node.Id == fixture.MemberId).Name);
+        Assert.Equal(fixture.MemberId, Assert.Single(current.Search("After")).NodeId);
+        Assert.Empty(current.Search("Before"));
+    }
+
+    [Fact]
+    public void RetainedSessionKeepsGraphAndFtsOnTheLeaseGenerationAcrossAConcurrentCommit()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace, (_, _) => true);
+        using (var pinned = session.Acquire())
+        {
+            writer.Commit(IndexStage.Create(fixture.Snapshot(2, "After")));
+            Assert.Equal(1, pinned.Snapshot().Graph.Generation);
+            Assert.Equal("Before", pinned.Snapshot().Graph.Nodes.Single(node => node.Id == fixture.MemberId).Name);
+            Assert.Equal(fixture.MemberId, Assert.Single(pinned.Search("Before")).NodeId);
+            Assert.Empty(pinned.Search("After"));
+        }
+        using var current = session.Acquire();
+        Assert.Equal(2, current.Snapshot().Graph.Generation);
+        Assert.Equal(fixture.MemberId, Assert.Single(current.Search("After")).NodeId);
+        Assert.Empty(current.Search("Before"));
+    }
+
+    [Fact]
+    public void AnIdleRetainedSessionDoesNotBlockWalCheckpointing()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace, (_, _) => true);
+        using (var lease = session.Acquire()) Assert.Equal(1, lease.Snapshot().Graph.Generation);
+        writer.Commit(IndexStage.Create(fixture.Snapshot(2, "After")));
+        using (var checkpoint = IndexDatabase.Open(fixture.IndexPath, readOnly: false))
+        {
+            IndexDatabase.Execute(checkpoint, null, "PRAGMA busy_timeout=0;");
+            using var command = IndexDatabase.Command(checkpoint, null, "PRAGMA wal_checkpoint(TRUNCATE);");
+            using var result = command.ExecuteReader();
+            Assert.True(result.Read());
+            Assert.Equal(0, result.GetInt64(0));
+            Assert.Equal(result.GetInt64(1), result.GetInt64(2));
+        }
+        using var current = session.Acquire();
+        Assert.Equal(2, current.Snapshot().Graph.Generation);
+        Assert.Equal(fixture.MemberId, Assert.Single(current.Search("After")).NodeId);
+    }
+
+    [Fact]
+    public void EqualSizeAndTimestampDoNotProveNativeIdentityOrPermitStalePathFallback()
+    {
+        using var original = new StoreFixture();
+        using var replacement = new StoreFixture(original.Workspace, original.Document);
+        using (var writer = original.Writer()) writer.Commit(IndexStage.Create(original.Snapshot(1, "Before")));
+        using (var writer = replacement.Writer()) writer.Commit(IndexStage.Create(replacement.Snapshot(1, "Beforz")));
+        foreach (var path in new[] { original.IndexPath, replacement.IndexPath })
+        {
+            using var connection = IndexDatabase.Open(path, readOnly: false);
+            IndexDatabase.Execute(connection, null, "PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+        var stamp = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(original.IndexPath, stamp);
+        File.SetLastWriteTimeUtc(replacement.IndexPath, stamp);
+        Assert.Equal(new FileInfo(original.IndexPath).Length, new FileInfo(replacement.IndexPath).Length);
+        Assert.Equal(File.GetLastWriteTimeUtc(original.IndexPath), File.GetLastWriteTimeUtc(replacement.IndexPath));
+        using (var connection = IndexDatabase.Open(original.IndexPath, readOnly: true))
+        {
+            if (IndexPhysicalIdentity.Supported)
+                Assert.True(IndexPhysicalIdentity.IsCurrent(connection, original.IndexPath));
+            else
+                Assert.False(IndexPhysicalIdentity.IsCurrent(connection, original.IndexPath));
+            Assert.False(IndexPhysicalIdentity.IsCurrent(connection, replacement.IndexPath));
+        }
+
+        using var session = new IndexReadSession(original.IndexPath, original.Workspace, (_, _) => false);
+        IndexSnapshot before;
+        using (var first = session.Acquire()) before = first.Snapshot();
+        // Unsupported proof must reopen the current path; metadata equality cannot retain the old file.
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+            File.Move(replacement.IndexPath + suffix, original.IndexPath + suffix, overwrite: true);
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(original.IndexPath));
+        using var current = session.Acquire();
+        Assert.NotSame(before, current.Snapshot());
+        Assert.Equal(before.Graph.SnapshotId, current.Snapshot().Graph.SnapshotId);
+        Assert.Equal(before.Graph.Generation, current.Snapshot().Graph.Generation);
+        Assert.Equal("Beforz", current.Snapshot().Graph.Nodes.Single(node => node.Id == original.MemberId).Name);
+        Assert.Equal(original.MemberId, Assert.Single(current.Search("Beforz")).NodeId);
+        Assert.Empty(current.Search("Before"));
+    }
+
+    [Fact]
+    public async Task CancellingOneSessionLeaseWaiterLeavesTheActiveLeaseAndNextAcquireUsable()
+    {
+        using var fixture = new StoreFixture();
+        using var writer = fixture.Writer();
+        writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
+        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace, (_, _) => true);
+        var active = session.Acquire();
+        using var cancellation = new CancellationTokenSource();
+        var waiting = Task.Run(() =>
+        {
+            using var unexpected = session.Acquire(cancellation.Token);
+            return unexpected.Snapshot().Graph.Generation;
+        });
+        cancellation.Cancel();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            {
+                await waiting.WaitAsync(TimeSpan.FromSeconds(10));
+            });
+            Assert.Equal(1, active.Snapshot().Graph.Generation);
+            Assert.Equal(fixture.MemberId, Assert.Single(active.Search("Before")).NodeId);
+        }
+        finally { active.Dispose(); }
+        using var next = session.Acquire();
+        Assert.Equal(1, next.Snapshot().Graph.Generation);
+        Assert.Equal(fixture.MemberId, Assert.Single(next.Search("Before")).NodeId);
+    }
+
     [Fact]
     public void CancellationAndChangedSourceAtThePublishBoundaryRollbackRowsFtsAndGeneration()
     {
@@ -1098,6 +1285,24 @@ public sealed class IndexStoreTests
             Kind = "calls", Certainty = HarnessCertainty.Resolved, Producer = "roslyn-operation",
             Evidence = fixture.CodeLocation, Origin = "userSource", ExtensionBinding = binding
         };
+
+    private static string RewriteSavedMember(StoreFixture fixture, IndexSnapshot snapshot, string memberName)
+    {
+        var node = snapshot.Graph.Nodes.Single(node => node.Id == fixture.MemberId) with
+        { Name = memberName, Signature = memberName + "()" };
+        var json = JsonSerializer.Serialize(node, IndexStage.Json);
+        using var external = IndexDatabase.Open(fixture.IndexPath, readOnly: false);
+        using var transaction = external.BeginTransaction();
+        IndexDatabase.Execute(external, transaction, "UPDATE nodes SET json=$json WHERE generation=$g AND id=$id",
+            ("$json", json), ("$g", snapshot.Graph.Generation), ("$id", fixture.MemberId));
+        IndexDatabase.Execute(external, transaction,
+            "UPDATE search_text SET name=$name,signature=$signature WHERE generation=$g AND node_id=$id",
+            ("$name", memberName), ("$signature", node.Signature), ("$g", snapshot.Graph.Generation), ("$id", fixture.MemberId));
+        var searchTable = IndexDatabase.SearchTable(snapshot.Graph.Generation);
+        IndexDatabase.Execute(external, transaction, $"INSERT INTO {searchTable}({searchTable}) VALUES('rebuild')");
+        transaction.Commit();
+        return json;
+    }
 
     private static void AssertCode(string expected, Action action)
         => Assert.Equal(expected, Assert.Throws<IndexStoreException>(action).Code);

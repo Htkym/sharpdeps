@@ -29,10 +29,7 @@ internal static class IndexDatabase
     }
     public static SqliteConnection Open(string path, bool readOnly)
     {
-        IndexPaths.RejectLinks(path + "-wal");
-        IndexPaths.RejectLinks(path + "-shm");
-        if (readOnly && (!File.Exists(path + "-wal") || !File.Exists(path + "-shm")))
-            throw new IndexStoreException("INDEX_RECOVERY_REQUIRED", "A trusted writer must prepare existing WAL sidecars before a saved read.");
+        CheckSidecars(path, readOnly);
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         { DataSource=path, Mode=readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
             Cache=SqliteCacheMode.Private, Pooling=false, ForeignKeys=true, DefaultTimeout=3 }.ToString());
@@ -47,6 +44,13 @@ internal static class IndexDatabase
             return connection;
         }
         catch { connection.Dispose(); throw; }
+    }
+    internal static void CheckSidecars(string path, bool readOnly)
+    {
+        IndexPaths.RejectLinks(path + "-wal");
+        IndexPaths.RejectLinks(path + "-shm");
+        if (readOnly && (!File.Exists(path + "-wal") || !File.Exists(path + "-shm")))
+            throw new IndexStoreException("INDEX_RECOVERY_REQUIRED", "A trusted writer must prepare existing WAL sidecars before a saved read.");
     }
     [DllImport("e_sqlite3", CallingConvention=CallingConvention.Cdecl)]
     private static extern int sqlite3_file_control(IntPtr database,
