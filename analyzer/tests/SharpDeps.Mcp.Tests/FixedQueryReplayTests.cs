@@ -586,6 +586,63 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task PendingPreparationAbortsBeforeNextCliAndRetainsSeparatePostDrainEvidence()
+    {
+        using var fixture = new ReplayFixture();
+        var directory = ReceiptDirectory("pending-owner-block");
+        var input = Input(fixture,
+            [new("first", fixture.Member, MaxMilliseconds: 2000, PrepareMaxMilliseconds: 5000,
+                Equivalence: "deadline-sensitive"), new("must-not-run", fixture.Member)]) with
+        {
+            McpDll = typeof(FixedQueryReplay).Assembly.Location,
+            AbortOnIncompletePreparation = true
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => FixedQueryReplay.RunAsync(input, directory, deadline.Token));
+        Assert.Contains("preparation completion is unproven", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(directory, "must-not-run")));
+        var request = JsonSerializer.Deserialize<ReplayPhaseCapture>(File.ReadAllText(Path.Combine(directory, "first", "mcp.phase-metrics.json")), FixedQueryReplay.Json)!;
+        Assert.Equal("pending", request.RelatedPreparation!.Status);
+        var late = JsonSerializer.Deserialize<ReplayLatePreparation[]>(File.ReadAllText(Path.Combine(directory, "late-owners.json")), FixedQueryReplay.Json)!;
+        var terminal = Assert.Single(late);
+        Assert.Equal(ReplayOwnerDrainProbe.OwnerId, terminal.PreparationOwnerId);
+        Assert.Equal("recorded", terminal.Capture.Status);
+        Assert.Equal("cancelled", terminal.Capture.RunOutcome);
+        using var summary = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "summary.json")));
+        Assert.Equal("aborted-incomplete-preparation", summary.RootElement.GetProperty("status").GetString());
+        Assert.Equal("must-not-run", Assert.Single(summary.RootElement.GetProperty("missingCaseIds").EnumerateArray()).GetString());
+        Assert.True(summary.RootElement.GetProperty("mcpShutdown").GetProperty("ownedProcessesDrained").GetBoolean());
+        Assert.True(summary.RootElement.GetProperty("mcpShutdown").GetProperty("graceful").GetBoolean());
+        Assert.False(summary.RootElement.GetProperty("mcpShutdown").GetProperty("killed").GetBoolean());
+        using var probe = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Root, "owner-probe-shutdown.json")));
+        Assert.Equal(1, probe.RootElement.GetProperty("calls").GetInt32());
+        Assert.True(probe.RootElement.GetProperty("ownerCompletedAfterEof").GetBoolean());
+        output.WriteLine("Pending owner block receipts: {0}", directory);
+    }
+
+    [Fact]
+    public async Task NonExitingShutdownIsBoundedAndNeverReportedAsSuccessfulDrain()
+    {
+        var directory = ReceiptDirectory("non-exiting-shutdown");
+        Directory.CreateDirectory(directory);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await using var process = new ReplayProcess(directory, FixedQueryReplay.Dotnet,
+            [typeof(FixedQueryReplay).Assembly.Location, "--replay-non-exiting-probe"]);
+        Assert.Equal("ready", Encoding.UTF8.GetString(await process.ReadLineAsync(deadline.Token)).Trim());
+        var shutdown = await process.ShutdownAsync(TimeSpan.FromMilliseconds(100)).WaitAsync(deadline.Token);
+        Assert.False(shutdown.Graceful);
+        Assert.True(shutdown.Killed);
+        Assert.True(shutdown.ProcessExited);
+        Assert.False(shutdown.OwnedProcessesDrained);
+        Assert.NotNull(shutdown.Error);
+        Assert.Null(shutdown.Capture);
+        Assert.False(deadline.IsCancellationRequested);
+        FixedQueryReplay.WriteJson(Path.Combine(directory, "shutdown.json"), shutdown);
+        FixedQueryReplay.WriteManifest(directory);
+        output.WriteLine("Non-exiting shutdown receipts: {0}", directory);
+    }
+
+    [Fact]
     public async Task ProcessExitDrainsTrailingStdoutBeforeWaiting()
     {
         var directory = ReceiptDirectory("drain-probe");
@@ -630,17 +687,22 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
 
     private static ReplayInput Input(ReplayFixture fixture, IReadOnlyList<ReplayCase> cases, bool trusted = true)
     {
-        var analyzer = new DirectoryInfo(AppContext.BaseDirectory);
-        while (analyzer is not null && !File.Exists(Path.Combine(analyzer.FullName, "SharpDeps.Analyzer.slnx")))
+        var repository = Environment.GetEnvironmentVariable("SHARPDEPS_REPLAY_REPOSITORY_ROOT");
+        if (repository is null)
         {
-            analyzer = analyzer.Parent;
+            var analyzer = new DirectoryInfo(AppContext.BaseDirectory);
+            while (analyzer is not null && !File.Exists(Path.Combine(analyzer.FullName, "SharpDeps.Analyzer.slnx")))
+                analyzer = analyzer.Parent;
+            Assert.NotNull(analyzer);
+            repository = analyzer.Parent!.FullName;
         }
-        Assert.NotNull(analyzer);
-        var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var cli = Path.Combine(analyzer.FullName, "src", "SharpDeps.Cli", "bin", configuration, "net10.0", "SharpDeps.Cli.dll");
-        var mcp = Path.Combine(analyzer.FullName, "src", "SharpDeps.Mcp", "bin", configuration, "net10.0", "SharpDeps.Mcp.dll");
+        Assert.True(Path.IsPathFullyQualified(repository));
+        Assert.True(File.Exists(Path.Combine(repository, "analyzer", "SharpDeps.Analyzer.slnx")));
+        // The test project's executable references copy complete same-build hosts here, including isolated artifact builds.
+        var cli = Path.Combine(AppContext.BaseDirectory, "SharpDeps.Cli.dll");
+        var mcp = Path.Combine(AppContext.BaseDirectory, "SharpDeps.Mcp.dll");
         Assert.True(File.Exists(cli), cli);
         Assert.True(File.Exists(mcp), mcp);
-        return new(fixture.Root, cli, mcp, analyzer.Parent!.FullName, cases, trusted, PhaseMetrics: true);
+        return new(fixture.Root, cli, mcp, repository, cases, trusted, PhaseMetrics: true);
     }
 }

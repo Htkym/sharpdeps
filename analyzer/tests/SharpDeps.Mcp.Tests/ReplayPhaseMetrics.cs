@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 internal sealed record ReplayPhaseArtifact(string Path, string OriginalName, long Bytes, string Sha256);
+internal sealed record ReplayLatePreparation(string PreparationOwnerId, string RequestReceipt,
+    DateTimeOffset CapturedUtc, ReplayPhaseCapture Capture);
 internal sealed record ReplayPhaseSpan(long SpanId, long? ParentSpanId, string Phase, double StartedMilliseconds,
     double InclusiveMilliseconds, double? MeasuredChildExclusiveMilliseconds, bool UnfinishedChildren);
 internal sealed record ReplayPhaseCapture(string Status, string? Reason, string RequestOutcome, string? RunId,
@@ -37,7 +39,8 @@ internal sealed class ReplayPhaseMetrics(string? directory)
     private const int MaximumLineBytes = 64 * 1024;
     private const int MaximumRecords = 65536;
     private readonly Dictionary<string, string> known = new(StringComparer.Ordinal);
-    private readonly HashSet<string> preparationOwners = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ReplayPhaseCapture Request, string Directory, string Host)> preparationOwners
+        = new(StringComparer.Ordinal);
     private bool associationLost;
     internal string? DirectoryPath => directory;
 
@@ -107,13 +110,41 @@ internal sealed class ReplayPhaseMetrics(string? directory)
             Capture(artifactDirectory, "mcp-unbound", "outside-request-boundary");
     }
 
-    private ReplayPhaseCapture CapturePreparation(string artifactDirectory, string host, ReplayPhaseCapture request, int remainingBytes)
+    internal static bool PreparationIsTerminal(ReplayPhaseCapture request)
+        => request.Status == "recorded" && (request.PreparationOwnerId is null
+            || request.RelatedPreparation is { Status: "recorded", RunOutcome: "completed" or "failed" or "cancelled" });
+
+    internal IReadOnlyList<ReplayLatePreparation> CaptureAfterDrain(string artifactDirectory)
+    {
+        var lateDirectory = Path.Combine(artifactDirectory, "late-owners");
+        if (Directory.Exists(lateDirectory))
+            throw new IOException("Late-owner receipts already exist; never replace request-time or terminal evidence.");
+        Directory.CreateDirectory(lateDirectory);
+        var captures = new List<ReplayLatePreparation>();
+        var remainingBytes = MaximumBytes;
+        foreach (var (ownerId, source) in preparationOwners)
+        {
+            var capture = CapturePreparation(lateDirectory, ownerId, source.Request, remainingBytes, register: false);
+            remainingBytes -= checked((int)capture.Artifacts.Sum(artifact => artifact.Bytes));
+            var late = new ReplayLatePreparation(ownerId,
+                Path.GetRelativePath(artifactDirectory, Path.Combine(source.Directory, source.Host + ".phase-metrics.json")),
+                DateTimeOffset.UtcNow, capture);
+            FixedQueryReplay.WriteJson(Path.Combine(lateDirectory, ownerId + ".json"), late);
+            captures.Add(late);
+        }
+        FixedQueryReplay.WriteJson(Path.Combine(artifactDirectory, "late-owners.json"), captures);
+        return captures;
+    }
+
+    private ReplayPhaseCapture CapturePreparation(string artifactDirectory, string host, ReplayPhaseCapture request,
+        int remainingBytes, bool register = true)
     {
         var ownerId = request.PreparationOwnerId!;
         var artifacts = new List<ReplayPhaseArtifact>();
         try
         {
-            Check(preparationOwners.Add(ownerId), "preparation-owner-already-associated");
+            if (register)
+                Check(preparationOwners.TryAdd(ownerId, (request, artifactDirectory, host)), "preparation-owner-already-associated");
             var ownerDirectory = Path.GetFullPath(Path.Combine(directory!, "owners", ownerId));
             Check(Path.GetRelativePath(Path.GetFullPath(directory!), ownerDirectory) == Path.Combine("owners", ownerId),
                 "preparation-path-invalid");

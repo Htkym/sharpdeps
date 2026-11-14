@@ -17,7 +17,8 @@ internal sealed record ReplayCase(string Id, string Query, string Format = "audi
     int? MaxMilliseconds = null, bool OwnerStatus = false, string Equivalence = "exact",
     string? Purpose = null, int? PrepareMaxMilliseconds = null);
 internal sealed record ReplayInput(string Root, string CliDll, string McpDll, string RepositoryRoot,
-    IReadOnlyList<ReplayCase> Cases, bool Trusted = true, string Index = ".sharpdeps/index.sqlite", bool PhaseMetrics = false);
+    IReadOnlyList<ReplayCase> Cases, bool Trusted = true, string Index = ".sharpdeps/index.sqlite", bool PhaseMetrics = false,
+    bool AbortOnIncompletePreparation = false);
 internal sealed record ReplayUnit(string SourceId, string Path, string ContentHash, HarnessRawSpan? Span,
     IReadOnlyList<HarnessRawSpan> PossibleSpans, int FirstLine, string Text, string RenderedNumberedText, string? ProjectId,
     string? VariantId, IReadOnlyList<string> Selectors, bool WholeSavedRangeVerified,
@@ -34,6 +35,16 @@ internal static class FixedQueryReplay
 
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--root", ..])
+            return await ReplayOwnerDrainProbe.RunAsync(args);
+        if (args is ["--replay-non-exiting-probe"])
+        {
+            await Console.Out.WriteLineAsync("ready");
+            await Console.Out.FlushAsync();
+            await Console.In.ReadToEndAsync();
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+            return 0;
+        }
         if (args is [var mode, var channel, var marker]
             && (mode is "--replay-output-limit-probe" or "--replay-output-limit-probe-immediate")
             && channel is "stdout" or "stderr")
@@ -102,6 +113,8 @@ internal static class FixedQueryReplay
         CancellationToken token)
     {
         WriteJson(Path.Combine(directory, "input.json"), input);
+        Require(!input.AbortOnIncompletePreparation || input.PhaseMetrics,
+            "Incomplete-owner protection requires request and preparation phase evidence.");
         var indexPath = Path.GetFullPath(Path.Combine(input.Root, input.Index));
         using var state = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(input.Root, ".sharpdeps", "workspace.json")));
         var uuid = state.RootElement.GetProperty("workspaceUuid").GetGuid();
@@ -203,246 +216,281 @@ internal static class FixedQueryReplay
         WriteJson(Path.Combine(directory, "mcp-argv.json"), new { executable = Dotnet, arguments = hostArguments });
         await using var mcp = new ReplayProcess(input.Root, Dotnet, hostArguments);
         var sequence = 0;
-        await RpcAsync("initialize", new
-        {
-            protocolVersion = "2025-11-25",
-            capabilities = new { },
-            clientInfo = new { name = "sharpdeps-fixed-query-replay", version = "1" }
-        }, "initialize");
-        await NotifyAsync("notifications/initialized", new { }, "initialized");
-        var listed = await RpcAsync("tools/list", new { }, "tools-list");
-        using (var tools = JsonDocument.Parse(listed.Bytes))
-        {
-            var explore = tools.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
-                .SingleOrDefault(tool => tool.GetProperty("name").GetString() == "explore");
-            Require(explore.ValueKind == JsonValueKind.Object, "MCP explore schema was not listed.");
-            Require(SupportsSplitBudget(explore.GetProperty("inputSchema")),
-                "The target host does not advertise the split-v1 exploration budget contract; no replay case was started.");
-        }
         var observations = new List<ReplayObservation>();
-        var exploreRequestOrdinal = 0;
-        foreach (var item in input.Cases)
+        string? abortedReason = null;
+        ReplayShutdown shutdown;
+        try
         {
-            exploreRequestOrdinal++;
-            Require(Regex.IsMatch(item.Id, "^[a-z0-9][a-z0-9-]{0,79}$", RegexOptions.CultureInvariant)
-                && input.Cases.Count(value => value.Id == item.Id) == 1, "Case IDs must be unique safe filenames.");
-            Require(item.Equivalence is "exact" or "protocol-error" or "deadline-sensitive", "Unknown equivalence rule.");
-            var caseDirectory = Path.Combine(directory, item.Id);
-            Directory.CreateDirectory(caseDirectory);
-            var cliMetrics = new ReplayPhaseMetrics(metricsRoot is null ? null : Path.Combine(metricsRoot, item.Id, "cli"));
-            var arguments = Arguments(input, item);
-            if (cliMetrics.DirectoryPath is { } cliMetricsDirectory)
+            await RpcAsync("initialize", new
             {
-                arguments.AddRange(["--metrics-directory", cliMetricsDirectory]);
+                protocolVersion = "2025-11-25",
+                capabilities = new { },
+                clientInfo = new { name = "sharpdeps-fixed-query-replay", version = "1" }
+            }, "initialize");
+            await NotifyAsync("notifications/initialized", new { }, "initialized");
+            var listed = await RpcAsync("tools/list", new { }, "tools-list");
+            using (var tools = JsonDocument.Parse(listed.Bytes))
+            {
+                var explore = tools.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
+                    .SingleOrDefault(tool => tool.GetProperty("name").GetString() == "explore");
+                Require(explore.ValueKind == JsonValueKind.Object, "MCP explore schema was not listed.");
+                Require(SupportsSplitBudget(explore.GetProperty("inputSchema")),
+                    "The target host does not advertise the split-v1 exploration budget contract; no replay case was started.");
             }
-            WriteJson(Path.Combine(caseDirectory, "cli-argv.json"), new { executable = Dotnet, arguments });
-            cliMetrics.BeginRequest();
-            ReplayCapture cli;
-            try
+            var exploreRequestOrdinal = 0;
+            foreach (var item in input.Cases)
             {
-                cli = await ReplayProcess.RunAsync(input.Root, Dotnet, arguments, token);
-            }
-            catch
-            {
-                cliMetrics.Capture(caseDirectory, "cli", token.IsCancellationRequested ? "cancelled" : "capture-aborted");
-                throw;
-            }
-            File.WriteAllBytes(Path.Combine(caseDirectory, "cli.stdout"), cli.Stdout);
-            File.WriteAllBytes(Path.Combine(caseDirectory, "cli.stderr"), cli.Stderr);
-            var cliPhases = cliMetrics.Capture(caseDirectory, "cli", RequestOutcome(cli.Stdout, cli.ExitCode != 0));
-            mcpMetrics.BeginRequest();
-            (byte[] Bytes, double WallMilliseconds, double? CpuMilliseconds) reply;
-            try
-            {
-                reply = await RpcAsync("tools/call", new { name = "explore", arguments = ToolArguments(item) }, item.Id + "/mcp");
-            }
-            catch
-            {
-                mcpMetrics.Capture(caseDirectory, "mcp", token.IsCancellationRequested ? "cancelled" : "capture-aborted");
-                throw;
-            }
-            using var rpc = JsonDocument.Parse(reply.Bytes);
-            var root = rpc.RootElement;
-            string? mcpText = null;
-            bool? isError = null;
-            string? wire = null;
-            ReplayPhaseCapture mcpPhases;
-            try
-            {
-                if (root.TryGetProperty("result", out var result))
+                exploreRequestOrdinal++;
+                Require(Regex.IsMatch(item.Id, "^[a-z0-9][a-z0-9-]{0,79}$", RegexOptions.CultureInvariant)
+                    && input.Cases.Count(value => value.Id == item.Id) == 1, "Case IDs must be unique safe filenames.");
+                Require(item.Equivalence is "exact" or "protocol-error" or "deadline-sensitive", "Unknown equivalence rule.");
+                var caseDirectory = Path.Combine(directory, item.Id);
+                Directory.CreateDirectory(caseDirectory);
+                var cliMetrics = new ReplayPhaseMetrics(metricsRoot is null ? null : Path.Combine(metricsRoot, item.Id, "cli"));
+                var arguments = Arguments(input, item);
+                if (cliMetrics.DirectoryPath is { } cliMetricsDirectory)
                 {
-                    Require(!result.TryGetProperty("structuredContent", out _), "Explore unexpectedly duplicated source in structuredContent.");
-                    isError = result.GetProperty("isError").GetBoolean();
-                    var content = result.GetProperty("content");
-                    Require(content.GetArrayLength() == 1 && content[0].GetProperty("type").GetString() == "text", "Unexpected explore content.");
-                    mcpText = content[0].GetProperty("text").GetString()!;
-                    wire = result.GetRawText();
+                    arguments.AddRange(["--metrics-directory", cliMetricsDirectory]);
                 }
-                else
+                WriteJson(Path.Combine(caseDirectory, "cli-argv.json"), new { executable = Dotnet, arguments });
+                cliMetrics.BeginRequest();
+                ReplayCapture cli;
+                try
                 {
-                    Require(root.TryGetProperty("error", out _), "JSON-RPC response has neither result nor error.");
+                    cli = await ReplayProcess.RunAsync(input.Root, Dotnet, arguments, token);
                 }
-                mcpPhases = mcpMetrics.Capture(caseDirectory, "mcp", root.TryGetProperty("error", out var rpcError)
-                    ? rpcError.GetProperty("code").GetInt32() switch { -32602 => "rejected", -32800 => "cancelled", _ => "failed" }
-                    : RequestOutcome(mcpText ?? "", isError == true));
-            }
-            catch
-            {
-                mcpMetrics.Capture(caseDirectory, "mcp", "response-invalid");
-                throw;
-            }
-            var cliText = Utf8.GetString(cli.Stdout);
-            Require(cliText.EndsWith(Environment.NewLine, StringComparison.Ordinal), "CLI omitted its transport newline.");
-            cliText = cliText[..^Environment.NewLine.Length];
-            var equivalent = cliText == mcpText && (cli.ExitCode != 0) == isError;
-            var outcome = Outcome(mcpText ?? cliText);
-            var units = ParseUnits(mcpText ?? "", snapshot, input.Root, caseDirectory);
-            var cliUnits = equivalent ? units : ParseUnits(cliText, snapshot, input.Root, caseDirectory, "cli-");
-            var receiptPath = Path.Combine(caseDirectory, "receipt.json");
-            var queryMilliseconds = item.MaxMilliseconds ?? new QueryBudget().MaxMilliseconds;
-            var preparationMilliseconds = item.PrepareMaxMilliseconds ?? new ExploreRequest(item.Query).PrepareMaxMilliseconds;
-            var cliTimeoutCode = TimeoutCode(cliText);
-            var mcpTimeoutCode = mcpText is null ? null : TimeoutCode(mcpText);
-            WriteJson(receiptPath, new
-            {
-                requested = item,
-                effective = new
+                catch
                 {
-                    item.Format,
-                    scopePolicy = item.ScopePolicy ?? (mcpText?.StartsWith("SharpDeps discover ", StringComparison.Ordinal) == true
-                        ? "discover" : mcpText?.StartsWith("SharpDeps explore ", StringComparison.Ordinal) == true ? "unique" : null),
-                    item.ProjectId,
-                    item.VariantId,
-                    item.PathPrefix,
-                    item.Freshness,
-                    item.MaxChars,
-                    item.MaxBytes,
-                    budgetContract = "split-v1",
-                    prepareMaxMilliseconds = preparationMilliseconds,
-                    maxMilliseconds = queryMilliseconds,
-                    totalMaxMilliseconds = preparationMilliseconds + queryMilliseconds,
-                    maxNodes = 60,
-                    maxEdges = 120,
-                    maxDepth = 2,
-                    hostTrusted = input.Trusted
-                },
-                snapshot = new { snapshot.Graph.SnapshotId, snapshot.Graph.Generation, payloadSha256 = Hash(snapshotBytes) },
-                cli = new
+                    cliMetrics.Capture(caseDirectory, "cli", token.IsCancellationRequested ? "cancelled" : "capture-aborted");
+                    throw;
+                }
+                File.WriteAllBytes(Path.Combine(caseDirectory, "cli.stdout"), cli.Stdout);
+                File.WriteAllBytes(Path.Combine(caseDirectory, "cli.stderr"), cli.Stderr);
+                var cliPhases = cliMetrics.Capture(caseDirectory, "cli", RequestOutcome(cli.Stdout, cli.ExitCode != 0));
+                mcpMetrics.BeginRequest();
+                (byte[] Bytes, double WallMilliseconds, double? CpuMilliseconds) reply;
+                try
                 {
-                    cli.ExitCode,
-                    cli.ProcessId,
-                    processState = "fresh",
-                    exploreRequestOrdinal = 1,
-                    osCacheState = "unknown",
-                    cli.WallMilliseconds,
-                    cli.CpuMilliseconds,
-                    stdoutSha256 = Hash(cli.Stdout),
-                    stderrSha256 = Hash(cli.Stderr),
-                    stdoutBytes = cli.Stdout.Length
-                },
-                mcp = new
+                    reply = await RpcAsync("tools/call", new { name = "explore", arguments = ToolArguments(item) }, item.Id + "/mcp");
+                }
+                catch
                 {
-                    processId = mcp.Id,
-                    processState = exploreRequestOrdinal == 1 ? "fresh" : "reused",
-                    exploreRequestOrdinal,
-                    osCacheState = "unknown",
-                    isError,
-                    rpcError = root.TryGetProperty("error", out var error) ? error : (JsonElement?)null,
-                    reply.WallMilliseconds,
-                    reply.CpuMilliseconds,
-                    responseSha256 = Hash(reply.Bytes),
-                    responseBytes = reply.Bytes.Length,
-                    toolResultUtf16 = wire?.Length,
-                    toolResultUtf8 = wire is null ? (int?)null : Utf8.GetByteCount(wire),
-                    rpcEnvelopeAndLineDelimiterBytes = wire is null ? (int?)null : reply.Bytes.Length - Utf8.GetByteCount(wire)
-                },
-                resolution = new
+                    mcpMetrics.Capture(caseDirectory, "mcp", token.IsCancellationRequested ? "cancelled" : "capture-aborted");
+                    throw;
+                }
+                using var rpc = JsonDocument.Parse(reply.Bytes);
+                var root = rpc.RootElement;
+                string? mcpText = null;
+                bool? isError = null;
+                string? wire = null;
+                ReplayPhaseCapture mcpPhases;
+                try
                 {
-                    outcome,
-                    equivalent,
-                    candidateCount = (int?)null,
-                    publicErrorCodes = PublicErrorCodes(mcpText ?? cliText),
-                    cliPublicErrorCodes = PublicErrorCodes(cliText),
-                    cliTimeoutCode,
-                    mcpTimeoutCode,
-                    cliDeadlineObserved = cliTimeoutCode is not null,
-                    mcpDeadlineObserved = mcpText is null ? (bool?)null : mcpTimeoutCode is not null,
-                    matchingScopes = CaptureNumber(mcpText, @"\((\d+) matching scopes"),
-                    selectedGroups = CaptureNumber(mcpText, @"\bgroups=(\d+)"),
-                    omittedGroups = CaptureNumber(mcpText, @"\bomittedGroups=(\d+)"),
-                    scopeDecision = Lines(mcpText, "Scope ", "Scope policy=", "Choose project/variant", "Alternative scope"),
-                    omissionsAndErrors = Lines(mcpText ?? cliText, "Error ", "Limits/status:", "Omitted saved units=", "Omission details", "Unverified:", "Dirty sources=")
-                },
-                source = new
+                    if (root.TryGetProperty("result", out var result))
+                    {
+                        Require(!result.TryGetProperty("structuredContent", out _), "Explore unexpectedly duplicated source in structuredContent.");
+                        isError = result.GetProperty("isError").GetBoolean();
+                        var content = result.GetProperty("content");
+                        Require(content.GetArrayLength() == 1 && content[0].GetProperty("type").GetString() == "text", "Unexpected explore content.");
+                        mcpText = content[0].GetProperty("text").GetString()!;
+                        wire = result.GetRawText();
+                    }
+                    else
+                    {
+                        Require(root.TryGetProperty("error", out _), "JSON-RPC response has neither result nor error.");
+                    }
+                    mcpPhases = mcpMetrics.Capture(caseDirectory, "mcp", root.TryGetProperty("error", out var rpcError)
+                        ? rpcError.GetProperty("code").GetInt32() switch { -32602 => "rejected", -32800 => "cancelled", _ => "failed" }
+                        : RequestOutcome(mcpText ?? "", isError == true));
+                }
+                catch
                 {
-                    unitCount = units.Count,
-                    fileCount = units.Select(unit => unit.SourceId).Distinct().Count(),
-                    completeRangeCount = units.Count(unit => unit.WholeSavedRangeVerified),
-                    utf16 = units.All(unit => unit.Span is not null) ? units.Sum(unit => unit.Text.Length) : (int?)null,
-                    utf8 = units.All(unit => unit.Span is not null) ? units.Sum(unit => Utf8.GetByteCount(unit.Text)) : (int?)null,
-                    units,
-                    cliUnits
-                },
-                displayed = new
+                    mcpMetrics.Capture(caseDirectory, "mcp", "response-invalid");
+                    throw;
+                }
+                var cliText = Utf8.GetString(cli.Stdout);
+                Require(cliText.EndsWith(Environment.NewLine, StringComparison.Ordinal), "CLI omitted its transport newline.");
+                cliText = cliText[..^Environment.NewLine.Length];
+                var equivalent = cliText == mcpText && (cli.ExitCode != 0) == isError;
+                var outcome = Outcome(mcpText ?? cliText);
+                var units = ParseUnits(mcpText ?? "", snapshot, input.Root, caseDirectory);
+                var cliUnits = equivalent ? units : ParseUnits(cliText, snapshot, input.Root, caseDirectory, "cli-");
+                var receiptPath = Path.Combine(caseDirectory, "receipt.json");
+                var queryMilliseconds = item.MaxMilliseconds ?? new QueryBudget().MaxMilliseconds;
+                var preparationMilliseconds = item.PrepareMaxMilliseconds ?? new ExploreRequest(item.Query).PrepareMaxMilliseconds;
+                var cliTimeoutCode = TimeoutCode(cliText);
+                var mcpTimeoutCode = mcpText is null ? null : TimeoutCode(mcpText);
+                WriteJson(receiptPath, new
                 {
-                    utf16 = mcpText?.Length,
-                    utf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText),
-                    sourceDefinition = "Numbered source body lines exactly as displayed, excluding source headers.",
-                    sourceUtf16 = units.Sum(unit => unit.RenderedNumberedText.Length),
-                    sourceUtf8 = units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText)),
-                    nonSourceUtf16 = mcpText is null ? (int?)null : mcpText.Length - units.Sum(unit => unit.RenderedNumberedText.Length),
-                    nonSourceUtf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText) - units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText))
-                },
-                phaseMilliseconds = new { cli = cliPhases.PhaseMilliseconds, mcp = mcpPhases.PhaseMilliseconds },
-                phaseMetrics = new
+                    requested = item,
+                    effective = new
+                    {
+                        item.Format,
+                        scopePolicy = item.ScopePolicy ?? (mcpText?.StartsWith("SharpDeps discover ", StringComparison.Ordinal) == true
+                            ? "discover" : mcpText?.StartsWith("SharpDeps explore ", StringComparison.Ordinal) == true ? "unique" : null),
+                        item.ProjectId,
+                        item.VariantId,
+                        item.PathPrefix,
+                        item.Freshness,
+                        item.MaxChars,
+                        item.MaxBytes,
+                        budgetContract = "split-v1",
+                        prepareMaxMilliseconds = preparationMilliseconds,
+                        maxMilliseconds = queryMilliseconds,
+                        totalMaxMilliseconds = preparationMilliseconds + queryMilliseconds,
+                        maxNodes = 60,
+                        maxEdges = 120,
+                        maxDepth = 2,
+                        hostTrusted = input.Trusted
+                    },
+                    snapshot = new { snapshot.Graph.SnapshotId, snapshot.Graph.Generation, payloadSha256 = Hash(snapshotBytes) },
+                    cli = new
+                    {
+                        cli.ExitCode,
+                        cli.ProcessId,
+                        processState = "fresh",
+                        exploreRequestOrdinal = 1,
+                        osCacheState = "unknown",
+                        cli.WallMilliseconds,
+                        cli.CpuMilliseconds,
+                        stdoutSha256 = Hash(cli.Stdout),
+                        stderrSha256 = Hash(cli.Stderr),
+                        stdoutBytes = cli.Stdout.Length
+                    },
+                    mcp = new
+                    {
+                        processId = mcp.Id,
+                        processState = exploreRequestOrdinal == 1 ? "fresh" : "reused",
+                        exploreRequestOrdinal,
+                        osCacheState = "unknown",
+                        isError,
+                        rpcError = root.TryGetProperty("error", out var error) ? error : (JsonElement?)null,
+                        reply.WallMilliseconds,
+                        reply.CpuMilliseconds,
+                        responseSha256 = Hash(reply.Bytes),
+                        responseBytes = reply.Bytes.Length,
+                        toolResultUtf16 = wire?.Length,
+                        toolResultUtf8 = wire is null ? (int?)null : Utf8.GetByteCount(wire),
+                        rpcEnvelopeAndLineDelimiterBytes = wire is null ? (int?)null : reply.Bytes.Length - Utf8.GetByteCount(wire)
+                    },
+                    resolution = new
+                    {
+                        outcome,
+                        equivalent,
+                        candidateCount = (int?)null,
+                        publicErrorCodes = PublicErrorCodes(mcpText ?? cliText),
+                        cliPublicErrorCodes = PublicErrorCodes(cliText),
+                        cliTimeoutCode,
+                        mcpTimeoutCode,
+                        cliDeadlineObserved = cliTimeoutCode is not null,
+                        mcpDeadlineObserved = mcpText is null ? (bool?)null : mcpTimeoutCode is not null,
+                        matchingScopes = CaptureNumber(mcpText, @"\((\d+) matching scopes"),
+                        selectedGroups = CaptureNumber(mcpText, @"\bgroups=(\d+)"),
+                        omittedGroups = CaptureNumber(mcpText, @"\bomittedGroups=(\d+)"),
+                        scopeDecision = Lines(mcpText, "Scope ", "Scope policy=", "Choose project/variant", "Alternative scope"),
+                        omissionsAndErrors = Lines(mcpText ?? cliText, "Error ", "Limits/status:", "Omitted saved units=", "Omission details", "Unverified:", "Dirty sources=")
+                    },
+                    source = new
+                    {
+                        unitCount = units.Count,
+                        fileCount = units.Select(unit => unit.SourceId).Distinct().Count(),
+                        completeRangeCount = units.Count(unit => unit.WholeSavedRangeVerified),
+                        utf16 = units.All(unit => unit.Span is not null) ? units.Sum(unit => unit.Text.Length) : (int?)null,
+                        utf8 = units.All(unit => unit.Span is not null) ? units.Sum(unit => Utf8.GetByteCount(unit.Text)) : (int?)null,
+                        units,
+                        cliUnits
+                    },
+                    displayed = new
+                    {
+                        utf16 = mcpText?.Length,
+                        utf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText),
+                        sourceDefinition = "Numbered source body lines exactly as displayed, excluding source headers.",
+                        sourceUtf16 = units.Sum(unit => unit.RenderedNumberedText.Length),
+                        sourceUtf8 = units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText)),
+                        nonSourceUtf16 = mcpText is null ? (int?)null : mcpText.Length - units.Sum(unit => unit.RenderedNumberedText.Length),
+                        nonSourceUtf8 = mcpText is null ? (int?)null : Utf8.GetByteCount(mcpText) - units.Sum(unit => Utf8.GetByteCount(unit.RenderedNumberedText))
+                    },
+                    phaseMilliseconds = new { cli = cliPhases.PhaseMilliseconds, mcp = mcpPhases.PhaseMilliseconds },
+                    phaseMetrics = new
+                    {
+                        definition = ReplayPhaseMetrics.Definition,
+                        groups = ReplayPhaseMetrics.Groups,
+                        cli = cliPhases,
+                        mcp = mcpPhases
+                    },
+                    modelUsage = (object?)null
+                });
+                observations.Add(new(item.Id, cliText, mcpText, cli.ExitCode, isError, outcome, units,
+                    equivalent, wire?.Length ?? 0, wire is null ? 0 : Utf8.GetByteCount(wire), receiptPath));
+                if (item.Equivalence == "exact")
                 {
-                    definition = ReplayPhaseMetrics.Definition,
-                    groups = ReplayPhaseMetrics.Groups,
-                    cli = cliPhases,
-                    mcp = mcpPhases
-                },
-                modelUsage = (object?)null
-            });
-            observations.Add(new(item.Id, cliText, mcpText, cli.ExitCode, isError, outcome, units,
-                equivalent, wire?.Length ?? 0, wire is null ? 0 : Utf8.GetByteCount(wire), receiptPath));
-            if (item.Equivalence == "exact")
-            {
-                Require(equivalent, $"CLI/MCP differ for {item.Id}; raw outputs and receipt were retained.");
-            }
-            if (item.Equivalence == "protocol-error")
-            {
-                Require(cli.ExitCode == 2 && root.TryGetProperty("error", out var protocolError)
-                    && protocolError.GetProperty("code").GetInt32() == -32602, "Expected CLI argument error and MCP InvalidParams.");
-            }
-            if (item.Equivalence == "deadline-sensitive")
-            {
-                var cliOutcome = RequestOutcome(cliText, cli.ExitCode != 0);
-                var mcpOutcome = mcpText is null ? "failed" : RequestOutcome(mcpText, isError == true);
-                Require(DeadlineCompatible(cliOutcome) && DeadlineCompatible(mcpOutcome)
-                    && (equivalent || cliTimeoutCode is not null || mcpTimeoutCode is not null),
-                    "Unexpected deadline comparison difference or non-timeout failure.");
-            }
-            if (wire is not null)
-            {
-                Require(wire.Length <= item.MaxChars && Utf8.GetByteCount(wire) <= item.MaxBytes,
-                    $"Actual tool-result JSON exceeded the requested budget for {item.Id}.");
+                    Require(equivalent, $"CLI/MCP differ for {item.Id}; raw outputs and receipt were retained.");
+                }
+                if (item.Equivalence == "protocol-error")
+                {
+                    Require(cli.ExitCode == 2 && root.TryGetProperty("error", out var protocolError)
+                        && protocolError.GetProperty("code").GetInt32() == -32602, "Expected CLI argument error and MCP InvalidParams.");
+                }
+                if (item.Equivalence == "deadline-sensitive")
+                {
+                    var cliOutcome = RequestOutcome(cliText, cli.ExitCode != 0);
+                    var mcpOutcome = mcpText is null ? "failed" : RequestOutcome(mcpText, isError == true);
+                    Require(DeadlineCompatible(cliOutcome) && DeadlineCompatible(mcpOutcome)
+                        && (equivalent || cliTimeoutCode is not null || mcpTimeoutCode is not null),
+                        "Unexpected deadline comparison difference or non-timeout failure.");
+                }
+                if (wire is not null)
+                {
+                    Require(wire.Length <= item.MaxChars && Utf8.GetByteCount(wire) <= item.MaxBytes,
+                        $"Actual tool-result JSON exceeded the requested budget for {item.Id}.");
+                }
+                if (input.AbortOnIncompletePreparation && !ReplayPhaseMetrics.PreparationIsTerminal(mcpPhases))
+                {
+                    abortedReason = "MCP preparation completion is unproven after " + item.Id;
+                    break;
+                }
             }
         }
-        var host = await mcp.FinishAsync(token);
-        mcpMetrics.CaptureOutsideRequest(directory);
+        finally
+        {
+            // Request cancellation must not skip independent owner shutdown and final evidence capture.
+            shutdown = await mcp.ShutdownAsync(TimeSpan.FromSeconds(45));
+            WriteJson(Path.Combine(directory, "mcp-shutdown.json"), shutdown);
+            if (shutdown.ProcessExited)
+            {
+                mcpMetrics.CaptureAfterDrain(directory);
+                mcpMetrics.CaptureOutsideRequest(directory);
+            }
+            WriteJson(Path.Combine(directory, "late-owners-status.json"), new
+            {
+                status = shutdown.ProcessExited ? "captured-after-process-exit" : "unavailable",
+                scope = "Registered request owner IDs only; missing or unfinished terminal traces remain unavailable.",
+                reason = shutdown.ProcessExited ? null : "host-process-exit-unconfirmed",
+                partialProcessOutput = shutdown.Capture is null ? "not-retained-after-shutdown-or-stream-failure" : "complete"
+            });
+        }
+        Require(shutdown.Graceful && shutdown.OwnedProcessesDrained && shutdown.Capture is not null,
+            "MCP did not shut down with confirmed stream drain; no later block may start.");
+        var host = shutdown.Capture!;
         File.WriteAllBytes(Path.Combine(directory, "mcp.stderr"), host.Stderr);
         File.WriteAllBytes(Path.Combine(directory, "mcp.trailing.stdout"), host.Stdout);
         Require(host.ExitCode == 0 && host.Stderr.Length == 0 && host.Stdout.Length == 0, "MCP failed or emitted unexpected trailing output.");
         Require(Hash(File.ReadAllBytes(indexPath)) == originalIndexHash, "Read-only replay changed the index database.");
         WriteJson(Path.Combine(directory, "summary.json"), new
         {
-            status = "completed",
+            status = abortedReason is null ? "completed" : "aborted-incomplete-preparation",
+            reason = abortedReason,
+            plannedCaseIds = input.Cases.Select(item => item.Id).ToArray(),
+            executedCaseIds = observations.Select(item => item.Id).ToArray(),
+            missingCaseIds = input.Cases.Select(item => item.Id).Except(observations.Select(item => item.Id)).ToArray(),
             cases = observations.Select(item => new
             { item.Id, item.Outcome, item.CliExit, item.McpIsError, item.Equivalent, unitCount = item.Units.Count }),
             mcpHost = host,
+            mcpShutdown = shutdown,
             indexUnchanged = true
         });
         WriteManifest(directory);
+        Require(abortedReason is null, abortedReason ?? "Incomplete preparation block aborted.");
         return observations;
 
         async Task<(byte[] Bytes, double WallMilliseconds, double? CpuMilliseconds)> RpcAsync(string method, object parameters, string label)

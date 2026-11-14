@@ -290,7 +290,19 @@ public sealed class ReplayPhaseMetricsTests
             Assert.Null(pending.RunOutcome);
             Assert.All(pending.PhaseMilliseconds.Values, Assert.Null);
             Assert.Empty(pending.Spans);
+            Assert.False(ReplayPhaseMetrics.PreparationIsTerminal(request));
+            var requestReceipt = File.ReadAllBytes(Path.Combine(receipts, "cancelled.phase-metrics.json"));
+            var requestArtifacts = pending.Artifacts.ToDictionary(artifact => artifact.Path,
+                artifact => File.ReadAllBytes(Path.Combine(receipts, artifact.Path)));
             File.WriteAllBytes(ownerPath, ownerBytes);
+            var late = Assert.Single(collector.CaptureAfterDrain(receipts));
+            Assert.Equal(OwnerId, late.PreparationOwnerId);
+            Assert.Equal("recorded", late.Capture.Status);
+            Assert.Equal("completed", late.Capture.RunOutcome);
+            Assert.Equal(requestReceipt, File.ReadAllBytes(Path.Combine(receipts, "cancelled.phase-metrics.json")));
+            foreach (var (path, bytes) in requestArtifacts)
+                Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(receipts, path)));
+            Assert.Throws<IOException>(() => collector.CaptureAfterDrain(receipts));
             collector.BeginRequest();
             var nextRunId = new string('c', 32);
             File.WriteAllBytes(Path.Combine(sink, nextRunId + ".jsonl"), Encode(Payloads(Sidecar()), nextRunId));

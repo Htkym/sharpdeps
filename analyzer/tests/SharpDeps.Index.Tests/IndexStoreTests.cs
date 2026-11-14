@@ -712,9 +712,18 @@ public sealed class IndexStoreTests
         using var fixture = new StoreFixture();
         using var writer = fixture.Writer();
         writer.Commit(IndexStage.Create(fixture.Snapshot(1, "Before")));
-        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace, (_, _) => true);
+        using var session = new IndexReadSession(fixture.IndexPath, fixture.Workspace);
+        IndexSnapshot warm;
+        using (var initial = session.Acquire()) warm = initial.Snapshot();
         using (var pinned = session.Acquire())
         {
+            var pinnedSnapshot = pinned.Snapshot();
+            // Reference equality identifies actual validated reuse. Windows support alone does not
+            // guarantee native proof; a freshly validated snapshot is a legitimate fallback.
+            var reusedValidatedSnapshot = ReferenceEquals(warm, pinnedSnapshot);
+            Assert.True(!reusedValidatedSnapshot || IndexPhysicalIdentity.Supported);
+            Assert.Equal(warm.Graph.SnapshotId, pinnedSnapshot.Graph.SnapshotId);
+            Assert.Equal(warm.Graph.Generation, pinnedSnapshot.Graph.Generation);
             writer.Commit(IndexStage.Create(fixture.Snapshot(2, "After")));
             Assert.Equal(1, pinned.Snapshot().Graph.Generation);
             Assert.Equal("Before", pinned.Snapshot().Graph.Nodes.Single(node => node.Id == fixture.MemberId).Name);
