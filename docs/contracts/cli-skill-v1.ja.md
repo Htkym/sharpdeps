@@ -72,7 +72,7 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 準備にはsaved-index readerのopen、全snapshotの読取り／整合性検証／read-only化と、標準の派生index／lexical indexの準備を含む。HttpGet projectionも要求された場合はこの段階で準備する。探索の計時はその完了後に始まり、探索、source／鮮度検証、出力に適用する。一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。caller取消は両段階で有効であり、期限切れより優先する。取消は協調的で、同期処理の即時停止を保証するOS制限ではない。process起動、MCP handshake、transportはこの計算時間に含めない。
 
-準備期限切れは`PREPARATION_TIMEOUT`、探索期限切れは`QUERY_TIMEOUT`、request全体の期限切れは`REQUEST_TIMEOUT`で、いずれもexit 4となる。caller取消は`CANCELLED`でexit 130となる。これらの失敗ではsourceを返さない。各requestは新しいSQLite readerで全snapshotを検証する。既存の派生cacheは4entry／serialized payload 64MiBのままであり、これはmanaged heapの上限ではない。nativeな世代再利用は未実装のP2設計である。
+準備期限切れは`PREPARATION_TIMEOUT`、探索期限切れは`QUERY_TIMEOUT`、request全体の期限切れは`REQUEST_TIMEOUT`で、いずれもexit 4となる。caller取消は`CANCELLED`でexit 130となる。これらの失敗ではsourceを返さない。P1では各requestが新しいSQLite readerで全snapshotを検証し、4entry／serialized payload 64MiBの派生cacheを使う。現在のP2 code draftではMCP hostがWindowsの物理同一性を検査し、pin後の同一connectionの`data_version`が保持値と一致する場合に検証済みsnapshotを再利用する。証明できない場合とUnixでは新しいreaderで全量検証する。このhostは従来の64MiB cacheを経由せず、既定で一つの準備済み世代を保持するが、heap byte数の上限は保証しない。独立した準備ownerの既定期限は30000msで、callerが待機を終えても継続できるため、requestのP＋Qはその後のbackground処理全体の上限ではない。one-shot CLIは新しいreaderを使う。P2はWindows／SDK 10.0.404で限定buildと対象test 306件が成功し、失敗・skipはともに0件だった。小fixtureでdefault Windows経路のnative warm reuseも観測した。完全受入や実コーパスでの性能改善を示すものではなく、[検証範囲と未実施の受入項目](../development/prepared-exploration.md#diagnostics-and-validation-scope)を参照する。
 
 次の2例はどちらも準備30000ms、探索1000msを使う。値を変える場合は、対応CLIのhelpを確認し、用途・indexの規模・負荷・呼出し側の期限に応じて有限budgetを選ぶ。
 

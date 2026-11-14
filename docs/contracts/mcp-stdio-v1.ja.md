@@ -46,7 +46,10 @@ caller取消の`CANCELLED`は期限切れより優先し、CLI換算のexitは13
 同じ新しいbuildのCLI／MCP／API利用側でこの契約を使い、公開時には新しいpackage versionを使う。公開済み0.4.0は変更せず、今回のsource変更ではreleaseを行わない。
 既存の`maxMilliseconds`は準備を含む共有予算から探索だけの予算へ意味が変わるため、過去の入力は変更せず、新しいcohort manifestを固定して再計測する。
 元の24trial／共有8秒のP0 cohortと直接比較せず、予算の自動引上げや無断の再試行もしない。
-各requestで全snapshot検証を続け、既存の4entry／64MiB serialized payloadの派生cacheは維持する。nativeな世代再利用は未実装のP2設計である。
+P1では各requestで全snapshotを検証し、4entry／64MiB serialized payloadの派生cacheを使う。現在のP2 code draftではMCP adapterが準備hostを所有し、終了時に`DisposeAsync`で解放する。
+Windowsの物理同一性とpin後の同一connectionの`data_version`一致を証明できれば、検証済みsnapshotを再利用する。証明できない場合とUnixでは新しいreaderで全量検証する。
+このhostは従来の64MiB cacheを経由せず、既定で一つの準備済み世代を保持するが、heap byte数の上限は保証しない。独立した準備ownerの既定期限は30000msであり、呼出し側が離れても継続でき、完了したreaderを回収する。requestのP＋Qはその後のbackground処理全体の上限ではない。
+P2はWindows／SDK 10.0.404で限定buildと対象test 306件が成功し、失敗・skipはともに0件だった。小fixtureでdefault Windows経路のnative warm reuseも観測した。完全受入や実コーパスでの性能改善を示すものではなく、[検証範囲と未実施の受入項目](../development/prepared-exploration.md#diagnostics-and-validation-scope)を参照する。
 index schema 1／2／3は変更せず、in-place migrationは行わない。
 
 未知fieldや不正な組合せを拒否し、曖昧な短名を一つの実装へ確定しない。source本文にはhostのtrustが必要であり、

@@ -9,7 +9,11 @@ internal sealed record ReplayPhaseSpan(long SpanId, long? ParentSpanId, string P
 internal sealed record ReplayPhaseCapture(string Status, string? Reason, string RequestOutcome, string? RunId,
     string? RunOutcome, IReadOnlyDictionary<string, double?> PhaseMilliseconds,
     IReadOnlyDictionary<string, string?> MissingReasons, IReadOnlyList<ReplayPhaseArtifact> Artifacts,
-    IReadOnlyList<ReplayPhaseSpan> Spans);
+    IReadOnlyList<ReplayPhaseSpan> Spans)
+{
+    public string? PreparationOwnerId { get; init; }
+    public ReplayPhaseCapture? RelatedPreparation { get; init; }
+}
 
 internal sealed class ReplayPhaseMetrics(string? directory)
 {
@@ -17,11 +21,13 @@ internal sealed class ReplayPhaseMetrics(string? directory)
         + "Nested/repeated intervals are counted once, not added or reported as exclusive time. Groups may overlap and are not additive. "
         + "Only closed, validated spans are evidence; elapsed spans do not establish successful work. "
         + "Search/scope includes discovery scope ranking/selection but excludes remaining discovery orchestration; source verification includes read/decode/hash/freshness, not unit selection. "
-        + "Rendering covers explore.render, not transport serialization. Missing phases are null, never inferred zero.";
+        + "Rendering covers explore.render, not transport serialization. Missing phases are null, never inferred zero. "
+        + "Related preparation runs use their own clock and are never unioned into request phases; request host waits include waiting, not exclusive preparation work.";
     internal static readonly IReadOnlyDictionary<string, string[]> Groups = new Dictionary<string, string[]>
     {
         ["readerPreparation"] = ["reader.open", "reader.snapshot", "explore.prepare", "explore.prepare-standard", "explore.freeze", "explore.validate",
-            "explore.derived-index", "explore.fingerprint", "explore.http-declarations", "explore.lexical-index"],
+            "explore.derived-index", "explore.fingerprint", "explore.http-declarations", "explore.lexical-index",
+            "explore.host-wait", "explore.host-prepare-wait"],
         ["searchAndScope"] = ["reader.search", "explore.resolve", "explore.search", "explore.expand",
             "explore.discovery-rank", "explore.discovery-select"],
         ["sourceVerification"] = ["source.read", "source.stored", "source.hash", "source.freshness"],
@@ -31,6 +37,7 @@ internal sealed class ReplayPhaseMetrics(string? directory)
     private const int MaximumLineBytes = 64 * 1024;
     private const int MaximumRecords = 65536;
     private readonly Dictionary<string, string> known = new(StringComparer.Ordinal);
+    private readonly HashSet<string> preparationOwners = new(StringComparer.Ordinal);
     private bool associationLost;
     internal string? DirectoryPath => directory;
 
@@ -79,6 +86,9 @@ internal sealed class ReplayPhaseMetrics(string? directory)
                         ? "request-rejected-before-admission" : "no-sidecar-setup-not-admitted-or-diagnostics-unavailable", requestOutcome, artifacts)
                     : added.Length != 1 ? Missing("unavailable", "multiple-runs-in-request-boundary", requestOutcome, artifacts)
                     : Parse(added[0].Value, Path.GetFileNameWithoutExtension(added[0].Key), requestOutcome) with { Artifacts = artifacts };
+                if (capture.PreparationOwnerId is not null)
+                    capture = capture with { RelatedPreparation = CapturePreparation(artifactDirectory, host, capture,
+                        MaximumBytes - (int)artifacts.Sum(artifact => artifact.Bytes)) };
             }
         }
         catch (Exception error) when (CaptureFailure(error))
@@ -96,28 +106,60 @@ internal sealed class ReplayPhaseMetrics(string? directory)
         if (associationLost)
             Capture(artifactDirectory, "mcp-unbound", "outside-request-boundary");
     }
+
+    private ReplayPhaseCapture CapturePreparation(string artifactDirectory, string host, ReplayPhaseCapture request, int remainingBytes)
+    {
+        var ownerId = request.PreparationOwnerId!;
+        var artifacts = new List<ReplayPhaseArtifact>();
+        try
+        {
+            Check(preparationOwners.Add(ownerId), "preparation-owner-already-associated");
+            var ownerDirectory = Path.GetFullPath(Path.Combine(directory!, "owners", ownerId));
+            Check(Path.GetRelativePath(Path.GetFullPath(directory!), ownerDirectory) == Path.Combine("owners", ownerId),
+                "preparation-path-invalid");
+            var files = ReadFiles(ownerDirectory, remainingBytes, 1);
+            if (files.Count == 0)
+                return Missing("pending", "preparation-trace-not-available", request.RequestOutcome, artifacts)
+                    with { PreparationOwnerId = ownerId };
+            var file = files.Single();
+            var name = host + ".prepare-phase.jsonl";
+            File.WriteAllBytes(Path.Combine(artifactDirectory, name), file.Value);
+            artifacts.Add(new(name, Path.Combine("owners", ownerId, file.Key), file.Value.Length, FixedQueryReplay.Hash(file.Value)));
+            return Parse(file.Value, Path.GetFileNameWithoutExtension(file.Key), request.RequestOutcome, ownerId)
+                with { Artifacts = artifacts, PreparationOwnerId = ownerId };
+        }
+        catch (Exception error) when (CaptureFailure(error))
+        {
+            return Missing("unavailable", error is InvalidDataException ? error.Message : "preparation-read-or-retention-failed",
+                request.RequestOutcome, artifacts) with { PreparationOwnerId = ownerId };
+        }
+    }
+
     private Dictionary<string, byte[]> ReadFiles()
+        => ReadFiles(directory!);
+
+    private static Dictionary<string, byte[]> ReadFiles(string sourceDirectory, int byteLimit = MaximumBytes, int fileLimit = 4096)
     {
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        if (!Directory.Exists(directory))
+        if (!Directory.Exists(sourceDirectory))
             return files;
-        for (var ancestor = new DirectoryInfo(directory!); ancestor is not null; ancestor = ancestor.Parent)
+        for (var ancestor = new DirectoryInfo(sourceDirectory); ancestor is not null; ancestor = ancestor.Parent)
             Check((ancestor.Attributes & FileAttributes.ReparsePoint) == 0, "linked-sidecar-directory");
         var total = 0;
-        foreach (var path in Directory.EnumerateFiles(directory!, "*", SearchOption.TopDirectoryOnly))
+        foreach (var path in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.TopDirectoryOnly))
         {
-            Check(files.Count < 4096, "sidecar-file-count-limit");
+            Check(files.Count < fileLimit, "sidecar-file-count-limit");
             var info = new FileInfo(path);
             Check((info.Attributes & FileAttributes.ReparsePoint) == 0, "linked-sidecar-file");
-            Check(Regex.IsMatch(info.Name, "^[a-f0-9]{32}\\.jsonl$", RegexOptions.CultureInvariant), "unexpected-sidecar-filename");
+            Check(Regex.IsMatch(info.Name, "\\A[a-f0-9]{32}\\.jsonl\\z", RegexOptions.CultureInvariant), "unexpected-sidecar-filename");
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            Check(stream.Length <= MaximumBytes - total, "sidecar-byte-limit");
+            Check(stream.Length <= byteLimit - total, "sidecar-byte-limit");
             using var output = new MemoryStream();
             var buffer = new byte[8192];
             int read;
             while ((read = stream.Read(buffer)) > 0)
             {
-                Check(output.Length + read <= MaximumBytes - total, "sidecar-byte-limit");
+                Check(output.Length + read <= byteLimit - total, "sidecar-byte-limit");
                 output.Write(buffer, 0, read);
             }
             var bytes = output.ToArray();
@@ -127,16 +169,19 @@ internal sealed class ReplayPhaseMetrics(string? directory)
         return files;
     }
 
-    internal static ReplayPhaseCapture Parse(byte[] bytes, string expectedRunId, string requestOutcome)
+    internal static ReplayPhaseCapture Parse(byte[] bytes, string expectedRunId, string requestOutcome, string? expectedPreparationOwnerId = null)
     {
         try
         {
             Check(bytes.Length <= MaximumBytes, "sidecar-byte-limit");
+            if (expectedPreparationOwnerId is not null && (bytes.Length == 0 || bytes[^1] != (byte)'\n'))
+                return Missing("pending", "sidecar-truncated", requestOutcome, []) with { RunId = expectedRunId };
             Check(bytes.Length > 0 && bytes[^1] == (byte)'\n', "sidecar-truncated");
             var spans = new List<ReplayPhaseSpan>();
             var byId = new Dictionary<long, ReplayPhaseSpan>();
             var reads = new Dictionary<long, (long ParentSpanId, string Phase)>();
             string? runOutcome = null;
+            string? preparationOwnerId = null;
             var records = 0;
             for (var offset = 0; offset < bytes.Length;)
             {
@@ -155,7 +200,7 @@ internal sealed class ReplayPhaseMetrics(string? directory)
                 if (records == 1)
                 {
                     Check(type == "run.start" && payload.GetProperty("schema").GetString() == "sharpdeps-phase-metrics/1"
-                        && payload.GetProperty("operation").GetString() == "explore"
+                        && payload.GetProperty("operation").GetString() == (expectedPreparationOwnerId is null ? "explore" : "explore-prepare")
                         && payload.GetProperty("timing").GetString() == "inclusive-and-measured-child-exclusive", "sidecar-start-mismatch");
                 }
                 else if (type == "run.end")
@@ -211,10 +256,24 @@ internal sealed class ReplayPhaseMetrics(string? directory)
                             : double.IsFinite(elapsed.GetDouble()) && elapsed.GetDouble() >= 0 && reason is null),
                         "sidecar-reported-duration-invalid");
                 }
+                else if (type == "decision" && payload.TryGetProperty("stage", out var stage)
+                    && stage.GetString() == "explore.host-owner")
+                {
+                    Properties(payload, "type", "stage", "reason");
+                    var ownerId = payload.GetProperty("reason").GetString();
+                    Check(preparationOwnerId is null && ownerId is not null
+                        && Regex.IsMatch(ownerId, "\\A[a-f0-9]{32}\\z", RegexOptions.CultureInvariant), "preparation-owner-link-invalid");
+                    preparationOwnerId = ownerId;
+                    Check(expectedPreparationOwnerId is null || preparationOwnerId == expectedPreparationOwnerId, "preparation-owner-mismatch");
+                }
                 else
                     Check(type is "count" or "decision", "sidecar-event-invalid");
             }
+            if (runOutcome is null && expectedPreparationOwnerId is not null)
+                return Missing("pending", "sidecar-run-end-missing", requestOutcome, [])
+                    with { RunId = expectedRunId, PreparationOwnerId = preparationOwnerId };
             Check(runOutcome is not null, "sidecar-run-end-missing");
+            Check(expectedPreparationOwnerId is null || preparationOwnerId == expectedPreparationOwnerId, "preparation-owner-mismatch");
             foreach (var read in reads)
                 Check(byId.TryGetValue(read.Key, out var span) && span.ParentSpanId == read.Value.ParentSpanId
                     && span.Phase == read.Value.Phase, "sidecar-read-span-invalid");
@@ -245,7 +304,8 @@ internal sealed class ReplayPhaseMetrics(string? directory)
                 times.Add(group.Key, intervals.Length == 0 ? null : union);
                 reasons.Add(group.Key, intervals.Length == 0 ? "phase-not-reached" : null);
             }
-            return new("recorded", null, requestOutcome, expectedRunId, runOutcome, times, reasons, [], spans);
+            return new("recorded", null, requestOutcome, expectedRunId, runOutcome, times, reasons, [], spans)
+                { PreparationOwnerId = preparationOwnerId };
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException or KeyNotFoundException
             or ArgumentException or InvalidDataException or FormatException or OverflowException)

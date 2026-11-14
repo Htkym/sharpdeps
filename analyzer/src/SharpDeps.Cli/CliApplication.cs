@@ -105,12 +105,20 @@ public static class CliApplication
         TimeProvider? timeProvider = null)
         => ExploreWithMetricsCoreAsync(root, index, trusted, request, metricsDirectory, requestId, token, reusePreparation: true, timeProvider: timeProvider);
 
-    private static Task<(string Text, int ExitCode)> ExploreWithMetricsCoreAsync(string root, string index, bool trusted,
+    internal static Task<(string Text, int ExitCode)> ExploreWithHostAsync(string root, string index, bool trusted,
+        ExploreRequest request, string? metricsDirectory, PreparedExplorationHost preparationHost,
+        string requestId = "cli", CancellationToken token = default)
+        => ExploreWithMetricsCoreAsync(root, index, trusted, request, metricsDirectory, requestId, token,
+            reusePreparation: false, preparationHost: preparationHost);
+
+    private static async Task<(string Text, int ExitCode)> ExploreWithMetricsCoreAsync(string root, string index, bool trusted,
         ExploreRequest request, string? metricsDirectory, string requestId, CancellationToken token, bool reusePreparation,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null, PreparedExplorationHost? preparationHost = null)
     {
         PhaseMetrics.Run? metrics = null;
         ExplorationExecutionBudget? execution = null;
+        using var hostedCancellation = preparationHost is null ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(token, preparationHost.LifetimeToken);
         var hostParsed = false;
         try
         {
@@ -121,7 +129,7 @@ public static class CliApplication
             hostParsed = true;
             token.ThrowIfCancellationRequested();
             request = ExploreRequestFactory.Validate(request);
-            execution = new(request, token, timeProvider: timeProvider);
+            execution = new(request, hostedCancellation?.Token ?? token, timeProvider: timeProvider);
             execution.Check();
             root = CliPaths.Root(root);
             metrics = PhaseMetrics.TryStart(metricsDirectory, "explore", root);
@@ -130,9 +138,13 @@ public static class CliApplication
             if (!File.Exists(index)) throw new CliFailure("INDEX_MISSING", 3);
             var state = CliWorkspaceState.Open(root, create: false);
             execution.Check();
-            using var reader = IndexReader.Open(index, state.WorkspaceUuid, execution.Token);
+            using var hosted = preparationHost is null ? null
+                : await preparationHost.AcquireAsync(root, index, state.WorkspaceUuid, metricsDirectory, execution.Token).ConfigureAwait(false);
+            using var freshReader = hosted is null ? IndexReader.Open(index, state.WorkspaceUuid, execution.Token) : null;
+            var reader = hosted?.Reader ?? freshReader!;
             // A one-shot CLI cannot reuse a cross-reader cache after process exit.
-            var pinned = reusePreparation ? new PinnedQueryIndex(reader, execution.Token, root)
+            var pinned = hosted is not null ? hosted.Pin(execution.Token)
+                : reusePreparation ? new PinnedQueryIndex(reader, execution.Token, root)
                 : new PinnedQueryIndex(reader, execution.Token);
             var sourceWorkspace = trusted ? new QueryWorkspace(root,
                 ownerToken => VerifyQueryOwner(root, index, state.WorkspaceUuid, pinned.Snapshot, ownerToken)) : null;
@@ -144,18 +156,22 @@ public static class CliApplication
             var prepared = service.PrepareSnapshot(request, execution.Token);
             execution.StartQuery();
             var explored = service.ExecutePrepared(request, prepared, execution);
-            token.ThrowIfCancellationRequested();
+            // Ending the SQL pin and checking its reusable marker are response finalization too.
+            hosted?.Dispose();
+            freshReader?.Dispose();
+            execution.CallerToken.ThrowIfCancellationRequested();
             if (explored.Succeeded) execution.Check();
             var exit = explored.Succeeded ? 0 : explored.Errors.Count == 0 ? 4 : ExitFor(explored.Errors[0].Code);
             if (exit == 0)
                 metrics?.Complete();
             else
                 metrics?.Fail(explored.Errors.Any(error => error.Code == "CANCELLED"));
-            return Task.FromResult((explored.Text, exit));
+            return (explored.Text, exit);
         }
         catch (Exception error)
         {
-            var cancellationCode = error is OperationCanceledException && execution is not null ? execution.Code : null;
+            var cancellationCode = execution is not null
+                && (error is OperationCanceledException || execution.CallerToken.IsCancellationRequested) ? execution.Code : null;
             var failure = cancellationCode is not null
                 ? (Code: cancellationCode, ExitCode: cancellationCode == "CANCELLED" ? 130 : 4)
                 : Failure(error);
@@ -165,10 +181,11 @@ public static class CliApplication
                 "PREPARATION_TIMEOUT" => $"The configured {request.PrepareMaxMilliseconds} ms preparation deadline expired during saved-index and standard exploration preparation. No source evidence was returned. Full snapshot validation remains required; do not increase a frozen evaluation budget or retry without authorization.",
                 "QUERY_TIMEOUT" => $"The configured {request.Budget!.MaxMilliseconds} ms query deadline expired during exploration. No source evidence was returned. Preparation used its separate finite budget. Narrow the query within the agreed budget.",
                 "REQUEST_TIMEOUT" => $"The configured {execution!.TotalMilliseconds} ms total request deadline expired. No source evidence was returned. Preparation, exploration and response finalization share this total upper bound.",
+                "INDEX_PREPARATION_BUSY" => "Prepared-index capacity is occupied by active requests. No source evidence was returned. Wait for the active requests to finish; retry only when authorized within the agreed budget.",
                 "INDEX_MISSING" or "WORKSPACE_STATE_MISSING" => $"No usable saved index at '{index}' for selected root '{root}'. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command.",
                 _ => null
             };
-            return Task.FromResult((ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode));
+            return (ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode);
         }
         finally
         {
@@ -360,7 +377,7 @@ public static class CliApplication
         "UPDATE_REQUIRED" or "FRESHNESS_UNVERIFIED" or "FRESHNESS_REQUIREMENT_NOT_MET" or "SOURCE_CHANGED_SINCE_SNAPSHOT"
             or "INDEX_NO_SNAPSHOT" or "INDEX_NOT_FOUND" => 3,
         "SYMBOL_NOT_FOUND" or "HTTP_GET_DECLARATION_NOT_FOUND" => 2,
-        "QUERY_TIMEOUT" or "PREPARATION_TIMEOUT" or "REQUEST_TIMEOUT" or "INCOMPLETE_RESULT" or "OUTPUT_BUDGET_TOO_SMALL" => 4,
+        "QUERY_TIMEOUT" or "PREPARATION_TIMEOUT" or "REQUEST_TIMEOUT" or "INDEX_PREPARATION_BUSY" or "INCOMPLETE_RESULT" or "OUTPUT_BUDGET_TOO_SMALL" => 4,
         "COORDINATOR_SUPERSEDED" => 3,
         _ when code.StartsWith("COORDINATOR_", StringComparison.Ordinal) => 6,
         _ when code.Contains("CURSOR", StringComparison.Ordinal) || code.StartsWith("INDEX_", StringComparison.Ordinal) => 6,

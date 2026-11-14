@@ -16,7 +16,7 @@ internal static class Program
         Console.CancelKeyPress += cancelled;
         try
         {
-            var adapter = new McpQueryAdapter(McpHostOptions.Parse(args));
+            await using var adapter = new McpQueryAdapter(McpHostOptions.Parse(args));
             var options = new McpServerOptions
             {
                 ServerInfo = new() { Name = "sharpdeps", Version = typeof(Program).Assembly

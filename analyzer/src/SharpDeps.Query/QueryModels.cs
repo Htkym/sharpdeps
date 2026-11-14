@@ -91,6 +91,13 @@ public sealed class PinnedQueryIndex : IQueryIndex
         this.canonicalRoot = canonicalRoot;
         sharedCache = cache;
     }
+    internal PinnedQueryIndex(IndexReader reader, ExplorationSnapshot prepared, CancellationToken token)
+        : this(reader, token)
+    {
+        if (!ReferenceEquals(Snapshot, prepared.saved))
+            throw new InvalidOperationException("Prepared exploration belongs to another saved snapshot.");
+        exploration = prepared;
+    }
     public IndexSnapshot Snapshot { get; }
     public IReadOnlyList<IndexSearchHit> Search(string literal, int limit) => reader.Search(literal, limit);
     public IndexSnapshot ReadSnapshot(CancellationToken token) => reader.Snapshot(token);

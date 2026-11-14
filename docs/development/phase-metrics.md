@@ -50,10 +50,11 @@ accepts `--metrics-directory` at startup; tool arguments and tool schemas cannot
 or change it. Mutations use that host-selected destination too. Metrics selection
 does not change the request's computation allowances or source/freshness checks.
 
-Each admitted saved request writes its own run, including reader open/snapshot,
-freeze/validation and derived indexes, search/resolve/expand, source read/hash and
-freshness verification, and final rendering where those stages are reached.
-Existing pinned and payload-cache decisions remain. CLI/MCP exploration also emits
+Each admitted saved request writes its own run, including search/resolve/expand,
+source read/hash and freshness verification, and final rendering where those stages
+are reached. The P1 CLI path also records reader open/snapshot, freeze/validation
+and derived indexes in that request run. P2 MCP preparation has a separate owner run.
+Existing pinned and payload-cache decisions remain on the P1 cross-reader path. That path emits
 `validated-cache-hit`, `validated-cache-miss`, `validated-cache-evicted` and
 `validated-cache-capacity-bypass` for shared immutable derived data. Its key includes
 canonical root/index, workspace, schema/identity, complete payload fingerprint and
@@ -64,15 +65,28 @@ and freshness checks. No live reader or transaction is retained by the cache.
 A derived-cache hit does not mean the whole query is warm or faster.
 
 Under unreleased split-v1, `explore.prepare-standard` covers preparation of standard
-derived and lexical indexes after full reader hydration/validation/freezing, including
-the HttpGet projection when requested. Query execution starts only after this phase.
-Replay attributes it to `readerPreparation`; reader, derived and lexical phase groups
-overlap and must not be added together. Phase labels describe measured work, not
-separate deadline owners. One monotonic request owner enforces preparation, query
-and total computation allowances; startup, MCP handshake and transport are separate.
+derived and lexical indexes after obtaining validated saved state, including the
+HttpGet projection when requested. Query execution starts only after preparation.
+Replay attributes this span to `readerPreparation` within its own run; reader,
+derived and lexical intervals can overlap and must not be added together.
 
 P1 retains the four-entry/64 MiB derived cache and a freshly validated SQLite reader
-per request. Native generation reuse remains an unimplemented P2 design. The EF Core
+per request. The current P2 code draft bypasses that cache in the prepared MCP host
+and may restore validated state after Windows native identity/same-connection marker
+proof. Unix and unsupported proof use fresh full validation. Every admitted preparation,
+including warm reuse, writes an independent `explore-prepare` run under
+`<metrics-directory>/owners/<ownerId>/`. Its fixed 30-second deadline and host lifetime
+are independent of the waiting caller's cancellation and preparation allowance.
+Both runs record `explore.host-owner` with the same opaque GuidN owner ID. The request
+records `explore.host-wait` for the entry gate and `explore.host-prepare-wait` for its
+preparation owner. Replay includes these waits in the request's `readerPreparation`
+group. They include waiting, not exclusive preparation work; owner spans use a
+different monotonic clock origin and must never be unioned with request spans.
+Startup, MCP handshake and transport remain separate.
+Limited P2 Windows builds and 306 targeted tests passed with SDK 10.0.404, including
+small-fixture native warm reuse. Full CI, Linux runtime, retained-HANDLE path
+replacement, real-corpus/heap/concurrency/performance and packaged smoke checks
+remain pending; see [validation scope](prepared-exploration.md#diagnostics-and-validation-scope). The EF Core
 P0 diagnostics used three repetitions per entrypoint/budget; all six MCP calls
 recorded capacity bypass. No performance improvement follows from that observation
 or from the budget split. Preserve the original 24-trial, shared 8-second P0 cohort.
@@ -91,6 +105,19 @@ Fixed-query replay accepts validated `read` observations joined to their matchin
 `input.read-*` span, and `reported-duration` operation observations. These records
 do not add intervals or durations to the replay phase totals. Unknown or invalid
 events make the phase capture unavailable.
+
+Replay continues to associate requests using only the metrics directory's direct
+JSONL files. A request's optional `preparationOwnerId` links its optional
+`relatedPreparation` capture one-to-one to an owner run with the matching decision
+and `explore-prepare` operation. That capture retains its own spans, outcome, phase
+groups and raw artifact with hash; none of its durations enters the request totals.
+Owner IDs and JSONL names must be 32 lowercase hexadecimal digits, linked paths are
+refused, and request plus related raw artifacts share the 16 MiB output limit.
+An absent, empty or unfinished owner trace is `pending`, with no completed timing
+evidence. A caller can cancel while the owner continues; later writes to that owner
+trace do not invalidate the following request's association. Old request traces
+without an owner decision remain readable without a related capture.
+
 ## Read attribution and MSBuild progress
 
 `read` records report logical position differences on explicitly instrumented

@@ -12,7 +12,7 @@ public sealed class McpTests
     public async Task HostCapabilityCannotBeEscalatedByToolArguments()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N")));
-        var adapter = new McpQueryAdapter(new(root));
+        await using var adapter = new McpQueryAdapter(new(root));
         var tool = Assert.Single(adapter.ListTools());
         Assert.Equal("explore", tool.Name);
         Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
@@ -35,14 +35,15 @@ public sealed class McpTests
             Name = "explore", Arguments = new Dictionary<string, JsonElement> { ["trusted"] = JsonSerializer.SerializeToElement(true) }
         }));
         Assert.False(Directory.Exists(root));
-        Assert.Equal(3, new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true)).ListTools().Count);
+        await using var mutationAdapter = new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true));
+        Assert.Equal(3, mutationAdapter.ListTools().Count);
     }
 
     [Fact]
     public async Task NestedQueryGetsActionableRecoveryWithoutOpeningTheWorkspaceOrEchoingInput()
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
-        var adapter = new McpQueryAdapter(new(root));
+        await using var adapter = new McpQueryAdapter(new(root));
         var tool = Assert.Single(adapter.ListTools());
         var properties = tool.InputSchema.GetProperty("properties");
         Assert.Equal("string", properties.GetProperty("query").GetProperty("type").GetString());
@@ -86,7 +87,7 @@ public sealed class McpTests
     public async Task BothTimeBudgetsRequireFiniteIntegersBeforeWorkspaceAccess(string value)
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
-        var adapter = new McpQueryAdapter(new(root));
+        await using var adapter = new McpQueryAdapter(new(root));
         foreach (var name in new[] { "maxMilliseconds", "prepareMaxMilliseconds" })
         {
             var arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
@@ -102,7 +103,7 @@ public sealed class McpTests
     public async Task TypedExploreArgumentsAreValidatedBeforeOpeningTheWorkspace()
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
-        var adapter = new McpQueryAdapter(new(root));
+        await using var adapter = new McpQueryAdapter(new(root));
         var schema = Assert.Single(adapter.ListTools()).InputSchema;
         var kind = schema.GetProperty("properties").GetProperty("queryKind");
         Assert.Equal("symbol", kind.GetProperty("default").GetString());

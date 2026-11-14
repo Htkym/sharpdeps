@@ -39,8 +39,9 @@ public sealed record McpHostOptions(string Root, string Index = ".sharpdeps/inde
 }
 
 /// <summary>Delegates to the existing CLI/Query contract; never starts its own watcher or writer.</summary>
-public sealed class McpQueryAdapter(McpHostOptions host)
+public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
 {
+    private readonly PreparedExplorationHost preparation = new();
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"A plain string, not an object. Put scope and budget fields beside query in one flat arguments object. Names, exact identities, or source paths by default; exact saved HttpGet text in literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"When omitted, ordinary unscoped names/paths use discover; explicit project or variant uses unique. Exact saved IDs, pathTo and http-get-literal use unique and reject discover. Discover returns separate saved project/variant groups; prefer-debug chooses only a single saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"prepareMaxMilliseconds":{"type":"integer","default":30000,"minimum":10,"maximum":30000,"description":"split-v1: finite preparation budget for full saved-index validation and standard derived/lexical indexes. Omitted: 30000 ms. Does not extend maxMilliseconds."},"maxMilliseconds":{"type":"integer","default":1000,"minimum":10,"maximum":30000,"description":"split-v1: finite query budget after preparation. Omitted: 1000 ms; zero is invalid. The total request upper bound is prepareMaxMilliseconds plus maxMilliseconds. Defaults are not latency guarantees; keep frozen evaluation budgets unchanged."}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"examples":[{"query":"Service","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}],"additionalProperties":false}
@@ -96,7 +97,8 @@ public sealed class McpQueryAdapter(McpHostOptions host)
                     StructuredContent = document.RootElement.Clone(), IsError = exit != 0
                 };
             }
-            var explored = await CliApplication.ExploreWithMetricsAsync(host.Root, host.Index, host.Trusted, exploration!, host.MetricsDirectory, token: token);
+            var explored = await CliApplication.ExploreWithHostAsync(host.Root, host.Index, host.Trusted, exploration!,
+                host.MetricsDirectory, preparation, token: token);
             return new() { Content = [new TextContentBlock { Text = explored.Text }], IsError = explored.ExitCode != 0 };
         }
         finally { slots.Release(); }
@@ -192,4 +194,6 @@ public sealed class McpQueryAdapter(McpHostOptions host)
     }
 
     private static McpProtocolException Invalid() => new("MCP_ARGUMENT_INVALID", McpErrorCode.InvalidParams);
+
+    public ValueTask DisposeAsync() => preparation.DisposeAsync();
 }

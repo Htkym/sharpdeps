@@ -7,6 +7,8 @@ using Xunit;
 public sealed class ReplayPhaseMetricsTests
 {
     private const string RunId = "0123456789abcdef0123456789abcdef";
+    private const string OwnerId = "abcdef0123456789abcdef0123456789";
+    private const string OwnerRunId = "fedcba9876543210fedcba9876543210";
 
     [Fact]
     public void RepeatedNestedAndOverlappingSpansUseIntervalUnionAndKeepMissingStagesNull()
@@ -221,6 +223,168 @@ public sealed class ReplayPhaseMetricsTests
         }
     }
 
+    [Fact]
+    public void RelatedPreparationKeepsItsClockOutcomeAndArtifactsSeparateFromRequestTotals()
+    {
+        WithCapture((collector, sink, receipts) =>
+        {
+            File.WriteAllBytes(Path.Combine(sink, RunId + ".jsonl"), Encode<object>(
+            [
+                new { type = "run.start", schema = "sharpdeps-phase-metrics/1", operation = "explore", timing = "inclusive-and-measured-child-exclusive" },
+                new { type = "decision", stage = "explore.host-owner", reason = OwnerId },
+                Phase(2, 1, "explore.host-wait", 1, 2), Phase(3, 1, "explore.host-prepare-wait", 3, 4),
+                Phase(1, null, "run", 0, 8, 2), new { type = "run.end", outcome = "cancelled" }
+            ]));
+            var ownerPath = OwnerPath(sink);
+            var ownerBytes = Preparation();
+            File.WriteAllBytes(ownerPath, ownerBytes);
+            var request = collector.Capture(receipts, "request", "cancelled");
+            Assert.Equal("recorded", request.Status);
+            Assert.Equal("cancelled", request.RunOutcome);
+            Assert.Equal(6, request.PhaseMilliseconds["readerPreparation"]);
+            Assert.Equal(OwnerId, request.PreparationOwnerId);
+            Assert.Single(request.Artifacts);
+            Assert.Equal(3, request.Spans.Count);
+            var owner = Assert.IsType<ReplayPhaseCapture>(request.RelatedPreparation);
+            Assert.Equal("recorded", owner.Status);
+            Assert.Equal("completed", owner.RunOutcome);
+            Assert.Equal("cancelled", owner.RequestOutcome);
+            Assert.Equal(OwnerRunId, owner.RunId);
+            Assert.Equal(OwnerId, owner.PreparationOwnerId);
+            Assert.Equal(80, owner.PhaseMilliseconds["readerPreparation"]);
+            Assert.Contains(owner.Spans, span => span.StartedMilliseconds == 100);
+            Assert.Null(owner.RelatedPreparation);
+            var artifact = Assert.Single(owner.Artifacts);
+            Assert.Equal(Path.Combine("owners", OwnerId, OwnerRunId + ".jsonl"), artifact.OriginalName);
+            Assert.Equal(ownerBytes, File.ReadAllBytes(Path.Combine(receipts, artifact.Path)));
+            Assert.Equal(FixedQueryReplay.Hash(ownerBytes), artifact.Sha256);
+            collector.BeginRequest();
+            var nextRunId = new string('c', 32);
+            File.WriteAllBytes(Path.Combine(sink, nextRunId + ".jsonl"), Encode(Payloads(Sidecar(ownerId: OwnerId)), nextRunId));
+            var repeated = collector.Capture(receipts, "repeated", "completed");
+            Assert.Equal("recorded", repeated.Status);
+            Assert.Equal("preparation-owner-already-associated", repeated.RelatedPreparation?.Reason);
+            Assert.All(repeated.RelatedPreparation!.PhaseMilliseconds.Values, Assert.Null);
+        });
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty")]
+    [InlineData("truncated")]
+    [InlineData("open")]
+    public void PendingOwnersNeverBecomeCompletedEvidenceOrLoseTheNextRequestBoundary(string state)
+    {
+        WithCapture((collector, sink, receipts) =>
+        {
+            File.WriteAllBytes(Path.Combine(sink, RunId + ".jsonl"), Sidecar("cancelled", ownerId: OwnerId));
+            var ownerPath = OwnerPath(sink);
+            var ownerBytes = Preparation();
+            if (state != "missing")
+                File.WriteAllBytes(ownerPath, state == "empty" ? Array.Empty<byte>() : state == "truncated" ? ownerBytes[..^1]
+                    : Encode(Payloads(ownerBytes).Where(payload => payload.GetProperty("type").GetString() != "run.end"), OwnerRunId));
+            var request = collector.Capture(receipts, "cancelled", "cancelled");
+            Assert.Equal("recorded", request.Status);
+            var pending = Assert.IsType<ReplayPhaseCapture>(request.RelatedPreparation);
+            Assert.Equal("pending", pending.Status);
+            Assert.Null(pending.RunOutcome);
+            Assert.All(pending.PhaseMilliseconds.Values, Assert.Null);
+            Assert.Empty(pending.Spans);
+            File.WriteAllBytes(ownerPath, ownerBytes);
+            collector.BeginRequest();
+            var nextRunId = new string('c', 32);
+            File.WriteAllBytes(Path.Combine(sink, nextRunId + ".jsonl"), Encode(Payloads(Sidecar()), nextRunId));
+            var next = collector.Capture(receipts, "next", "completed");
+            Assert.Equal("recorded", next.Status);
+            Assert.Null(next.PreparationOwnerId);
+            Assert.Null(next.RelatedPreparation);
+            Assert.Single(next.Artifacts);
+        });
+    }
+
+    [Fact]
+    public void InvalidOrRepeatedPreparationLinksFailClosedWithoutReadingArbitraryPaths()
+    {
+        foreach (var ownerId in new[] { "../" + OwnerId, OwnerId.ToUpperInvariant(), new string('a', 33), OwnerId + "\n", "" })
+            Assert.Equal("preparation-owner-link-invalid", ReplayPhaseMetrics.Parse(Sidecar(ownerId: ownerId), RunId, "completed").Reason);
+        var payloads = Payloads(Sidecar(ownerId: OwnerId));
+        payloads.Insert(1, payloads[1]);
+        Assert.Equal("preparation-owner-link-invalid", ReplayPhaseMetrics.Parse(Encode(payloads), RunId, "completed").Reason);
+    }
+
+    [Theory]
+    [InlineData("foreign-owner", "preparation-owner-mismatch")]
+    [InlineData("missing-link", "preparation-owner-mismatch")]
+    [InlineData("wrong-operation", "sidecar-start-mismatch")]
+    [InlineData("multiple", "sidecar-file-count-limit")]
+    [InlineData("filename", "unexpected-sidecar-filename")]
+    [InlineData("byte-limit", "sidecar-byte-limit")]
+    public void UntrustedPreparationArtifactsCannotSpoilRequestEvidenceOrExceedItsOutputCap(string state, string reason)
+    {
+        WithCapture((collector, sink, receipts) =>
+        {
+            File.WriteAllBytes(Path.Combine(sink, RunId + ".jsonl"), Sidecar(ownerId: OwnerId));
+            var ownerPath = OwnerPath(sink);
+            var text = Encoding.UTF8.GetString(Preparation());
+            if (state == "foreign-owner") text = text.Replace(OwnerId, new string('d', 32), StringComparison.Ordinal);
+            if (state == "wrong-operation") text = text.Replace("explore-prepare", "explore", StringComparison.Ordinal);
+            var bytes = state == "missing-link"
+                ? Encode(Payloads(Preparation()).Where(payload => payload.GetProperty("type").GetString() != "decision"), OwnerRunId)
+                : Encoding.UTF8.GetBytes(text);
+            File.WriteAllBytes(ownerPath, bytes);
+            if (state == "multiple") File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(ownerPath)!, new string('e', 32) + ".jsonl"), bytes);
+            if (state == "filename") File.Move(ownerPath, Path.Combine(Path.GetDirectoryName(ownerPath)!, "unexpected.jsonl"));
+            if (state == "byte-limit")
+            {
+                using var stream = File.OpenWrite(ownerPath);
+                stream.SetLength(ReplayPhaseMetrics.MaximumBytes);
+            }
+            var request = collector.Capture(receipts, "request", "completed");
+            Assert.Equal("recorded", request.Status);
+            Assert.Equal(15, request.PhaseMilliseconds["readerPreparation"]);
+            var owner = Assert.IsType<ReplayPhaseCapture>(request.RelatedPreparation);
+            Assert.Equal("unavailable", owner.Status);
+            Assert.Equal(reason, owner.Reason);
+            Assert.All(owner.PhaseMilliseconds.Values, Assert.Null);
+            Assert.True(request.Artifacts.Concat(owner.Artifacts).Sum(artifact => artifact.Bytes) <= ReplayPhaseMetrics.MaximumBytes);
+        });
+    }
+
+    private static void WithCapture(Action<ReplayPhaseMetrics, string, string> action)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-replay-preparation-" + Guid.NewGuid().ToString("N"));
+        var sink = Path.Combine(root, "sink");
+        var receipts = Path.Combine(root, "receipts");
+        Directory.CreateDirectory(receipts);
+        try
+        {
+            var collector = new ReplayPhaseMetrics(sink);
+            collector.BeginRequest();
+            Directory.CreateDirectory(sink);
+            action(collector, sink, receipts);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static string OwnerPath(string sink)
+    {
+        var directory = Path.Combine(sink, "owners", OwnerId);
+        Directory.CreateDirectory(directory);
+        return Path.Combine(directory, OwnerRunId + ".jsonl");
+    }
+
+    private static byte[] Preparation() => Encode<object>(
+    [
+        new { type = "run.start", schema = "sharpdeps-phase-metrics/1", operation = "explore-prepare", timing = "inclusive-and-measured-child-exclusive" },
+        new { type = "decision", stage = "explore.host-owner", reason = OwnerId },
+        Phase(2, 1, "explore.prepare-standard", 100, 80), Phase(1, null, "run", 0, 200, 120),
+        new { type = "run.end", outcome = "completed" }
+    ], OwnerRunId);
+
+    private static List<JsonElement> Payloads(byte[] bytes) => Encoding.UTF8.GetString(bytes)
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(line => JsonSerializer.Deserialize<JsonElement>(line).GetProperty("payload").Clone()).ToList();
+
     private static object Phase(long id, long? parent, string name, double start, double duration, double? exclusive = null, bool overlaps = false)
         => new
         {
@@ -235,7 +399,7 @@ public sealed class ReplayPhaseMetricsTests
             unfinishedChildren = false
         };
 
-    private static byte[] Sidecar(string outcome = "completed", string? observations = null)
+    private static byte[] Sidecar(string outcome = "completed", string? observations = null, string? ownerId = null)
     {
         List<object> payloads =
         [
@@ -245,6 +409,8 @@ public sealed class ReplayPhaseMetricsTests
             Phase(6, 1, "explore.resolve", 17, 5), Phase(7, 1, "explore.render", 24, 3), Phase(1, null, "run", 0, 30, 6, overlaps: true),
             new { type = "run.end", outcome }
         ];
+        if (ownerId is not null)
+            payloads.Insert(1, new { type = "decision", stage = "explore.host-owner", reason = ownerId });
         if (observations is not null)
             payloads.InsertRange(payloads.Count - 2,
             [
@@ -262,7 +428,7 @@ public sealed class ReplayPhaseMetricsTests
         return Encode(payloads);
     }
 
-    private static byte[] Encode<T>(IEnumerable<T> payloads)
+    private static byte[] Encode<T>(IEnumerable<T> payloads, string runId = RunId)
         => Encoding.UTF8.GetBytes(string.Join('\n', payloads.Select((payload, index)
-            => JsonSerializer.Serialize(new { runId = RunId, sequence = index + 1, payload }))) + "\n");
+            => JsonSerializer.Serialize(new { runId, sequence = index + 1, payload }))) + "\n");
 }
