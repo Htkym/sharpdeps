@@ -854,7 +854,7 @@ public sealed class CliTests
         Assert.Equal(0, help.Exit);
         Assert.Empty(help.Progress);
         Assert.Contains("--prepare-max-milliseconds", help.Json, StringComparison.Ordinal);
-        Assert.Contains("finite, no 0", help.Json, StringComparison.Ordinal);
+        Assert.Contains("Both are finite 10..30000; 0 is invalid.", help.Json, StringComparison.Ordinal);
         using var helpDoc = JsonDocument.Parse(help.Json);
         Assert.Contains("index", helpDoc.RootElement.GetProperty("result").GetProperty("commands").EnumerateArray().Select(x => x.GetString()));
         var doctor = await Run("doctor");
