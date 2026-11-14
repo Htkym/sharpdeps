@@ -13,8 +13,9 @@ using SharpDeps.Index;
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 try
 {
-    if (args.Length != 2 || !Guid.TryParseExact(args[1], "N", out var workspace))
-        throw new ArgumentException("Expected an existing empty fixture root and workspace GUID (N).");
+    if (args.Length != 3 || !Guid.TryParseExact(args[1], "N", out var workspace)
+        || !Guid.TryParseExact(args[2], "N", out var launchId) || launchId == Guid.Empty)
+        throw new ArgumentException("Expected an existing empty fixture root, workspace GUID (N), and nonempty launch GUID (N).");
     var root = Path.GetFullPath(args[0]);
     if (!Path.IsPathFullyQualified(args[0]) || !Directory.Exists(root)
         || Path.GetFileName(root) != "writer-" + workspace.ToString("N")
@@ -27,7 +28,7 @@ try
     using (var writer = IndexWriter.Open(root, index, workspace, isTrusted: true))
     {
         Publish(writer, root, workspace, 1, "Before");
-        await Reply(new { command = "ready", pid = Environment.ProcessId, start, generation = 1 });
+        await Reply(new { command = "ready", pid = Environment.ProcessId, launchId, start, generation = 1 });
         using var checkpoint = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = index, Mode = SqliteOpenMode.ReadWrite, Cache = SqliteCacheMode.Private,
@@ -52,7 +53,7 @@ try
             if (expected == "publish")
             {
                 Publish(writer, root, workspace, 2, "After");
-                await Reply(new { command = expected, pid = Environment.ProcessId, start, generation = 2 });
+                await Reply(new { command = expected, pid = Environment.ProcessId, launchId, start, generation = 2 });
             }
             else if (expected != "stop")
             {
@@ -65,12 +66,12 @@ try
                 var log = rows.GetInt64(1);
                 var checkpointed = rows.GetInt64(2);
                 if (rows.Read()) throw new InvalidDataException("Extra checkpoint tuple.");
-                await Reply(new { command = expected, pid = Environment.ProcessId, start, busy, log, checkpointed });
+                await Reply(new { command = expected, pid = Environment.ProcessId, launchId, start, busy, log, checkpointed });
             }
         }
     }
     // Stop acknowledgment is deliberately after writer/connection disposal.
-    await Reply(new { command = "stop", pid = Environment.ProcessId, start });
+    await Reply(new { command = "stop", pid = Environment.ProcessId, launchId, start });
     return 0;
 }
 catch (Exception error)

@@ -14,6 +14,56 @@ using Xunit;
 public sealed class ExternalWriterLifecycleTests
 {
     [Fact]
+    public void WriterIdentityAcceptsDifferentReporterTimestamps()
+    {
+        var launchId = Guid.Parse("170535b3-405b-4e72-9df1-f17a51147c6f");
+        const string parentStart = "2026-11-14T18:30:15.3048290Z";
+        const string writerStart = "2026-11-14T18:30:15.3039915Z";
+        var identity = new WriterIdentity(123, launchId, parentStart);
+        var response = JsonSerializer.SerializeToElement(new { pid = 123, launchId, start = writerStart });
+
+        identity.Verify(response, parentStart);
+        identity.Verify(response, parentStart);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not-a-timestamp")]
+    public void WriterIdentityRejectsInvalidInitialTimestamp(string? writerStart)
+    {
+        var launchId = Guid.Parse("170535b3-405b-4e72-9df1-f17a51147c6f");
+        const string parentStart = "2026-11-14T18:30:15.3048290Z";
+        var identity = new WriterIdentity(123, launchId, parentStart);
+        var response = JsonSerializer.SerializeToElement(new { pid = 123, launchId, start = writerStart });
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => identity.Verify(response, parentStart));
+    }
+
+    [Theory]
+    [InlineData("pid")]
+    [InlineData("launchId")]
+    [InlineData("parentStart")]
+    [InlineData("writerStart")]
+    [InlineData("missingWriterStart")]
+    public void WriterIdentityRejectsChangedIdentity(string changed)
+    {
+        var launchId = Guid.Parse("170535b3-405b-4e72-9df1-f17a51147c6f");
+        const string parentStart = "2026-11-14T18:30:15.3048290Z";
+        const string writerStart = "2026-11-14T18:30:15.3039915Z";
+        var identity = new WriterIdentity(123, launchId, parentStart);
+        identity.Verify(JsonSerializer.SerializeToElement(new { pid = 123, launchId, start = writerStart }), parentStart);
+        var response = JsonSerializer.SerializeToElement(new
+        {
+            pid = changed == "pid" ? 124 : 123,
+            launchId = changed == "launchId" ? Guid.Empty : launchId,
+            start = changed == "missingWriterStart" ? null : changed == "writerStart" ? parentStart : writerStart
+        });
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => identity.Verify(response,
+            changed == "parentStart" ? writerStart : parentStart));
+    }
+
+    [Fact]
     public async Task SeparateWriterKeepsActiveGenerationCoherentAndIdleHostReleasesWal()
     {
         // Deliberately fail rather than silently skip when the separately built probe is absent.
@@ -270,6 +320,25 @@ public sealed class ExternalWriterLifecycleTests
         Directory.Delete(root, recursive: true);
     }
 
+    private sealed class WriterIdentity(int pid, Guid launchId, string parentStart)
+    {
+        private string? writerStart;
+
+        internal void Verify(JsonElement response, string observedParentStart)
+        {
+            Assert.Equal(pid, response.GetProperty("pid").GetInt32());
+            Assert.Equal(launchId, response.GetProperty("launchId").GetGuid());
+            // Independent Process instances can reconstruct different wall-clock start times on Unix.
+            // Correlate the owned launch by nonce/PID; require each reporter to remain exact on its own.
+            Assert.Equal(parentStart, observedParentStart);
+            var reportedStart = response.GetProperty("start").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(reportedStart));
+            Assert.True(response.GetProperty("start").TryGetDateTime(out var timestamp) && timestamp.Kind == DateTimeKind.Utc);
+            Assert.Equal(writerStart ?? reportedStart, reportedStart);
+            writerStart = reportedStart;
+        }
+    }
+
     private sealed class Child : IAsyncDisposable
     {
         private readonly Process process;
@@ -279,7 +348,8 @@ public sealed class ExternalWriterLifecycleTests
         private Task? trailing;
         private readonly PrefixCapture stderrCapture = new();
         private readonly PrefixCapture trailingCapture = new();
-        private string? start;
+        private readonly Guid launchId = Guid.NewGuid();
+        private WriterIdentity? identity;
         private bool finished;
         private int responseCharacters;
         internal int Id => process.Id;
@@ -298,6 +368,7 @@ public sealed class ExternalWriterLifecycleTests
             info.ArgumentList.Add(dll);
             info.ArgumentList.Add(root);
             info.ArgumentList.Add(workspace.ToString("N"));
+            info.ArgumentList.Add(launchId.ToString("N"));
             // Last constructor operation: callers own the returned child before Initialize can fail.
             process = Process.Start(info) ?? throw new InvalidOperationException("Writer did not start.");
         }
@@ -305,7 +376,9 @@ public sealed class ExternalWriterLifecycleTests
         internal void Initialize()
         {
             stderr = ReadToEndBounded(process.StandardError, stderrCapture, io.Token);
-            start = process.StartTime.ToUniversalTime().ToString("O");
+            var parentStart = process.StartTime.ToUniversalTime().ToString("O");
+            receipts.Add(new { direction = "launch", pid = Id, launchId, parentStart, utc = DateTimeOffset.UtcNow });
+            identity = new WriterIdentity(Id, launchId, parentStart);
         }
 
         internal async Task<JsonElement> Command(string command, CancellationToken token)
@@ -323,8 +396,10 @@ public sealed class ExternalWriterLifecycleTests
             var line = new StringBuilder();
             var character = new char[1];
             var complete = false;
+            string? parentStart = null;
             try
             {
+                parentStart = process.StartTime.ToUniversalTime().ToString("O");
                 while (true)
                 {
                     if (stderr.IsFaulted) await stderr;
@@ -338,13 +413,14 @@ public sealed class ExternalWriterLifecycleTests
             }
             finally
             {
-                receipts.Add(new { direction = "response", expected = command, raw = line.ToString(), complete, utc = DateTimeOffset.UtcNow });
+                receipts.Add(new { direction = "response", expected = command, parentStart, raw = line.ToString(), complete, utc = DateTimeOffset.UtcNow });
             }
             using var document = JsonDocument.Parse(line.ToString());
             var result = document.RootElement.Clone();
             Assert.Equal(command, result.GetProperty("command").GetString());
-            Assert.Equal(Id, result.GetProperty("pid").GetInt32());
-            Assert.Equal(start, result.GetProperty("start").GetString());
+            Assert.NotNull(identity);
+            Assert.NotNull(parentStart);
+            identity.Verify(result, parentStart);
             return result;
         }
 

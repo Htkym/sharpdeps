@@ -238,8 +238,9 @@ public sealed class CliTests
         var resolution = MarkdownSymbolResolver.Resolve(projection, raw, catalog);
         var projected = MarkdownSymbolResolver.ProjectGraph(graph, resolution);
         var stamp = projected.Markdown!;
+        var contentHash = Assert.IsType<string>(parsed.Facts.TextHash);
         var snapshot = saved with { Graph = projected,
-            Files = [.. saved.Files, new("readme.md", "readme.md", "markdown", parsed.Facts.TextHash,
+            Files = [.. saved.Files, new("readme.md", "readme.md", "markdown", contentHash,
                 Encoding.UTF8.GetByteCount(raw), raw.Length)],
             Documents = [new(documentUuid, "readme.md", null, parsed.Facts.TextHash, graph.WorkspaceId,
                 stamp.ParserVersion, stamp.ContractVersion, stamp.ProfileId, stamp.OptionsHash,

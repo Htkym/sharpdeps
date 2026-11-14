@@ -48,7 +48,8 @@ public sealed class McpAdmissionTransportTests(ITestOutputHelper output)
             fixture = new ReplayFixture();
             adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
             slots = Assert.IsType<SemaphoreSlim>(Field(adapter, "slots"));
-            var pipeName = "sharpdeps-admission-" + Guid.NewGuid().ToString("N");
+            // Keep the full random ID but leave room for TMPDIR and CoreFxPipe_ on Unix.
+            var pipeName = "sda-" + Guid.NewGuid().ToString("N");
             serverPipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
                 PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
             clientPipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);

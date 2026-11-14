@@ -310,7 +310,7 @@ public sealed class CliInstallationTests(ITestOutputHelper output)
             Assert.Equal(foreignConfig, File.ReadAllBytes(fixture.ConfigFile));
             Assert.Equal(recreated, File.ReadAllBytes(fixture.InstructionsFile));
             Assert.NotNull(edited);
-            var backup = Assert.Single(result.RetainedPaths.Where(path => path.EndsWith(".bak", StringComparison.Ordinal)));
+            var backup = Assert.Single(result.RetainedPaths, path => path.EndsWith(".bak", StringComparison.Ordinal));
             Assert.Equal(edited, File.ReadAllBytes(backup));
             AssertRetainedWithinFixture(result, fixture);
         }
