@@ -9,5 +9,13 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <ProjectReference Include="..\..\src\SharpDeps.Query\SharpDeps.Query.csproj" />
+    <ProjectReference Include="..\SharpDeps.Lifecycle.WriterProbe\SharpDeps.Lifecycle.WriterProbe.csproj" ReferenceOutputAssembly="false" OutputItemType="LifecycleWriterProbeTargetPath" />
   </ItemGroup>
+  <Target Name="CopyLifecycleWriterProbe" AfterTargets="Build">
+    <Error Condition="'@(LifecycleWriterProbeTargetPath-&gt;Count())' != '1'" Text="Expected exactly one lifecycle writer probe target path." />
+    <ItemGroup>
+      <LifecycleWriterProbeOutput Include="%(LifecycleWriterProbeTargetPath.RootDir)%(LifecycleWriterProbeTargetPath.Directory)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LifecycleWriterProbeOutput)" DestinationFolder="$(OutDir)LifecycleWriterProbe\%(RecursiveDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

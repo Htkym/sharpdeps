@@ -17,6 +17,7 @@
     <Project Path="tests/SharpDeps.Index.Tests/SharpDeps.Index.Tests.csproj" />
     <Project Path="tests/SharpDeps.Index.Tests/WriterLockProbe/WriterLockProbe.csproj" />
     <Project Path="tests/SharpDeps.Query.Tests/SharpDeps.Query.Tests.csproj" />
+    <Project Path="tests/SharpDeps.Lifecycle.WriterProbe/SharpDeps.Lifecycle.WriterProbe.csproj" />
     <Project Path="tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" />
     <Project Path="tests/SharpDeps.Mcp.Tests/SharpDeps.Mcp.Tests.csproj" />
     <Project Path="tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj" />
