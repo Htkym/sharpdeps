@@ -8,17 +8,33 @@ using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Index;
 
 // Deliberately independent of the replay observer, xUnit, CLI entrypoint, and MCP adapter.
-// Inputs: absolute dotnet host, actual CLI DLL, actual MCP DLL, new evidence directory.
-if (args.Length != 4) throw new ArgumentException("dotnet-path cli-dll mcp-dll new-evidence-directory");
-Check(args.All(Path.IsPathFullyQualified), "All inputs must be absolute paths");
+// Installed shims use independent payload identities and MCP-only helper references; the fixture is unchanged.
+if (args.Length != 4 && (args.Length != 7 || args[4] != "--installed-tool-shims"))
+    throw new ArgumentException("dotnet-path cli-dll mcp-dll new-evidence-directory [--installed-tool-shims cli-exe mcp-exe]");
+var installed = args.Length == 7;
+Check(args.Take(4).Concat(args.Skip(5)).All(Path.IsPathFullyQualified), "All path inputs must be absolute");
 var host = Path.GetFullPath(args[0]);
 var cli = Path.GetFullPath(args[1]);
 var mcp = Path.GetFullPath(args[2]);
 var evidence = Path.GetFullPath(args[3]);
-Check(File.Exists(host) && File.Exists(cli) && File.Exists(mcp), "Missing explicit host/product input");
-foreach (var path in new[] { host, cli, mcp, evidence }) RejectLinks(path);
-foreach (var payload in new[] { Path.GetDirectoryName(cli)!, Path.GetDirectoryName(mcp)!, AppContext.BaseDirectory })
-    Check(!Within(evidence, payload) && !Within(payload, evidence), "Evidence and payload/helper directories must be disjoint");
+var cliExecutable = installed ? Path.GetFullPath(args[5]) : host;
+var mcpExecutable = installed ? Path.GetFullPath(args[6]) : host;
+string[] cliPrefix = installed ? [] : [cli];
+string[] mcpPrefix = installed ? [] : [mcp];
+var mode = installed ? "installed-tool-shim-integration-only" : "local-built-dll-integration-only";
+var engineIdentityPolicy = installed ? "independent-payloads-helper-mcp-byte-equality" : "cli-mcp-helper-byte-equality";
+var inputs = new[] { host, cli, mcp, cliExecutable, mcpExecutable };
+Check(inputs.All(File.Exists), "Missing explicit host/product/command input");
+foreach (var path in inputs.Append(evidence)) RejectLinks(path);
+string[] installRoots = installed ? [Path.GetDirectoryName(cliExecutable)!, Path.GetDirectoryName(mcpExecutable)!] : [];
+if (installed)
+{
+    Check(Path.GetFileName(cliExecutable).Equals("sharpdeps.exe", StringComparison.OrdinalIgnoreCase)
+        && Path.GetFileName(mcpExecutable).Equals("sharpdeps-mcp.exe", StringComparison.OrdinalIgnoreCase), "Expected installed Windows tool shim names");
+    Check(Within(cli, installRoots[0]) && Within(mcp, installRoots[1]), "Each payload DLL must be beneath its shim install root");
+}
+foreach (var payload in new[] { Path.GetDirectoryName(cli)!, Path.GetDirectoryName(mcp)!, AppContext.BaseDirectory }.Concat(installRoots))
+    Check(!Within(evidence, payload) && !Within(payload, evidence), "Evidence and install/payload/helper directories must be disjoint");
 Check(!Directory.Exists(evidence), "Evidence directory must be new; never overwrite receipts");
 Directory.CreateDirectory(evidence);
 var root = Path.Combine(evidence, "fixture");
@@ -44,7 +60,9 @@ try
     // Bind both complete payload trees, including their union of engine DLLs and native assets.
     var payloads = new[] { Path.GetDirectoryName(cli)!, Path.GetDirectoryName(mcp)! }.Distinct().ToArray();
     var payloadBefore = payloads.SelectMany((p, i) => Manifest(p).Select(x => new { payload = i, x.path, x.sha256 })).ToArray();
-    Save("product-inputs.json", new { mode = "local-built-dll-integration-only", host, hostSha256 = FileHash(host), cli, mcp,
+    var executableBefore = Executables();
+    Save("product-inputs.json", new { mode, engineIdentityPolicy, host, hostSha256 = FileHash(host), cli, mcp,
+        cliExecutable, mcpExecutable, cliPrefix, mcpPrefix, installRoots, executables = executableBefore,
         payloads, files = payloadBefore, budgetContract = "split-v1", prepareMs, queryMs, chars, bytes });
     Save("helper-inputs.json", new { helper = Environment.ProcessPath, files = Manifest(AppContext.BaseDirectory) });
     var engines = payloads.SelectMany(p => Directory.GetFiles(p, "SharpDeps.*.dll")).Select(Path.GetFileName)
@@ -52,16 +70,27 @@ try
     Check(engines.Contains("SharpDeps.Query.dll") && engines.Contains("SharpDeps.Index.dll"), "Engine union incomplete");
     foreach (var name in engines)
     {
-        var hashes = payloads.Select(p => FileHash(Path.Combine(p, name!))).Distinct().ToArray();
-        Check(hashes.Length == 1, "Mixed CLI/MCP engine identity: " + name);
-        Check(FileHash(Path.Combine(AppContext.BaseDirectory, name!)) == hashes[0], "Helper reference differs from product: " + name);
+        if (installed)
+            Check(payloads.All(p => File.Exists(Path.Combine(p, name!))), "Engine missing from CLI/MCP payload: " + name);
+        else
+        {
+            var hashes = payloads.Select(p => FileHash(Path.Combine(p, name!))).Distinct().ToArray();
+            Check(hashes.Length == 1, "Mixed CLI/MCP engine identity: " + name);
+            Check(FileHash(Path.Combine(AppContext.BaseDirectory, name!)) == hashes[0], "Helper reference differs from product: " + name);
+        }
     }
+    if (installed)
+        foreach (var name in engines.Concat(Directory.GetFiles(AppContext.BaseDirectory, "SharpDeps.*.dll").Select(Path.GetFileName)).Distinct())
+            Check(FileHash(Path.Combine(AppContext.BaseDirectory, name!)) == FileHash(Path.Combine(Path.GetDirectoryName(mcp)!, name!)),
+                "Helper reference differs from MCP payload: " + name);
     Seed();
     var inputBefore = Inputs();
     Save("fixture-inputs.json", new { workspace, project, variant, symbol, occurrence, sourceHash,
         spanStart = 0, spanLength = code.Length - 1, code, files = inputBefore });
-    server = Start(mcp, ["--root", root, "--trusted", "--metrics-directory", metrics]);
-    Save("mcp-process.json", new { server.Id, startUtc = server.StartTime.ToUniversalTime(), host, mcp });
+    string[] mcpArguments = [.. mcpPrefix, "--root", root, "--trusted", "--metrics-directory", metrics];
+    server = Start(mcpExecutable, mcpArguments);
+    Save("mcp-process.json", new { server.Id, startUtc = server.StartTime.ToUniversalTime(), host, mcp,
+        executable = mcpExecutable, arguments = mcpArguments });
     stderr = ReadBounded(server.StandardError, serverReads.Token);
     var initialized = await Rpc(1, "initialize", new { protocolVersion = "2025-11-25", capabilities = new { }, clientInfo = new { name = "transport-smoke", version = "1" } });
     Check(initialized.GetProperty("result").GetProperty("protocolVersion").GetString() == "2025-11-25", "Protocol");
@@ -124,6 +153,9 @@ try
     Check(JsonSerializer.Serialize(inputBefore) == JsonSerializer.Serialize(Inputs()), "Fixture DB/WAL/workspace/source changed");
     var payloadAfter = payloads.SelectMany((p, i) => Manifest(p).Select(x => new { payload = i, x.path, x.sha256 })).ToArray();
     Check(JsonSerializer.Serialize(payloadBefore) == JsonSerializer.Serialize(payloadAfter), "Payload changed");
+    var executableAfter = Executables();
+    Save("executable-checks.json", new { before = executableBefore, after = executableAfter });
+    Check(JsonSerializer.Serialize(executableBefore) == JsonSerializer.Serialize(executableAfter), "Command executable/host changed");
     using (var reader = IndexReader.Open(Path.Combine(root, ".sharpdeps", "index.sqlite"), workspace))
         Check(reader.Snapshot().Graph.Generation == 1, "Generation changed");
     passed = true;
@@ -156,7 +188,7 @@ finally
     try
     {
         if (primaryError is not null) Save("failure.json", new { type = primaryError.GetType().FullName, primaryError.Message });
-        Save("summary.json", new { passed, forced, cleanupErrors, mode = "local-built-dll-integration-only", ownerIds });
+        Save("summary.json", new { passed, forced, cleanupErrors, mode, ownerIds });
         Save("artifact-manifest.json", Manifest(evidence));
     }
     catch (Exception error) { primaryError ??= error; }
@@ -215,19 +247,19 @@ Dictionary<string, object> Arguments(string format, string query) => new()
 string[] CliArguments(string format, string query) => ["explore", "--root", root, "--trusted", "--format", format,
     "--project-id", project, "--variant", variant, "--scope-policy", "unique", "--freshness", "allow-stale",
     "--prepare-max-milliseconds", "30000", "--max-milliseconds", "1000", "--max-chars", "12000", "--max-bytes", "48000", "--term", query];
-Process Start(string dll, IEnumerable<string> arguments)
+Process Start(string executable, IEnumerable<string> arguments)
 {
-    var start = new ProcessStartInfo(host) { UseShellExecute = false, CreateNoWindow = true,
+    var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true,
         RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
         StandardOutputEncoding = utf8, StandardErrorEncoding = utf8, StandardInputEncoding = utf8, WorkingDirectory = root };
-    start.ArgumentList.Add(dll);
     foreach (var argument in arguments) start.ArgumentList.Add(argument);
     return Process.Start(start) ?? throw new IOException("Process did not start");
 }
 async Task<(int exit, string text)> Cli(int id, string[] arguments)
 {
     Save("cli-" + id + "-arguments.json", arguments);
-    using var process = Start(cli, arguments);
+    string[] commandArguments = [.. cliPrefix, .. arguments];
+    using var process = Start(cliExecutable, commandArguments);
     using var reads = new CancellationTokenSource();
     Task<string>? stdout = null, errors = null;
     var killed = false;
@@ -237,7 +269,8 @@ async Task<(int exit, string text)> Cli(int id, string[] arguments)
     {
         stdout = ReadBounded(process.StandardOutput, reads.Token);
         errors = ReadBounded(process.StandardError, reads.Token);
-        Save("cli-" + id + "-process.json", new { process.Id, startUtc = process.StartTime.ToUniversalTime(), host, cli });
+        Save("cli-" + id + "-process.json", new { process.Id, startUtc = process.StartTime.ToUniversalTime(), host, cli,
+            executable = cliExecutable, arguments = commandArguments });
         process.StandardInput.Close();
         await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
         result = (process.ExitCode, await stdout.WaitAsync(TimeSpan.FromSeconds(10)));
@@ -347,6 +380,8 @@ object[] Inputs() => new[] { "App.cs", ".sharpdeps/workspace.json", ".sharpdeps/
     .Select(p => (object)new { path = p, sha256 = File.Exists(Path.Combine(root, p)) ? FileHash(Path.Combine(root, p)) : null }).ToArray();
 FileIdentity[] Manifest(string directory) => SafeFiles(directory)
     .OrderBy(p => p, StringComparer.Ordinal).Select(p => new FileIdentity(Path.GetRelativePath(directory, p), FileHash(p))).ToArray();
+FileIdentity[] Executables() => new[] { host, cliExecutable, mcpExecutable }.Distinct(StringComparer.OrdinalIgnoreCase)
+    .Select(p => new FileIdentity(p, FileHash(p))).ToArray();
 void Save(string name, object value) => Write(name, JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true, IncludeFields = true }));
 void Write(string name, string value)
 {
