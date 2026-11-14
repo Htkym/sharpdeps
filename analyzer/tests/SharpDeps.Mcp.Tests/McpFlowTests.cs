@@ -292,7 +292,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             var (exit, text, result) = await AssertEquivalent(adapter, Literal(value, kindFirst), Arguments(value, kindFirst));
             Assert.Equal(0, exit);
             Assert.Contains("Query kind=http-get-literal;", text, StringComparison.Ordinal);
-            var match = Assert.Single(text.Split('\n').Where(line => line.StartsWith("HttpGet match selector=", StringComparison.Ordinal)));
+            var match = Assert.Single(text.Split('\n'), line => line.StartsWith("HttpGet match selector=", StringComparison.Ordinal));
             Assert.StartsWith($"HttpGet match selector={fixture.HttpGetOccurrences[value]} ", match, StringComparison.Ordinal);
             Assert.DoesNotContain(Fixture.HttpGetBody, text, StringComparison.Ordinal);
             AssertWireBudget(result, 12000, 48000);
