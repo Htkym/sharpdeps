@@ -49,7 +49,7 @@ is linked above.
 
 ## Markdown parsing in the CLI and MCP tools
 
-The current CLI/MCP source selects Syntamark 2.0.0 (MIT, copyright 2026 Htkym),
+The 0.5.0 CLI/MCP tools use Syntamark 2.0.0 (MIT, copyright 2026 Htkym),
 including its native YAML parser with no YamlDotNet dependency. Syntamark's runtime/source pair
 and source commit are recorded in
 [the Markdown runtime pin](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/markdown-runtime-pin.json).

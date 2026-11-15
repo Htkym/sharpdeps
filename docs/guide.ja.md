@@ -2,9 +2,9 @@
 
 [English](guide.md) · 日本語 · [README](../README.ja.md)
 
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) からインストールするか、ダウンロードした VSIX を **Extensions: Install from VSIX…** で選択します。最新の公開版は 0.4.0 です。Quick の利用に別途 CLI を導入する必要はありません。**未公開**と示した項目は、このソースツリーの追加機能です。公開済みの版に対応する説明は [0.4.0 のガイド](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/guide.ja.md)を参照してください。
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) からインストールするか、ダウンロードした VSIX を **Extensions: Install from VSIX…** で選択します。このガイドは 0.5.0 を対象としています。公開状況は Marketplace またはリリースページで確認してください。Quick の利用に別途 CLI を導入する必要はありません。以前のバージョンに対応する説明は [0.4.0 のガイド](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/guide.ja.md)を参照してください。
 
-画像は外部の型を非表示にした 0.1.0 の画面です。移動やグラフの操作を示すもので、保存索引の互換性はインストールした reader の版によって決まります。
+画像は外部の型を非表示にした 0.1.0 の画面です。移動やグラフの操作を示すもので、保存索引の互換性はインストールした reader のバージョンによって決まります。
 
 ## ソリューションやプロジェクトを開く
 
@@ -46,7 +46,7 @@ SharpDeps が SDK をダウンロードしたり、パッケージを自動で�
 
 `sharpdeps.resultProvider` を `savedIndex` にすると、既存の `.sharpdeps/index.sqlite` を拡張機能に同梱する `analyzer/bin/query/sharpdeps-query-host.dll` で読みます。Quick／Semantic の選択とは別の設定です。閲覧には既存の .NET 10 ランタイムが必要で、この経路はランタイムを自動取得しません。`sharpdeps.savedIndexCliPath` の外部 CLI を替えても、同梱 reader は更新されません。複数 variant がある場合は `sharpdeps.savedIndexVariant` に表示する ID を指定します。異なる variant を自動で混ぜることはありません。
 
-0.4.0 の reader は SQLite schema 1／2／3 に対応し、新規索引は schema 3 です。生成ソースの本文保存には schema 2 以降、パッケージソースの本文保存には schema 3 が必要です。0.2.1 の拡張機能は schema 1 のみを読み、新 CLI の schema 3 を読めません。CLI と拡張機能の両方を更新してください。旧索引の自動移行は行いません。旧 CLI／VSIXと旧索引を保持し、CLI／MCP で別パスを使う場合は新 CLI の `--index` に root 内の未使用パスを指定して再索引します。保存表示は既定の `.sharpdeps/index.sqlite` を読み、索引パスの設定はありません。新 VSIX を試す場合は、旧ワークスペースを残し、別のソース作業コピーの既定パスへ新規索引を作成してください。戻す場合は保持した旧環境と旧索引を使います。
+0.5.0 の reader は SQLite schema 1／2／3 に対応し、新規索引は schema 3 です。生成ソースの本文保存には schema 2 以降、パッケージソースの本文保存には schema 3 が必要です。0.2.1 の拡張機能は schema 1 のみを読み、新 CLI の schema 3 を読めません。CLI と拡張機能の両方を更新してください。旧索引の自動移行は行いません。旧 CLI／VSIXと旧索引を保持し、CLI／MCP で別パスを使う場合は新 CLI の `--index` に root 内の未使用パスを指定して再索引します。保存表示は既定の `.sharpdeps/index.sqlite` を読み、索引パスの設定はありません。新 VSIX を試す場合は、旧ワークスペースを残し、別のソース作業コピーの既定パスへ新規索引を作成してください。戻す場合は保持した旧環境と旧索引を使います。
 
 索引を退避するときは、owner／watchとほかのwriterを停止し、拡張機能、MCPなどのreaderを閉じてから、`.sharpdeps/workspace.json`、DBと残ったWAL／SHMを一緒に保持します。稼働中のDB本体だけをコピーすると、WAL内の確定済みデータを失うことがあります。旧DBやsidecarを削除して復旧せず、[索引の保存契約](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/index-storage-v1.ja.md)と[移行手順](mcp.md#upgrade-from-030)を参照してください。
 
@@ -76,7 +76,7 @@ dotnet 'D:\tools\SharpDeps.Cli.dll' serve --root 'D:\work\repo' --target 'D:\wor
 
 ## 線と参照の根拠を読む
 
-矢印は、参照元から参照先へ向かって伸びます。ノードの色はプロジェクトの種類を表しており、グラフ上部の凡例で確認できます。
+矢印は参照元から参照先へ向かって伸びます。ノードの色はプロジェクトの種類を表しており、グラフ上部の凡例で確認できます。
 
 | 表示 | 意味 |
 | --- | --- |
@@ -135,7 +135,7 @@ C# のエディター上で **SharpDeps: Show Type Dependencies (cursor)** や *
 
 上部の **日本語** または **English** で表示言語を切り替えます。選択した言語は保存され、切り替えても再解析は行われません。コードのシンボル名やファイルパス、解析プログラムの診断メッセージは元の文字列のまま表示されます。
 
-対象、表示範囲、選択状態、フィルター、レイアウト、ペイン幅、表示位置、倍率は保存の対象です。元コードから一覧へ戻る操作と、再起動・再読込み後の復元は別の検証対象です。過去の確認だけで 0.4.0 のインストール後の復元を保証するものではありません。legacy の結果が古くなった場合は **解析**、savedIndex では明示更新の後に **Refresh** で再読取りします。**停止** は解析を停止する操作で、直前に成功した結果はそのまま残ります。
+対象、表示範囲、選択状態、フィルター、レイアウト、ペイン幅、表示位置、倍率は保存の対象です。元コードから一覧へ戻る操作と、再起動・再読込み後の状態の復元は異なります。legacy の結果が古くなった場合は **解析**、savedIndex では明示更新の後に **Refresh** で再読取りします。**停止** は解析を停止する操作で、直前に成功した結果はそのまま残ります。
 
 ## キーボードで操作する
 
