@@ -1,4 +1,4 @@
-name: Markdown session candidate
+name: Markdown sessions
 
 on:
   push:
@@ -6,24 +6,24 @@ on:
     paths:
       - 'analyzer/**'
       - 'eng/markdown/**'
-      - 'docs/contracts/markdown-session-candidate-pin.json'
-      - '.github/workflows/markdown-session-candidate.yml'
+      - 'docs/contracts/markdown-runtime-pin.json'
+      - '.github/workflows/markdown-sessions.yml'
   pull_request:
     paths:
       - 'analyzer/**'
       - 'eng/markdown/**'
-      - 'docs/contracts/markdown-session-candidate-pin.json'
-      - '.github/workflows/markdown-session-candidate.yml'
+      - 'docs/contracts/markdown-runtime-pin.json'
+      - '.github/workflows/markdown-sessions.yml'
 
 permissions:
   contents: read
 
 jobs:
-  candidate:
+  sessions:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SharpDepsUseMarkdownSessionCandidate: 'true'
+      SharpDepsUseMarkdownSessions: 'true'
       SHARPDEPS_TEST_REPOSITORY_ROOT: ${{ github.workspace }}
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-dotnet@v6.0.0
         with:
           dotnet-version: 10.0.403
+      - name: Test artifact identity gate
+        run: node --test eng/markdown/Verify-ConsumerArtifacts.Tests.mjs
       - name: Prepare isolated SDK and feeds
         run: |
           dotnet_root="$(dirname "$(readlink -f "$(command -v dotnet)")")"
@@ -55,10 +57,17 @@ jobs:
           <configuration>
             <packageSources>
               <clear />
-              <add key="session" value="$GITHUB_WORKSPACE/eng/markdown/session-feed" />
               <add key="stable" value="$GITHUB_WORKSPACE/eng/markdown/feed" />
               <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
             </packageSources>
+            <packageSourceMapping>
+              <clear />
+              <packageSource key="stable">
+                <package pattern="Syntamark" />
+                <package pattern="Syntamark.Source" />
+              </packageSource>
+              <packageSource key="nuget.org"><package pattern="*" /></packageSource>
+            </packageSourceMapping>
           </configuration>
           EOF
       - name: Generate and verify isolated locks
@@ -78,20 +87,20 @@ jobs:
         run: |
           assets="$(dotnet msbuild "$GITHUB_WORKSPACE/analyzer/src/SharpDeps.Analysis.Markdown/SharpDeps.Analysis.Markdown.csproj" -getProperty:ProjectAssetsFile -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT")"
           node "$GITHUB_WORKSPACE/eng/markdown/Verify-ConsumerArtifacts.mjs" \
-            "$GITHUB_WORKSPACE/eng/markdown/session-feed/pair-manifest.json" \
-            "$GITHUB_WORKSPACE/eng/markdown/session-feed" "$assets" \
-            "$GITHUB_WORKSPACE/docs/contracts/markdown-session-candidate-pin.json" > artifact-gate.json
-      - name: Test candidate adapter and owner
+            "$GITHUB_WORKSPACE/eng/markdown/feed/pair-manifest-2.0.0.json" \
+            "$GITHUB_WORKSPACE/eng/markdown/feed" "$assets" \
+            "$GITHUB_WORKSPACE/docs/contracts/markdown-runtime-pin.json" > artifact-gate.json
+      - name: Test session adapter and owner
         working-directory: ${{ runner.temp }}/markdown-session-work
         run: |
           dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Markdown.Tests/SharpDeps.Markdown.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --logger 'trx;LogFileName=markdown.trx' --results-directory results
           dotnet test "$GITHUB_WORKSPACE/analyzer/tests/SharpDeps.Cli.Tests/SharpDeps.Cli.Tests.csproj" --no-restore -c Release -m:1 -p:UseSharedCompilation=false -p:UseArtifactsOutput=true -p:ArtifactsPath="$ARTIFACTS_ROOT" --filter 'FullyQualifiedName~CliMarkdownInputTests|FullyQualifiedName~PreparedStateIsDiscardedOnRollbackAndAdoptionFailureCannotUndoCommit|FullyQualifiedName~SemanticSessionWorkspaceTests' --logger 'trx;LogFileName=owner.trx' --results-directory results
           git -C "$GITHUB_WORKSPACE" diff --exit-code -- docs/contracts/markdown-runtime-pin.json docs/contracts/markdown-consumer-conformance-v1.json eng/markdown/feed
-      - name: Upload candidate verification
+      - name: Upload session verification
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: markdown-session-candidate-verification
+          name: markdown-session-verification
           path: |
             ${{ runner.temp }}/markdown-session-work/results/
             ${{ runner.temp }}/markdown-session-work/locks.sha256

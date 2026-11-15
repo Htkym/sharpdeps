@@ -49,8 +49,8 @@ is linked above.
 
 ## Markdown parsing in the CLI and MCP tools
 
-The 0.4.0 CLI/MCP tools include Syntamark 1.2.0 (MIT, copyright 2026 Htkym)
-and its pinned YamlDotNet 18.1.0 dependency (MIT). Syntamark's runtime/source pair
+The current CLI/MCP source selects Syntamark 2.0.0 (MIT, copyright 2026 Htkym),
+including its native YAML parser with no YamlDotNet dependency. Syntamark's runtime/source pair
 and source commit are recorded in
 [the Markdown runtime pin](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/markdown-runtime-pin.json).
 The source package is retained for provenance; the tools execute the runtime
@@ -58,7 +58,8 @@ assembly. These Markdown dependencies are not bundled into the VSIX's Quick,
 Semantic, or saved-index Query hosts.
 
 Upstream sources and licence information:
-https://github.com/Htkym/syntamark and https://github.com/aaubry/YamlDotNet.
+https://github.com/Htkym/syntamark. Its package also includes the WHATWG and
+Unicode notices for the bundled character-reference and case-folding data.
 
 ## NuGet package-source inspection
 

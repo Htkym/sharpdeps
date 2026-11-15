@@ -16,23 +16,6 @@ public sealed class MarkdownSessionCacheTests
     private static string Hash(string raw) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
 
     [Fact]
-    public void CandidateSelectionBindsBothPackagesAndTheLoadedRuntimeToTheDevelopmentPin()
-    {
-        using var pinFile = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "markdown-runtime-pin.json")));
-        var pin = pinFile.RootElement;
-        Assert.True(pin.GetProperty("developmentOnly").GetBoolean());
-        Assert.Equal(MarkdownRuntimePin.ComponentVersion, pin.GetProperty("componentVersion").GetString());
-        Assert.Equal("c60683ef270e9a1cb451610425621363d0072dcf", pin.GetProperty("sourceCommit").GetString());
-        Assert.Equal(MarkdownRuntimePin.CanonicalSourceHash, pin.GetProperty("canonicalSourceHash").GetString());
-        Assert.Equal(MarkdownRuntimePin.ParserVersion, pin.GetProperty("parserVersion").GetString());
-        var artifacts = pin.GetProperty("artifacts");
-        Assert.Equal(MarkdownRuntimePin.ComponentVersion, artifacts.GetProperty("runtime").GetProperty("componentVersion").GetString());
-        Assert.Equal(MarkdownRuntimePin.ComponentVersion, artifacts.GetProperty("source").GetProperty("componentVersion").GetString());
-        Assert.Equal(MarkdownRuntimePin.RuntimeAssemblySha256, artifacts.GetProperty("runtime").GetProperty("assemblySha256").GetString());
-        MarkdownRuntimePin.RequireLoaded(MarkdownRuntimePin.ParserVersion);
-    }
-
-    [Fact]
     public void SupportedEditsUndoAndUnsupportedTransitionsMatchColdFactsSyntaxIdentityAndProjection()
     {
         var adapter = new LithoSharpMarkdownAdapter();

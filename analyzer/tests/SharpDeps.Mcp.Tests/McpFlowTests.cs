@@ -24,12 +24,13 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         var host = McpHostOptions.Parse(["--root", fixture.Root, "--trusted", "--metrics-directory", directory]);
         Assert.Equal(directory, host.MetricsDirectory);
         Assert.Equal(new McpHostOptions(fixture.Root, Trusted: true), host with { MetricsDirectory = null });
-        var measured = new McpQueryAdapter(host);
+        await using var measured = new McpQueryAdapter(host);
         Assert.False(Assert.Single(measured.ListTools()).InputSchema.GetProperty("properties").TryGetProperty("metricsDirectory", out _));
         var request = Explore("Service");
-        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
+        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(30000);
         var cold = await measured.CallAsync(request);
-        var expected = await new McpQueryAdapter(host with { MetricsDirectory = null }).CallAsync(request);
+        await using var expectedAdapter = new McpQueryAdapter(host with { MetricsDirectory = null });
+        var expected = await expectedAdapter.CallAsync(request);
         var actual = await measured.CallAsync(request);
         Assert.Equal(expected.IsError, actual.IsError);
         Assert.Equal(Assert.IsType<TextContentBlock>(Assert.Single(cold.Content)).Text,
@@ -37,14 +38,33 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         Assert.Equal(Assert.IsType<TextContentBlock>(Assert.Single(expected.Content)).Text,
             Assert.IsType<TextContentBlock>(Assert.Single(actual.Content)).Text);
         Assert.Equal(2, Directory.GetFiles(directory, "*.jsonl").Length);
-        var metrics = Directory.GetFiles(directory, "*.jsonl").Select(File.ReadAllText).ToArray();
-        Assert.Contains(metrics, text => text.Contains("validated-cache-miss", StringComparison.Ordinal));
-        Assert.Contains(metrics, text => text.Contains("validated-cache-hit", StringComparison.Ordinal));
-        Assert.All(metrics, text => Assert.Contains("reader.open", text, StringComparison.Ordinal));
+        var metrics = Directory.GetFiles(directory, "*.jsonl").Select(path => ReplayPhaseMetrics.Parse(
+            File.ReadAllBytes(path), Path.GetFileNameWithoutExtension(path), "completed")).ToArray();
+        Assert.All(metrics, run =>
+        {
+            Assert.Equal("recorded", run.Status);
+            Assert.Equal("completed", run.RunOutcome);
+            Assert.NotNull(run.PreparationOwnerId);
+            Assert.Contains(run.Spans, span => span.Phase == "explore.host-wait");
+            Assert.Contains(run.Spans, span => span.Phase == "explore.host-prepare-wait");
+            Assert.DoesNotContain(run.Spans, span => span.Phase == "reader.open");
+        });
+        Assert.Equal(2, metrics.Select(run => run.PreparationOwnerId).Distinct().Count());
+        var preparations = metrics.Select(run =>
+        {
+            var path = Assert.Single(Directory.GetFiles(Path.Combine(directory, "owners", run.PreparationOwnerId!), "*.jsonl"));
+            var owner = ReplayPhaseMetrics.Parse(File.ReadAllBytes(path), Path.GetFileNameWithoutExtension(path), "completed", run.PreparationOwnerId);
+            Assert.Equal("recorded", owner.Status);
+            Assert.Equal("completed", owner.RunOutcome);
+            Assert.NotEqual(run.RunId, owner.RunId);
+            Assert.Contains(owner.Spans, span => span.Phase == "reader.open");
+            return owner;
+        }).ToArray();
+        Assert.Contains(preparations, run => run.Spans.Any(span => span.Phase == "explore.prepare-standard"));
         request.Arguments["metricsDirectory"] = JsonSerializer.SerializeToElement(directory);
         var invalid = await Assert.ThrowsAsync<McpProtocolException>(async () => await measured.CallAsync(request));
         Assert.Equal("MCP_ARGUMENT_INVALID", invalid.Message);
-        var mutable = new McpQueryAdapter(host with { AllowMutations = true });
+        await using var mutable = new McpQueryAdapter(host with { AllowMutations = true });
         await Assert.ThrowsAsync<McpProtocolException>(async () => await mutable.CallAsync(new()
         {
             Name = "index", Arguments = new Dictionary<string, JsonElement>
@@ -63,7 +83,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
     public async Task UnknownProjectReturnsTheScopeErrorInCliAndMcp(string format, string? policy)
     {
         using var fixture = new Fixture();
-        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        await using var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
         var unknown = "hpr_" + new string('f', 64);
         var request = Explore("Service", format, policy);
         request.Arguments!["projectId"] = JsonSerializer.SerializeToElement(unknown);
@@ -84,7 +104,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
     public async Task OmittedScopePolicyDiscoversWithoutChangingExplicitOrExactRequests()
     {
         using var fixture = new Fixture(addScopes: true);
-        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        await using var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
         var arguments = new[] { "explore", "--root", fixture.Root, "--trusted", "--format", "agent", "--max-milliseconds", "10000", "Service" };
         CallToolRequestParams Request(string query = "Service", string? policy = null)
         {
@@ -127,7 +147,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
     {
         var code = Fixture.Code.TrimEnd('\n') + " // " + string.Concat(Enumerable.Repeat("検証😀 \" \\", 80)) + "\r\n";
         using var fixture = new Fixture(addScopes: scopePolicy == "prefer-debug", code: code);
-        var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: trusted));
+        await using var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: trusted));
         var arguments = new List<string> { "explore", "--root", fixture.Root, "--term", "Service", "--format", format ?? "agent" };
         if (trusted) arguments.Add("--trusted");
         if (scopePolicy is not null) arguments.AddRange(["--scope-policy", scopePolicy]);
@@ -163,14 +183,16 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         var pathArguments = new List<string>(arguments);
         pathArguments[pathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
         pathArguments.AddRange(["--project-id", fixture.Project, "--variant", fixture.Variant, "--path-prefix", "App.cs",
-            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000", "--max-milliseconds", "0", "--owner-status"]);
+            "--path-to", fixture.Occurrence, "--freshness", "allow-stale", "--max-chars", "10000", "--max-bytes", "40000",
+            "--max-milliseconds", "10000", "--prepare-max-milliseconds", "5000", "--owner-status"]);
         var pathRequest = Explore(fixture.Occurrence, format, scopePolicy, fixture.Occurrence);
         foreach (var (name, value) in new[] { ("projectId", fixture.Project), ("variantId", fixture.Variant),
             ("pathPrefix", "App.cs"), ("freshness", "allow-stale") })
             pathRequest.Arguments![name] = JsonSerializer.SerializeToElement(value);
         pathRequest.Arguments!["maxChars"] = JsonSerializer.SerializeToElement(10000);
         pathRequest.Arguments["maxBytes"] = JsonSerializer.SerializeToElement(40000);
-        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(0);
+        pathRequest.Arguments["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+        pathRequest.Arguments["prepareMaxMilliseconds"] = JsonSerializer.SerializeToElement(5000);
         pathRequest.Arguments["ownerStatus"] = JsonSerializer.SerializeToElement(true);
         var (pathExit, pathText, pathResult) = await AssertEquivalent(adapter, pathRequest, pathArguments);
         Assert.Equal(0, pathExit);
@@ -199,7 +221,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             Assert.Equal(0, defaultExit);
             Assert.Equal(text, defaultText);
 
-            var missingIndex = new McpQueryAdapter(new(fixture.Root, Index: "missing.sqlite", Trusted: trusted));
+            await using var missingIndex = new McpQueryAdapter(new(fixture.Root, Index: "missing.sqlite", Trusted: trusted));
             var (hostExit, hostText, _) = await AssertEquivalent(missingIndex, Explore("Service", format, scopePolicy),
                 [.. arguments, "--index", "missing.sqlite"]);
             Assert.Equal(3, hostExit);
@@ -215,16 +237,20 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             var invalidPathArguments = new List<string>(arguments);
             invalidPathArguments[invalidPathArguments.IndexOf("--term") + 1] = fixture.Occurrence;
             invalidPathArguments.AddRange(["--path-to", "Service"]);
-            var (invalidPathExit, invalidPathText, _) = await AssertEquivalent(adapter,
-                Explore(fixture.Occurrence, format, scopePolicy, "Service"), invalidPathArguments);
-            Assert.Equal(2, invalidPathExit);
-            using var invalidPath = JsonDocument.Parse(invalidPathText);
-            Assert.Equal("ARGUMENT_INVALID", invalidPath.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
-            var (precedenceExit, precedenceText, _) = await AssertEquivalent(missingIndex,
-                Explore(fixture.Occurrence, format, scopePolicy, "Service"), [.. invalidPathArguments, "--index", "missing.sqlite"]);
-            Assert.Equal(3, precedenceExit);
-            using var precedence = JsonDocument.Parse(precedenceText);
-            Assert.Equal("INDEX_MISSING", precedence.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
+            foreach (var (invalidAdapter, cliArguments) in new[]
+                { (adapter, invalidPathArguments), (missingIndex, new List<string>(invalidPathArguments) { "--index", "missing.sqlite" }) })
+            {
+                var cliOutput = new StringWriter();
+                var progress = new StringWriter();
+                Assert.Equal(2, await CliApplication.RunAsync(cliArguments.ToArray(), cliOutput, progress));
+                using var invalidPath = JsonDocument.Parse(cliOutput.ToString());
+                Assert.Equal("ARGUMENT_INVALID", invalidPath.RootElement.GetProperty("errors")[0].GetProperty("code").GetString());
+                Assert.Empty(progress.ToString());
+                var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await invalidAdapter.CallAsync(
+                    Explore(fixture.Occurrence, format, scopePolicy, "Service")));
+                Assert.Equal(McpErrorCode.InvalidParams, error.ErrorCode);
+                Assert.Equal("MCP_ARGUMENT_INVALID", error.Message);
+            }
 
             var refresh = Explore("Service", format, scopePolicy);
             refresh.Arguments!["freshness"] = JsonSerializer.SerializeToElement("refresh");
@@ -256,7 +282,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         var identityLike = "hocc_" + new string('a', 64);
         var literals = new[] { "", "  ", "--trusted", identityLike, "*", " /café/{id} " };
         using var fixture = new Fixture(httpGetLiterals: literals);
-        var adapter = new McpQueryAdapter(new(fixture.Root));
+        await using var adapter = new McpQueryAdapter(new(fixture.Root));
         foreach (var (value, kindFirst) in new[]
         {
             ("", false), ("", true), ("  ", false), ("--trusted", false), ("--trusted", true),
@@ -266,14 +292,15 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             var (exit, text, result) = await AssertEquivalent(adapter, Literal(value, kindFirst), Arguments(value, kindFirst));
             Assert.Equal(0, exit);
             Assert.Contains("Query kind=http-get-literal;", text, StringComparison.Ordinal);
-            var match = Assert.Single(text.Split('\n').Where(line => line.StartsWith("HttpGet match selector=", StringComparison.Ordinal)));
+            var match = Assert.Single(text.Split('\n'), line => line.StartsWith("HttpGet match selector=", StringComparison.Ordinal));
             Assert.StartsWith($"HttpGet match selector={fixture.HttpGetOccurrences[value]} ", match, StringComparison.Ordinal);
             Assert.DoesNotContain(Fixture.HttpGetBody, text, StringComparison.Ordinal);
             AssertWireBudget(result, 12000, 48000);
         }
         var trustedArguments = Arguments("--trusted", true);
         trustedArguments.Add("--trusted");
-        var (trustedExit, trustedText, _) = await AssertEquivalent(new McpQueryAdapter(new(fixture.Root, Trusted: true)),
+        await using var trustedAdapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        var (trustedExit, trustedText, _) = await AssertEquivalent(trustedAdapter,
             Literal("--trusted", true), trustedArguments);
         Assert.Equal(0, trustedExit);
         Assert.Contains($"HttpGet match selector={fixture.HttpGetOccurrences["--trusted"]} ", trustedText, StringComparison.Ordinal);
@@ -367,7 +394,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
                 Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
-                Assert.Contains("""{"query":"Service","maxMilliseconds":8000}""", instructions, StringComparison.Ordinal);
+                Assert.Contains("\"query\":\"Service\"", instructions, StringComparison.Ordinal);
+                Assert.Contains("\"prepareMaxMilliseconds\":30000", instructions, StringComparison.Ordinal);
+                Assert.Contains("\"maxMilliseconds\":1000", instructions, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
                 Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);

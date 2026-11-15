@@ -2,11 +2,36 @@ namespace SharpDeps.Mcp.Tests;
 
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 using Xunit.Abstractions;
 
 public sealed class FixedQueryReplayTests(ITestOutputHelper output)
 {
+    [Fact]
+    public void SplitBudgetCapabilityRejectsLegacyDeadlinesAndMissingPreparation()
+    {
+        var tool = Assert.Single(new McpQueryAdapter(new(Path.GetTempPath())).ListTools());
+        var schema = JsonNode.Parse(tool.InputSchema.GetRawText())!;
+        Assert.True(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
+        schema["properties"]!["maxMilliseconds"]!["minimum"] = 0;
+        Assert.False(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
+        schema["properties"]!["maxMilliseconds"]!["minimum"] = 10;
+        schema["properties"]!.AsObject().Remove("prepareMaxMilliseconds");
+        Assert.False(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
+    }
+
+    [Theory]
+    [InlineData("Error PREPARATION_TIMEOUT: deadline.", "preparation-timeout")]
+    [InlineData("Error QUERY_TIMEOUT: deadline.", "query-timeout")]
+    [InlineData("Error REQUEST_TIMEOUT: deadline.", "request-timeout")]
+    [InlineData("Error CANCELLED: caller stopped.", "cancelled")]
+    [InlineData("Error INTERNAL_ERROR: failure.", "failed")]
+    [InlineData("Error QUERY_TIMEOUT: deadline.\nError INTERNAL_ERROR: failure.", "failed")]
+    [InlineData("Error NOT_QUERY_TIMEOUT: failure.", "failed")]
+    public void RequestOutcomesKeepTimeoutKindsAndUnrelatedFailuresSeparate(string text, string expected)
+        => Assert.Equal(expected, FixedQueryReplay.RequestOutcome(text, failed: true));
+
     [Fact]
     public void UnavailableProcessCpuRemainsNullWithoutInvalidatingTheCapture()
     {
@@ -18,6 +43,65 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         Assert.Equal(JsonValueKind.Null, receipt.RootElement.GetProperty("cpuMilliseconds").ValueKind);
         Assert.Equal(0, capture.ExitCode);
         Assert.Equal(1, capture.WallMilliseconds);
+    }
+
+    [Theory]
+    [InlineData("different", "SharpDeps.Query.dll")]
+    [InlineData("missing-cli", "SharpDeps.Analysis.Markdown.dll")]
+    [InlineData("missing-mcp", "SharpDeps.Analysis.Markdown.dll")]
+    [InlineData("missing-both", "SharpDeps.Analysis.Core.dll")]
+    public async Task SharedEngineMismatchOrMissingDllRejectsBeforeStartingQueryHosts(string fault, string name)
+    {
+        using var fixture = new ReplayFixture();
+        var input = Input(fixture, [new("must-not-run", fixture.Member)]);
+        var cliDirectory = Path.Combine(fixture.Root, "payloads", "cli");
+        var mcpDirectory = Path.Combine(fixture.Root, "payloads", "mcp");
+        foreach (var payload in new[] { cliDirectory, mcpDirectory })
+        {
+            Directory.CreateDirectory(payload);
+            foreach (var file in new[] { "SharpDeps.Cli.dll", "SharpDeps.Index.dll", "SharpDeps.Query.dll",
+                "SharpDeps.Analysis.Contracts.dll", "SharpDeps.Analysis.Core.dll", "SharpDeps.Analysis.Markdown.dll" })
+                File.WriteAllBytes(Path.Combine(payload, file), [1, 2, 3]);
+        }
+        File.WriteAllBytes(Path.Combine(mcpDirectory, "SharpDeps.Mcp.dll"), [1, 2, 3]);
+        if (fault == "different")
+            File.WriteAllBytes(Path.Combine(mcpDirectory, name), [1, 2, 4]);
+        else
+        {
+            if (fault != "missing-cli")
+                File.Delete(Path.Combine(mcpDirectory, name));
+            if (fault != "missing-mcp")
+                File.Delete(Path.Combine(cliDirectory, name));
+        }
+        var directory = ReceiptDirectory("engine-" + fault);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => FixedQueryReplay.RunAsync(input with
+        {
+            CliDll = Path.Combine(cliDirectory, "SharpDeps.Cli.dll"),
+            McpDll = Path.Combine(mcpDirectory, "SharpDeps.Mcp.dll")
+        }, directory, deadline.Token));
+        Assert.Contains("shared engine DLLs", error.Message, StringComparison.Ordinal);
+        var identityBytes = File.ReadAllBytes(Path.Combine(directory, "identity.json"));
+        using var identity = JsonDocument.Parse(identityBytes);
+        var comparison = identity.RootElement.GetProperty("sharedEngine");
+        Assert.Equal("rejected", comparison.GetProperty("status").GetString());
+        var rejected = Assert.Single(comparison.GetProperty("files").EnumerateArray(), file => file.GetProperty("name").GetString() == name);
+        Assert.Equal(fault == "different" ? "different" : "missing", rejected.GetProperty("status").GetString());
+        if (fault == "different")
+        {
+            Assert.Equal(rejected.GetProperty("cliBytes").GetInt64(), rejected.GetProperty("mcpBytes").GetInt64());
+            Assert.NotEqual(rejected.GetProperty("cliSha256").GetString(), rejected.GetProperty("mcpSha256").GetString());
+        }
+        else
+            Assert.Equal(JsonValueKind.Null, rejected.GetProperty(fault == "missing-cli" ? "cliSha256" : "mcpSha256").ValueKind);
+        if (fault == "missing-both")
+            Assert.Equal(JsonValueKind.Null, rejected.GetProperty("cliSha256").ValueKind);
+        Assert.True(File.Exists(Path.Combine(directory, "failure.json")));
+        using var manifest = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "artifact-manifest.json")));
+        var retainedIdentity = Assert.Single(manifest.RootElement.EnumerateArray(), file => file.GetProperty("path").GetString() == "identity.json");
+        Assert.Equal(FixedQueryReplay.Hash(identityBytes), retainedIdentity.GetProperty("sha256").GetString());
+        Assert.False(File.Exists(Path.Combine(directory, "mcp-argv.json")));
+        Assert.False(Directory.Exists(Path.Combine(directory, "must-not-run")));
     }
 
     [Fact]
@@ -32,7 +116,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             new("overloads", "Service.Run", ProjectId: fixture.Project, VariantId: fixture.Variant),
             new("partial-and-huge-type", "Service", ProjectId: fixture.Project, VariantId: fixture.Variant),
             new("partial-path", "Service", ProjectId: fixture.Project, VariantId: fixture.Variant, PathPrefix: "src/Service.Partial.cs"),
-            new("agent-source", fixture.Member, Format: "agent"),
+            new("agent-source", fixture.Member, Format: "agent", MaxMilliseconds: 2000, PrepareMaxMilliseconds: 5000),
             new("escaped-budget", fixture.Huge, MaxChars: 2048, MaxBytes: 2048),
             new("large-budget-retry", fixture.Huge, MaxChars: 1000000, MaxBytes: 4000000),
             new("no-match", "NoSuchSavedSymbol", ScopePolicy: "unique"),
@@ -68,11 +152,31 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             Assert.DoesNotContain("--metrics-directory", File.ReadAllText(Path.Combine(withoutMetricsDirectory, "mcp-argv.json")), StringComparison.Ordinal);
             Assert.DoesNotContain("--metrics-directory", File.ReadAllText(Path.Combine(Path.GetDirectoryName(disabled.ReceiptPath)!, "cli-argv.json")), StringComparison.Ordinal);
         }
+        var exploreRequestOrdinal = 0;
         foreach (var observation in observations)
         {
+            exploreRequestOrdinal++;
             using var receipt = JsonDocument.Parse(File.ReadAllBytes(observation.ReceiptPath));
+            var requested = cases.Single(item => item.Id == observation.Id);
+            var effective = receipt.RootElement.GetProperty("effective");
+            Assert.Equal("split-v1", effective.GetProperty("budgetContract").GetString());
+            Assert.Equal(requested.PrepareMaxMilliseconds ?? 30000, effective.GetProperty("prepareMaxMilliseconds").GetInt32());
+            Assert.Equal(requested.MaxMilliseconds ?? 1000, effective.GetProperty("maxMilliseconds").GetInt32());
+            Assert.Equal((requested.PrepareMaxMilliseconds ?? 30000) + (requested.MaxMilliseconds ?? 1000),
+                effective.GetProperty("totalMaxMilliseconds").GetInt32());
+            var caseDirectory = Path.GetDirectoryName(observation.ReceiptPath)!;
+            using var cliArguments = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(caseDirectory, "cli-argv.json")));
+            using var mcpRequest = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(caseDirectory, "mcp.request.json")));
+            var arguments = cliArguments.RootElement.GetProperty("arguments").EnumerateArray().Select(value => value.GetString()).ToArray();
+            var toolArguments = mcpRequest.RootElement.GetProperty("params").GetProperty("arguments");
+            AssertBudgetArgument("--max-milliseconds", "maxMilliseconds", requested.MaxMilliseconds);
+            AssertBudgetArgument("--prepare-max-milliseconds", "prepareMaxMilliseconds", requested.PrepareMaxMilliseconds);
             foreach (var host in new[] { "cli", "mcp" })
             {
+                var process = receipt.RootElement.GetProperty(host);
+                Assert.Equal(host == "cli" || exploreRequestOrdinal == 1 ? "fresh" : "reused", process.GetProperty("processState").GetString());
+                Assert.Equal(host == "cli" ? 1 : exploreRequestOrdinal, process.GetProperty("exploreRequestOrdinal").GetInt32());
+                Assert.Equal("unknown", process.GetProperty("osCacheState").GetString());
                 var phases = receipt.RootElement.GetProperty("phaseMetrics").GetProperty(host);
                 if (observation.Id == "unsupported-selection")
                 {
@@ -96,6 +200,18 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
                 }
                 else
                     Assert.True(phases.GetProperty("phaseMilliseconds").GetProperty("sourceVerification").GetDouble() >= 0);
+            }
+
+            void AssertBudgetArgument(string option, string property, int? value)
+            {
+                var position = Array.IndexOf(arguments, option);
+                Assert.Equal(value.HasValue, position >= 0);
+                Assert.Equal(value.HasValue, toolArguments.TryGetProperty(property, out var supplied));
+                if (value is { } milliseconds)
+                {
+                    Assert.Equal(milliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture), arguments[position + 1]);
+                    Assert.Equal(milliseconds, supplied.GetInt32());
+                }
             }
         }
         Assert.Contains(member.Units, unit => unit.Text == ReplayFixture.RunInt);
@@ -163,33 +279,46 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task PublicProcessesCaptureColdDeadlineAndGenerationBoundaries()
+    public async Task PublicProcessesCaptureDeadlineAndGenerationBoundaries()
     {
         using var fixture = new ReplayFixture(noise: 5000);
-        var timed = Assert.Single(await RunAsync(fixture, "deadline", [new("cold-deadline", fixture.Member,
+        var timed = Assert.Single(await RunAsync(fixture, "deadline", [new("query-deadline", fixture.Member,
             MaxMilliseconds: 10, Equivalence: "deadline-sensitive")]));
-        var cliTimedOut = timed.CliText.Contains("QUERY_TIMEOUT", StringComparison.Ordinal);
-        var mcpTimedOut = timed.McpText!.Contains("QUERY_TIMEOUT", StringComparison.Ordinal);
-        foreach (var text in new[] { timed.CliText, timed.McpText })
-        {
-            if (text.Contains("QUERY_TIMEOUT", StringComparison.Ordinal))
-            {
-                Assert.DoesNotContain(ReplayFixture.RunInt, text, StringComparison.Ordinal);
-            }
-            else
-            {
-                Assert.Contains(ReplayFixture.RunInt, text, StringComparison.Ordinal);
-                Assert.DoesNotContain(ReplayFixture.Unrelated, text, StringComparison.Ordinal);
-            }
-        }
-        output.WriteLine("Cold deadline observed: CLI={0}, MCP={1}. Non-triggered deadlines are not timeout coverage.", cliTimedOut, mcpTimedOut);
         using (var receipt = JsonDocument.Parse(File.ReadAllBytes(timed.ReceiptPath)))
         {
             var resolution = receipt.RootElement.GetProperty("resolution");
-            foreach (var (host, timedOut) in new[] { ("cli", cliTimedOut), ("mcp", mcpTimedOut) })
+            foreach (var (host, text, codesProperty) in new[]
+                { ("cli", timed.CliText, "cliPublicErrorCodes"), ("mcp", timed.McpText!, "publicErrorCodes") })
             {
+                var errors = resolution.GetProperty(codesProperty).EnumerateArray().Select(code => code.GetString()).ToArray();
+                var timeouts = errors.Where(code => code is "PREPARATION_TIMEOUT" or "QUERY_TIMEOUT" or "REQUEST_TIMEOUT").ToArray();
+                Assert.True(timeouts.Length <= 1);
+                var timeout = timeouts.SingleOrDefault();
+                var expectedOutcome = timeout switch
+                {
+                    "PREPARATION_TIMEOUT" => "preparation-timeout",
+                    "QUERY_TIMEOUT" => "query-timeout",
+                    "REQUEST_TIMEOUT" => "request-timeout",
+                    _ => "completed"
+                };
                 var phases = receipt.RootElement.GetProperty("phaseMetrics").GetProperty(host);
-                Assert.Equal(timedOut ? "timeout" : "completed", phases.GetProperty("requestOutcome").GetString());
+                Assert.Equal(expectedOutcome, phases.GetProperty("requestOutcome").GetString());
+                Assert.Equal(timeout, resolution.GetProperty(host + "TimeoutCode").GetString());
+                if (timeout is not null)
+                {
+                    Assert.All(errors, code => Assert.Contains(code, new[] { "PREPARATION_TIMEOUT", "QUERY_TIMEOUT", "REQUEST_TIMEOUT" }));
+                    Assert.DoesNotContain(ReplayFixture.RunInt, text, StringComparison.Ordinal);
+                }
+                else
+                {
+                    if (host == "cli")
+                        Assert.Equal(0, timed.CliExit);
+                    else
+                        Assert.False(timed.McpIsError);
+                    Assert.Contains(ReplayFixture.RunInt, text, StringComparison.Ordinal);
+                    Assert.DoesNotContain(ReplayFixture.Unrelated, text, StringComparison.Ordinal);
+                }
+                output.WriteLine("Deadline observed: {0}={1}. A completed request is not timeout coverage.", host, timeout ?? "none");
                 foreach (var phase in phases.GetProperty("phaseMilliseconds").EnumerateObject())
                 {
                     if (phase.Value.ValueKind == JsonValueKind.Null)
@@ -197,14 +326,6 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
                     else
                         Assert.True(phase.Value.GetDouble() >= 0);
                 }
-            }
-            if (cliTimedOut)
-            {
-                Assert.Contains("QUERY_TIMEOUT", resolution.GetProperty("cliPublicErrorCodes").EnumerateArray().Select(code => code.GetString()));
-            }
-            if (mcpTimedOut)
-            {
-                Assert.Contains("QUERY_TIMEOUT", resolution.GetProperty("publicErrorCodes").EnumerateArray().Select(code => code.GetString()));
             }
         }
         fixture.Publish(2);
@@ -234,7 +355,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         await Read("initialize");
         await Send("notifications/initialized", new { }, null, "initialized");
         metrics.BeginRequest();
-        await Send("tools/call", new { name = "explore", arguments = new { query = fixture.Member, format = "audit", maxMilliseconds = 0 } }, 2, "call");
+        await Send("tools/call", new { name = "explore", arguments = new { query = fixture.Member, format = "audit", maxMilliseconds = 30000 } }, 2, "call");
         await Send("notifications/cancelled", new { requestId = 2, reason = "fixed replay cancellation" }, null, "cancel");
         await Send("ping", new { }, 3, "ping");
         var classification = "response-suppressed-before-ping; cancellation acceptance not proven";
@@ -465,6 +586,63 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task PendingPreparationAbortsBeforeNextCliAndRetainsSeparatePostDrainEvidence()
+    {
+        using var fixture = new ReplayFixture();
+        var directory = ReceiptDirectory("pending-owner-block");
+        var input = Input(fixture,
+            [new("first", fixture.Member, MaxMilliseconds: 2000, PrepareMaxMilliseconds: 5000,
+                Equivalence: "deadline-sensitive"), new("must-not-run", fixture.Member)]) with
+        {
+            McpDll = typeof(FixedQueryReplay).Assembly.Location,
+            AbortOnIncompletePreparation = true
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => FixedQueryReplay.RunAsync(input, directory, deadline.Token));
+        Assert.Contains("preparation completion is unproven", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(directory, "must-not-run")));
+        var request = JsonSerializer.Deserialize<ReplayPhaseCapture>(File.ReadAllText(Path.Combine(directory, "first", "mcp.phase-metrics.json")), FixedQueryReplay.Json)!;
+        Assert.Equal("pending", request.RelatedPreparation!.Status);
+        var late = JsonSerializer.Deserialize<ReplayLatePreparation[]>(File.ReadAllText(Path.Combine(directory, "late-owners.json")), FixedQueryReplay.Json)!;
+        var terminal = Assert.Single(late);
+        Assert.Equal(ReplayOwnerDrainProbe.OwnerId, terminal.PreparationOwnerId);
+        Assert.Equal("recorded", terminal.Capture.Status);
+        Assert.Equal("cancelled", terminal.Capture.RunOutcome);
+        using var summary = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "summary.json")));
+        Assert.Equal("aborted-incomplete-preparation", summary.RootElement.GetProperty("status").GetString());
+        Assert.Equal("must-not-run", Assert.Single(summary.RootElement.GetProperty("missingCaseIds").EnumerateArray()).GetString());
+        Assert.True(summary.RootElement.GetProperty("mcpShutdown").GetProperty("ownedProcessesDrained").GetBoolean());
+        Assert.True(summary.RootElement.GetProperty("mcpShutdown").GetProperty("graceful").GetBoolean());
+        Assert.False(summary.RootElement.GetProperty("mcpShutdown").GetProperty("killed").GetBoolean());
+        using var probe = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Root, "owner-probe-shutdown.json")));
+        Assert.Equal(1, probe.RootElement.GetProperty("calls").GetInt32());
+        Assert.True(probe.RootElement.GetProperty("ownerCompletedAfterEof").GetBoolean());
+        output.WriteLine("Pending owner block receipts: {0}", directory);
+    }
+
+    [Fact]
+    public async Task NonExitingShutdownIsBoundedAndNeverReportedAsSuccessfulDrain()
+    {
+        var directory = ReceiptDirectory("non-exiting-shutdown");
+        Directory.CreateDirectory(directory);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await using var process = new ReplayProcess(directory, FixedQueryReplay.Dotnet,
+            [typeof(FixedQueryReplay).Assembly.Location, "--replay-non-exiting-probe"]);
+        Assert.Equal("ready", Encoding.UTF8.GetString(await process.ReadLineAsync(deadline.Token)).Trim());
+        var shutdown = await process.ShutdownAsync(TimeSpan.FromMilliseconds(100)).WaitAsync(deadline.Token);
+        Assert.False(shutdown.Graceful);
+        Assert.True(shutdown.Killed);
+        Assert.True(shutdown.ProcessExited);
+        Assert.False(shutdown.OwnedProcessesDrained);
+        Assert.NotNull(shutdown.Error);
+        Assert.Null(shutdown.Capture);
+        Assert.False(deadline.IsCancellationRequested);
+        FixedQueryReplay.WriteJson(Path.Combine(directory, "shutdown.json"), shutdown);
+        FixedQueryReplay.WriteManifest(directory);
+        output.WriteLine("Non-exiting shutdown receipts: {0}", directory);
+    }
+
+    [Fact]
     public async Task ProcessExitDrainsTrailingStdoutBeforeWaiting()
     {
         var directory = ReceiptDirectory("drain-probe");
@@ -497,6 +675,8 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         var directory = ReceiptDirectory(label);
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var result = await FixedQueryReplay.RunAsync(Input(fixture, cases, trusted), directory, deadline.Token);
+        using var identity = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "identity.json")));
+        Assert.Equal("identical", identity.RootElement.GetProperty("sharedEngine").GetProperty("status").GetString());
         output.WriteLine("Replay receipts: {0}", directory);
         return result;
     }
@@ -507,17 +687,22 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
 
     private static ReplayInput Input(ReplayFixture fixture, IReadOnlyList<ReplayCase> cases, bool trusted = true)
     {
-        var analyzer = new DirectoryInfo(AppContext.BaseDirectory);
-        while (analyzer is not null && !File.Exists(Path.Combine(analyzer.FullName, "SharpDeps.Analyzer.slnx")))
+        var repository = Environment.GetEnvironmentVariable("SHARPDEPS_REPLAY_REPOSITORY_ROOT");
+        if (repository is null)
         {
-            analyzer = analyzer.Parent;
+            var analyzer = new DirectoryInfo(AppContext.BaseDirectory);
+            while (analyzer is not null && !File.Exists(Path.Combine(analyzer.FullName, "SharpDeps.Analyzer.slnx")))
+                analyzer = analyzer.Parent;
+            Assert.NotNull(analyzer);
+            repository = analyzer.Parent!.FullName;
         }
-        Assert.NotNull(analyzer);
-        var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var cli = Path.Combine(analyzer.FullName, "src", "SharpDeps.Cli", "bin", configuration, "net10.0", "SharpDeps.Cli.dll");
-        var mcp = Path.Combine(analyzer.FullName, "src", "SharpDeps.Mcp", "bin", configuration, "net10.0", "SharpDeps.Mcp.dll");
+        Assert.True(Path.IsPathFullyQualified(repository));
+        Assert.True(File.Exists(Path.Combine(repository, "analyzer", "SharpDeps.Analyzer.slnx")));
+        // The test project's executable references copy complete same-build hosts here, including isolated artifact builds.
+        var cli = Path.Combine(AppContext.BaseDirectory, "SharpDeps.Cli.dll");
+        var mcp = Path.Combine(AppContext.BaseDirectory, "SharpDeps.Mcp.dll");
         Assert.True(File.Exists(cli), cli);
         Assert.True(File.Exists(mcp), mcp);
-        return new(fixture.Root, cli, mcp, analyzer.Parent!.FullName, cases, trusted, PhaseMetrics: true);
+        return new(fixture.Root, cli, mcp, repository, cases, trusted, PhaseMetrics: true);
     }
 }

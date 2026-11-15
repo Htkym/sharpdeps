@@ -19,24 +19,8 @@ internal static class ExploreRequestFactory
 
     internal static ExploreRequest Validate(ExploreRequest request)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        QueryText(request.Query, request.QueryKind);
-        Text("projectId", request.ProjectId);
-        Text("variantId", request.VariantId);
-        Text("pathPrefix", request.PathPrefix);
-        Text("pathTo", request.PathTo);
-        var budget = request.Budget ?? Budget();
-        if (!Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy)
-            || request.QueryKind == ExploreQueryKind.HttpGetLiteral && request.PathTo is not null
-            || request.ScopePolicy == ExploreScopePolicy.Discover
-                && (request.QueryKind != ExploreQueryKind.Symbol || request.PathTo is not null
-                    || ExplorationService.HasSavedIdentity(request.Query))
-            || budget.MaxNodes is < 1 or > 500 || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
-            || budget.MaxMilliseconds != 0 && (budget.MaxMilliseconds is < 10 or > 30000)
-            || budget.MaxChars is < 2048 or > 1000000
-            || budget.MaxBytes is < 2048 or > 4000000)
-            throw new CliFailure("ARGUMENT_INVALID", 2);
-        return request with { Budget = budget };
+        try { return ExplorationService.Normalize(request); }
+        catch (ArgumentException) { throw new CliFailure("ARGUMENT_INVALID", 2); }
     }
 
     internal static void QueryText(string? value, ExploreQueryKind kind)

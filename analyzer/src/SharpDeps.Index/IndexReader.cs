@@ -16,25 +16,82 @@ public sealed class IndexReader : IDisposable
     private readonly int schemaVersion;
     private readonly bool utf8Rows;
     private readonly bool singleGeneration;
+    private readonly bool ownsConnection;
     private IndexSnapshot? cachedSnapshot;
     private bool disposed;
-    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath,bool utf8Rows,bool singleGeneration)
-    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath;this.utf8Rows=utf8Rows;this.singleGeneration=singleGeneration; }
+    private Action? onDisposed;
+    private IndexReader(SqliteConnection connection,SqliteTransaction transaction,HarnessGraphEnvelope header,string hash,int schemaVersion,string indexPath,bool utf8Rows,bool singleGeneration,bool ownsConnection)
+    { this.connection=connection;this.transaction=transaction;this.header=header;ManifestHash=hash;this.schemaVersion=schemaVersion;IndexPath=indexPath;this.utf8Rows=utf8Rows;this.singleGeneration=singleGeneration;this.ownsConnection=ownsConnection; }
     public string ManifestHash { get; }
     public string IndexPath { get; }
     public int SchemaVersion => schemaVersion;
     internal IReadOnlyDictionary<string, HarnessNode> ValidatedNodes { get; private set; } = null!;
     internal IReadOnlyDictionary<string, HarnessSymbolOccurrence> ValidatedOccurrences { get; private set; } = null!;
     internal IReadOnlyDictionary<string, IndexFile> ValidatedFiles { get; private set; } = null!;
+    internal bool LeaseClosedCleanly { get; private set; }
+    internal SqliteTransaction Transaction => transaction;
+    internal sealed record ValidatedState(IndexSnapshot Snapshot, string ManifestHash, int SchemaVersion,
+        IReadOnlyDictionary<string, HarnessNode> Nodes,
+        IReadOnlyDictionary<string, HarnessSymbolOccurrence> Occurrences,
+        IReadOnlyDictionary<string, IndexFile> Files);
+
+    internal ValidatedState CaptureValidatedState()
+        => new(cachedSnapshot ?? throw new InvalidOperationException("Snapshot validation has not completed."),
+            ManifestHash, schemaVersion, ValidatedNodes, ValidatedOccurrences, ValidatedFiles);
+
+    internal bool RestoreValidatedState(ValidatedState state)
+    {
+        var saved = state.Snapshot.Graph;
+        if (state.SchemaVersion != schemaVersion || state.ManifestHash != ManifestHash
+            || saved.WorkspaceId != header.WorkspaceId || saved.SnapshotId != header.SnapshotId
+            || saved.Generation != header.Generation || saved.Format != header.Format
+            || saved.SchemaVersion != header.SchemaVersion || saved.IdentityVersion != header.IdentityVersion
+            || saved.Coverage != header.Coverage || saved.Markdown != header.Markdown)
+            return false;
+        cachedSnapshot = state.Snapshot;
+        ValidatedNodes = state.Nodes;
+        ValidatedOccurrences = state.Occurrences;
+        ValidatedFiles = state.Files;
+        return true;
+    }
+
+    internal void ReleaseLeaseWith(Action callback)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (onDisposed is not null) throw new InvalidOperationException("Reader already has a lease owner.");
+        onDisposed = callback;
+    }
+
     public static IndexReader Open(string indexPath,Guid workspaceUuid,CancellationToken token=default)
     {
         using var metricsScope = PhaseMetrics.Measure("reader.open");
         token.ThrowIfCancellationRequested();
-        var workspace=HarnessIdentity.WorkspaceId(workspaceUuid);var path=IndexPaths.Absolute(indexPath);
+        var path=IndexPaths.Absolute(indexPath);
         if(!File.Exists(path))throw new IndexStoreException("INDEX_NOT_FOUND", "No saved index exists.");
         IndexDatabase.InspectHeader(path);
         token.ThrowIfCancellationRequested();
-        var connection=IndexDatabase.Open(path,readOnly:true);SqliteTransaction? transaction=null;
+        var connection=IndexDatabase.Open(path,readOnly:true);
+        IndexReader? result = null;
+        try
+        {
+            result = Begin(connection, path, workspaceUuid, ownsConnection: true, token);
+            _ = result.Snapshot(token);
+            token.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch
+        {
+            if (result is not null) result.Dispose();
+            else connection.Dispose();
+            throw;
+        }
+    }
+
+    internal static IndexReader Begin(SqliteConnection connection, string path, Guid workspaceUuid,
+        bool ownsConnection, CancellationToken token)
+    {
+        var workspace = HarnessIdentity.WorkspaceId(workspaceUuid);
+        SqliteTransaction? transaction = null;
         try
         {
             using var progress=new ReadCancellation(connection,token);
@@ -68,12 +125,12 @@ public sealed class IndexReader : IDisposable
             var manifestHash=row.GetString(2);row.Close();
             var singleGeneration=Convert.ToInt64(IndexDatabase.Scalar(connection,transaction,
                 "SELECT NOT EXISTS(SELECT 1 FROM generations WHERE generation<>$g)",("$g",header.Generation)))!=0;
-            var result=new IndexReader(connection,transaction,header,manifestHash,schemaVersion,path,utf8Rows,singleGeneration);
-            _=result.Snapshot(token);token.ThrowIfCancellationRequested();return result;
+            token.ThrowIfCancellationRequested();
+            return new IndexReader(connection,transaction,header,manifestHash,schemaVersion,path,utf8Rows,singleGeneration,ownsConnection);
         }
         catch(SqliteException error) when(token.IsCancellationRequested && error.SqliteErrorCode==SQLitePCL.raw.SQLITE_INTERRUPT)
-        {transaction?.Dispose();connection.Dispose();throw new OperationCanceledException("Saved index read was cancelled.",error,token);}
-        catch{transaction?.Dispose();connection.Dispose();throw;}
+        {transaction?.Dispose();throw new OperationCanceledException("Saved index read was cancelled.",error,token);}
+        catch{transaction?.Dispose();throw;}
     }
     public IndexSnapshot Snapshot(CancellationToken token=default)
     {
@@ -325,5 +382,14 @@ public sealed class IndexReader : IDisposable
         }
     }
     public void Dispose()
-    {if(disposed)return;disposed=true;try{transaction.Dispose();}finally{connection.Dispose();}}
+    {
+        if (disposed) return;
+        disposed = true;
+        try { transaction.Dispose(); LeaseClosedCleanly = true; }
+        finally
+        {
+            try { if (ownsConnection) connection.Dispose(); }
+            finally { onDisposed?.Invoke(); }
+        }
+    }
 }

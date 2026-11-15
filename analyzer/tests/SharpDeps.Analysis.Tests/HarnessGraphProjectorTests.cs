@@ -370,7 +370,7 @@ public sealed class HarnessGraphProjectorTests : IDisposable
         Assert.Equal(graph.Coverage, conflicted.Coverage);
 
         var unavailable = Project(sample with { Evidence = sample.Evidence.Select(value => value with
-        { Evidence = value.Evidence with { SourceContentHash = null } }).ToArray() });
+        { Evidence = value.Evidence with { SourceContentHash = null! } }).ToArray() });
         Assert.DoesNotContain(unavailable.Edges, edge => edge.ExtensionBinding is not null);
         Assert.Equal(graph.Edges.Count, unavailable.Edges.Count);
     }

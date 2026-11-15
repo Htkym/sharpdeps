@@ -20,10 +20,10 @@
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(SharpDepsUseMarkdownSessionCandidate)' == 'true'">
-    <DefineConstants>$(DefineConstants);SHARPDEPS_MARKDOWN_SESSION_CANDIDATE</DefineConstants>
+  <PropertyGroup Condition="'$(SharpDepsUseMarkdownSessions)' == 'true'">
+    <DefineConstants>$(DefineConstants);SHARPDEPS_MARKDOWN_SESSIONS</DefineConstants>
     <UseArtifactsOutput>true</UseArtifactsOutput>
-    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)../.local/markdown-session-candidate</ArtifactsPath>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)../.local/markdown-runtime-verification</ArtifactsPath>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <NuGetLockFilePath>$(ArtifactsPath)/locks/$(MSBuildProjectName).packages.lock.json</NuGetLockFilePath>
   </PropertyGroup>

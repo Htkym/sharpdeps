@@ -53,6 +53,11 @@ jobs:
       - name: C# tests
         run: dotnet test analyzer/SharpDeps.Analyzer.slnx -c Release
 
+      - name: Verify the formal Markdown runtime and source pair
+        run: |
+          node --test eng/markdown/Verify-ConsumerArtifacts.Tests.mjs
+          node eng/markdown/Verify-ConsumerArtifacts.mjs eng/markdown/feed/pair-manifest-2.0.0.json eng/markdown/feed analyzer/src/SharpDeps.Analysis.Markdown/obj/project.assets.json
+
       - name: TypeScript and analyzer contract tests
         run: npm test
 

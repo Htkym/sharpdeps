@@ -57,7 +57,7 @@ internal sealed class MarkdownPreparedCache
     }
 
     private sealed record Entry(MarkdownPreparedInput Prepared,
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+#if SHARPDEPS_MARKDOWN_SESSIONS
         MarkdownParseSession? Session,
 #endif
         long SourceUtf16, long Items, long Stamp);
@@ -107,7 +107,7 @@ internal sealed class MarkdownPreparedCache
             }
             hit = false;
             MarkdownPreparedInput prepared;
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+#if SHARPDEPS_MARKDOWN_SESSIONS
             MarkdownParseSession? session = null;
             if ((long)request.RawText.Length * 2 <= owner.maximumSourceUtf16)
             {
@@ -153,7 +153,7 @@ internal sealed class MarkdownPreparedCache
             var weight = CountItems(prepared, owner.maximumItems, token);
             var length = Math.Max(1, request.RawText.Length);
             long retainedLength = length;
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+#if SHARPDEPS_MARKDOWN_SESSIONS
             if (session is not null)
             {
                 var sessionWeight = weight + session.OutputItems + 2L * (session.ParsedBlocks + session.ReusedBlocks);
@@ -188,7 +188,7 @@ internal sealed class MarkdownPreparedCache
                 items -= oldest.Value.Items;
             }
             entries.Add(key, new(prepared,
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+#if SHARPDEPS_MARKDOWN_SESSIONS
                 session,
 #endif
                 retainedLength, weight, ++stamp));

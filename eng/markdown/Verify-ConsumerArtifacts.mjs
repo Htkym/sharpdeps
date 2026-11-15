@@ -58,15 +58,30 @@ for (const kind of ['runtime', 'source']) {
 const assets = read(args[2]);
 const runtimeId = pin.artifacts.runtime.packageId;
 const runtimeKey = runtimeId + '/' + pin.componentVersion;
-const yamlKey = pin.dependencies[0].packageId + '/' + pin.dependencies[0].version;
-if (!assets.libraries[runtimeKey] || !assets.libraries[yamlKey])
-  throw new Error('Restored runtime/dependency exact versions missing');
+if (!assets.libraries[runtimeKey]) throw new Error('Restored runtime exact version missing');
 const runtimeVersions = Object.keys(assets.libraries).filter((k) => k.startsWith(runtimeId + '/'));
-const yamlVersions = Object.keys(assets.libraries).filter((k) =>
-  k.startsWith(pin.dependencies[0].packageId + '/')
+if (runtimeVersions.length !== 1) throw new Error('Ambiguous restored package version');
+const dependencyVersions = {};
+for (const dependency of pin.dependencies) {
+  const key = dependency.packageId + '/' + dependency.version;
+  const versions = Object.keys(assets.libraries).filter((k) =>
+    k.startsWith(dependency.packageId + '/')
+  );
+  if (!assets.libraries[key] || versions.length !== 1)
+    throw new Error(
+      'Restored dependency exact version missing or ambiguous: ' + dependency.packageId
+    );
+  dependencyVersions[dependency.packageId] = dependency.version;
+}
+const runtimeTargets = Object.values(assets.targets).flatMap((target) =>
+  target[runtimeKey] ? [target[runtimeKey]] : []
 );
-if (runtimeVersions.length !== 1 || yamlVersions.length !== 1)
-  throw new Error('Ambiguous restored package version');
+if (runtimeTargets.length === 0) throw new Error('Restored runtime target missing');
+for (const target of runtimeTargets) {
+  const dependencies = target.dependencies ?? {};
+  if (!same(Object.keys(dependencies).sort(), Object.keys(dependencyVersions).sort()))
+    throw new Error('Restored runtime dependency set differs from the pinned contract');
+}
 const relative = assets.libraries[runtimeKey].path;
 if (relative !== 'syntamark/' + pin.componentVersion)
   throw new Error('Unexpected restored package path');
@@ -85,7 +100,7 @@ for (const folder of Object.keys(assets.packageFolders)) {
   break;
 }
 if (!restored) throw new Error('Restored runtime package bytes unavailable');
-if (pin.developmentOnly === true) {
+{
   const sourceId = pin.artifacts.source.packageId;
   const sourceKey = sourceId + '/' + pin.componentVersion;
   if (
@@ -121,6 +136,7 @@ process.stdout.write(
     state: 'ARTIFACT_GATE_PASS',
     checked,
     restored,
-    yamlVersion: pin.dependencies[0].version
+    dependencyVersions,
+    yamlVersion: dependencyVersions.YamlDotNet ?? null
   }) + '\n'
 );

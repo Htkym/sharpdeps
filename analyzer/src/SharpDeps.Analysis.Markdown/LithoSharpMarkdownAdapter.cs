@@ -87,7 +87,7 @@ public sealed partial class LithoSharpMarkdownAdapter
         MarkdownDocument facts, MarkdownSyntaxNode? syntaxRoot, CancellationToken cancellationToken)
     {
         MarkdownRuntimePin.RequireFacts(facts);
-        var (attributes, ignored) = Metadata(facts.FrontMatter.Root);
+        var (attributes, ignored) = Metadata(facts.FrontMatter);
         cancellationToken.ThrowIfCancellationRequested();
         return new(request, options, facts, attributes, ignored, syntaxRoot);
     }
@@ -247,10 +247,12 @@ public sealed partial class LithoSharpMarkdownAdapter
         }
     }
 
-    private static (List<MarkdownMetadataValue> Values, List<string> Ignored) Metadata(MarkdownYamlNode? root)
+    private static (List<MarkdownMetadataValue> Values, List<string> Ignored) Metadata(MarkdownFrontMatter frontMatter)
     {
         var values = new List<MarkdownMetadataValue>();
         var ignored = new List<string>();
+        // Native YAML retains invalid syntax for inspection; only parsed metadata can drive graph meaning.
+        var root = frontMatter.State == MarkdownFrontMatterState.Parsed ? frontMatter.Root : null;
         if (root?.Kind != MarkdownYamlKind.Mapping) return (values, ignored);
         foreach (var (key, value) in Entries(root))
         {

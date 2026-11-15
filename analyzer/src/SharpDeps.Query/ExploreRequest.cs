@@ -32,6 +32,8 @@ public sealed record ExploreRequest(string Query, string? ProjectId = null, stri
     QueryBudget? Budget = null, ExploreFormat Format = ExploreFormat.Audit,
     ExploreScopePolicy ScopePolicy = ExploreScopePolicy.RequireUnique, string? PathTo = null)
 {
+    /// <summary>Finite preparation budget for validation and standard query-independent indexes.</summary>
+    public int PrepareMaxMilliseconds { get; init; } = 30000;
     public bool ObserveOwner { get; init; }
     public ExploreQueryKind QueryKind { get; init; }
 }

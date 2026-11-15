@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <!-- Compile only against the APIs used by Program.cs, never the dirty replay/test projects. -->
+    <Reference Include="$(ProductRoot)/SharpDeps.Analysis.Contracts.dll" />
+    <Reference Include="$(ProductRoot)/SharpDeps.Analysis.Core.dll" />
+    <Reference Include="$(ProductRoot)/SharpDeps.Index.dll" />
+    <!-- Register SQLite's dynamically discovered initialization/runtime assemblies in deps.json. -->
+    <Reference Include="$(ProductRoot)/SQLitePCLRaw.batteries_v2.dll" />
+    <Reference Include="$(ProductRoot)/SQLitePCLRaw.provider.e_sqlite3.dll" />
+    <!-- Preserve the unchanged frozen runtime closure without making unused DLLs compiler references. -->
+    <Content Include="$(ProductRoot)/*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(ProductRoot)/runtimes/**/*" Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="RequireProduct" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(ProductRoot)/SharpDeps.Analysis.Contracts.dll') Or !Exists('$(ProductRoot)/SharpDeps.Analysis.Core.dll')" Text="ProductRoot must include the frozen Contracts and Core compiler references." />
+    <Error Condition="!Exists('$(ProductRoot)/SharpDeps.Index.dll')" Text="ProductRoot must identify the existing, frozen MCP product directory." />
+    <Error Condition="!Exists('$(ProductRoot)/SQLitePCLRaw.batteries_v2.dll') Or !Exists('$(ProductRoot)/SQLitePCLRaw.provider.e_sqlite3.dll')" Text="ProductRoot must include the frozen SQLite initialization and provider runtime assemblies." />
+    <Error Condition="!Exists('$(ProductRoot)/runtimes/win-x64/native/e_sqlite3.dll')" Text="This Windows-x64 fixture requires the frozen ProductRoot/runtimes/win-x64/native/e_sqlite3.dll." />
+  </Target>
+  <!-- Binary references do not add native runtime assets to this helper's deps.json. -->
+  <Target Name="CopyWindowsX64SqliteForFixture" AfterTargets="Build">
+    <Copy SourceFiles="$(ProductRoot)/runtimes/win-x64/native/e_sqlite3.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

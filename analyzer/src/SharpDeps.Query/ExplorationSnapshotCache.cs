@@ -21,6 +21,9 @@ internal sealed class ExplorationSnapshot
     internal readonly IReadOnlyDictionary<string, IndexFile> files;
     internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> outgoing;
     internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> incoming;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessNode>> members;
+    internal readonly IReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>> documentEdges;
+    internal readonly IReadOnlyDictionary<string, string> storedBodies;
     private ExplorationSearchIndex? searchIndex;
     private readonly SemaphoreSlim searchGate = new(1, 1);
     internal readonly FrozenSet<string> savedPaths;
@@ -41,6 +44,31 @@ internal sealed class ExplorationSnapshot
         // Expand imposes its own total edge order; avoid sorting every unused adjacency group.
         outgoing = Group(frozen.Graph.Edges, edge => edge.SourceNodeId, null, token);
         incoming = Group(frozen.Graph.Edges, edge => edge.TargetNodeId, null, token);
+        members = Group(MemberNodes(), node => node.ParentId!, null, token);
+        var documentEdgeBuilder = new Dictionary<string, IReadOnlyList<HarnessEdge>>(StringComparer.Ordinal);
+        foreach (var (section, edges) in Group(DocumentCodeEdges(), item => item.Section, null, token))
+        {
+            var values = new HarnessEdge[edges.Count];
+            for (var i = 0; i < values.Length; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                values[i] = edges[i].Edge;
+            }
+            documentEdgeBuilder.Add(section, Array.AsReadOnly(values));
+        }
+        documentEdges = new ReadOnlyDictionary<string, IReadOnlyList<HarnessEdge>>(documentEdgeBuilder);
+        var bodyBuilder = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var body in frozen.StoredGeneratedBodies)
+        {
+            token.ThrowIfCancellationRequested();
+            bodyBuilder.Add(body.SourceId, body.Body);
+        }
+        foreach (var body in frozen.StoredPackageBodies)
+        {
+            token.ThrowIfCancellationRequested();
+            bodyBuilder.Add(body.SourceId, body.Body);
+        }
+        storedBodies = new ReadOnlyDictionary<string, string>(bodyBuilder);
         var savedPathBuilder = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in frozen.Files)
         {
@@ -50,7 +78,51 @@ internal sealed class ExplorationSnapshot
         }
         savedPaths = savedPathBuilder.ToFrozenSet(StringComparer.Ordinal);
         token.ThrowIfCancellationRequested();
+
+        IEnumerable<HarnessNode> MemberNodes()
+        {
+            foreach (var node in frozen.Graph.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (node.Kind == HarnessNodeKind.Member && node.ParentId is not null) yield return node;
+            }
+        }
+
+        IEnumerable<(string Section, HarnessEdge Edge)> DocumentCodeEdges()
+        {
+            foreach (var node in frozen.Graph.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!IsDocument(node)) continue;
+                string? sectionId = null;
+                string SectionId()
+                {
+                    if (sectionId is not null) return sectionId;
+                    var section = node;
+                    while (section.Kind is not (HarnessNodeKind.Section or HarnessNodeKind.Document)
+                        && section.ParentId is { } parent && nodes.TryGetValue(parent, out var ancestor))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        section = ancestor;
+                    }
+                    return sectionId = section.Id;
+                }
+                foreach (var edge in outgoing.GetValueOrDefault(node.Id) ?? [])
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!IsDocument(nodes[edge.TargetNodeId])) yield return (SectionId(), edge);
+                }
+                foreach (var edge in incoming.GetValueOrDefault(node.Id) ?? [])
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!IsDocument(nodes[edge.SourceNodeId])) yield return (SectionId(), edge);
+                }
+            }
+        }
     }
+
+    internal static bool IsDocument(HarnessNode node) => node.Kind is HarnessNodeKind.Document or HarnessNodeKind.Section
+        or HarnessNodeKind.FrontMatter or HarnessNodeKind.CodeFence or HarnessNodeKind.LinkTarget or HarnessNodeKind.SymbolMention;
 
     internal sealed record ExplorationSearchIndex(
         IReadOnlyDictionary<string, ExplorationSearchMetadata> Search,

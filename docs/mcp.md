@@ -75,10 +75,10 @@ The host fixes root, index and source trust at startup. Add `--trusted` only whe
 The default tool list contains only `explore`. Call that connected tool with a **flat arguments object**:
 
 ```json
-{"query":"OrderService","format":"agent","maxMilliseconds":8000}
+{"query":"OrderService","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}
 ```
 
-`query` must be a string. Scope and budget fields are siblings of `query`. The nested shape `{"query":{"query":"OrderService","maxMilliseconds":8000}}` is invalid and is rejected before searching. Inspect the advertised schema and call details if the client reports `MCP_ARGUMENT_INVALID`.
+`query` must be a string. Scope and budget fields are siblings of `query`. The nested shape `{"query":{"query":"OrderService","maxMilliseconds":1000}}` is invalid and is rejected before searching. Inspect the advertised schema and call details if the client reports `MCP_ARGUMENT_INVALID`.
 
 | Argument | Meaning |
 | --- | --- |
@@ -91,9 +91,10 @@ The default tool list contains only `explore`. Call that connected tool with a *
 | `format` | `agent` (default) or `audit`. |
 | `ownerStatus` | Optional bounded observation of an existing coordinator; does not prove freshness. |
 | `maxChars`, `maxBytes` | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes. |
-| `maxMilliseconds` | Shared preparation/exploration computation budget; default 1,000 ms. |
+| `prepareMaxMilliseconds` | Unreleased preparation computation budget; default 30,000 ms. |
+| `maxMilliseconds` | Unreleased query-only computation budget; default 1,000 ms. |
 
-Positive computation budgets range from 10 to 30,000 ms. The existing value `0` disables that computation deadline; caller cancellation and other limits still apply. Prefer an explicitly chosen finite budget for unattended AI use. For a large cold index, the default can expire during preparation. The finite 8000 ms example does not guarantee completion or change that default. MCP has no separate preparation-budget argument.
+In the unreleased split-v1 contract, both computation budgets must be finite values from 10 to 30,000 ms; `0` is rejected for `explore`. Omitting both fields, as in `{"query":"OrderService","format":"agent"}`, selects preparation 30,000 ms and query 1,000 ms. The query default is an initial policy choice, not a guarantee that complete `DbContext` exploration or another workload finishes in one second. Published 0.4.0 retains its shared-budget behavior; use its tagged guide and advertised schema.
 
 The tool returns one text content block, without duplicating the evidence in `structuredContent`. Source is data, not instructions. Saved calls do not prove runtime dispatch, activation or network activity. AI clients may also use ordinary source search; product use alone does not establish answer quality or comparative speed/token savings.
 
@@ -147,15 +148,18 @@ Setup uses no-overwrite publication and retains temporary/backup recovery paths 
 
 ## Time budgets, freshness and recovery
 
-The default **1000 ms is an exploration computation budget**, not a universal speed guarantee or a process wall-clock limit. It includes opening and fully validating the saved snapshot, preparation and exploration. Cancellation is cooperative; individual I/O/JSON operations can complete before the next check. Process startup, client permissions and transport add their own time.
-
-**Unreleased CLI only:** `--prepare-max-milliseconds 10..30000` opts into a separate finite reader-preparation budget, then starts `--max-milliseconds` for exploration. Zero is invalid for the preparation option. Omitting it preserves the shared default. For a large cold index, choose separate finite preparation and exploration budgets when this option is available. For example:
+The **unreleased split-v1** contract applies to matching newly built CLI, MCP and API consumers. `ExploreRequest.PrepareMaxMilliseconds`, CLI `--prepare-max-milliseconds` and MCP `prepareMaxMilliseconds` default to 30,000 ms for preparation. `Budget.MaxMilliseconds`, CLI `--max-milliseconds` and MCP `maxMilliseconds` default to 1,000 ms for the query only. Both values must be finite and within 10..30,000 ms; explore rejects `0`. Omitting the options selects these same defaults:
 
 ```bash
-sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent --prepare-max-milliseconds 5000 --max-milliseconds 3000
+sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent
+sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent --prepare-max-milliseconds 30000 --max-milliseconds 1000
 ```
 
-Choose finite values for your purpose, workload and caller deadline. This example is not a guarantee for another index, selector or operation. Full snapshot validation and caller cancellation remain required. Do not pass `--prepare-max-milliseconds` to MCP.
+Preparation establishes a validated frozen snapshot and all standard derived and lexical indexes, including the HttpGet projection when requested. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The P1 path fully validates a fresh reader for each request. The current P2 code draft adds a bounded long-lived MCP host: Windows can reuse previously validated state only after native physical-identity and same-connection `data_version` proof; unsupported proof and Unix use fresh full validation. This host bypasses the P1 four-entry/64 MiB serialized-payload cache and retains one ready generation by default, without a heap-byte guarantee. One-shot CLI reads stay fresh. Limited Windows builds and 306 targeted tests passed with SDK 10.0.404, including small-fixture native warm reuse. Full acceptance and real-corpus/heap/concurrency/performance measurements remain pending. See the [prepared-exploration draft and pending acceptance](development/prepared-exploration.md).
+
+One monotonic request owner bounds caller preparation/wait by `P`, query work by `Q`, and their total by `P + Q`. With request start `t0` and query start `tq`, the query deadline is `min(tq + Q, t0 + P + Q)`. P2's independent finite preparation owner may continue after the caller leaves; the request sum does not bound all later background CPU work. Cancellation is cooperative; individual I/O/JSON operations can complete before the next check. Process startup, MCP handshake, client permissions and transport are outside this computation bound. These values are not a universal latency guarantee.
+
+Migration changes the meaning of the existing `maxMilliseconds`/`--max-milliseconds` field from shared preparation/query time to query-only time. Freeze a new cohort manifest before replaying recorded inputs; do not reinterpret historical runs or compare the new values directly with the original 24-trial, shared 8-second P0 cohort. Existing recorded inputs remain unchanged. Explore's old zero/unlimited input must be replaced by an explicitly chosen finite value. Non-explore typed Query operations still allow `QueryBudget.MaxMilliseconds = 0`. Choose values for the purpose, workload and caller deadline; do not silently raise budgets or retry. This breaking behavior requires a new package version before release; published 0.4.0 is unaffected, and no release is performed by this source change. P1 does not change index schemas 1/2/3 or require an in-place migration.
 
 | Result | Action |
 | --- | --- |
@@ -163,8 +167,10 @@ Choose finite values for your purpose, workload and caller deadline. This exampl
 | `INDEX_MISSING` | Check the selected root/index. Create an index only through an authorized explicit indexing operation. |
 | `INDEX_OPEN_FAILED` | Check the selected DB, existing WAL/SHM and runtime temporary paths within existing permissions. Missing/invalid paths, OS restrictions and sandbox restrictions are different causes; the individual failing file may be unknown. |
 | Sandbox restriction supported by evidence | For a valid path and authorized operation, use the client's normal scoped permission review. Stop on denial; do not change ACLs, disable sandboxing or move/copy/checkpoint the index to bypass access controls. |
-| `PREPARATION_TIMEOUT` | With the separate CLI budget, reader preparation expired and no source was returned. |
-| `QUERY_TIMEOUT` | The computation budget expired. With a separate preparation budget this is the later stage; otherwise it can include preparation. |
+| `PREPARATION_TIMEOUT` | Preparation expired; exit 4, with no source returned. |
+| `QUERY_TIMEOUT` | The query-only allowance expired; exit 4, with no source returned. |
+| `REQUEST_TIMEOUT` | The total request computation allowance expired; exit 4, with no source returned. |
+| `CANCELLED` | Caller cancellation takes priority over deadline failures; exit 130, with no source returned. |
 | `scope-choices` or omitted source | Narrow with actual returned scope/selector values, or use permitted ordinary source search. |
 | `OUTPUT_BUDGET_TOO_SMALL` | Required metadata cannot fit; choose an appropriate finite response budget or narrow the request. |
 
@@ -172,7 +178,7 @@ Do not automatically retry failed calls, raise limits or change settings without
 
 `allow-stale` verifies returned source against saved hashes while leaving semantic freshness unverified. `require-fresh` additionally needs trusted current input/configuration proof before and after collection; failed verification returns no source. `refresh` reports `UPDATE_REQUIRED`: explicitly update through the trusted coordinator. Coverage, including Partial, is independent of freshness.
 
-`--owner-status` or MCP `ownerStatus: true` optionally observes an existing owner. It never starts analysis/watch or grants trust. Its 200 ms allowance shares the original deadline and output budget; owner state can change immediately afterward. A running owner or matching saved generation is not a current-input proof.
+`--owner-status` or MCP `ownerStatus: true` optionally observes an existing owner. It never starts analysis/watch or grants trust. Its 200 ms allowance stays within the query/request computation and output budgets; owner state can change immediately afterward. A running owner or matching saved generation is not a current-input proof.
 
 Response character/UTF-8 limits include conservative JSON escaping for one text content result, not only source text; they exclude the client-controlled JSON-RPC envelope. They are not model token counts. CLI `--max-nodes`, `--max-edges` and `--max-depth` also bound collection. Whole saved source ranges, body classification, remaining omissions and provenance must be read together.
 
@@ -196,7 +202,7 @@ Keep the previous workspace identity, DB and any WAL/SHM together. Stop owner/wa
 
 New indexes use schema 3. Readers accept schemas 1/2/3, but generated source needs schema 2 or later and package-derived source needs schema 3. Incompatible writes return `INDEX_SCHEMA_MIGRATION_REQUIRED`; there is no in-place migration. The 0.3.0 tools cannot read schema 3. Update the VS Code extension as well: its 0.2.1 reader accepts only schema 1, and updating the external CLI does not replace it.
 
-Syntamark 1.2.0 changes the Markdown parser stamp. Generations are not rewritten, and section tokens are not reused across a parser-stamp mismatch. Keep evidence tied to its own snapshot.
+The current source adopts Syntamark 2.0.0 and its native YAML contract. Its parser stamp differs from 1.2.0. Generations are not rewritten, and section tokens are not reused across a parser-stamp mismatch. Keep evidence tied to its own snapshot.
 
 ## Upgrade from 0.2.3
 

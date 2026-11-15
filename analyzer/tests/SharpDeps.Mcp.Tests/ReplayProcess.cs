@@ -5,6 +5,8 @@ using System.Text;
 
 internal sealed record ReplayCapture(byte[] Stdout, byte[] Stderr, int ExitCode, double WallMilliseconds,
     double? CpuMilliseconds, int ProcessId);
+internal sealed record ReplayShutdown(int ProcessId, bool Graceful, bool Killed, bool ProcessExited,
+    bool OwnedProcessesDrained, string? Error, ReplayCapture? Capture);
 
 internal sealed class ReplayProcess : IAsyncDisposable
 {
@@ -108,6 +110,35 @@ internal sealed class ReplayProcess : IAsyncDisposable
         }
         var error = await stderr.WaitAsync(CleanupTimeout, token);
         return new(output, error, process.ExitCode, clock.Elapsed.TotalMilliseconds, CpuMilliseconds, Id);
+    }
+
+    internal async Task<ReplayShutdown> ShutdownAsync(TimeSpan timeout)
+    {
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            var capture = await FinishAsync(deadline.Token);
+            return new(Id, true, false, true, true, null, capture);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            var killed = false;
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    killed = true;
+                }
+                await process.WaitForExitAsync().WaitAsync(CleanupTimeout);
+            }
+            catch (Exception cleanup) when (cleanup is not OutOfMemoryException)
+            {
+                return new(Id, false, killed, process.HasExited, false, error + "\nCleanup: " + cleanup, null);
+            }
+            // Exit alone is not successful stream drain or terminal owner evidence.
+            return new(Id, false, killed, true, false, error.ToString(), null);
+        }
     }
 
     internal static async Task<ReplayCapture> RunAsync(string root, string executable,

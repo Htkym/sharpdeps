@@ -44,7 +44,7 @@ dotnet tool install --global SharpDeps.Cli --version 0.4.0
 dotnet tool install --global SharpDeps.Mcp --version 0.4.0
 ```
 
-Tool installation requires an SDK; running an installed tool requires the .NET 10 runtime. Indexing additionally requires the target's SDK and restored dependencies. The CLI/MCP tools use Syntamark 1.2.0 for Markdown; that parser is not bundled in the VSIX.
+Tool installation requires an SDK; running an installed tool requires the .NET 10 runtime. Indexing additionally requires the target's SDK and restored dependencies. The published 0.4.0 CLI/MCP tools use Syntamark 1.2.0 for Markdown; the current unreleased source selects 2.0.0. Neither parser is bundled in the VSIX.
 
 The [CLI/MCP guide](docs/mcp.md) covers indexing, source queries, normal MCP connection, scope selection, trust, finite time budgets and recovery. It marks unreleased additions separately from published 0.4.0 behavior. For the released implementation, use the [0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
 
