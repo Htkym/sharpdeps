@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Keep XML output settings unchanged; public API XML comments are optional. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+</Project>
