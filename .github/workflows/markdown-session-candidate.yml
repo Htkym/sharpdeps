@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-dotnet@v6.0.0
         with:
           dotnet-version: 10.0.403
+      - name: Test artifact identity gate
+        run: node --test eng/markdown/Verify-ConsumerArtifacts.Tests.mjs
       - name: Prepare isolated SDK and feeds
         run: |
           dotnet_root="$(dirname "$(readlink -f "$(command -v dotnet)")")"

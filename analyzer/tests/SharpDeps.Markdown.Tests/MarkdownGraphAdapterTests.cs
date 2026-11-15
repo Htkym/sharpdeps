@@ -197,6 +197,10 @@ public sealed class MarkdownGraphAdapterTests
         Assert.Equal(MarkdownFrontMatterState.Absent, readme.Facts.FrontMatter.State);
         Assert.DoesNotContain(readme.Graph.Nodes, n => n.Kind == HarnessNodeKind.FrontMatter);
         Assert.DoesNotContain(readme.Facts.Diagnostics, d => d.Severity == MarkdownDiagnosticSeverity.Error);
+        var invalidMetadata = adapter.Analyze(Request("---\ntitle: first\ntitle: second\n---\n# Fallback\n"), true);
+        Assert.Equal(MarkdownFrontMatterState.Invalid, invalidMetadata.Facts.FrontMatter.State);
+        Assert.Empty(invalidMetadata.Attributes);
+        Assert.Equal("Fallback", Assert.Single(invalidMetadata.Graph.Nodes, n => n.Kind == HarnessNodeKind.Document).Name);
         var failed = adapter.Analyze(Request("\uD800"), true);
         Assert.Equal(MarkdownParseStatus.Failed, failed.Facts.Status);
         Assert.Equal(HarnessCoverage.Failed, failed.Graph.Coverage);

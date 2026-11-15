@@ -15,6 +15,47 @@ public sealed class MarkdownSymbolResolverTests
     private static readonly string Net9 = HarnessIdentity.VariantId(Workspace, ProjectId, "net9.0", "Debug");
 
     [Fact]
+    public void InvalidMetadataCannotLeakThroughPreparedCacheTransitionsOrSymbolResolution()
+    {
+        const string valid = "---\ntitle: Metadata\ntags: [Service]\nsharpdeps:\n  symbols: [Service]\n---\n# Fallback\n";
+        var invalid = valid.Replace("title: Metadata", "title: Metadata\ntitle: Duplicate", StringComparison.Ordinal);
+        var adapter = new LithoSharpMarkdownAdapter();
+        var cache = new MarkdownPreparedCache();
+        var symbol = Symbol("App.Service", "Service", "T:App.Service", "App");
+        var generation = 0;
+        foreach (var raw in new[] { valid, invalid, valid })
+        {
+            var request = new MarkdownGraphRequest(raw, Workspace, Document, "scope", "readme.md",
+                "version-" + ++generation, "snapshot-" + generation, generation);
+            using var update = cache.BeginUpdate();
+            var prepared = update.Prepare(adapter, request, true, out _);
+            var projection = adapter.Project(request, prepared, true);
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(adapter.Analyze(request, true)),
+                System.Text.Json.JsonSerializer.Serialize(projection));
+            var resolution = MarkdownSymbolResolver.ResolvePrepared(projection, prepared, Catalog(projection, symbol));
+            if (raw == invalid)
+            {
+                Assert.Equal(MarkdownFrontMatterState.Invalid, projection.Facts.FrontMatter.State);
+                Assert.Empty(projection.Attributes);
+                Assert.DoesNotContain(projection.SearchFields, field => field.Kind.StartsWith("metadata:", StringComparison.Ordinal));
+                Assert.DoesNotContain(resolution.Mentions, mention => mention.Token == "Service"
+                    || mention.Origin == MarkdownMentionOrigin.ExplicitMetadata);
+                Assert.Equal("Fallback", Assert.Single(projection.Graph.Nodes, node => node.Kind == HarnessNodeKind.Document).Name);
+            }
+            else
+            {
+                Assert.Contains(projection.SearchFields, field => field.Kind == "metadata:tags" && field.Content.Text == "Service");
+                Assert.Equal(symbol.NodeId, Assert.Single(resolution.Mentions,
+                    mention => mention.Origin == MarkdownMentionOrigin.ExplicitMetadata).TargetNodeId);
+            }
+            Assert.True(update.Adopt());
+            using var unchanged = cache.BeginUpdate();
+            Assert.Same(prepared, unchanged.Prepare(adapter, request, true, out var hit));
+            Assert.True(hit);
+        }
+    }
+
+    [Fact]
     public void ExplicitSelectorsFiltersAndLogicalVariantDedupNeverChooseAnOverload()
     {
         var first = Symbol("App.Service.Handle", "Handle", "M:App.Service.Handle(System.Int32)", "App", Net10);

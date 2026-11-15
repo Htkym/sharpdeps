@@ -27,9 +27,18 @@ public sealed class MarkdownConformanceTests
         Assert.Equal(MarkdownRuntimePin.ParserVersion, projection.Facts.ParserVersion);
         Assert.Equal(MarkdownRuntimePin.ContractVersion, projection.Facts.ContractVersion);
         Assert.Equal(MarkdownRuntimePin.ProfileId, projection.Facts.ProfileId);
+#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+        Assert.Equal(MarkdownRuntimePin.YamlProfileId, projection.Facts.YamlProfileId);
+#endif
         Assert.Null(projection.Facts.FrontMatter.FailureSpan);
         Assert.Null(projection.Facts.FrontMatter.FailureLine);
         var golden = (Dictionary<string, object?>)Normalize(projection.Facts)!;
+#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+        Assert.Equal(MarkdownFeatureState.Unsupported,
+            Assert.Single(projection.Facts.Capabilities, capability => capability.Feature == "footnotes").State);
+        golden[nameof(projection.Facts.Capabilities)] = Normalize(
+            projection.Facts.Capabilities.Where(capability => capability.Feature != "footnotes").ToArray());
+#endif
         // The old immutable oracle includes its stamp; only this root field changes with the selected parser.
         golden[nameof(projection.Facts.ParserVersion)] = fixtureFile.RootElement.GetProperty("parserVersion").GetString();
         var json = JsonSerializer.Serialize(golden);
@@ -44,7 +53,7 @@ public sealed class MarkdownConformanceTests
 
     // The same normalized property selection/order as the accepted MD-05 artifact comparison,
     // including every original nested span, source segment, diagnostic and coverage fact.
-    // The two additive 1.2 frontmatter failure fields are checked separately above.
+    // Additive failure fields, the v2 YAML profile and its disabled footnote capability are checked separately.
     private static object? Normalize(object? value)
     {
         if (value is null || value is string || value.GetType().IsPrimitive || value is decimal) return value;
@@ -52,7 +61,7 @@ public sealed class MarkdownConformanceTests
         if (value is IEnumerable sequence) return sequence.Cast<object?>().Select(Normalize).ToArray();
         var properties = value.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(p => p.GetMethod is not null && p.GetIndexParameters().Length == 0
-                && p.Name is not ("RawText" or "ContractVersion" or "ProfileId")
+                && p.Name is not ("RawText" or "ContractVersion" or "ProfileId" or "YamlProfileId")
                 && (value is not MarkdownFrontMatter || p.Name is not ("FailureSpan" or "FailureLine")))
             .OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
         Assert.NotEmpty(properties);
