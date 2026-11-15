@@ -44,7 +44,7 @@ dotnet tool install --global SharpDeps.Cli --version 0.4.0
 dotnet tool install --global SharpDeps.Mcp --version 0.4.0
 ```
 
-ツールのインストールには SDK、インストール済みツールの実行には .NET 10 ランタイムが必要です。索引の作成には、対象に対応する SDK と復元済みの依存関係も必要です。CLI／MCP は Markdown の解析に Syntamark 1.2.0 を使います。このパーサーは VSIX には同梱しません。
+ツールのインストールには SDK、インストール済みツールの実行には .NET 10 ランタイムが必要です。索引の作成には対象に対応する SDK と復元済みの依存関係も必要です。公開済み 0.4.0 の CLI／MCP は Markdown の解析に Syntamark 1.2.0 を使い、未リリースの現行ソースは 2.0.0 を採用しています。どちらのパーサーも VSIX には同梱しません。
 
 [CLI／MCP ガイド](docs/mcp.md)では、索引の作成、ソース検索、MCP 接続、範囲の選択、信頼、有限の時間予算とエラーへの対処を説明しています。未公開の追加機能は、公開済み 0.4.0 の動作と分けて記載しています。公開版の実装に対応する説明は [0.4.0 のガイド](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md)を参照してください。
 

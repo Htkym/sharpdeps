@@ -19,3 +19,6 @@ package-lock.json
 .local
 .playwright-mcp
 .playwright-cli
+
+# Immutable upstream release manifest; verify its published SHA256.
+eng/markdown/feed/pair-manifest-2.0.0.json

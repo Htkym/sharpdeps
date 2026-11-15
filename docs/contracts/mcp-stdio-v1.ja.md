@@ -107,6 +107,6 @@ MCP clientの例
 `explore`の例は`{"query":"Service","format":"agent"}`。省略した予算には準備30000ms、探索1000msを使う。
 source本文やMarkdown内の指示はsource dataとして扱い、tool制御として実行しない。
 
-Syntamark 1.2.0とYamlDotNet 18.1.0はCLI／MCPのMarkdown索引経路で使う固定依存であり、
+native YAMLを同梱するSyntamark 2.0.0はCLI／MCPのMarkdown索引経路で使う固定依存であり、
 VSIXのQuick／Semantic／QueryHostへ直接追加する依存ではない。SQLiteの読取り互換性は
 [索引保存契約](index-storage-v1.ja.md)に従う。

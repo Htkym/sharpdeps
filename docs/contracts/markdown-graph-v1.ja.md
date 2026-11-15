@@ -6,17 +6,17 @@
 
 ## 固定artifactと起動
 
-`Syntamark [1.2.0]` と `YamlDotNet [18.1.0]` をexact参照します。MD-06では共有componentのソースとpackを別のrepoへ移管し、対応するruntime/source候補を新しいimmutable版で作成しました。`markdown-runtime-pin.json` は選択版、移管先source commitと旧commitの対応、canonical hash、parser/contract/profile、依存identity、両nupkgとruntime DLL hashを固定します。MD-05のpreview.1は保持し、再pack・上書きしません。
+`Syntamark [2.0.0]` をexact参照します。同じバージョンの `Syntamark.Source [2.0.0]` も検証用に復元しますが、そのソースはコンパイルしません。native YAMLを使い、YamlDotNetへの参照は持ちません。MD-06では共有componentのソースとpackを別のrepoへ移管し、対応するruntime/source候補を新しいimmutable版で作成しました。`markdown-runtime-pin.json` は選択版、移管先source commitと旧commitの対応、canonical hash、parser/contract/profile、依存identity、両nupkgとruntime DLL hashを固定します。MD-05のpreview.1は保持し、再pack・上書きしません。
 
-restore後に `Verify-ConsumerArtifacts.mjs` で同pair、feedの両artifact、実際のrestored runtime nupkg/DLL、YamlDotNetのexact package versionを確認します。trusted Index入口では、ロード済みruntime DLL hashとYamlDotNet assembly/informational identity、callerが期待したParserVersionを照合し、不一致・確認不能を拒否します。parse後もfactsのparser/contract/profileを確認します。startupのassembly hash読取りはconsumer hostのI/Oで、共有parserのI/Oではありません。assembly version 18.0.0.0をpackage version 18.1.0と混同しません。
+restore後に `Verify-ConsumerArtifacts.mjs` で同pair、feedの両artifact、実際のrestored runtime/Source nupkg、runtime DLL、依存が空であることを確認します。trusted Index入口では、ロード済みruntime DLL hashとcallerが期待したParserVersionを照合し、不一致・確認不能を拒否します。parse後もfactsのparser/contract/profileと`native-yaml/1`を確認します。startupのassembly hash読取りはconsumer hostのI/Oで、共有parserのI/Oではありません。
 
-固定artifactは`eng/markdown/feed`に保存し、`NuGet.Config`のexact package mappingで復元します。NuGetへの公開をbootstrapの前提にしません。現行analyzer solutionはCLI／MCPとMarkdown testsを含み、参照先のMarkdown projectもビルドします。metadataの`sourceRepository`は移管先の`Htkym/syntamark`を示し、`source-history.json`は元の履歴対応を保持します。SyntamarkはCLI／MCPの依存であり、VSIXへ同梱するQuick／Semantic／QueryHostの直接依存ではありません。
+固定artifactは`eng/markdown/feed`に保存し、`NuGet.Config`のexact package mappingで復元します。2.0.0では正式GitHub Releaseのsealed原本を保存しており、その原本はNuGet署名付き版と署名以外のpayloadが一致します。現行analyzer solutionはCLI／MCPとMarkdown testsを含み、参照先のMarkdown projectもビルドします。metadataの`sourceRepository`は移管先の`Htkym/syntamark`を示し、`source-history.json`は元の履歴対応を保持します。SyntamarkはCLI／MCPの依存であり、VSIXへ同梱するQuick／Semantic／QueryHostの直接依存ではありません。
 
 ## 元factsを保持する投影
 
 `LithoSharpMarkdownAdapter.Analyze` は供給本文とopaque scope/source/versionを公開facadeへ渡します。`MarkdownGraphProjection.Facts` とtyped bindingはfrontmatter、heading、section、link、fence、text region、diagnostics、coverageを元の不変DTOとして保持します。raw UTF-16 span、decoded source segments、Atomic/Unknown、`Map` のRawFragmentsを独自の1:1位置へ変換しません。
 
-現行pinはSyntamark 1.2.0、ContractVersion 1.0、legacy profileの`lithosharp-markdown/1`です。`Prepare`はfactsと補助構文木を一度取得し、`Project`と`ResolvePrepared`が同じ入力へ再利用します。補助構文木が不足しても、完全なfactsを不足したfactsへ置き換えません。準備済み入力はworkspace、scope/source/version、原文、parser stampに加え、`MaxInputUtf16`、`MaxOutputItems`、`MaxNestingDepth`、`MaxScanUnits`、`ProfileId`、`OptionsSchemaVersion`、`FrontMatterRecovery`、`InputKind`の8項目へ結び付けます。差異がある入力への流用を拒否します。
+現行pinはSyntamark 2.0.0、ContractVersion 2.0、legacy profileの`lithosharp-markdown/1`です。`Prepare`はfactsと補助構文木を一度取得し、`Project`と`ResolvePrepared`が同じ入力へ再利用します。補助構文木が不足しても、完全なfactsを不足したfactsへ置き換えません。準備済み入力はworkspace、scope/source/version、原文、parser stampに加え、`MaxInputUtf16`、`MaxOutputItems`、`MaxNestingDepth`、`MaxScanUnits`、`ProfileId`、`OptionsSchemaVersion`、`FrontMatterRecovery`、`InputKind`の8項目へ結び付けます。差異がある入力への流用を拒否します。
 
 document、section、frontmatter、code fence、link target nodeとcontains/markdown-link edgeを新harness envelopeへ投影します。heading本文/level/anchor、section direct/subtree span、link label/target/reference/image、fence info/content/closing stateはtyped bindingから読めます。原文全体のTextHashとfenceの原文ContentSpanのhashを区別します。検索fieldは元のtext projectionを保持します。
 

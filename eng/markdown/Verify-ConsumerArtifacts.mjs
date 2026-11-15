@@ -100,7 +100,7 @@ for (const folder of Object.keys(assets.packageFolders)) {
   break;
 }
 if (!restored) throw new Error('Restored runtime package bytes unavailable');
-if (pin.developmentOnly === true) {
+{
   const sourceId = pin.artifacts.source.packageId;
   const sourceKey = sourceId + '/' + pin.componentVersion;
   if (

@@ -1,4 +1,10 @@
-# Syntamark v2 consumer candidate
+# Syntamark v2 consumer candidate history
+
+This page preserves the private-preview work at SharpDeps `7ffab63`. It is not the current dependency or a formal-release acceptance result. See [formal 2.0.0 adoption](syntamark-2.0-adoption.md) for the selected production pin and validation status.
+
+The three historical Windows semantic failures below did not recur in the one selected three-test run on 2026-11-15, using SDK 10.0.404 and testhost .NET 10.0.15. All three passed; the earlier failure evidence was retained. This does not establish a historical root cause, and it is not evidence for the later formal package.
+
+## Historical candidate scope
 
 This is an opt-in development candidate, selected with
 `SharpDepsUseMarkdownSessionCandidate=true`. Production remains pinned to

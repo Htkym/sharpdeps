@@ -224,7 +224,7 @@ public sealed class CliMarkdownInputTests
         Assert.Equal("unverified", saved.Envelope.Snapshot.Freshness);
     }
 
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
+#if SHARPDEPS_MARKDOWN_SESSIONS
     [Fact]
     [Trait("Category", "Integration")]
     public async Task OwnerSessionsCacheCatalogRefreshAndPublicationRejectionMatchTheSavedColdOracle()

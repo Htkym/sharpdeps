@@ -13,7 +13,7 @@ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 function fixture(t, dependencies) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sharpdeps-artifact-gate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const version = '2.0.0-preview.test';
+  const version = '2.0.0';
   const runtime = Buffer.from('runtime package');
   const source = Buffer.from('source package');
   const assembly = Buffer.from('runtime assembly');
@@ -40,7 +40,6 @@ function fixture(t, dependencies) {
   fs.mkdirSync(lib, { recursive: true });
   fs.writeFileSync(path.join(lib, 'Syntamark.dll'), assembly);
   const pin = {
-    developmentOnly: true,
     componentVersion: version,
     sourceCommit: 'fixture',
     canonicalSourceHash: 'fixture',
@@ -89,7 +88,7 @@ function fixture(t, dependencies) {
   };
 }
 
-test('dependency-free native YAML candidate passes without a phantom YAML package', (t) => {
+test('dependency-free native YAML formal runtime passes without a phantom YAML package', (t) => {
   const result = fixture(t, []).run();
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).dependencyVersions, {});
@@ -105,7 +104,7 @@ test('stable YAML dependency still requires its exact restored version', (t) => 
 
 test('unexpected dependency on a supposedly dependency-free runtime is rejected', (t) => {
   const f = fixture(t, []);
-  f.assets.targets.net10['Syntamark/2.0.0-preview.test'].dependencies = { YamlDotNet: '18.1.0' };
+  f.assets.targets.net10['Syntamark/2.0.0'].dependencies = { YamlDotNet: '18.1.0' };
   const result = f.run();
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /dependency set differs/);
@@ -115,4 +114,12 @@ test('missing runtime target cannot pass an otherwise matching package inventory
   const f = fixture(t, []);
   f.assets.targets = {};
   assert.notEqual(f.run().status, 0);
+});
+
+test('formal runtime requires the exact restored Source package too', (t) => {
+  const f = fixture(t, []);
+  delete f.assets.libraries['Syntamark.Source/2.0.0'];
+  const result = f.run();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Restored source exact version missing/);
 });

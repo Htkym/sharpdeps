@@ -202,7 +202,7 @@ Keep the previous workspace identity, DB and any WAL/SHM together. Stop owner/wa
 
 New indexes use schema 3. Readers accept schemas 1/2/3, but generated source needs schema 2 or later and package-derived source needs schema 3. Incompatible writes return `INDEX_SCHEMA_MIGRATION_REQUIRED`; there is no in-place migration. The 0.3.0 tools cannot read schema 3. Update the VS Code extension as well: its 0.2.1 reader accepts only schema 1, and updating the external CLI does not replace it.
 
-Syntamark 1.2.0 changes the Markdown parser stamp. Generations are not rewritten, and section tokens are not reused across a parser-stamp mismatch. Keep evidence tied to its own snapshot.
+The current source adopts Syntamark 2.0.0 and its native YAML contract. Its parser stamp differs from 1.2.0. Generations are not rewritten, and section tokens are not reused across a parser-stamp mismatch. Keep evidence tied to its own snapshot.
 
 ## Upgrade from 0.2.3
 

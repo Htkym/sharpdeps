@@ -11,6 +11,28 @@ using Xunit;
 
 public sealed class MarkdownConformanceTests
 {
+    [Fact]
+    public void FormalSelectionBindsBothPackagesAndTheLoadedRuntimeToTheReleasePin()
+    {
+        using var pinFile = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "markdown-runtime-pin.json")));
+        var pin = pinFile.RootElement;
+        Assert.False(pin.TryGetProperty("developmentOnly", out _));
+        Assert.Equal("2.0.0", MarkdownRuntimePin.ComponentVersion);
+        Assert.Equal(MarkdownRuntimePin.ComponentVersion, pin.GetProperty("componentVersion").GetString());
+        Assert.Equal("47c997fb91315e8f73849f47610d2f2b21f811ba", pin.GetProperty("sourceCommit").GetString());
+        Assert.Equal(MarkdownRuntimePin.CanonicalSourceHash, pin.GetProperty("canonicalSourceHash").GetString());
+        Assert.Equal(MarkdownRuntimePin.ParserVersion, pin.GetProperty("parserVersion").GetString());
+        Assert.Equal(MarkdownRuntimePin.ContractVersion, pin.GetProperty("contractVersion").GetString());
+        Assert.Empty(pin.GetProperty("dependencies").EnumerateArray());
+        Assert.DoesNotContain(typeof(MarkdownParser).Assembly.GetReferencedAssemblies(), assembly => assembly.Name == "YamlDotNet");
+        Assert.Equal(MarkdownRuntimePin.YamlProfileId, MarkdownParser.Parse("# Native YAML", "scope", "readme.md").YamlProfileId);
+        var artifacts = pin.GetProperty("artifacts");
+        Assert.Equal(MarkdownRuntimePin.ComponentVersion, artifacts.GetProperty("runtime").GetProperty("componentVersion").GetString());
+        Assert.Equal(MarkdownRuntimePin.ComponentVersion, artifacts.GetProperty("source").GetProperty("componentVersion").GetString());
+        Assert.Equal(MarkdownRuntimePin.RuntimeAssemblySha256, artifacts.GetProperty("runtime").GetProperty("assemblySha256").GetString());
+        MarkdownRuntimePin.RequireLoaded(MarkdownRuntimePin.ParserVersion);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -27,18 +49,14 @@ public sealed class MarkdownConformanceTests
         Assert.Equal(MarkdownRuntimePin.ParserVersion, projection.Facts.ParserVersion);
         Assert.Equal(MarkdownRuntimePin.ContractVersion, projection.Facts.ContractVersion);
         Assert.Equal(MarkdownRuntimePin.ProfileId, projection.Facts.ProfileId);
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
         Assert.Equal(MarkdownRuntimePin.YamlProfileId, projection.Facts.YamlProfileId);
-#endif
         Assert.Null(projection.Facts.FrontMatter.FailureSpan);
         Assert.Null(projection.Facts.FrontMatter.FailureLine);
         var golden = (Dictionary<string, object?>)Normalize(projection.Facts)!;
-#if SHARPDEPS_MARKDOWN_SESSION_CANDIDATE
         Assert.Equal(MarkdownFeatureState.Unsupported,
             Assert.Single(projection.Facts.Capabilities, capability => capability.Feature == "footnotes").State);
         golden[nameof(projection.Facts.Capabilities)] = Normalize(
             projection.Facts.Capabilities.Where(capability => capability.Feature != "footnotes").ToArray());
-#endif
         // The old immutable oracle includes its stamp; only this root field changes with the selected parser.
         golden[nameof(projection.Facts.ParserVersion)] = fixtureFile.RootElement.GetProperty("parserVersion").GetString();
         var json = JsonSerializer.Serialize(golden);
