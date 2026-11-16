@@ -1,6 +1,6 @@
 ---
 name: sharpdeps-query
-description: Investigate .NET symbol identity, dependencies, callers/callees and saved call paths with an available SharpDeps CLI or MCP index. Start indexed .NET structural investigation with explore before source discovery; reuse its evidence and read only missing ranges. Use ordinary search for literal text or unindexed work. Respect user opt-out, exact scope, uncertainty and freshness; queries do not authorize setup or updates.
+description: Investigate .NET symbol identity, dependencies, callers/callees and saved call paths with an available SharpDeps CLI or MCP index. Use explore when indexed structural evidence would help; targeted source reads are also valid. Reuse evidence and stop when sufficient. Use ordinary search for literal text or unindexed work. Respect user opt-out, exact scope, uncertainty and freshness; queries do not authorize setup or updates.
 ---
 
 # SharpDeps Query
@@ -11,15 +11,15 @@ This repository copy describes the 0.5.0 interface: discovery and omission-sensi
 
 ## Choose when to use SharpDeps
 
-For .NET symbol identity, dependencies, callers/callees, saved call paths or cross-file implementation questions covered by the configured index, you MUST begin investigation with available SharpDeps exploration before broad repository searches or opening source files to discover code. Start with a focused names/path query, use the returned source as primary evidence, and do not repeat a repository scan after a token tool call. Reuse complete ranges already in context with the same hash and span. For omitted members, follow the returned exact selector and scope; read only specific evidence still missing or changed. No repeat call is required for evidence already available in context.
+Use SharpDeps explore when indexed .NET symbol, dependency, caller/callee or cross-file structure would help resolve missing evidence. Tool use is optional: use targeted source read/search when the relevant location is already known. Query focused names/paths and reuse returned evidence; do not retrieve complete unchanged ranges already in context. Follow exact selectors only for specific evidence still missing or changed and needed for the task. Omissions do not require exhaustive exploration; stop when sufficient evidence is available. Use ordinary read/search for simple literal text or documentation-only lookups, dirty/unindexed/out-of-scope files, unavailable tools/indexes or user opt-out. Report blockers without claiming unverified evidence. No repeat call is required for evidence already in context.
 
 Choose ordinary read/search for a simple literal text lookup, documentation-only work, dirty or unindexed files, a missing tool/index, or work outside the saved scope. Required current-file verification before an edit is not a redundant read. If exploration is blocked, report the reason and use permitted targeted fallback without claiming the unavailable evidence was checked. Do not install or create an index merely to answer a query.
 
 A user opt-out or disabled integration takes precedence over this routing. Use ordinary tools until the user explicitly requests re-enabling it; do not reinstall, reconnect or restore removed settings yourself. Disabling automatic guidance does not ban an explicitly authorized CLI command. See the [opt-out and setup instructions](../../docs/mcp.md#agent-routing-and-opt-out).
 
-## Start with explore
+## When choosing explore
 
-For a structural question, start with short related names or a saved source path in one bounded request. Replace `ROOT_ABS` with the selected absolute workspace path and example IDs with actual returned values. Retain a selected nondefault `--index` in later CLI calls and MCP startup. The positional examples below require the 0.5.0 interface; older tools use `--term` with the same query and an explicit root.
+When structural exploration is useful, start with short related names or a saved source path in one bounded request. Replace `ROOT_ABS` with the selected absolute workspace path and example IDs with actual returned values. Retain a selected nondefault `--index` in later CLI calls and MCP startup. The positional examples below require the 0.5.0 interface; older tools use `--term` with the same query and an explicit root.
 
 ```text
 sharpdeps explore "Parser ParseOptions" --root ROOT_ABS --format agent

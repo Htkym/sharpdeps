@@ -1442,6 +1442,15 @@ public sealed partial class ExplorationService
             return text.ToString();
         }
 
+        private bool isDiscoveryGroup;
+
+        // Identical for all discovery groups; scope-specific evidence stays in each group.
+        private static void AppendAgentContext(StringBuilder text)
+        {
+            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; executable body is unclassified. Owner context adds no semantic targets or proof that inactive text is active.");
+            text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+        }
+
         private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
         {
             var text = new StringBuilder();
@@ -1450,8 +1459,7 @@ public sealed partial class ExplorationService
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
             Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
             AppendOwnerObservation(text);
-            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; executable body is unclassified. Owner context adds no semantic targets or proof that inactive text is active.");
-            text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+            if (!isDiscoveryGroup) AppendAgentContext(text);
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
             Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} name={Safe(project is null ? null : owner.nodes.GetValueOrDefault(project)?.Name, 100)} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)}{(scope is null ? "" : ScopeChoiceDimensions(scope))} path={request.PathPrefix ?? "all saved paths"}");
             var header = text;
@@ -1559,7 +1567,7 @@ public sealed partial class ExplorationService
                 }
             }
             text.Append(metadata);
-            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry its exact selector with larger maxChars/maxBytes, or read the saved source range in audit.");
+            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
             foreach (var omission in shownOmissions)
                 Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
             if (omitted.Count > shownOmissions.Length) Line($"Omission details not shown={omitted.Count - shownOmissions.Length}; narrow to requested selectors.");

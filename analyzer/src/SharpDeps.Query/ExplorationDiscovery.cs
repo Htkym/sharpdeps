@@ -133,7 +133,7 @@ public sealed partial class ExplorationService
                     }
                 };
                 var group = new Run(owner, index, workspace, trusted, scoped, execution, originalToken)
-                { freshness = freshness, ownerObservation = ownerObservation, relationDisplayLimit = 2, omissionDisplayLimit = 2 };
+                { freshness = freshness, ownerObservation = ownerObservation, relationDisplayLimit = 2, omissionDisplayLimit = 2, isDiscoveryGroup = true };
                 discoveryGroups.Add(group);
                 if (group.Resolve())
                 {
@@ -178,6 +178,7 @@ public sealed partial class ExplorationService
             var outcome = AggregateDiscoveryOutcome(Errors.Count != 0, units,
                 groups.Select(group => group.Outcome(group.Units, group.pending)));
             var text = new StringBuilder($"SharpDeps discover generation={owner.saved.Graph.Generation} snapshot={Safe(owner.saved.Graph.SnapshotId, 160)} outcome={outcome} groups={groups.Count} omittedGroups={omittedGroups}\n");
+            if (request.Format == ExploreFormat.Agent && groups.Count > 0) AppendAgentContext(text);
             foreach (var error in Errors.Take(8))
                 text.AppendLine($"Error {error.Code}: {Safe(error.Message, 240)}");
             if (omittedGroups > 0)

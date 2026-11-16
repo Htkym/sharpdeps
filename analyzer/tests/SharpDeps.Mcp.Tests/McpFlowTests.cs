@@ -393,9 +393,10 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var initialized = ready.RootElement.GetProperty("result");
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
-                Assert.Contains("MUST start indexed .NET", instructions, StringComparison.Ordinal);
-                Assert.Contains("before broad search or opening source", instructions, StringComparison.Ordinal);
-                Assert.Contains("same hash and span", instructions, StringComparison.Ordinal);
+                Assert.Contains("Tool use is optional", instructions, StringComparison.Ordinal);
+                Assert.DoesNotContain("MUST start", instructions, StringComparison.Ordinal);
+                Assert.Contains("stop when sufficient evidence is available", instructions, StringComparison.Ordinal);
+                Assert.Contains("complete unchanged ranges already in context", instructions, StringComparison.Ordinal);
                 Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
                 Assert.Contains("\"query\":\"Service\"", instructions, StringComparison.Ordinal);
                 Assert.Contains("\"prepareMaxMilliseconds\":30000", instructions, StringComparison.Ordinal);
@@ -413,8 +414,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
                 var explore = Assert.Single(tools.EnumerateArray(), tool => tool.GetProperty("name").GetString() == "explore");
                 var description = explore.GetProperty("description").GetString()!;
-                Assert.Contains("MUST start indexed .NET", description, StringComparison.Ordinal);
-                Assert.Contains("same hash and span", description, StringComparison.Ordinal);
+                Assert.Contains("Tool use is optional", description, StringComparison.Ordinal);
+                Assert.DoesNotContain("MUST start", description, StringComparison.Ordinal);
+                Assert.Contains("complete unchanged ranges already in context", description, StringComparison.Ordinal);
                 Assert.Contains("specific evidence still missing or changed", description, StringComparison.Ordinal);
                 Assert.Contains("simple literal text", description, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", description, StringComparison.Ordinal);

@@ -243,6 +243,13 @@ public sealed class ExplorationTests
         Assert.Equal(1, reads);
         Assert.Equal("source-returned", reply.Outcome);
         Assert.Contains("groups=3 omittedGroups=0", reply.Text);
+        if (format == ExploreFormat.Agent)
+        {
+            Assert.Equal(1, reply.Text.Split("Source defaults:", StringSplitOptions.None).Length - 1);
+            Assert.Equal(1, reply.Text.Split("Coverage: selected index;", StringSplitOptions.None).Length - 1);
+            Assert.Equal(3, reply.Text.Split("SharpDeps explore generation=", StringSplitOptions.None).Length - 1);
+            Assert.Equal(3, reply.Text.Split("Freshness=", StringSplitOptions.None).Length - 1);
+        }
         Assert.Equal(new[] { fixture.Variant, fixture.AlternateVariant, fixture.OtherVariant }.Order(StringComparer.Ordinal),
             reply.Units.Select(unit => unit.VariantId!).Distinct().Order(StringComparer.Ordinal));
         Assert.All(reply.Units, unit =>
