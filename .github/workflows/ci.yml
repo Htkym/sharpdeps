@@ -58,6 +58,9 @@ jobs:
           node --test eng/markdown/Verify-ConsumerArtifacts.Tests.mjs
           node eng/markdown/Verify-ConsumerArtifacts.mjs eng/markdown/feed/pair-manifest-2.0.0.json eng/markdown/feed analyzer/src/SharpDeps.Analysis.Markdown/obj/project.assets.json
 
+      - name: Experimental OpenCode context reuse tests
+        run: node --test eng/opencode-context-reuse/*.test.mjs
+
       - name: TypeScript and analyzer contract tests
         run: npm test
 

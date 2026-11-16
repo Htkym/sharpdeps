@@ -156,6 +156,24 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         Assert.EndsWith("\n", text, StringComparison.Ordinal);
         AssertWireBudget(result, 12000, 48000);
         Assert.DoesNotContain("Owner observation ", text, StringComparison.Ordinal);
+        foreach (var mode in new[] { "overview", "evidence", "detail" })
+        {
+            var modeRequest = Explore("Service", format, scopePolicy);
+            modeRequest.Arguments!["responseMode"] = JsonSerializer.SerializeToElement(mode);
+            var (_, modeText, modeResult) = await AssertEquivalent(adapter, modeRequest,
+                [.. arguments, "--response-mode", mode]);
+            Assert.Contains($"requested={mode} effective={mode}", modeText, StringComparison.Ordinal);
+            AssertWireBudget(modeResult, 12000, 48000);
+            if (mode == "overview" || !trusted)
+                Assert.DoesNotContain(fixture.SavedText, modeText, StringComparison.Ordinal);
+            else
+                Assert.Contains(fixture.SavedText, modeText, StringComparison.Ordinal);
+            if (mode == "overview")
+            {
+                Assert.Contains("source-deferred", modeText, StringComparison.Ordinal);
+                Assert.Contains(fixture.Occurrence, modeText, StringComparison.Ordinal);
+            }
+        }
         if (scopePolicy is null) Assert.DoesNotContain("Scope policy=", text, StringComparison.Ordinal);
         if (trusted)
         {
@@ -393,6 +411,10 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var initialized = ready.RootElement.GetProperty("result");
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
+                Assert.Contains("Tool use is optional", instructions, StringComparison.Ordinal);
+                Assert.DoesNotContain("MUST start", instructions, StringComparison.Ordinal);
+                Assert.Contains("stop when sufficient evidence is available", instructions, StringComparison.Ordinal);
+                Assert.Contains("complete unchanged ranges already in context", instructions, StringComparison.Ordinal);
                 Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
                 Assert.Contains("\"query\":\"Service\"", instructions, StringComparison.Ordinal);
                 Assert.Contains("\"prepareMaxMilliseconds\":30000", instructions, StringComparison.Ordinal);
@@ -409,6 +431,13 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var tools = listed.RootElement.GetProperty("result").GetProperty("tools");
                 Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
                 var explore = Assert.Single(tools.EnumerateArray(), tool => tool.GetProperty("name").GetString() == "explore");
+                var description = explore.GetProperty("description").GetString()!;
+                Assert.Contains("Tool use is optional", description, StringComparison.Ordinal);
+                Assert.DoesNotContain("MUST start", description, StringComparison.Ordinal);
+                Assert.Contains("complete unchanged ranges already in context", description, StringComparison.Ordinal);
+                Assert.Contains("specific evidence still missing or changed", description, StringComparison.Ordinal);
+                Assert.Contains("simple literal text", description, StringComparison.Ordinal);
+                Assert.Contains("user opt-out", description, StringComparison.Ordinal);
                 example = explore.GetProperty("inputSchema").GetProperty("examples")[0].Clone();
                 Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
                 if (!allowMutations)

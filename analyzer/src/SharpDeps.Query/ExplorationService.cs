@@ -141,6 +141,7 @@ public sealed partial class ExplorationService
         if ((literal ? !HttpGetLiteral(request.Query) : !Text(request.Query, 1024) || string.IsNullOrWhiteSpace(request.Query))
             || !Text(request.ProjectId, 128) || !Text(request.VariantId, 128) || !Text(request.PathPrefix, 512)
             || request.PathTo is { } target && (literal || !Text(target, 128) || !IsOccurrenceIdentity(target.Trim()) || !IsOccurrenceIdentity(request.Query.Trim()))
+            || request.ResponseMode is { } mode && !Enum.IsDefined(mode)
             || !Enum.IsDefined(request.Freshness) || !Enum.IsDefined(request.Format) || !Enum.IsDefined(request.ScopePolicy) || !Enum.IsDefined(request.QueryKind)
             || budget.MaxNodes is < 1 or > 500
             || budget.MaxEdges is < 1 or > 1000 || budget.MaxDepth is < 1 or > 8
@@ -194,6 +195,7 @@ public sealed partial class ExplorationService
         private readonly QueryWorkspace? workspace;
         private readonly bool trusted;
         private readonly ExploreRequest request;
+        private readonly ExploreResponseMode? responseMode;
         private readonly CancellationTokenSource timer;
         private readonly CancellationToken originalToken;
         private readonly ExplorationExecutionBudget execution;
@@ -234,6 +236,10 @@ public sealed partial class ExplorationService
         {
             this.owner = owner; this.index = index; this.workspace = workspace; this.trusted = trusted;
             this.request = request; originalToken = token; this.execution = execution; timer = execution.Source;
+            responseMode = request.ResponseMode == ExploreResponseMode.Overview
+                && (request.PathTo is not null || request.QueryKind == ExploreQueryKind.Symbol
+                    && Terms(request.Query) is { Length: > 0 } terms && terms.All(IsSavedIdentity))
+                ? ExploreResponseMode.Evidence : request.ResponseMode;
             storedBodies = owner.storedBodies;
             project = request.ProjectId; variant = request.VariantId;
         }
@@ -1054,6 +1060,13 @@ public sealed partial class ExplorationService
                 return order != 0 ? order : Nullable.Compare(left.Location.RawSpan?.Length, right.Location.RawSpan?.Length);
             });
             allCandidates.AddRange(pending);
+            if (responseMode == ExploreResponseMode.Overview)
+            {
+                DeferSource(_ => true);
+                return;
+            }
+            if (responseMode == ExploreResponseMode.Evidence)
+                DeferSource(candidate => !roots.Any(root => root.Identity == candidate.Selection.Identity));
             if (!trusted || workspace is null)
             {
                 reasons.Add(trusted ? "SOURCE_OWNER_UNAVAILABLE" : "WORKSPACE_UNTRUSTED");
@@ -1063,13 +1076,30 @@ public sealed partial class ExplorationService
             }
         }
 
+        private void DeferSource(Func<Pending, bool> predicate)
+        {
+            var deferred = false;
+            for (var i = 0; i < pending.Count; i++)
+                if (pending[i].Reason == "budget" && predicate(pending[i]))
+                {
+                    pending[i] = pending[i] with { Reason = "response-mode:" + ModeName(responseMode!.Value) };
+                    deferred = true;
+                }
+            if (deferred) reasons.Add("SOURCE_DEFERRED_BY_MODE");
+        }
+
+        private static string ModeName(ExploreResponseMode mode) => mode.ToString().ToLowerInvariant();
+
         private readonly HashSet<string> failedFiles = new(StringComparer.Ordinal);
 
         private void ReadRequested((int Chars, int Bytes)? globalCeiling = null)
         {
             if (!trusted || workspace is null)
                 return;
-            var requested = allCandidates.Where(candidate => candidate.SourcePriority <= 2).ToArray();
+            if (responseMode == ExploreResponseMode.Overview) return;
+            var requested = allCandidates.Where(candidate => responseMode == ExploreResponseMode.Evidence
+                ? roots.Any(root => root.Identity == candidate.Selection.Identity)
+                : candidate.SourcePriority <= 2).ToArray();
             var groups = requested.GroupBy(candidate => candidate.Location.SourceId, StringComparer.Ordinal)
                 .OrderBy(group => group.Min(candidate => candidate.SourcePriority))
                 .ThenBy(group => group.Key, StringComparer.Ordinal).ToArray();
@@ -1094,12 +1124,13 @@ public sealed partial class ExplorationService
                     foreach (var candidate in requested)
                         ReadCandidate(candidate, failedFiles);
             }
-            if (globalCeiling is null)
+            if (globalCeiling is null && responseMode is null or ExploreResponseMode.Detail)
                 CoalesceOwners(failedFiles, requestedOnly: true);
         }
 
         private void ReadRelated()
         {
+            if (responseMode is ExploreResponseMode.Overview or ExploreResponseMode.Evidence) return;
             if (!trusted || workspace is null)
                 return;
             PrepareMemberFallback();
@@ -1346,15 +1377,16 @@ public sealed partial class ExplorationService
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage}");
             Line($"Freshness={freshness.State}; returned source ranges={units.Count}, hash-verified when returned.");
             Line($"Outcome={Outcome(units, omitted)}");
+            AppendResponseMode(text, detailCount);
             AppendOwnerObservation(text);
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; completeness is the saved span only. Owner context does not select additional semantic targets or prove inactive text active.");
-            if (project is not null || variant is not null)
+            if (project is not null || variant is not null || request.ResponseMode is not null)
             {
                 var scope = owner.saved.Graph.Variants.FirstOrDefault(v => v.Id == variant);
                 Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} name={Safe(project is null ? null : owner.nodes.GetValueOrDefault(project)?.Name, 100)} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)}{(scope is null ? "" : ScopeChoiceDimensions(scope))} path={request.PathPrefix ?? "all saved paths"}");
             }
             AppendScopeDecision(text, detailCount);
-            AppendHttpGetMatches(text);
+            AppendHttpGetMatches(text, detailCount);
             if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
             text.AppendLine("Coverage is the selected index, not proof of runtime consumers or absent unindexed code/tests.");
             foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
@@ -1380,9 +1412,9 @@ public sealed partial class ExplorationService
                 if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
             }
             var shownRelations = relations.Take(relationCount).ToArray();
-            var shownOmissions = omitted.Take(detailCount).ToArray();
+            var shownOmissions = responseMode == ExploreResponseMode.Overview ? [] : omitted.Take(detailCount).ToArray();
             var identities = new Dictionary<string, Selected>(StringComparer.Ordinal);
-            foreach (var item in roots) identities.TryAdd(item.Identity, item);
+            foreach (var item in DisplayedRoots(detailCount)) identities.TryAdd(item.Identity, item);
             foreach (var unit in units)
                 foreach (var item in selected.Values.Where(s => unit.SymbolIds.Contains(s.Node.Id))
                     .OrderBy(s => s.Priority).ThenBy(s => s.Identity, StringComparer.Ordinal))
@@ -1433,13 +1465,43 @@ public sealed partial class ExplorationService
                     text.Append((unit.FirstLine + i).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(lines[i]).Append('\n');
                 }
             }
-            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry exact id with larger budget or read the exact source span; sourceChars=span length:");
+            if (omitted.Count > 0)
+            {
+                if (request.ResponseMode is null)
+                    Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry exact id with larger budget or read the exact source span; sourceChars=span length:");
+                else
+                    Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Reasons distinguish mode deferral, access failure and budget limits; request only needed additional evidence.");
+            }
             foreach (var omission in shownOmissions)
-                Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]} span={omission.Location.RawSpan?.Start}:{omission.Location.RawSpan?.Length} reason={Safe(omission.Reason, 100)} retryWireCharsAtLeast={omission.RequiredChars} retryWireBytesAtLeast={omission.RequiredBytes}");
+            {
+                var retry = omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)
+                    ? "body intentionally deferred; request only missing evidence if needed"
+                    : FormattableString.Invariant($"retryWireCharsAtLeast={omission.RequiredChars} retryWireBytesAtLeast={omission.RequiredBytes}");
+                Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]} span={omission.Location.RawSpan?.Start}:{omission.Location.RawSpan?.Length} reason={Safe(omission.Reason, 100)} {retry}");
+            }
             if (omitted.Count > shownOmissions.Length) Line($"Omission details not shown={omitted.Count - shownOmissions.Length}; narrow the query to requested identities.");
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
+        }
+
+        private bool isDiscoveryGroup;
+        private bool shareGraphDiagnostics;
+
+        // Identical for all discovery groups; scope-specific evidence stays in each group.
+        private static void AppendAgentContext(StringBuilder text)
+        {
+            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; executable body is unclassified. Owner context adds no semantic targets or proof that inactive text is active.");
+            text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+        }
+
+        private void AppendAgentDiagnostics(StringBuilder text)
+        {
+            var diagnostics = owner.saved.Graph.Diagnostics;
+            foreach (var diagnostic in (diagnostics ?? []).Take(8))
+                text.AppendLine(FormattableString.Invariant($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}"));
+            if ((diagnostics?.Count ?? 0) > 8)
+                text.AppendLine(FormattableString.Invariant($"Diagnostics omitted={diagnostics!.Count - 8}"));
         }
 
         private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
@@ -1448,19 +1510,18 @@ public sealed partial class ExplorationService
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
-            Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
+            Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : responseMode == ExploreResponseMode.Overview ? "not-requested" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
+            AppendResponseMode(text, detailCount);
             AppendOwnerObservation(text);
-            text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; executable body is unclassified. Owner context adds no semantic targets or proof that inactive text is active.");
-            text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+            if (!isDiscoveryGroup) AppendAgentContext(text);
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
             Line($"Scope project={project ?? "unselected"} variant={variant ?? "unselected"} name={Safe(project is null ? null : owner.nodes.GetValueOrDefault(project)?.Name, 100)} {Safe(scope?.TargetFramework, 80)} {Safe(scope?.Configuration, 80)}{(scope is null ? "" : ScopeChoiceDimensions(scope))} path={request.PathPrefix ?? "all saved paths"}");
             var header = text;
             text = new StringBuilder();
             AppendScopeDecision(text, detailCount);
-            AppendHttpGetMatches(text);
+            AppendHttpGetMatches(text, detailCount);
             if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
-            foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
-            if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
+            if (!shareGraphDiagnostics) AppendAgentDiagnostics(text);
             foreach (var error in Errors.Take(8)) Line($"Error {Safe(error.Code, 80)}: {Safe(error.Message, 240)} {Safe(error.Path, 160)}");
             if (freshness.DirtyPaths.Count > 0) Line($"Dirty sources={freshness.DirtyPaths.Count}: {string.Join(", ", freshness.DirtyPaths.Take(4).Select(path => Safe(path, 160)))}");
             if (freshness.Unverified.Count > 0) Line($"Unverified: {string.Join("; ", freshness.Unverified.Take(4).Select(value => Safe(value, 160)))}");
@@ -1482,11 +1543,12 @@ public sealed partial class ExplorationService
                 if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
             }
             var shownRelations = relations.Take(relationCount).ToArray();
-            var shownOmissions = omitted.Take(detailCount).ToArray();
+            var shownOmissions = responseMode == ExploreResponseMode.Overview ? [] : omitted.Take(detailCount).ToArray();
             var summaryAllowance = request.PathTo is null ? detailCount : detailCount - PathDetailsShown(detailCount);
-            AgentDetail[] summaryRows = summaryAllowance > 0 && agentSummary is not null ? agentSummary.Rows.Take(summaryAllowance - 1).ToArray() : [];
+            AgentDetail[] summaryRows = summaryAllowance > 0 && agentSummary is not null ? agentSummary.Rows.Where(row => responseMode != ExploreResponseMode.Overview
+                || DisplayedRoots(detailCount).Any(root => root.Identity == row.Root.Identity)).Take(summaryAllowance - 1).ToArray() : [];
             var identities = new Dictionary<string, Selected>(StringComparer.Ordinal);
-            foreach (var item in roots) identities.TryAdd(item.Identity, item);
+            foreach (var item in DisplayedRoots(detailCount)) identities.TryAdd(item.Identity, item);
             foreach (var unit in units)
                 foreach (var item in selected.Values.Where(selection => unit.SymbolIds.Contains(selection.Node.Id))
                     .OrderBy(selection => selection.Priority).ThenBy(selection => selection.Identity, StringComparer.Ordinal))
@@ -1523,8 +1585,11 @@ public sealed partial class ExplorationService
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var sourceAliases = sourceIds.Select((id, index) => (id, Alias: "F" + (index + 1).ToString(CultureInfo.InvariantCulture)))
                 .ToDictionary(pair => pair.id, pair => pair.Alias, StringComparer.Ordinal);
+            if (sourceIds.Length > 0)
+                header.AppendLine(isDiscoveryGroup ? "Files (F identifiers are group-local):" : "Files (F identifiers are reply-local):");
             foreach (var sourceId in sourceIds)
-                if (owner.files.TryGetValue(sourceId, out var file)) Line($"{sourceAliases[sourceId]} {file.RelativePath}");
+                if (owner.files.TryGetValue(sourceId, out var file))
+                    header.AppendLine(FormattableString.Invariant($"{sourceAliases[sourceId]} {file.RelativePath}"));
             AppendAgentSummary(text, summaryRows, units, omitted, aliases, sourceAliases, summaryAllowance);
             if (shownRelations.Length > 0) text.AppendLine("Saved relations (certainty is semantic evidence, not runtime dispatch):");
             foreach (var relation in shownRelations)
@@ -1550,7 +1615,7 @@ public sealed partial class ExplorationService
                             sourceDetails += " certainty=" + item.Certainty;
                         Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)} selector={item.Identity} source{sourceDetails}");
                     }
-                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)} path={unit.Path}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
+                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
                 var lines = unit.Text.Split('\n');
                 for (var index = 0; index < lines.Length; index++)
                 {
@@ -1559,20 +1624,52 @@ public sealed partial class ExplorationService
                 }
             }
             text.Append(metadata);
-            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Retry its exact selector with larger maxChars/maxBytes, or read the saved source range in audit.");
+            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
             foreach (var omission in shownOmissions)
-                Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
+            {
+                var retry = omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)
+                    ? "body intentionally deferred; request only missing evidence if needed"
+                    : FormattableString.Invariant($"retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
+                Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} {retry}");
+            }
             if (omitted.Count > shownOmissions.Length) Line($"Omission details not shown={omitted.Count - shownOmissions.Length}; narrow to requested selectors.");
             var status = (omitted.Count > 0 ? reasons.Append("OMITTED_UNITS") : reasons).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (status.Length > 0) Line($"Limits/status: {string.Join(",", status)}");
             return text.ToString();
         }
 
-        private void AppendHttpGetMatches(StringBuilder text)
+        private IEnumerable<Selected> DisplayedRoots(int detailCount)
+            => responseMode == ExploreResponseMode.Overview ? roots.Take(detailCount) : roots;
+
+        private void AppendResponseMode(StringBuilder text, int detailCount)
+        {
+            if (request.ResponseMode is not { } requested) return;
+            text.AppendLine($"Response mode requested={ModeName(requested)} effective={ModeName(responseMode!.Value)}");
+            if (responseMode == ExploreResponseMode.Overview)
+                text.AppendLine("Source bodies not requested in overview; saved pointers are not current-source verification or proof of absence. Request evidence with an exact selector only when needed.");
+            else if (responseMode == ExploreResponseMode.Evidence)
+                text.AppendLine("Only requested declarations are read; related bodies are intentionally deferred. Request detail only for additional evidence.");
+            // Evidence/detail retain their existing source/alias provenance without a duplicate pointer table.
+            if (responseMode != ExploreResponseMode.Overview) return;
+            var displayed = DisplayedRoots(detailCount).ToArray();
+            text.AppendLine(FormattableString.Invariant($"Overview candidates shown={displayed.Length}/{roots.Count}; omitted={roots.Count - displayed.Length}. Unshown candidates are not evidence of absence; narrow the query if needed."));
+            // Candidate and pointer rows share the existing detail quota; safety headers are never trimmed.
+            foreach (var root in displayed.Concat(symbolChoices.Take(detailCount)
+                .Select(choice => new Selected(choice.Node, null, 0, "candidate", HarnessCertainty.Candidate, false))))
+            {
+                var locations = root.Occurrence?.Declarations ?? (root.Occurrence?.Location is { } occurrence
+                    ? [occurrence] : owner.Locations(root.Node, variant).ToArray());
+                foreach (var location in locations.Distinct().Where(PathAllowed))
+                    if (owner.files.TryGetValue(location.SourceId, out var file))
+                        text.AppendLine(FormattableString.Invariant($"Saved pointer selector={root.Identity} path={file.RelativePath} hash={file.ContentHash} rawSpan={location.RawSpan?.Start}:{location.RawSpan?.Length}; body=not-requested"));
+            }
+        }
+
+        private void AppendHttpGetMatches(StringBuilder text, int detailCount)
         {
             if (request.QueryKind != ExploreQueryKind.HttpGetLiteral) return;
             text.AppendLine("Query kind=http-get-literal; exact captured declaration fragments only; effective routes not evaluated. Missing/omitted metadata does not prove route absence.");
-            foreach (var root in roots)
+            foreach (var root in DisplayedRoots(detailCount))
             {
                 var sites = httpGetMatches[root.Identity];
                 var first = sites[0];

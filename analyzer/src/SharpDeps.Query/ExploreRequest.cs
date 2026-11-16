@@ -10,6 +10,9 @@ public enum ExploreFormat
     Agent
 }
 
+/// <summary>Opt-in retrieval depth; null preserves the existing exploration behavior.</summary>
+public enum ExploreResponseMode { Overview, Evidence, Detail }
+
 public enum ExploreScopePolicy
 {
     /// <summary>Leaves ambiguous compilation scopes unresolved.</summary>
@@ -35,6 +38,7 @@ public sealed record ExploreRequest(string Query, string? ProjectId = null, stri
     /// <summary>Finite preparation budget for validation and standard query-independent indexes.</summary>
     public int PrepareMaxMilliseconds { get; init; } = 30000;
     public bool ObserveOwner { get; init; }
+    public ExploreResponseMode? ResponseMode { get; init; }
     public ExploreQueryKind QueryKind { get; init; }
 }
 

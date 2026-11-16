@@ -5,4 +5,7 @@ Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellat
 if (args is ["--vscode-mutation-helper", ..])
     return await CliMutationEntry.RunAsync(args[1..], Console.OpenStandardInput(), Console.Out,
         Console.Error, cancellation.Token);
+if (args is ["prompt-context", ..])
+    return await CliPromptContext.RunAsync(args[1..], Console.OpenStandardInput(), Console.Out,
+        Console.Error, cancellation.Token);
 return await CliApplication.RunAsync(args, Console.Out, Console.Error, cancellation.Token);

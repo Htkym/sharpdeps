@@ -41,7 +41,9 @@ Check the returned source ranges, project/variant, coverage, freshness, certaint
 
 CLI exploration defaults to `--format audit`, which retains full saved identities, hashes, spans and provenance. `--format agent` uses compact aliases and line-numbered source. MCP defaults to agent format. Neither format grants source access or changes the saved facts.
 
-Aliases such as `@1` and `F1` are local to one response group. Use the retained exact selector for later requests. Reuse complete saved ranges already in context with the same hash and span, and request only missing evidence. Ordinary read/search remains appropriate for dirty or unindexed files, documentation and questions outside the saved scope.
+Opt-in retrieval depth is available through CLI --response-mode overview|evidence|detail or MCP responseMode. Omit it to preserve existing behavior. Overview is optional when discovery is useful; use evidence directly when the target is known, and detail only when additional evidence is needed. These modes do not establish measured token or latency savings. Overview returns saved candidates, scope-specific relation summaries and exact selectors without retrieving source bodies for the response. Bodies are explicitly deferred, not absent; saved pointers do not prove current source freshness. Existing index and freshness proof checks remain in force and may read files for verification. An overview request consisting of exact saved selectors, or using pathTo, goes directly to evidence. Evidence retrieves requested declarations while deferring related bodies; detail additionally allows related declarations and owner context within the same budgets. Responses identify requested and effective modes. No mode grants source permission, changes freshness requirements, combines compilation scopes, or increases the total escaped wire limits. Intentionally deferred bodies and budget/access omissions remain distinct. A budget too small for an evidence response may still return the existing explicit failure with no evidence.
+
+Aliases such as `@1` and `F1` are local to one response group. The agent format lists `F1 path` mappings before source blocks; a `Source F1:start-end @n` heading refers to that table without repeating the path. Consumers of older agent text should accept both this form and headings with `path=...`. In multi-group agent replies, identical index-wide diagnostics are shown once under `Index diagnostics (all saved scopes)`; per-group coverage, freshness, errors and omissions remain separate. Audit formatting is unchanged. Use the retained exact selector for later requests. Reuse complete saved ranges already in context with the same hash and span, and request only missing evidence. Ordinary read/search remains appropriate for dirty or unindexed files, documentation and questions outside the saved scope.
 
 ### Discovery and source outcomes
 
@@ -89,6 +91,7 @@ The default tool list contains only `explore`. Call that connected tool with a *
 | `pathTo` | Exact target occurrence for a saved call witness; at most 128 characters. |
 | `freshness` | `allow-stale` (default), `require-fresh` or `refresh`. |
 | `format` | `agent` (default) or `audit`. |
+| `responseMode` | Optional `overview`, `evidence` or `detail`; omission preserves existing retrieval behavior. Independent of `format`. |
 | `ownerStatus` | Optional bounded observation of an existing coordinator; does not prove freshness. |
 | `maxChars`, `maxBytes` | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes. |
 | `prepareMaxMilliseconds` | Preparation computation budget; default 30,000 ms. |
@@ -102,7 +105,11 @@ Starting with both `--trusted --allow-mutations` additionally exposes `index` an
 
 ## Agent routing and opt-out
 
-For structural questions covered by an existing index, prefer available SharpDeps exploration before broad repository search. Use ordinary search for literal text, documentation, dirty/unindexed files, missing tools/indexes or work outside the saved scope. Keep Partial coverage, proof limits, ambiguity and omissions. A no-match is not proof of absence.
+Use SharpDeps explore when indexed .NET symbol, dependency, caller/callee or cross-file structure would help resolve missing evidence. Tool use is optional: use targeted source read/search when the relevant location is already known. Query focused names/paths and reuse returned evidence; do not retrieve complete unchanged ranges already in context. Follow exact selectors only for specific evidence still missing or changed and needed for the task. Omissions do not require exhaustive exploration; stop when sufficient evidence is available. Use ordinary read/search for simple literal text or documentation-only lookups, dirty/unindexed/out-of-scope files, unavailable tools/indexes or user opt-out. Report blockers without claiming unverified evidence. No repeat call is required for evidence already in context.
+
+Use ordinary read/search for simple literal text or documentation-only questions, dirty/unindexed files, unavailable tools/indexes or work outside the saved scope. Necessary current-file verification before an edit remains allowed. Report a blocked exploration before using permitted targeted fallback; do not imply that unavailable evidence was checked. Keep Partial coverage, proof limits, ambiguity and omissions. A no-match is not proof of absence.
+
+The server sends this workflow in both initialization instructions and the `explore` tool description, so the tool description carries the core rule even when a client does not forward server instructions to its model. These are model-facing instructions, not a security boundary: the server cannot intercept another tool's reads/searches or prevent a final answer. Actual tool-order enforcement requires support and configuration in the AI host; connecting MCP alone does not provide it. Source permissions, user opt-out and higher-priority instructions still apply.
 
 A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the longer workflow. It describes the 0.5.0 interface.
 
@@ -124,7 +131,47 @@ This example leaves source reads disabled. Add `--trusted` after the server argu
 sharpdeps install --client copilot-cli --root /absolute/workspace --config-file /absolute/setup/.mcp.json --instructions-file /absolute/setup/AGENTS.md --mcp-command /absolute/tools/sharpdeps-mcp --dry-run
 ```
 
-Review the preview, then remove `--dry-run` to write the new pair. Optional `--trusted` permits source reads, not mutation tools. An exact unchanged owned pair is a no-op on repeated install; edited, foreign or incomplete files cause a conflict. The generated files must be in locations your client loads. Existing owned guidance is not silently upgraded.
+Review the preview, then remove `--dry-run` to write the new pair. Optional `--trusted` permits source reads, not mutation tools. An exact unchanged owned pair is a no-op on repeated install; edited, foreign or incomplete files cause a conflict. The generated files must be in locations your client loads. Existing owned guidance is not silently upgraded. To replace an unchanged old pair with this workflow, explicitly preview and uninstall that pair, retain its backups, then preview and install the new pair at the selected paths. Review manually merged instructions instead of overwriting them. Reload the client so the new server/tool description and discovered instructions are actually used.
+
+### Experimental opt-in prompt context before model exploration
+
+`sharpdeps prompt-context` is an explicit opt-in command for hosts that can attach context before a model processes a prompt. It makes at most one read-only CLI exploration against an existing fixed index. It does not call an AI, create/update an index, start watch, install hooks, or deny ordinary read/search. This is experimental pre-supplied evidence, not a model-selected MCP call. It adds context and may duplicate later evidence; lower total token use is not established. Leave it disabled unless you explicitly choose to evaluate it for your workload.
+
+The command reads one UTF-8 JSON object from stdin with `prompt` and absolute `cwd` strings. Supply an absolute `--root`, a root-contained `--index`, and `--trusted` only for a workspace whose source reads are authorized. The submitted `cwd` must match that root; it does not search ancestors or subprojects. A prompt cannot replace the root, index or trust setting.
+
+```bash
+sharpdeps prompt-context --root /absolute/workspace --index .sharpdeps/index.sqlite --trusted
+```
+
+Eligibility is deliberately lexical, not a general intent classifier. A structural term such as dependency, call, implementation or its supported Japanese equivalent must occur with a code-name hint. Selection prefers explicit backtick names or `.cs` paths, then directly adjacent method-call forms such as `saveChanges()`, then mixed-case names such as `DbContext`. Each tier preserves appearance order; duplicate names are removed and at most three are selected. Additional detected names are counted in stderr and marked as omitted in the injected context. The evidence does not cover the entire question merely because some source was returned. Invalid quoted/path tokens are not rescued by extracting a fragment.
+
+Supported literal/documentation-only markers and explicit opt-out phrases, missing names, a different working directory and a missing index produce no context. The heuristic cannot recognize every opt-out, negation or question type, and quoted text can resemble a request. Persist opt-out in the configuration and disable the hook when its selection is unsuitable. A miss does not establish that SharpDeps cannot answer the question; the agent can use normal permitted exploration.
+
+Successful output is a single Claude-style `hookSpecificOutput` JSON object with `hookEventName: "UserPromptSubmit"` and `additionalContext`. It preserves the complete rendered agent evidence, including source locations, independent scope groups, coverage, freshness and omissions. Source text remains data, not instructions. No source result, an exploration error or an oversized envelope produces empty stdout, not a truncated source body. Status/reason/elapsed-time JSON, the omitted-candidate count and the numeric product exit code (null before exploration) go to stderr without prompts or source. An `attempted` record is not evidence that context was injected. The context contains the original agent text with real line breaks, not an additional JSON-encoded copy.
+
+The input limit is 64 KiB with a two-second cooperative read deadline; the prompt limit is 16,000 UTF-16 code units. Exploration uses at most 10,000 response characters / 12,000 UTF-8 bytes, and the final JSON envelope must fit 16 KiB. Defaults are the same finite preparation 30,000 ms and query 1,000 ms budgets as `explore`; pass `--prepare-max-milliseconds` and `--max-milliseconds` to choose values within 10..30,000. Startup, input, transport and host processing are outside those computation budgets. The one-shot command prepares afresh, can add latency even on a miss, and does not retain conversation state or deduplicate earlier injected evidence. Measure this overhead as well as any saved reads; token or latency improvements are not guaranteed.
+
+For [Claude Code's UserPromptSubmit command hook](https://code.claude.com/docs/en/hooks#userpromptsubmit), review and merge this example into the host's normal settings only if you want automatic source context. Replace both absolute paths and quote them for your host shell; preserve other hooks. The example uses a 40-second host timeout and does not block on failure.
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "\"/absolute/tools/sharpdeps\" prompt-context --root \"/absolute/workspace\" --index .sharpdeps/index.sqlite --trusted",
+        "timeout": 40
+      }]
+    }]
+  }
+}
+```
+
+Verify that your actual host/version loads the hook and presents the context. Do not add `onFailure: "block"` or a deny hook for this workflow. The command emits no block/permission decision and treats malformed input or configuration as non-blocking errors. Cancellation remains cancellation. A native host integration and a test harness that attaches the same context are different forms of validation.
+
+This output format is not universal. In particular, [Copilot's command/HTTP `userPromptSubmitted` hooks ignore their output](https://docs.github.com/en/copilot/reference/hooks-reference#userpromptsubmitted--userpromptsubmit); an SDK integration has a different contract. Do not install the Claude example there or assume that server guidance means injected context is present.
+
+To disable automatic injection, remove only this hook or add `--disabled`. A custom adapter can send `sharpdepsDisabled: true`. The command does not read transcripts, so a preference expressed in an earlier turn is not visible to it; persist opt-out in the hook configuration instead. Disabling MCP alone does not remove a separately installed CLI hook. Existing `sharpdeps install` / `uninstall` operations manage only their dedicated MCP/instruction pair, not these optional host settings.
 
 ### Disable or re-enable
 

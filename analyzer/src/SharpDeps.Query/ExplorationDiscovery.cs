@@ -18,7 +18,8 @@ public sealed partial class ExplorationService
         var outcomes = groupOutcomes.ToArray();
         if (outcomes.Contains("scope-choices", StringComparer.Ordinal))
             return "scope-choices";
-        return outcomes.Contains("budget-limited", StringComparer.Ordinal) ? "budget-limited" : "source-unavailable";
+        if (outcomes.Contains("budget-limited", StringComparer.Ordinal)) return "budget-limited";
+        return outcomes.Contains("source-deferred", StringComparer.Ordinal) ? "source-deferred" : "source-unavailable";
     }
 
     private sealed partial class Run
@@ -37,10 +38,14 @@ public sealed partial class ExplorationService
                 return "source-returned";
             if (choices.Count > 0 || symbolChoices.Count > 0)
                 return "scope-choices";
-            if (!trusted || workspace is null || omitted.Any(item => item.Reason != "budget"))
+            if (responseMode == ExploreResponseMode.Overview && roots.Count > 0)
+                return "source-deferred";
+            if (!trusted || workspace is null || omitted.Any(item => item.Reason != "budget" && !item.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
                 return "source-unavailable";
             if (omitted.Any(item => item.Reason == "budget") && trusted && workspace is not null)
                 return "budget-limited";
+            if (omitted.Any(item => item.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
+                return "source-deferred";
             return "source-unavailable";
         }
 
@@ -133,7 +138,7 @@ public sealed partial class ExplorationService
                     }
                 };
                 var group = new Run(owner, index, workspace, trusted, scoped, execution, originalToken)
-                { freshness = freshness, ownerObservation = ownerObservation, relationDisplayLimit = 2, omissionDisplayLimit = 2 };
+                { freshness = freshness, ownerObservation = ownerObservation, relationDisplayLimit = 2, omissionDisplayLimit = 2, isDiscoveryGroup = true, shareGraphDiagnostics = scopes.Length > 1 };
                 discoveryGroups.Add(group);
                 if (group.Resolve())
                 {
@@ -178,6 +183,12 @@ public sealed partial class ExplorationService
             var outcome = AggregateDiscoveryOutcome(Errors.Count != 0, units,
                 groups.Select(group => group.Outcome(group.Units, group.pending)));
             var text = new StringBuilder($"SharpDeps discover generation={owner.saved.Graph.Generation} snapshot={Safe(owner.saved.Graph.SnapshotId, 160)} outcome={outcome} groups={groups.Count} omittedGroups={omittedGroups}\n");
+            if (request.Format == ExploreFormat.Agent && groups.Count > 0) AppendAgentContext(text);
+            if (request.Format == ExploreFormat.Agent && groups.Count > 1 && (owner.saved.Graph.Diagnostics?.Count ?? 0) > 0)
+            {
+                text.AppendLine("Index diagnostics (all saved scopes):");
+                AppendAgentDiagnostics(text);
+            }
             foreach (var error in Errors.Take(8))
                 text.AppendLine($"Error {error.Code}: {Safe(error.Message, 240)}");
             if (omittedGroups > 0)

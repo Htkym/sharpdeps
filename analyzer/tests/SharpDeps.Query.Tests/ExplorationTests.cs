@@ -37,6 +37,98 @@ public sealed class ExplorationTests
         Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(request)));
     }
 
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void ResponseModesDeferBodiesWithoutChangingEvidenceOrProofRequirements(ExploreFormat format)
+    {
+        using var fixture = new Fixture(partial: true, format: format);
+        var engine = fixture.Engine();
+        var request = fixture.Request("Pump");
+        var legacy = engine.Execute(request);
+        Assert.Equal(JsonSerializer.Serialize(legacy), JsonSerializer.Serialize(engine.Execute(request with { ResponseMode = null })));
+        Assert.DoesNotContain("Response mode", legacy.Text);
+        Assert.Throws<ArgumentException>(() => engine.Execute(request with { ResponseMode = (ExploreResponseMode)99 }));
+
+        var metricsDirectory = Path.Combine(fixture.Root, ".sharpdeps", "overview-metrics");
+        ExploreReply overview;
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(metricsDirectory, "explore")!)
+        {
+            overview = engine.Execute(request with { ResponseMode = ExploreResponseMode.Overview });
+            metrics.Complete();
+        }
+        Assert.DoesNotContain(ReadMetricPhases(metricsDirectory),
+            phase => phase.GetProperty("phase").GetString() is "source.read" or "source.stored");
+        Assert.True(overview.Succeeded);
+        Assert.Empty(overview.Units);
+        Assert.Equal("source-deferred", overview.Outcome);
+        Assert.Contains("SOURCE_DEFERRED_BY_MODE", overview.OmissionReasons);
+        Assert.Contains("requested=overview effective=overview", overview.Text);
+        Assert.Contains("Saved pointer selector=", overview.Text);
+        Assert.Contains("rawSpan=", overview.Text);
+        Assert.Contains("coverage=Partial", overview.Text);
+        Assert.Contains("Freshness=unverified", overview.Text);
+        Assert.Contains("not current-source verification or proof of absence", overview.Text);
+        AssertWireBudget(overview, request.Budget!);
+
+        var exactRequest = fixture.Request(fixture.Occurrence(fixture.RunInt));
+        var evidence = engine.Execute(exactRequest with { ResponseMode = ExploreResponseMode.Evidence });
+        var direct = engine.Execute(exactRequest with { ResponseMode = ExploreResponseMode.Overview });
+        var detail = engine.Execute(exactRequest with { ResponseMode = ExploreResponseMode.Detail });
+        Assert.NotEmpty(evidence.Units);
+        Assert.Equal(JsonSerializer.Serialize(evidence.Units), JsonSerializer.Serialize(direct.Units));
+        Assert.Contains("requested=overview effective=evidence", direct.Text);
+        Assert.DoesNotContain(evidence.Units, unit => unit.SymbolIds.Contains(fixture.Helper));
+        Assert.Contains(detail.Units, unit => unit.SymbolIds.Contains(fixture.Helper));
+        Assert.Contains("SOURCE_DEFERRED_BY_MODE", evidence.OmissionReasons);
+        Assert.All(evidence.Text.Split('\n').Where(line => line.Contains("reason=response-mode:", StringComparison.Ordinal)),
+            line => Assert.DoesNotContain("AtLeast=", line));
+        var path = engine.Execute(exactRequest with
+        { ResponseMode = ExploreResponseMode.Overview, PathTo = fixture.Occurrence(fixture.Helper) });
+        Assert.Contains("requested=overview effective=evidence", path.Text);
+        Assert.Contains("Retained path status=found", path.Text);
+        foreach (var maxChars in new[] { 2048, 5500 })
+        {
+            var budget = Generous with { MaxChars = maxChars, MaxBytes = maxChars };
+            var bounded = engine.Execute(request with { Query = "Pump Run Helper", ResponseMode = ExploreResponseMode.Overview, Budget = budget });
+            AssertWireBudget(bounded, budget);
+            Assert.Empty(bounded.Units);
+            if (bounded.Succeeded)
+            {
+                Assert.True(bounded.Text.Contains("Saved pointer selector=", StringComparison.Ordinal)
+                    || bounded.Text.Contains("Overview candidates shown=0/", StringComparison.Ordinal));
+                Assert.Contains("omitted=", bounded.Text);
+                Assert.Contains("coverage=Partial", bounded.Text);
+                Assert.Contains("Freshness=unverified", bounded.Text);
+            }
+            else Assert.Contains(bounded.Errors, error => error.Code == "OUTPUT_BUDGET_TOO_SMALL");
+        }
+        foreach (var mode in Enum.GetValues<ExploreResponseMode>())
+        {
+            var untrusted = new ExplorationService(new FixedIndex(fixture.Snapshot), new QueryWorkspace(fixture.Root), false)
+                .Execute(exactRequest with { ResponseMode = mode });
+            Assert.Empty(untrusted.Units);
+            Assert.Contains("WORKSPACE_UNTRUSTED", untrusted.OmissionReasons);
+        }
+        // Overview avoids response-body admission, not freshness verification.
+        File.WriteAllText(fixture.CoreFullPath, fixture.Sources[Fixture.CorePath] + "// changed", Fixture.Utf8);
+        var deferred = engine.Execute(request with { ResponseMode = ExploreResponseMode.Overview });
+        Assert.Empty(deferred.Units);
+        Assert.Equal("source-deferred", deferred.Outcome);
+        Assert.Contains("Freshness=unverified", deferred.Text);
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(fixture.Inventory(), true));
+        var fresh = fixture.Engine(workspace).Execute(request with
+        { ResponseMode = ExploreResponseMode.Overview, Freshness = QueryFreshnessPolicy.RequireFresh });
+        Assert.False(fresh.Succeeded);
+        Assert.Empty(fresh.Units);
+        foreach (var mode in new[] { ExploreResponseMode.Evidence, ExploreResponseMode.Detail })
+        {
+            var dirty = engine.Execute(exactRequest with { ResponseMode = mode });
+            Assert.DoesNotContain(dirty.Units, unit => unit.Path == Fixture.CorePath);
+            Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", dirty.OmissionReasons);
+        }
+    }
+
     [Fact]
     public void CancelledLexicalPreparationDoesNotPoisonTheValidatedSnapshot()
     {
@@ -230,7 +322,9 @@ public sealed class ExplorationTests
     {
         using var fixture = new Fixture(addScopes: true, partial: true, dense: true, format: format);
         var reads = 0;
-        var engine = new ExplorationService(new ObservedIndex(() => { reads++; return fixture.Snapshot; }), new QueryWorkspace(fixture.Root), true);
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        { Diagnostics = Enumerable.Range(1, 10).Select(number => new HarnessGraphDiagnostic("test.diagnostic" + number, number)).ToArray() } };
+        var engine = new ExplorationService(new ObservedIndex(() => { reads++; return snapshot; }), new QueryWorkspace(fixture.Root), true);
         var request = new ExploreRequest("Pump Run", Budget: Generous, Format: format);
         var strict = engine.Execute(request);
         Assert.True(strict.Succeeded);
@@ -243,6 +337,23 @@ public sealed class ExplorationTests
         Assert.Equal(1, reads);
         Assert.Equal("source-returned", reply.Outcome);
         Assert.Contains("groups=3 omittedGroups=0", reply.Text);
+        if (format == ExploreFormat.Agent)
+        {
+            Assert.Equal(1, reply.Text.Split("Source defaults:", StringSplitOptions.None).Length - 1);
+            Assert.Equal(1, reply.Text.Split("Coverage: selected index;", StringSplitOptions.None).Length - 1);
+            Assert.Equal(3, reply.Text.Split("SharpDeps explore generation=", StringSplitOptions.None).Length - 1);
+            Assert.Equal(3, reply.Text.Split("Freshness=", StringSplitOptions.None).Length - 1);
+            Assert.Equal(1, reply.Text.Split("Diagnostic test.diagnostic1=1", StringSplitOptions.None).Length - 1);
+            Assert.Equal(1, reply.Text.Split("Diagnostics omitted=2", StringSplitOptions.None).Length - 1);
+            Assert.Contains("Index diagnostics (all saved scopes):", reply.Text);
+            foreach (var group in reply.Text.Split("SharpDeps explore generation=", StringSplitOptions.None).Skip(1))
+            {
+                Assert.Contains("Files (F identifiers are group-local):", group);
+                Assert.True(group.IndexOf("Files (", StringComparison.Ordinal) < group.IndexOf("Source F", StringComparison.Ordinal));
+                Assert.All(group.Split('\n').Where(line => line.StartsWith("Source F", StringComparison.Ordinal)),
+                    line => Assert.DoesNotContain(" path=", line, StringComparison.Ordinal));
+            }
+        }
         Assert.Equal(new[] { fixture.Variant, fixture.AlternateVariant, fixture.OtherVariant }.Order(StringComparer.Ordinal),
             reply.Units.Select(unit => unit.VariantId!).Distinct().Order(StringComparer.Ordinal));
         Assert.All(reply.Units, unit =>
@@ -262,6 +373,27 @@ public sealed class ExplorationTests
         Assert.Equal("source-returned", selected.Outcome);
         Assert.All(selected.Units, unit => Assert.Equal(fixture.OtherVariant, unit.VariantId));
         Assert.Contains("groups=1", selected.Text);
+        foreach (var mode in Enum.GetValues<ExploreResponseMode>())
+        {
+            reads = 0;
+            var staged = engine.Execute(request with { ScopePolicy = ExploreScopePolicy.Discover, ResponseMode = mode });
+            Assert.Equal(1, reads);
+            Assert.True(staged.Succeeded);
+            Assert.Contains("groups=3 omittedGroups=0", staged.Text);
+            AssertWireBudget(staged, Generous);
+            foreach (var scope in new[] { fixture.Variant, fixture.AlternateVariant, fixture.OtherVariant })
+                Assert.Contains("variant=" + scope, staged.Text);
+            Assert.Equal(format == ExploreFormat.Agent ? 1 : 3,
+                staged.Text.Split("Diagnostic test.diagnostic1=1", StringSplitOptions.None).Length - 1);
+            Assert.Equal(format == ExploreFormat.Agent ? 1 : 3,
+                staged.Text.Split("Diagnostics omitted=2", StringSplitOptions.None).Length - 1);
+            if (mode == ExploreResponseMode.Overview)
+            {
+                Assert.Empty(staged.Units);
+                Assert.Equal("source-deferred", staged.Outcome);
+                Assert.Contains("Saved pointer selector=", staged.Text);
+            }
+        }
     }
 
     [Theory]
@@ -1471,6 +1603,13 @@ public sealed class ExplorationTests
             Assert.Contains($"literalSpan={templateSpan.Start}:{templateSpan.Length} matchingSavedSites=1", found.Text);
             Assert.Equal(units, JsonSerializer.Serialize(found.Units, QueryJson.Options));
             AssertWireBudget(found, Generous);
+            var overview = literalEngine.Execute(literalRequest with { ResponseMode = ExploreResponseMode.Overview });
+            Assert.True(overview.Succeeded);
+            Assert.Empty(overview.Units);
+            Assert.Contains("requested=overview effective=overview", overview.Text);
+            Assert.Contains("HttpGet match selector=" + member.Id, overview.Text);
+            Assert.Contains("Saved pointer selector=" + member.Id, overview.Text);
+            AssertWireBudget(overview, Generous);
             var missing = literalEngine.Execute(literalRequest with { Query = template + "x" });
             Assert.Contains(missing.Errors, error => error.Code == "HTTP_GET_DECLARATION_NOT_FOUND");
             Assert.Empty(missing.Units);
@@ -2665,6 +2804,7 @@ public sealed class ExplorationTests
     {
         using var fixture = new Fixture(format: format);
         foreach (var withPath in new[] { false, true })
+        foreach (var mode in new ExploreResponseMode?[] { null, ExploreResponseMode.Overview, ExploreResponseMode.Evidence, ExploreResponseMode.Detail })
         {
             using var cancellation = new CancellationTokenSource();
             var inspections = 0;
@@ -2675,7 +2815,7 @@ public sealed class ExplorationTests
                 return new(fixture.Inventory(), current == 1);
             });
             var request = fixture.Request(withPath ? fixture.Occurrence(fixture.RunInt) : fixture.RunInt) with
-            { Freshness = QueryFreshnessPolicy.RequireFresh, PathTo = withPath ? fixture.Occurrence(fixture.Helper) : null };
+            { Freshness = QueryFreshnessPolicy.RequireFresh, PathTo = withPath ? fixture.Occurrence(fixture.Helper) : null, ResponseMode = mode };
             var reply = fixture.Engine(workspace).Execute(request, cancellation.Token);
             Assert.True(inspections >= 2);
             Assert.False(reply.Succeeded);
@@ -2761,6 +2901,19 @@ public sealed class ExplorationTests
 
         AssertWireBudget(audit, request.Budget!);
         AssertWireBudget(agent, request.Budget!);
+        foreach (var mode in Enum.GetValues<ExploreResponseMode>())
+            foreach (var format in Enum.GetValues<ExploreFormat>())
+            {
+                var modeReply = engine.Execute(request with { ResponseMode = mode, Format = format });
+                AssertWireBudget(modeReply, request.Budget!);
+                if (modeReply.Errors.Any(error => error.Code == "OUTPUT_BUDGET_TOO_SMALL"))
+                    Assert.Empty(modeReply.Units);
+                else
+                    foreach (var value in new[] { "snapshot=fixture-1", "coverage=Partial", "Freshness=unverified",
+                        "Scope project=" + fixture.Project, "variant=" + fixture.Variant, "Unverified:", "Response mode requested=" })
+                        Assert.Contains(value, modeReply.Text);
+                if (longPath) Assert.Empty(modeReply.Units);
+            }
         if (agent.Errors.Any(error => error.Code == "OUTPUT_BUDGET_TOO_SMALL"))
         {
             Assert.Empty(agent.Units);
