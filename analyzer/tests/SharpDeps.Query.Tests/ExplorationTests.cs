@@ -63,8 +63,20 @@ public sealed class ExplorationTests
             Assert.Contains("SYMBOL_AMBIGUOUS", reply.OmissionReasons);
             Assert.Contains("selector=" + typeId, reply.Text);
             Assert.Contains("selector=" + fixture.Helper, reply.Text);
+            var candidateRows = reply.Text.Split('\n').Where(line => line.Contains(" savedLocations=", StringComparison.Ordinal)).ToArray();
+            Assert.Contains(candidateRows, line => line.Contains("kind=Type", StringComparison.Ordinal));
+            Assert.Contains(candidateRows, line => line.Contains("kind=Member", StringComparison.Ordinal));
+            Assert.All(candidateRows, line => Assert.Contains("locationsOmitted=", line));
+            Assert.Contains(candidateRows, line => line.Contains("savedRawSpan(start,length)=", StringComparison.Ordinal));
             Assert.Empty(reply.Units);
             AssertWireBudget(reply, fixture.Request(query).Budget!);
+            var overview = engine.Execute(fixture.Request(query) with { ResponseMode = ExploreResponseMode.Overview });
+            Assert.DoesNotContain("savedLocations=", overview.Text);
+            Assert.Contains("Saved pointer selector=" + fixture.Helper, overview.Text);
+            Assert.Contains("rawSpan=", overview.Text);
+            Assert.Contains("SYMBOL_AMBIGUOUS", overview.OmissionReasons);
+            Assert.Empty(overview.Units);
+            AssertWireBudget(overview, fixture.Request(query).Budget!);
             var exact = engine.Execute(fixture.Request(fixture.Occurrence(fixture.Helper)));
             Assert.DoesNotContain("SYMBOL_AMBIGUOUS", exact.OmissionReasons);
         }
@@ -73,6 +85,71 @@ public sealed class ExplorationTests
         var caseSensitive = new ExplorationService(new FixedIndex(differentCase), new QueryWorkspace(fixture.Root), true)
             .Execute(fixture.Request(query));
         Assert.DoesNotContain("SYMBOL_AMBIGUOUS", caseSensitive.OmissionReasons);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CandidateLocationsAreOptionalBeforeExistingBudgetInformation(bool discover)
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var graph = fixture.Snapshot.Graph;
+        var snapshot = fixture.Snapshot with { Graph = graph with
+        {
+            Nodes = graph.Nodes.Select(node => node.Id == fixture.Helper ? node with { Name = "Pump", Signature = new string('m', 240) }
+                : node.Id == fixture.Pump ? node with { Name = "Demo." + new string('n', 135) + ".Pump", Signature = new string('t', 240) } : node).ToArray(),
+            SymbolOccurrences = graph.SymbolOccurrences.Select(item => item.LogicalSymbolId == fixture.Helper
+                ? item with { Declarations = new[] { item.Location! }.Concat(Enumerable.Range(0, 16).Select(i => item.Location! with { RawSpan = new HarnessRawSpan(i, 1) })).ToArray() }
+                : item).ToArray()
+        } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request("Pump") with { ScopePolicy = discover ? ExploreScopePolicy.Discover : ExploreScopePolicy.RequireUnique };
+        if (discover) request = request with { ProjectId = null, VariantId = null };
+        var full = engine.Execute(request);
+        Assert.True(full.Succeeded, full.Text);
+        Assert.Contains("savedLocations=", full.Text);
+        Assert.Contains(discover ? "locationsOmitted=15" : "locationsOmitted=9", full.Text);
+        Assert.Contains("; src/Pump.cs savedRawSpan(start,length)=", full.Text);
+        // Exact old row text is the fallback, not a reduced candidate set.
+        var oldText = string.Join('\n', full.Text.Split('\n').Select(line => line.Contains(" savedLocations=", StringComparison.Ordinal)
+            ? line[..line.IndexOf(" kind=", StringComparison.Ordinal)] + (line.EndsWith('\r') ? "\r" : "") : line));
+        var wire = JsonSerializer.Serialize(new { content = new[] { new { type = "text", text = oldText } }, isError = false });
+        var tightRequest = request with { Budget = request.Budget! with { MaxChars = Math.Max(2048, wire.Length), MaxBytes = Math.Max(2048, Encoding.UTF8.GetByteCount(wire)) } };
+        var tight = engine.Execute(tightRequest);
+        Assert.Equal(oldText, tight.Text);
+        Assert.Equal(full.OmissionReasons, tight.OmissionReasons);
+        Assert.Equal(full.Outcome, tight.Outcome);
+        Assert.Equal(full.Units, tight.Units);
+        AssertWireBudget(tight, tightRequest.Budget!);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AmbiguousCandidateLocationsKeepUnknownAndMissingFilesExplicit(bool missingFile)
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var graph = fixture.Snapshot.Graph;
+        var snapshot = fixture.Snapshot with { Graph = graph with
+        {
+            Nodes = graph.Nodes.Select(node => node.Id == fixture.Helper ? node with { Name = "Pump" } : node).ToArray(),
+            SymbolOccurrences = graph.SymbolOccurrences.Select(item => item.LogicalSymbolId == fixture.Helper
+                ? item with { Location = null, Declarations = missingFile
+                    ? [new HarnessLocation("missing-source", null, null, null)] : [] } : item).ToArray()
+        } };
+        var reply = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), false).Execute(fixture.Request("Pump"));
+        if (missingFile)
+        {
+            Assert.False(reply.Succeeded);
+            Assert.Empty(reply.Units);
+            Assert.DoesNotContain("savedLocations=", reply.Text);
+            return;
+        }
+        var row = Assert.Single(reply.Text.Split('\n'), line => line.Contains("selector=" + fixture.Helper, StringComparison.Ordinal));
+        Assert.Contains(missingFile ? "savedLocations=[unknown savedRawSpan(start,length)=unknown]" : "savedLocations=[unknown]", row);
+        Assert.Contains("SYMBOL_AMBIGUOUS", reply.OmissionReasons);
+        Assert.Empty(reply.Units);
+        Assert.Contains("Freshness=unverified", reply.Text);
     }
 
     [Theory]

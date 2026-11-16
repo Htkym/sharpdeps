@@ -224,6 +224,7 @@ public sealed partial class ExplorationService
         private string? variant;
         private int relationDisplayLimit = 8;
         private int omissionDisplayLimit = 8;
+        private bool showCandidateLocations; // Enabled only after source planning; first optional budget fallback.
         private string? cachedSourceId;
         private string? cachedSourceText;
         private readonly IReadOnlyDictionary<string, string> storedBodies;
@@ -1332,6 +1333,7 @@ public sealed partial class ExplorationService
                 return FinishDiscovery();
             var relationCount = Math.Min(relationDisplayLimit, relations.Count);
             var detailCount = omissionDisplayLimit;
+            showCandidateLocations = request.Format == ExploreFormat.Agent && responseMode != ExploreResponseMode.Overview && symbolChoices.Count > 0;
             while (true)
             {
                 try { Check(); }
@@ -1342,6 +1344,7 @@ public sealed partial class ExplorationService
                 if (wire.Chars <= request.Budget!.MaxChars && wire.Bytes <= request.Budget.MaxBytes)
                     return new(text, Errors.ToArray(), Units.ToArray(), reasons.Order(StringComparer.Ordinal).ToArray(), wire.Chars, wire.Bytes)
                         { Outcome = Outcome(Units, pending) };
+                if (showCandidateLocations) { showCandidateLocations = false; continue; }
                 reasons.Add("OUTPUT_LIMIT");
                 if (relationCount > 0) { relationCount--; continue; }
                 if (detailCount > 0) { detailCount--; continue; }
@@ -1559,7 +1562,25 @@ public sealed partial class ExplorationService
             {
                 Line($"Ambiguous symbols={symbolChoices.Count}; re-query an exact selector with its scope:");
                 foreach (var choice in symbolChoices.Take(detailCount))
-                    Line($"{Safe(owner.Label(choice.Node), 160)} selector={choice.Node.Id} signature={Safe(choice.Node.Signature, 240)}");
+                {
+                    if (!showCandidateLocations)
+                    {
+                        Line($"{Safe(owner.Label(choice.Node), 160)} selector={choice.Node.Id} signature={Safe(choice.Node.Signature, 240)}");
+                        continue;
+                    }
+                    var locations = owner.Locations(choice.Node, variant).Distinct().Where(PathAllowed).ToArray();
+                    var displayed = locations.Take(detailCount).Select(location =>
+                    {
+                        var path = owner.files.TryGetValue(location.SourceId, out var file)
+                            ? Safe(file.RelativePath, 4096)
+                            : "unknown";
+                        var span = location.RawSpan is { } raw
+                            ? FormattableString.Invariant($"{raw.Start}:{raw.Length}") : "unknown";
+                        return FormattableString.Invariant($"{path} savedRawSpan(start,length)={span}");
+                    });
+                    // Saved spans are not line numbers or proof of current/active source.
+                    Line($"{Safe(owner.Label(choice.Node), 160)} selector={choice.Node.Id} signature={Safe(choice.Node.Signature, 240)} kind={choice.Node.Kind} savedLocations=[{(locations.Length == 0 ? "unknown" : string.Join("; ", displayed))}] locationsOmitted={Math.Max(0, locations.Length - detailCount)}");
+                }
                 if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
             }
             if (CompactAgentMetadata)

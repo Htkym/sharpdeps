@@ -123,6 +123,34 @@ After the CLI packaging freeze, the normal `UseAppHost=false` build and the same
 147/28 tests passed again; all 19 argument/result objects matched the previous
 full-build results. The refresh hashes are retained separately in the JSON record.
 
+## Optional locations for ambiguous candidates
+
+`candidate-location-verification.json` records a later display-only follow-up to
+`0ca0381`. Non-Overview Agent candidate rows add kind, saved relative path and
+`savedRawSpan(start,length)`, with explicit omitted-location counts. These UTF-16
+saved spans are not line numbers, current-source verification or active-code proof.
+Overview retains its existing Saved pointer metadata without duplicate suffixes.
+
+Metadata is enabled only in final rendering. If it exceeds the existing wire
+budget, the old row format is restored before removing existing information or
+adding an output-limit status. Ranking, roots and ambiguity decisions are unchanged.
+ExplorationTests passed 151/151; MCP Release build succeeded with zero warnings.
+Across 21 saved-argument replays, 18 results are byte-identical. Three
+PlacementStrategy results each increase by 550 UTF-8 bytes. Removing only the new
+suffixes reproduces every original result object, including source, diagnostics,
+freshness and the existing no-match response. Cleanup leaves no owned processes.
+
+A separate saved `AutoDetectChangesEnabled` evidence condition (shared by two
+paid calls) was also checked once against each artifact: 2,920 → 3,187 UTF-8 bytes
+for two candidate rows. The suffix inverse preserves the full result object,
+including selection and status; cleanup again leaves no owned processes. This
+additional condition is not included in the original 21-call count.
+
+The real-AI comparison evaluated `0ca0381`, **not this later display addition**.
+There were no new model calls, and no adoption, quality, token or cost gain is
+claimed. This is not a new four-host native acceptance; plain-text additions may
+affect external parsers.
+
 ## Release gates
 
 Four-host native results must be complete for the final assembly. The failed historical

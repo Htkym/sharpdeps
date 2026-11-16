@@ -254,6 +254,8 @@ public sealed partial class ExplorationService
 
         private ExploreReply FinishDiscovery()
         {
+            foreach (var group in discoveryGroups!)
+                group.showCandidateLocations = request.Format == ExploreFormat.Agent && group.responseMode != ExploreResponseMode.Overview && group.symbolChoices.Count > 0;
             if (Errors.Count != 0)
                 foreach (var group in discoveryGroups!)
                     group.Units.Clear();
@@ -276,6 +278,11 @@ public sealed partial class ExplorationService
                         Outcome = AggregateDiscoveryOutcome(Errors.Count != 0, returned.Length,
                         groups.Select(group => group.Outcome(group.Units, group.pending)))
                     };
+                }
+                if (discoveryGroups!.Any(group => group.showCandidateLocations))
+                {
+                    foreach (var group in discoveryGroups) group.showCandidateLocations = false;
+                    continue;
                 }
                 reasons.Add("OUTPUT_LIMIT");
                 var optional = discoveryGroups!.LastOrDefault(group => group.relationDisplayLimit > 0 || group.omissionDisplayLimit > 0);
