@@ -156,6 +156,24 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         Assert.EndsWith("\n", text, StringComparison.Ordinal);
         AssertWireBudget(result, 12000, 48000);
         Assert.DoesNotContain("Owner observation ", text, StringComparison.Ordinal);
+        foreach (var mode in new[] { "overview", "evidence", "detail" })
+        {
+            var modeRequest = Explore("Service", format, scopePolicy);
+            modeRequest.Arguments!["responseMode"] = JsonSerializer.SerializeToElement(mode);
+            var (_, modeText, modeResult) = await AssertEquivalent(adapter, modeRequest,
+                [.. arguments, "--response-mode", mode]);
+            Assert.Contains($"requested={mode} effective={mode}", modeText, StringComparison.Ordinal);
+            AssertWireBudget(modeResult, 12000, 48000);
+            if (mode == "overview" || !trusted)
+                Assert.DoesNotContain(fixture.SavedText, modeText, StringComparison.Ordinal);
+            else
+                Assert.Contains(fixture.SavedText, modeText, StringComparison.Ordinal);
+            if (mode == "overview")
+            {
+                Assert.Contains("source-deferred", modeText, StringComparison.Ordinal);
+                Assert.Contains(fixture.Occurrence, modeText, StringComparison.Ordinal);
+            }
+        }
         if (scopePolicy is null) Assert.DoesNotContain("Scope policy=", text, StringComparison.Ordinal);
         if (trusted)
         {

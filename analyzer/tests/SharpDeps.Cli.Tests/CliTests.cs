@@ -408,6 +408,13 @@ public sealed class CliTests
     {
         ExploreRequest Request(params string[] arguments) => CliArguments.Parse(["explore", .. arguments]).ExplorationRequest();
         Assert.Equal(ExploreScopePolicy.RequireUnique, new ExploreRequest("Service").ScopePolicy);
+        Assert.Null(Request("Service").ResponseMode);
+        foreach (var mode in Enum.GetValues<ExploreResponseMode>())
+            Assert.Equal(mode, Request("Service", "--response-mode", mode.ToString().ToLowerInvariant()).ResponseMode);
+        foreach (var invalid in new[] { "auto", "Overview", "0" })
+            Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => Request("Service", "--response-mode", invalid)).Code);
+        Assert.Equal("ARGUMENT_UNKNOWN", Assert.Throws<CliFailure>(() =>
+            CliArguments.Parse(["search", "--term", "Service", "--response-mode", "overview"])).Code);
         foreach (var query in new[] { "Service", "src/Service.cs" })
         {
             Assert.Equal(Request("--term", query), Request(query));

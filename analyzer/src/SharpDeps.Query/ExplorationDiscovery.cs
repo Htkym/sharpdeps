@@ -18,7 +18,8 @@ public sealed partial class ExplorationService
         var outcomes = groupOutcomes.ToArray();
         if (outcomes.Contains("scope-choices", StringComparer.Ordinal))
             return "scope-choices";
-        return outcomes.Contains("budget-limited", StringComparer.Ordinal) ? "budget-limited" : "source-unavailable";
+        if (outcomes.Contains("budget-limited", StringComparer.Ordinal)) return "budget-limited";
+        return outcomes.Contains("source-deferred", StringComparer.Ordinal) ? "source-deferred" : "source-unavailable";
     }
 
     private sealed partial class Run
@@ -37,10 +38,14 @@ public sealed partial class ExplorationService
                 return "source-returned";
             if (choices.Count > 0 || symbolChoices.Count > 0)
                 return "scope-choices";
-            if (!trusted || workspace is null || omitted.Any(item => item.Reason != "budget"))
+            if (responseMode == ExploreResponseMode.Overview && roots.Count > 0)
+                return "source-deferred";
+            if (!trusted || workspace is null || omitted.Any(item => item.Reason != "budget" && !item.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
                 return "source-unavailable";
             if (omitted.Any(item => item.Reason == "budget") && trusted && workspace is not null)
                 return "budget-limited";
+            if (omitted.Any(item => item.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
+                return "source-deferred";
             return "source-unavailable";
         }
 

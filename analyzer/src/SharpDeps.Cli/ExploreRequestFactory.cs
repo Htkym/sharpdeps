@@ -59,6 +59,15 @@ internal static class ExploreRequestFactory
         _ => throw new CliFailure("ARGUMENT_INVALID", 2)
     };
 
+    internal static ExploreResponseMode? ResponseMode(string? value) => value switch
+    {
+        null => null,
+        "overview" => ExploreResponseMode.Overview,
+        "evidence" => ExploreResponseMode.Evidence,
+        "detail" => ExploreResponseMode.Detail,
+        _ => throw new CliFailure("ARGUMENT_INVALID", 2)
+    };
+
     internal static ExploreFormat Format(string? value, ExploreFormat fallback) => value switch
     {
         null => fallback,

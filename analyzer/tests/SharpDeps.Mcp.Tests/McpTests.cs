@@ -116,7 +116,15 @@ public sealed class McpTests
         Assert.Contains("pathTo", literal.GetProperty("not").GetProperty("required").EnumerateArray().Select(value => value.GetString()));
         var symbol = Assert.Single(branches, branch => branch.GetProperty("properties").TryGetProperty("query", out _));
         Assert.Equal(1, symbol.GetProperty("properties").GetProperty("query").GetProperty("minLength").GetInt32());
+        var modes = schema.GetProperty("properties").GetProperty("responseMode");
+        Assert.Equal(new[] { "overview", "evidence", "detail" }, modes.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.False(modes.TryGetProperty("default", out _));
         foreach (var json in new[] {
+            JsonSerializer.Serialize(new { query = "Service", responseMode = "auto" }),
+            JsonSerializer.Serialize(new { query = "Service", responseMode = "Overview" }),
+            JsonSerializer.Serialize(new { query = "Service", responseMode = 1 }),
+            JsonSerializer.Serialize(new { query = "Service", responseMode = (string?)null }),
+            JsonSerializer.Serialize(new { query = "Service", ResponseMode = "overview" }),
             "{}", "{\"query\":\"\"}", "{\"query\":null}", "{\"query\":\"--trusted\"}",
             "{\"query\":\" \"}",
             "{\"query\":\"\",\"queryKind\":\"symbol\"}",

@@ -41,6 +41,8 @@ Check the returned source ranges, project/variant, coverage, freshness, certaint
 
 CLI exploration defaults to `--format audit`, which retains full saved identities, hashes, spans and provenance. `--format agent` uses compact aliases and line-numbered source. MCP defaults to agent format. Neither format grants source access or changes the saved facts.
 
+Opt-in retrieval depth is available through CLI --response-mode overview|evidence|detail or MCP responseMode. Omit it to preserve existing behavior. Overview is optional when discovery is useful; use evidence directly when the target is known, and detail only when additional evidence is needed. These modes do not establish measured token or latency savings. Overview returns saved candidates, scope-specific relation summaries and exact selectors without retrieving source bodies for the response. Bodies are explicitly deferred, not absent; saved pointers do not prove current source freshness. Existing index and freshness proof checks remain in force and may read files for verification. An overview request consisting of exact saved selectors, or using pathTo, goes directly to evidence. Evidence retrieves requested declarations while deferring related bodies; detail additionally allows related declarations and owner context within the same budgets. Responses identify requested and effective modes. No mode grants source permission, changes freshness requirements, combines compilation scopes, or increases the total escaped wire limits. Intentionally deferred bodies and budget/access omissions remain distinct. A budget too small for an evidence response may still return the existing explicit failure with no evidence.
+
 Aliases such as `@1` and `F1` are local to one response group. The agent format lists `F1 path` mappings before source blocks; a `Source F1:start-end @n` heading refers to that table without repeating the path. Consumers of older agent text should accept both this form and headings with `path=...`. In multi-group agent replies, identical index-wide diagnostics are shown once under `Index diagnostics (all saved scopes)`; per-group coverage, freshness, errors and omissions remain separate. Audit formatting is unchanged. Use the retained exact selector for later requests. Reuse complete saved ranges already in context with the same hash and span, and request only missing evidence. Ordinary read/search remains appropriate for dirty or unindexed files, documentation and questions outside the saved scope.
 
 ### Discovery and source outcomes
@@ -89,6 +91,7 @@ The default tool list contains only `explore`. Call that connected tool with a *
 | `pathTo` | Exact target occurrence for a saved call witness; at most 128 characters. |
 | `freshness` | `allow-stale` (default), `require-fresh` or `refresh`. |
 | `format` | `agent` (default) or `audit`. |
+| `responseMode` | Optional `overview`, `evidence` or `detail`; omission preserves existing retrieval behavior. Independent of `format`. |
 | `ownerStatus` | Optional bounded observation of an existing coordinator; does not prove freshness. |
 | `maxChars`, `maxBytes` | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes. |
 | `prepareMaxMilliseconds` | Preparation computation budget; default 30,000 ms. |

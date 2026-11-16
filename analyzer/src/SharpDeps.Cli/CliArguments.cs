@@ -21,7 +21,7 @@ internal sealed class CliArguments
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind", "metrics-directory" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "prepare-max-milliseconds", "max-chars", "max-bytes", "format", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
+      "max-depth", "max-milliseconds", "prepare-max-milliseconds", "max-chars", "max-bytes", "format", "response-mode", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -142,6 +142,7 @@ internal sealed class CliArguments
             ExploreRequestFactory.Format(Get("format"), ExploreFormat.Audit),
             ExploreRequestFactory.ScopePolicy(Get("scope-policy"), query, Get("project-id"), Get("variant"), Get("path-to"), queryKind), Get("path-to"))
             { ObserveOwner = Has("owner-status"), QueryKind = queryKind,
+                ResponseMode = ExploreRequestFactory.ResponseMode(Get("response-mode")),
                 PrepareMaxMilliseconds = ExplorePreparationMilliseconds() });
     }
 
