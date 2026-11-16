@@ -1,0 +1,235 @@
+{
+  "real_model_calls": 0,
+  "paid_calls": 0,
+  "owned_remaining": 0,
+  "hosts": [
+    {
+      "host": "codex",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "5231eabea126a0d3370146cf7983e9e157ba5448e73f269f89464cc392a80d5d"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-codex-product-mcp-native-1794843203520547200"
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "15dcd2d5fb9e8e32704bd224df331fd17073512c4d88a0b3d8a080fa27d72f4d",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "a1974240d5b0bacc909551a7605c70fabe8d0dc64b4e97bbbf8e6f63de973b00",
+            "30e0b6e6eb509fc08719cab0b39c95097522b9f31424e6d6d48ebb4a8be4fe92"
+          ],
+          "direct_match": false,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-codex-product-mcp-native-1794843205871027600"
+        }
+      ]
+    },
+    {
+      "host": "copilot",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "5231eabea126a0d3370146cf7983e9e157ba5448e73f269f89464cc392a80d5d"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-copilot-product-mcp-native-1794843207997608800"
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "15dcd2d5fb9e8e32704bd224df331fd17073512c4d88a0b3d8a080fa27d72f4d",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "a1974240d5b0bacc909551a7605c70fabe8d0dc64b4e97bbbf8e6f63de973b00",
+            "30e0b6e6eb509fc08719cab0b39c95097522b9f31424e6d6d48ebb4a8be4fe92"
+          ],
+          "direct_match": false,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-copilot-product-mcp-native-1794843211091943300"
+        }
+      ]
+    },
+    {
+      "host": "opencode",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "5231eabea126a0d3370146cf7983e9e157ba5448e73f269f89464cc392a80d5d"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-opencode-product-mcp-1794843213958661000"
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "15dcd2d5fb9e8e32704bd224df331fd17073512c4d88a0b3d8a080fa27d72f4d",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "8a944f0538400121eedc8299fe6191003bf57367a6731bd5afda8cd23b6ffe37",
+            "897ac1ad21fbc10c1ce1f0c2a574c6e0ab72a48d1cd5590a65da4cec27d0fc12"
+          ],
+          "direct_match": false,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-opencode-product-mcp-1794843217923511500"
+        }
+      ]
+    },
+    {
+      "host": "claude",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "5231eabea126a0d3370146cf7983e9e157ba5448e73f269f89464cc392a80d5d"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-claude-product-mcp-1794843222879496900"
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "15dcd2d5fb9e8e32704bd224df331fd17073512c4d88a0b3d8a080fa27d72f4d",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "8a944f0538400121eedc8299fe6191003bf57367a6731bd5afda8cd23b6ffe37",
+            "897ac1ad21fbc10c1ce1f0c2a574c6e0ab72a48d1cd5590a65da4cec27d0fc12"
+          ],
+          "direct_match": false,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-claude-product-mcp-1794843225215029000"
+        }
+      ]
+    }
+  ],
+  "scope": "Native MCP acceptance with local fixture responses, not natural model quality or token savings; no startup option.",
+  "artifact_sha256": {
+    "SharpDeps.Mcp.dll": "3f80dff2c440830e6bc9b51af07cec4f8286c2fdfedd6f9c8fc2a0230b66ddeb",
+    "SharpDeps.Query.dll": "a0408e933c0958f32d2a16d538ff31a291b8b448165e797ff59d3f9842d74eba"
+  },
+  "source_sha256": {
+    "analyzer/src/SharpDeps.Mcp/McpQueryAdapter.cs": "4588b6dc92fb3ae720a6407ffcceffbfda3673b42d8a706b04e8284b0c31a8c8",
+    "analyzer/src/SharpDeps.Mcp/Program.cs": "7317a1edc4cdc5b2b6b878c634fde7ca74707b1907293b45be0a5023d6f1ecff",
+    "analyzer/src/SharpDeps.Mcp/McpAgentGuidance.cs": "c208b982012a8a311d18b6c3aabdcfc1b99d97bb353b3ec2cfdb62e0dc2b319c",
+    "analyzer/src/SharpDeps.Query/ExplorationService.cs": "414982dbb45e71ef9bd13d0d49670917720bcbcdadc8765d9019f5b23839b398",
+    "analyzer/src/SharpDeps.Query/ExplorationDiscovery.cs": "69fe387b70022ea435646f64e8d28c1c371fb01a40af729b2469a6bbf7b7434b",
+    "analyzer/src/SharpDeps.Query/ExplorationEvidenceRef.cs": "ccf0edf5e89f5f879bda9252b8f124c25387bdb2c1fca3011af40aa1aeb00283",
+    "analyzer/src/SharpDeps.Query/ExploreRequest.cs": "30f1889f03454842cba74058818842e0fc25f32e876c2dfe0a5021784fc11f42",
+    "analyzer/tests/SharpDeps.Mcp.Tests/McpTests.cs": "21d49c9da6e347a368bbd81e970180a3d91ca3b6d4db262780fea6d215b8d72a",
+    "analyzer/tests/SharpDeps.Mcp.Tests/McpFlowTests.cs": "382ae2a000180a977abbed36f933356a9dec8ed34ce0d4ff72b118014cda3e6f",
+    "analyzer/tests/SharpDeps.Query.Tests/ExplorationTests.cs": "b0a407e466f1bf5933e7a0de4e972cb73d7742f2faac8735df8224fe4de2d3d6"
+  },
+  "limitations": [
+    "OpenCode wraps MCP errors as tool.execution JSON; decoded error message differs from other hosts only by stripped terminal CRLF (2 characters) for both rejected calls.",
+    "Codex app-server is intentionally terminated after direct tool RPCs; other native processes exited 0.",
+    "OpenCode auxiliary loopback request may omit explore and be rejected by fixture before primary successful session.",
+    "Codex/Copilot used model-free native direct MCP routes; Claude/OpenCode used only fixed loopback fake-provider tool instructions. No real inference or natural skill/adoption claim.",
+    "This validates an exact prerelease CI package payload, not an installed global-tool shim or a future stable/main/tag artifact.",
+    "Candidate row behavior was separately checked by 21+1 saved-argument direct replay; the four-host fixture covers normal modes and safety/re-fetch boundaries.",
+    "The earlier four comparison-session schema/init receipts are not four-host acceptance.",
+    "Adapter remains separate, not bundled or enabled; this acceptance does not activate it."
+  ],
+  "source_commit": "631e830e88697aeaa0f4e23d340c62b827f55990",
+  "candidate_package": {
+    "workflow_run": 43890740269,
+    "artifact_id": 14238051412,
+    "actions_zip_sha256": "7204e61e95280149824a11e91273ada4e62649d36c0b1c61135d273009226827",
+    "package": {
+      "file": "SharpDeps.Mcp.0.5.0-ci.43890740269.1.nupkg",
+      "bytes": 30042675,
+      "sha256": "8543c02264707a19ae52e4df584c8966a12ba44699a8bc35f1a696502c45b989",
+      "version": "0.5.0-ci.43890740269.1"
+    },
+    "status": "CI release candidate, not main/tag/publication"
+  },
+  "fresh_retrieval": {
+    "codex": "new empty app-server thread, exact content equality",
+    "copilot": "new empty session, exact content equality",
+    "claude": {
+      "fresh_process_guarded_exact_equal": true,
+      "output_sha256": "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+      "owned_remaining": 0,
+      "model_calls": 0
+    },
+    "opencode": {
+      "fresh_process_guarded_exact_equal": true,
+      "output_sha256": "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+      "owned_remaining": 0,
+      "model_calls": 0
+    }
+  },
+  "total_tool_calls": {
+    "normal": 16,
+    "guard_freshness": 16,
+    "new_context_or_process": 4,
+    "direct_reference": 4,
+    "total": 40
+  },
+  "evidence_sha256": {
+    "initial_acceptance": "ed2012d87add842155bb0ea343d8404dad6b3885396675441ae26b609f703b52",
+    "fresh_process": "3023edc0540538a72856160eda04d05382fb3b63e3bb14351a48360d42c57d6e",
+    "ci_identity": "588b5e1e936f89f204ae3f253bb3d9679e5781742a9e92e908885ac845af167a",
+    "ci_mutation_helper": "708535afea807e70d10d88afe1e65d4b5e870dd4f96f75dc5f4a1af7b3fc5b51"
+  },
+  "other_ci_candidates": {
+    "workflow_run": 43890740269,
+    "source_commit": "631e830e88697aeaa0f4e23d340c62b827f55990",
+    "cli": {
+      "artifact_id": 14237362395,
+      "actions_zip_digest": "fe65c46cc604aba86183ad2d7ed501ee4dfec907ee506eade82e2abcf659454c",
+      "version": "0.5.0-ci.43890740269.1",
+      "ci_pack_and_identity_check": "success",
+      "asset_present_not_expired": true
+    },
+    "vsix": {
+      "artifact_id": 14237237675,
+      "actions_zip_digest": "7395d39d4d1a5ae2ab8818e275adc08a15592d0eace002a1e0dbe9a0f12b2f3d",
+      "candidate_base": "0.5.0",
+      "ci_package_and_installed_vsix_e2e": "success",
+      "asset_present_not_expired": true
+    },
+    "scope": "API asset presence/head/digest and CI step/log readback only; these payloads were not independently downloaded or native-MCP tested in this audit."
+  }
+}

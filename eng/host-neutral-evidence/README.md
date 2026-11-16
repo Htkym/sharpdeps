@@ -146,10 +146,79 @@ for two candidate rows. The suffix inverse preserves the full result object,
 including selection and status; cleanup again leaves no owned processes. This
 additional condition is not included in the original 21-call count.
 
-The real-AI comparison evaluated `0ca0381`, **not this later display addition**.
-There were no new model calls, and no adoption, quality, token or cost gain is
-claimed. This is not a new four-host native acceptance; plain-text additions may
-affect external parsers.
+At the time of the 21-call replay and separate evidence check above, the prior
+real-AI comparison had evaluated `0ca0381`, **not this later display addition**.
+Those offline checks made no new model calls or adoption, quality, token or cost
+claims. The subsequently approved four-session study is recorded separately below.
+Neither study is a new four-host native acceptance; plain-text additions may affect
+external parsers.
+
+## Four-session candidate-location real-AI follow-up
+
+`candidate-location-real-ai.json` records the approved comparison of `0ca0381`
+(before) and `631e830` (after). Two natural tasks, NH03 EF Core and NH04 Orleans,
+were each run once per condition: four fresh sessions, OpenCode 2.2.0 with the same
+`openai/gpt-6-sol`, xhigh reasoning and normal/default service tier. The request-reuse
+adapter was OFF in both conditions. Task prompts and common instructions were
+unchanged; use of the product or its hints was not forced. Order was NH03 before/after,
+then NH04 after/before. There were no retries.
+
+| Task | Condition | Tokens | Host-estimated USD | Requests | Tool calls | Tool-output bytes | Quality |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| NH03 EF Core | Before | 49,433 | 0.0775171 | 5 | 9 | 74,801 | 3/3, complete |
+| NH03 EF Core | After | 44,676 | 0.0673766 | 5 | 9 | 62,272 | 3/3, complete |
+| NH04 Orleans | Before | 103,834 | 0.0889039 | 8 | 24 | 66,672 | 4/4, complete |
+| NH04 Orleans | After | 58,320 | 0.0783662 | 5 | 17 | 67,817 | 4/4, complete |
+
+Independent blinded grading against the unchanged rubric scored both conditions
+**7/7**, with **2/2 complete answers and zero critical errors**. Pack and grade hashes
+were sealed before the final condition mapping. Total tokens changed from 153,267
+to 102,996 (-32.8%); host-estimated cost from USD 0.166421 to USD 0.1457428 (-12.4%).
+All four sessions together cost an estimated **USD 0.3121638**; the actual provider
+invoice was not verified. The five host token counters are disjoint; reasoning is
+counted once, not added again to a reasoning-inclusive provider output total.
+All four runtime/usage validations passed, with no protocol violations or remaining
+owned processes; the execution gate was closed and all 371 frozen files rechecked.
+
+The new suffix appeared in both after-condition outputs: two NH03 candidate rows
+and four NH04 rows. However, NH03 **before also reached the same exact selector and
+scope at call 2**, then the same candidate path at call 3. NH04 after read the candidate
+path at call 5, but its preceding `source_list` call also supplied that path. The old
+NH04 run read that path at call 23. These observations do not prove the hint caused
+the selection or the efficiency difference.
+
+This is a small directional observation, not a general quality, token, cost or latency
+guarantee. Request repetition, batching, retrieval choices and cache state can affect
+the totals. The earlier negative comparison and offline records remain unchanged;
+this follow-up does not retrospectively turn them into successes or authorize release.
+
+## Final CI candidate native acceptance
+
+`final-candidate-host-verification.json` records separate no-inference acceptance
+of the MCP CI package `0.5.0-ci.43890740269.1`, built from `631e830`.
+Its nupkg SHA256 is
+`8543c02264707a19ae52e4df584c8966a12ba44699a8bc35f1a696502c45b989`;
+Actions ZIP and payload DLL hashes are retained in the JSON. This is a CI candidate,
+not a stable main/tag publication asset. Earlier native records remain unchanged.
+
+Forty local tool calls passed: four direct reference calls, sixteen normal-mode
+calls across four hosts, sixteen guard/freshness calls, and four exact re-fetches
+in new contexts/processes. Normal outputs match the direct reference. Guard mismatch
+and require-fresh rejection return no source; terminal-newline and OpenCode error
+wrapping differences are explicitly retained. All owned processes were cleaned up.
+
+Codex and Copilot use model-free native MCP routes, including fresh empty
+thread/session re-fetch. Claude Code and OpenCode use fixed loopback fake-provider
+tool instructions, including fresh-process re-fetch; they perform no real inference.
+These checks establish native transport/schema/output acceptance, not natural skill
+selection or equal model-facing guidance delivery. The four comparison-session
+schema/init receipts are a different check and are not four-host acceptance.
+The experimental context-reuse adapter remains separate and disabled.
+
+CLI and VSIX candidate assets also exist for the same CI head, with successful
+package checks and installed-VSIX CI tests. Those observations are recorded
+separately; this audit's downloaded-payload native MCP check applies only to the MCP
+candidate. No merge, tag, release or publication is performed by these checks.
 
 ## Release gates
 
