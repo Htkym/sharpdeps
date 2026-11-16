@@ -62,10 +62,11 @@ internal sealed class CliArguments
         if (args.Length == 0 || args is ["--help"] or ["-h"]) return parsed;
         if (args.Length > 200) throw new CliFailure("ARGUMENT_INVALID", 2);
         parsed.Command = args[0].ToLowerInvariant();
-        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help" or "install" or "uninstall")
+        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help" or "install" or "uninstall" or "agent-export" or "agent-remove")
             && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
-        if (parsed.Command is "install" or "uninstall") allowed.UnionWith(Installation);
+        if (parsed.Command is "agent-export" or "agent-remove") allowed.UnionWith(["client", "output-dir", "mcp-command", "dry-run"]);
+        else if (parsed.Command is "install" or "uninstall") allowed.UnionWith(Installation);
         else if (parsed.Command is "index" or "update") allowed.UnionWith(Index);
         else if (parsed.Command == "serve")
         {

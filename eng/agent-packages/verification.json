@@ -1,0 +1,89 @@
+{
+  "scope": "Project-bound agent package export; isolated no-real-AI verification, not a release or effectiveness claim.",
+  "sourceSha256": {
+    "analyzer/src/SharpDeps.Cli/CliAgentPackage.cs": "497af79ab6790a1a3d6047d385963a8474ddeef2c8208ea3e195378e74cf8395",
+    "analyzer/tests/SharpDeps.Cli.Tests/CliAgentPackageTests.cs": "7eb32776bf9c6342cffc206a2f267f871a8d51d28798fcf2d921df105040b354"
+  },
+  "evidence": {
+    "cli_tests": {
+      "artifact": "sd-agent-package-once-20261117/cli-tests.txt",
+      "sha256": "8ceb3f01574cbb36197b8c3275d8fd4dcb33a9083419ff823c9e2f26fd2399d5"
+    },
+    "schema": {
+      "artifact": "sd-agent-package-once-20261117/schema-results.json",
+      "sha256": "40680af0df18e376b642a59168685f2e8e952a3d66177785ae450175db98e886"
+    },
+    "powershell_forwarding": {
+      "artifact": "sd-agent-package-native-20261116/powershell-forwarding.json",
+      "sha256": "a991011e102dd7f0586332ef6f9bedd4896891942c3e3a1a1dfbd28c150e3982"
+    },
+    "bash_forwarding": {
+      "artifact": "sd-agent-package-native-20261116/shell-forwarding.txt",
+      "sha256": "8ea886a1fa48bdc46f2bcbe9dde360d77fca86ccdb1a1251212f780941e3a5a3"
+    },
+    "independent_contract_review": {
+      "artifact": "sd-agent-package-final-20261117/independent-final-review.json",
+      "sha256": "8b9a0546eada28da35d519f2720cbf2a4b5fcf331fef1f7ccd0c409f18e5d2f9"
+    },
+    "claude_copilot_read": {
+      "artifact": "sd-agent-package-once-20261117/final-host-read/result.json",
+      "sha256": "cc6776bd550f681c7743c5ce646977b57f28cffffc2e237e94b1fe1c13141465"
+    },
+    "codex_runtime": {
+      "artifact": "sd-codex-real-product-once-20261117/record.json",
+      "sha256": "e2ba57d296eb72c5d5d6534c15bf1cc8a062847209fadf164bcc96cc006a5740"
+    },
+    "codex_preservation": {
+      "artifact": "sd-codex-real-product-once-20261117/verification.json",
+      "sha256": "7fb2ae7b426272185200f882dd2efb348b26236fbfdd5a9f1ffb6af55f33f431"
+    },
+    "opencode_wire": {
+      "artifact": "sd-agent-package-once-wire-20261117/result.json",
+      "sha256": "64817c94b250f409ff3e40659642e2394acf85bbd49ca91775a9b415ccb06b93"
+    },
+    "independent_instructions_only_review": {
+      "artifact": "sd-agent-package-once-20261117/independent-final-review.json",
+      "sha256": "7293ba25b67ab82c25f509a3d0afcf2a6703eea0a80e80bb4aa3bee723ed45b6"
+    }
+  },
+  "checks": {
+    "cliTests": {
+      "passed": 47,
+      "failed": 0,
+      "scope": "CliAgentPackageTests and existing CliInstallationTests"
+    },
+    "portableSchema": "Official Agent Plugins 1.0 manifest and MCP schemas passed; semantic native checks are separate.",
+    "wrappers": "PowerShell and Bash forwarding retained spaced arguments with local stubs; no install performed.",
+    "independentReview": "Bare-command/routing/ownership contract static review passed; OpenCode instructions-only delta reviewed separately.",
+    "claudeCode": {
+      "version": "2.1.325",
+      "proved": "Final generated plugin validate succeeded with no manifest errors or warnings.",
+      "notProved": "Model-facing delivery or natural skill selection."
+    },
+    "copilotCli": {
+      "version": "1.0.112",
+      "proved": "Final generated portable package recognized by --plugin-dir plugin list.",
+      "notProved": "MCP runtime connection or model-facing delivery from this package."
+    },
+    "codex": {
+      "version": "0.167.2",
+      "proved": "Real SharpDeps 0.5.0 MCP explore listed and thread runtime connected; original bundle hashes unchanged, zero model turns and no remaining owned processes.",
+      "setup": "Bare standard verification apphost through isolated PATH; byte-identical package copy with relative local-marketplace source.",
+      "notProved": "Global-tool shim installation, fixed executable identity through PATH, model-facing guidance, or managed removal/update after relocation."
+    },
+    "opencode": {
+      "version": "2.2.0",
+      "proved": "Generated MCP and instructions preserved. Both initial and post-explore loopback payloads contain routing once and MCP init instructions once. No sharpdeps-routing skill metadata/body; generated skills key and SKILL.md absent.",
+      "genericSkillTool": "May remain available from the fixture; this is not registration of the omitted SharpDeps skill.",
+      "notProved": "Natural model adoption, token savings, quality improvement or global-tool installation."
+    }
+  },
+  "limitations": [
+    "Host checks prove different layers; they do not establish equivalent model-facing delivery across all four hosts.",
+    "UseAppHost=true was a verification-only build override; product project defaults and global-tool installation were unchanged.",
+    "Earlier unpublished draft exports, including OpenCode packages containing skills, need not match the final v1 renderer and are outside managed-removal compatibility guarantees. Preserve earlier artifacts; do not delete them automatically. After release, keep versioned guidance/renderers immutable.",
+    "OpenCode previously duplicated routing after explicit skill loading; final instructions-only form removes that registration. No real-model comparison quantifies the effect.",
+    "No new paid AI runs, sign-in, user profile edits or publication. Existing paid comparison results remain unchanged.",
+    "Exact-tree checks are not a cryptographic ownership or adversarial race-free guarantee. Cancellation can retain staging files. Host auto-discovery may observe an explicitly selected output directory."
+  ]
+}
