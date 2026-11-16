@@ -515,9 +515,14 @@ public sealed partial class ExplorationService
                 foreach (var node in owner.GetSearchIndex(timer.Token).Names.GetValueOrDefault(query) ?? [])
                 {
                     Check();
-                    if ((node.Name == query || owner.GetSearchIndex(timer.Token).Search[node.Id].Label == query || node.Signature == query) && NodeAllowed(node, variant))
+                    var metadata = owner.GetSearchIndex(timer.Token).Search[node.Id];
+                    // Types store qualified names; reuse prepared aliases so a same-named member
+                    // cannot hide a short-name type candidate. Keep collisions ambiguous, not type-first.
+                    var exactName = node.Name == query || metadata.Label == query
+                        || node.Kind == HarnessNodeKind.Type && (metadata.SimpleName == query || metadata.BaseName == query);
+                    if ((exactName || node.Signature == query) && NodeAllowed(node, variant))
                         literal.Add(new(node, MatchTier.ExactName, true, true, MatchedTerms: 1,
-                            NameTerms: node.Name == query || owner.GetSearchIndex(timer.Token).Search[node.Id].Label == query ? 1u : 0u));
+                            NameTerms: exactName ? 1u : 0u));
                 }
                 if (literal.Count > 0) { searchTerms = [query]; return literal; }
             }
@@ -1524,7 +1529,7 @@ public sealed partial class ExplorationService
             var graph = owner.saved.Graph;
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
             Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : responseMode == ExploreResponseMode.Overview ? "not-requested" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
-            AppendResponseMode(text, detailCount);
+            AppendResponseMode(text, detailCount, includePointers: roots.Count == 0);
             AppendEvidenceRefs(text, detailCount);
             AppendTypeMemberFallback(text, omitted);
             AppendOwnerObservation(text);
@@ -1585,6 +1590,7 @@ public sealed partial class ExplorationService
                 text.AppendLine(measureDiscovery is null
                 ? "Symbols (@n is reply-local; selection=requested certainty=Resolved unless shown):"
                 : "Symbols (@n is group-local; selection=requested certainty=Resolved unless shown):");
+            var overviewSymbols = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var item in identities.Values.OrderBy(selection => aliases[selection.Identity], StringComparer.Ordinal))
             {
                 if (units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)))
@@ -1595,8 +1601,14 @@ public sealed partial class ExplorationService
                 if (item.Reason != "requested") details += " selection=" + Safe(item.Reason, 100);
                 if (item.Certainty != HarnessCertainty.Resolved)
                     details += " certainty=" + item.Certainty;
-                Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)}{details}");
+                var symbol = $"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)}{details}";
+                if (responseMode == ExploreResponseMode.Overview
+                    && DisplayedRoots(detailCount).Any(root => root.Identity == item.Identity)
+                    && OverviewLocations(item).Any(location => owner.files.ContainsKey(location.SourceId)))
+                    overviewSymbols.Add(item.Identity, symbol.Replace(" selector=" + item.Identity, "", StringComparison.Ordinal));
+                else text.AppendLine(symbol);
             }
+            if (roots.Count > 0) AppendOverviewPointers(header, detailCount, overviewSymbols);
             var sourceIds = units.Select(unit => unit.SourceId).Concat(shownOmissions.Select(item => item.Location.SourceId))
                 .Concat(shownRelations.Select(relation => relation.Edge.Evidence?.SourceId).OfType<string>())
                 .Concat(summaryRows.Select(row => row.Location?.SourceId).OfType<string>())
@@ -1666,7 +1678,7 @@ public sealed partial class ExplorationService
         private IEnumerable<Selected> DisplayedRoots(int detailCount)
             => responseMode == ExploreResponseMode.Overview ? roots.Take(detailCount) : roots;
 
-        private void AppendResponseMode(StringBuilder text, int detailCount)
+        private void AppendResponseMode(StringBuilder text, int detailCount, bool includePointers = true)
         {
             if (request.ResponseMode is not { } requested) return;
             text.AppendLine($"Response mode requested={ModeName(requested)} effective={ModeName(responseMode!.Value)}");
@@ -1678,15 +1690,27 @@ public sealed partial class ExplorationService
             if (responseMode != ExploreResponseMode.Overview) return;
             var displayed = DisplayedRoots(detailCount).ToArray();
             text.AppendLine(FormattableString.Invariant($"Overview candidates shown={displayed.Length}/{roots.Count}; omitted={roots.Count - displayed.Length}. Unshown candidates are not evidence of absence; narrow the query if needed."));
+            if (includePointers) AppendOverviewPointers(text, detailCount);
+        }
+
+        private IEnumerable<HarnessLocation> OverviewLocations(Selected root)
+            => (root.Occurrence?.Declarations ?? (root.Occurrence?.Location is { } occurrence
+                ? [occurrence] : owner.Locations(root.Node, variant).ToArray())).Distinct().Where(PathAllowed);
+
+        private void AppendOverviewPointers(StringBuilder text, int detailCount, IReadOnlyDictionary<string, string>? symbols = null)
+        {
+            if (responseMode != ExploreResponseMode.Overview) return;
             // Candidate and pointer rows share the existing detail quota; safety headers are never trimmed.
-            foreach (var root in displayed.Concat(symbolChoices.Take(detailCount)
+            foreach (var root in DisplayedRoots(detailCount).Concat(symbolChoices.Take(detailCount)
                 .Select(choice => new Selected(choice.Node, null, 0, "candidate", HarnessCertainty.Candidate, false))))
             {
-                var locations = root.Occurrence?.Declarations ?? (root.Occurrence?.Location is { } occurrence
-                    ? [occurrence] : owner.Locations(root.Node, variant).ToArray());
-                foreach (var location in locations.Distinct().Where(PathAllowed))
+                var symbol = symbols?.GetValueOrDefault(root.Identity);
+                foreach (var location in OverviewLocations(root))
                     if (owner.files.TryGetValue(location.SourceId, out var file))
-                        text.AppendLine(FormattableString.Invariant($"Saved pointer selector={root.Identity} path={file.RelativePath} hash={file.ContentHash} rawSpan={location.RawSpan?.Start}:{location.RawSpan?.Length}; body=not-requested"));
+                    {
+                        text.AppendLine(FormattableString.Invariant($"Saved pointer selector={root.Identity} path={file.RelativePath} hash={file.ContentHash} rawSpan={location.RawSpan?.Start}:{location.RawSpan?.Length}; body=not-requested{(symbol is not null ? " " + symbol : "")}"));
+                        symbol = null; // Partial declarations share one symbol row, not one per location.
+                    }
             }
         }
 

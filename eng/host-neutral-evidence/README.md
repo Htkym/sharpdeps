@@ -67,7 +67,8 @@ The approved 12-session OpenCode comparison of main 40a5b5b and candidate 27fba1
 was negative on the intended efficiency/quality goal: all-session total tokens rose
 2.9%, tool-output bytes rose 6.0%, and rubric scores fell from 48/57 to 47/57.
 The all-session totals include two tool-call-limit violations; they are not presented
-as a protocol-compliant success. No additional AI comparison has been run.
+as a protocol-compliant success. These figures describe that completed study, not a
+quality re-test of later changes.
 
 `follow-up-verification.json` keeps the subsequent local checks separate:
 
@@ -88,6 +89,39 @@ as a protocol-compliant success. No additional AI comparison has been run.
 Scoped ExplorationTests passed 141/141 and McpTests/McpFlowTests 28/28. All 14 replay calls returned without
 error; the 383 frozen comparison inputs remain unchanged. Final native acceptance is recorded in `native-follow-up-verification.json`: normal outputs agree with direct MCP across all four hosts, with documented host wrapping/newline differences for rejected calls. These checks do
 not overturn the failed real-AI comparison or authorize release.
+
+## Short-type candidates and overview row consolidation
+
+`query-output-verification.json` records a later deterministic check using the same
+14 saved queries plus five queries from the subsequent natural-use study. It does
+not modify either paid dataset or measure model quality for these new changes.
+
+- Exact type short-name aliases now participate alongside same-named members using
+  the existing prepared lookup. A collision remains ambiguous, not type-first.
+  Eighteen of 19 type-only replay results are identical. `PlacementStrategy` now
+  includes the previously hidden type in its scope's choices; one property row moves
+  to explicit omission under the unchanged display budget. This changes candidate
+  selection and is not a lossless-selection claim.
+- Agent overview combines a root's symbol metadata with its saved pointer, retaining
+  selector, label, signature, scope, path, hash and span. Related information remains.
+  Other response modes and audit are unchanged. The plain-text row shape changes;
+  external parser compatibility is not guaranteed. Inverse row comparison preserves
+  all prior information except the updated relation-omission count in one case.
+- Against the separate type-only baseline, the 14-query total changes from 115,559
+  to 115,159 UTF-8 bytes; the natural five-query total changes from 38,510 to 38,151.
+  One `Detect` result **increases 121 bytes** because two related relations, two symbol
+  aliases and two file rows now fit; relation omissions fall from 31 to 29. Root
+  candidate counts, source ranges/text and important diagnostics are unchanged.
+  Total bytes are not guaranteed to decrease monotonically.
+
+The full MCP Release build succeeded, ExplorationTests passed 147/147, and the
+limited McpTests/McpFlowTests passed 28/28. All 19 full-build argument/result objects
+match the separately checked final isolated artifact. Independent code and inverse
+replay review passed; no AI calls occurred and cleanup left no owned processes.
+This is not a new four-host acceptance or evidence of model-quality/token/cost gains.
+After the CLI packaging freeze, the normal `UseAppHost=false` build and the same
+147/28 tests passed again; all 19 argument/result objects matched the previous
+full-build results. The refresh hashes are retained separately in the JSON record.
 
 ## Release gates
 

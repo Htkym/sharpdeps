@@ -11,6 +11,70 @@ using Xunit;
 
 public sealed class ExplorationTests
 {
+    [Fact]
+    public void AgentOverviewCombinesRootSymbolAndSavedPointerWithoutLosingFields()
+    {
+        using var fixture = new Fixture(dense: true, partial: true, format: ExploreFormat.Agent);
+        var request = fixture.Request("Pump") with { ResponseMode = ExploreResponseMode.Overview };
+        var reply = fixture.Engine().Execute(request);
+        Assert.Empty(reply.Units);
+        var pointers = reply.Text.Split('\n').Where(line => line.StartsWith("Saved pointer selector=", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(pointers);
+        Assert.Contains(pointers, line => line.Contains(" @", StringComparison.Ordinal)
+            && line.Contains("signature=", StringComparison.Ordinal)
+            && line.Contains("path=", StringComparison.Ordinal)
+            && line.Contains("hash=", StringComparison.Ordinal)
+            && line.Contains("rawSpan=", StringComparison.Ordinal));
+        foreach (var pointer in pointers.Where(line => line.Contains(" @", StringComparison.Ordinal)))
+        {
+            var selector = pointer.Split(' ')[2];
+            Assert.DoesNotContain(reply.Text.Split('\n'), line => line.StartsWith("@", StringComparison.Ordinal)
+                && line.Contains(selector, StringComparison.Ordinal));
+        }
+        Assert.Contains("Saved relations", reply.Text);
+        Assert.Contains("Freshness=unverified", reply.Text);
+        Assert.Contains("coverage=Partial", reply.Text);
+        AssertWireBudget(reply, request.Budget!);
+        var audit = fixture.Engine().Execute(request with { Format = ExploreFormat.Audit });
+        Assert.DoesNotContain(audit.Text.Split('\n').Where(line => line.StartsWith("Saved pointer selector=", StringComparison.Ordinal)),
+            line => line.Contains(" @", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Demo.Pump", "Pump")]
+    [InlineData("Demo.Outer.Pump", "Pump")]
+    [InlineData("Demo.Outer<T>.Pump<System.String>", "Pump")]
+    [InlineData("Demo.Outer<T>.Pump<System.String>", "Pump<System.String>")]
+    [InlineData("Demo.Pump`1", "Pump")]
+    public void ExactTypeAliasesCannotBeHiddenBySameNamedMembers(string typeName, string query)
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var graph = fixture.Snapshot.Graph;
+        var typeId = graph.Nodes.Single(node => node.Id == fixture.Helper).ParentId!;
+        var snapshot = fixture.Snapshot with { Graph = graph with
+        {
+            Nodes = graph.Nodes.Select(node => node.Id == typeId ? node with { Name = typeName }
+                : node.Id == fixture.Helper ? node with { Name = query } : node).ToArray()
+        } };
+        foreach (var trusted in new[] { false, true })
+        {
+            var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), trusted);
+            var reply = engine.Execute(fixture.Request(query));
+            Assert.Contains("SYMBOL_AMBIGUOUS", reply.OmissionReasons);
+            Assert.Contains("selector=" + typeId, reply.Text);
+            Assert.Contains("selector=" + fixture.Helper, reply.Text);
+            Assert.Empty(reply.Units);
+            AssertWireBudget(reply, fixture.Request(query).Budget!);
+            var exact = engine.Execute(fixture.Request(fixture.Occurrence(fixture.Helper)));
+            Assert.DoesNotContain("SYMBOL_AMBIGUOUS", exact.OmissionReasons);
+        }
+        var differentCase = snapshot with { Graph = snapshot.Graph with
+        { Nodes = snapshot.Graph.Nodes.Select(node => node.Id == typeId ? node with { Name = typeName.ToLowerInvariant() } : node).ToArray() } };
+        var caseSensitive = new ExplorationService(new FixedIndex(differentCase), new QueryWorkspace(fixture.Root), true)
+            .Execute(fixture.Request(query));
+        Assert.DoesNotContain("SYMBOL_AMBIGUOUS", caseSensitive.OmissionReasons);
+    }
+
     [Theory]
     [InlineData(ExploreResponseMode.Overview)]
     [InlineData(ExploreResponseMode.Evidence)]
