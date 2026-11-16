@@ -1018,6 +1018,11 @@ public sealed partial class ExplorationService
                     && (sourcePaths.Contains(file.RelativePath) || sourcePaths.Contains(Path.GetFileName(file.RelativePath)));
                 if (match.Exact) return match.PathMatch && !anchored ? 2 : 0;
                 if (anchored) return 1;
+                // Search-selected member roots precede graph-related bodies even when the name is lexical.
+                // Keep explicit overview/evidence admission unchanged, including ambiguous root sets.
+                if (responseMode is null or ExploreResponseMode.Detail
+                    && item.Node.Kind == HarnessNodeKind.Member
+                    && roots.Any(root => root.Identity == item.Identity)) return 2;
             }
             return bodySelections.Contains(item.Node.Id) || !sourceMatches.ContainsKey(item.Node.Id) ? 3 : 4;
         }

@@ -6,8 +6,11 @@ references. The separate OpenCode request-rewrite experiment is not this feature
 
 ## Contract
 
-- Omitted response mode preserves the legacy behavior. Explicit evidence mode is
-  suitable for known targets; overview is optional discovery, not a mandatory first call.
+- No response mode is forced when omitted. The 27fba1e study preserved legacy
+  selection; the follow-up now prioritizes search-selected member roots over related
+  bodies in omitted/detail mode. This can change the returned source set within the
+  same budgets. Explicit evidence is suitable for known targets; overview remains
+  optional discovery, not a mandatory first call.
 - `includeEvidenceRefs` emits bounded saved-selection guards. A subsequent exact
   occurrence plus project/variant and `evidenceRef` validates the saved declaration
   set before reading source. It is not authorization or proof of current context.
@@ -18,7 +21,7 @@ references. The separate OpenCode request-rewrite experiment is not this feature
   ranges inside that same type can provide partial evidence. The omitted parent and
   the partial nature remain explicit; unrelated bodies and larger budgets are not implied.
 
-## Offline output study
+## Offline output study (27fba1e baseline)
 
 `offline-verification.json` records six saved queries across Zen.MVVM, EF Core and
 Orleans, their frozen identities, tested assembly/source hashes, and all outcomes.
@@ -34,8 +37,10 @@ results are retained, including the type query that returned no source within bu
 Overview plus follow-up is **33.9% larger** than legacy in aggregate. It must not be
 recommended unconditionally. Direct same-query evidence is 17.8% smaller, but
 intentionally returns different amounts of source evidence. This is not an equal-quality,
-token, price or latency comparison. The final explore schema adds 593 bytes, and guard
-arguments add further input. Provider caching and model selection are unmeasured.
+token, price or latency comparison. At the 27fba1e study revision, the explore schema
+added 593 bytes relative to its main baseline, and guard arguments added further input.
+That historical delta is not the final follow-up schema size. Provider caching and
+model selection were unmeasured in this offline study.
 
 All six final round trips returned source, matched unguarded exact output, rejected an
 altered guard without source, and returned identical evidence from a new server connection.
@@ -56,9 +61,38 @@ selection guard rejection, freshness rejection, and a new empty session/process 
 This last case simulates loss of prior context; it does not inspect a provider's compaction
 implementation. Local fixture usage/cost estimates are not incurred AI charges.
 
+## Real-AI result and follow-up (not yet a quality re-test)
+
+The approved 12-session OpenCode comparison of main 40a5b5b and candidate 27fba1e
+was negative on the intended efficiency/quality goal: all-session total tokens rose
+2.9%, tool-output bytes rose 6.0%, and rubric scores fell from 48/57 to 47/57.
+The all-session totals include two tool-call-limit violations; they are not presented
+as a protocol-compliant success. No additional AI comparison has been run.
+
+`follow-up-verification.json` keeps the subsequent local checks separate:
+
+- A five-line selection-priority correction gives search-selected member roots their
+  turn before related bodies for omitted/detail mode, without changing matches, scopes or budgets. Overview/evidence selection is unchanged.
+  On 14 saved calls, 11 outputs are identical; three EF Core calls now include missing
+  requested declarations. Bytes change from 115,919 to 115,559. Those additions cover
+  118 lines explicitly cited in the saved answer; removed lines were not cited there.
+  Uncited does not mean unnecessary, and future tool-call or quality gains are untested.
+- MCP wording is shorter: schema 3,567 to 3,028 bytes, tool description 1,707 to 1,182,
+  initialization instructions 2,116 to 465 (2,715 bytes across these measured fields).
+  The known-target example now names evidence explicitly; that is intentional model guidance, not merely text shortening. Runtime defaults remain unchanged. This is not a measured provider-token or per-session saving.
+- The default Member-metadata dedup and startup default-evidence flag experiments
+  were not adopted; their evidence/patches were preserved separately. No startup
+  flag forces evidence mode. The priority correction changes source selection and
+  must not be described as lossless compression.
+
+Scoped ExplorationTests passed 141/141 and McpTests/McpFlowTests 28/28. All 14 replay calls returned without
+error; the 383 frozen comparison inputs remain unchanged. Final native acceptance is recorded in `native-follow-up-verification.json`: normal outputs agree with direct MCP across all four hosts, with documented host wrapping/newline differences for rejected calls. These checks do
+not overturn the failed real-AI comparison or authorize release.
+
 ## Release gates
 
-Four-host native results must be complete for the final assembly. A separately approved
-real-AI comparison must then assess task quality, tool selection, total input/output,
-latency and cost. Its scope and spending ceiling need owner approval before execution.
+Four-host native results must be complete for the final assembly. The failed historical
+real-AI comparison is retained above. Any further real-AI comparison of the follow-up
+requires separate owner approval for its scope and spending ceiling, and must assess
+task quality, tool selection, total input/output, latency and cost.
 Release remains blocked until those results are presented and the owner decides to proceed.

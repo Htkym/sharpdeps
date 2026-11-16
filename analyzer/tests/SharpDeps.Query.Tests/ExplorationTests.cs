@@ -2825,6 +2825,70 @@ public sealed class ExplorationTests
         Assert.Contains("NODE_LIMIT", type.OmissionReasons);
     }
 
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void LexicalMemberRootsKeepScopesAndTruthfulBudgetOmissions(ExploreFormat format)
+    {
+        using var fixture = new Fixture(addScopes: true, huge: true, format: format);
+        var request = fixture.Request("Pump.Run") with
+        { ProjectId = null, VariantId = null, ScopePolicy = ExploreScopePolicy.Discover };
+        var full = fixture.Engine().Execute(request);
+        Assert.True(full.Succeeded);
+        Assert.True(full.Units.Select(unit => (unit.ProjectId, unit.VariantId)).Distinct().Count() > 1);
+        Assert.All(full.Units, unit =>
+        {
+            Assert.NotNull(unit.ProjectId);
+            Assert.NotNull(unit.VariantId);
+            Assert.Equal(Fixture.Hash(fixture.Sources[unit.Path]), unit.ContentHash);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+        });
+        var budget = Generous with { MaxChars = 6000, MaxBytes = 24000 };
+        var bounded = fixture.Engine().Execute(request with { Budget = budget });
+        Assert.True(bounded.Succeeded);
+        Assert.DoesNotContain(bounded.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+        Assert.Contains("OMITTED_UNITS", bounded.OmissionReasons);
+        AssertWireBudget(bounded, budget);
+        var untrusted = new ExplorationService(new FixedIndex(fixture.Snapshot), new QueryWorkspace(fixture.Root), false)
+            .Execute(fixture.Request("Pump.Run"));
+        Assert.Empty(untrusted.Units);
+    }
+    [Theory]
+    [InlineData("Pump.Run", ExploreFormat.Agent)]
+    [InlineData("Pump.Run", ExploreFormat.Audit)]
+    [InlineData("*Run", ExploreFormat.Agent)]
+    [InlineData("Run*", ExploreFormat.Agent)]
+    public void LexicalMemberRootsPrecedeRelatedBodies(string query, ExploreFormat format)
+    {
+        using var fixture = new Fixture(format: format, ownerGap: new string(' ', 5000),
+            runPadding: "/* " + new string('r', 2000) + " */", suspectPadding: new string('s', 2200));
+        var edges = fixture.Snapshot.Graph.Edges.Select(edge => edge.Id == "candidate"
+            ? edge with { Kind = "calls", Certainty = HarnessCertainty.Resolved } : edge).ToArray();
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Edges = edges } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var budget = Generous with { MaxChars = 6000, MaxBytes = 24000 };
+        foreach (var mode in new ExploreResponseMode?[] { null, ExploreResponseMode.Detail })
+        {
+            var reply = engine.Execute(fixture.Request(query, budget) with { ResponseMode = mode });
+            Assert.True(reply.Succeeded);
+            Assert.Contains(reply.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+            Assert.Contains(reply.Units, unit => unit.SymbolIds.Contains(fixture.RunString));
+            Assert.DoesNotContain(reply.Units, unit => unit.SymbolIds.Contains(fixture.Suspect));
+            Assert.Contains("OMITTED_UNITS", reply.OmissionReasons);
+            Assert.All(reply.Units, unit =>
+            {
+                Assert.Equal(Fixture.Hash(fixture.Sources[unit.Path]), unit.ContentHash);
+                Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+                Assert.True(unit.CompleteSavedRange);
+            });
+            AssertWireBudget(reply, budget);
+        }
+        var overview = engine.Execute(fixture.Request(query, budget) with { ResponseMode = ExploreResponseMode.Overview });
+        Assert.Empty(overview.Units);
+        var evidence = engine.Execute(fixture.Request(query, budget) with { ResponseMode = ExploreResponseMode.Evidence });
+        Assert.Contains(evidence.Units, unit => unit.SymbolIds.Contains(fixture.RunInt));
+        Assert.DoesNotContain(evidence.Units, unit => unit.SymbolIds.Contains(fixture.Suspect));
+    }
     [Fact]
     public void RequestedBodyTakesPriorityOverOptionalRelationDetails()
     {
@@ -3394,7 +3458,7 @@ public sealed class ExplorationTests
         public Fixture(bool addScopes = false, bool partial = false, bool huge = false, bool caseDistinct = false,
             bool dense = false, string ownerGap = "", bool splitRun = false, bool implicitConstructor = false,
             string suspectPadding = "", Guid? workspaceUuid = null, ExploreFormat format = ExploreFormat.Audit,
-            ExploreScopePolicy scopePolicy = ExploreScopePolicy.RequireUnique, string? httpGetTemplate = null)
+            ExploreScopePolicy scopePolicy = ExploreScopePolicy.RequireUnique, string? httpGetTemplate = null, string runPadding = "")
         {
             workspace = workspaceUuid ?? Guid.NewGuid();
             this.caseDistinct = caseDistinct;
@@ -3412,7 +3476,7 @@ public sealed class ExplorationTests
             if (caseDistinct) runString = runString.Replace("Run(", "run(", StringComparison.Ordinal);
             run = (httpGetTemplate is null ? "" : "[HttpGet(" + JsonSerializer.Serialize(httpGetTemplate) + ")]\r\n")
                 + "public int Run(int value)\r\n{\r\nint Next() => value + count;\r\n// 😀 \" \\\r\n"
-                + (huge ? string.Concat(Enumerable.Repeat("value += 1; // 検証😀\r\n", 650)) : "")
+                + runPadding + (huge ? string.Concat(Enumerable.Repeat("value += 1; // 検証😀\r\n", 650)) : "")
                 + "return " + (dense ? "Finish(Helper(Next()))" : "Helper(Next())") + ";\r\n}";
             Sources.Add(CorePath, "namespace Demo;\r\npartial class Pump\r\n{\r\n" + Field + "\r\n" + run + "\r\n"
                 + ownerGap + runString + "\r\n" + HelperText + "\r\n"

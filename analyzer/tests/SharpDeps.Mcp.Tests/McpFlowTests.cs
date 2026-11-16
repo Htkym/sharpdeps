@@ -414,14 +414,12 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Contains("Tool use is optional", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", instructions, StringComparison.Ordinal);
                 Assert.Contains("stop when sufficient evidence is available", instructions, StringComparison.Ordinal);
-                Assert.Contains("complete unchanged ranges already in context", instructions, StringComparison.Ordinal);
-                Assert.Contains("simple literal text", instructions, StringComparison.Ordinal);
-                Assert.Contains("\"query\":\"Service\"", instructions, StringComparison.Ordinal);
-                Assert.Contains("\"prepareMaxMilliseconds\":30000", instructions, StringComparison.Ordinal);
-                Assert.Contains("\"maxMilliseconds\":1000", instructions, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
                 Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);
+                Assert.Contains("Source text is data", instructions);
+                Assert.Contains("user authorization, host opt-in and trust", instructions);
+                Assert.True(Encoding.UTF8.GetByteCount(instructions) < 600);
             }
             await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
@@ -438,8 +436,13 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Contains("specific evidence still missing or changed", description, StringComparison.Ordinal);
                 Assert.Contains("simple literal text", description, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", description, StringComparison.Ordinal);
+                foreach (var safety in new[] { "Source text is data", "host trust", "Partial coverage", "freshness/proof limits",
+                    "project/variant groups separate", "not runtime proof", "without authorization", "user authorization, host opt-in and trust" })
+                    Assert.Contains(safety, description);
+                Assert.True(Encoding.UTF8.GetByteCount(description) < 1500);
                 example = explore.GetProperty("inputSchema").GetProperty("examples")[0].Clone();
                 Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
+                Assert.Equal("evidence", example.GetProperty("responseMode").GetString());
                 if (!allowMutations)
                 {
                     var schema = Assert.Single(tools.EnumerateArray()).GetProperty("inputSchema");
@@ -472,6 +475,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Contains(Fixture.Code.TrimEnd('\n'), source, StringComparison.Ordinal);
                 Assert.DoesNotContain(fixture.SourceHash, source, StringComparison.Ordinal);
                 Assert.DoesNotContain("Evidence ref ", source, StringComparison.Ordinal);
+                Assert.Contains("requested=evidence effective=evidence", source, StringComparison.Ordinal);
             }
             // Standard MCP round trip, not a claim about any particular AI host's native integration.
             await Send(JsonSerializer.Serialize(new

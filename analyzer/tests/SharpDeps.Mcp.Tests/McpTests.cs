@@ -69,6 +69,7 @@ public sealed class McpTests
             Assert.Equal(expectedDefault, budget.GetProperty("default").GetInt32());
         }
         Assert.Contains("flat arguments", tool.Description, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(tool.InputSchema.GetRawText()) < 3700);
         var example = tool.InputSchema.GetProperty("examples")[0];
         Assert.Equal(JsonValueKind.String, example.GetProperty("query").ValueKind);
         Assert.Equal(1000, example.GetProperty("maxMilliseconds").GetInt32());
