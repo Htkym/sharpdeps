@@ -90,7 +90,7 @@ public sealed partial class ExplorationService
             else if (request.Freshness == QueryFreshnessPolicy.RequireFresh) run.Verify();
             if (run.Errors.Count == 0 && request.ScopePolicy == ExploreScopePolicy.Discover)
                 run.Discover();
-            else if (run.Errors.Count == 0 && run.Resolve() && (request.PathTo is null || run.ResolvePathEndpoints()))
+            else if (run.Errors.Count == 0 && run.Resolve() && run.ValidateEvidenceRef() && (request.PathTo is null || run.ResolvePathEndpoints()))
             {
                 run.Expand();
                 if (request.PathTo is not null) run.PrepareRetainedPath();
@@ -131,6 +131,7 @@ public sealed partial class ExplorationService
     {
         static bool Text(string? value, int maximum) => value is null
             || value.Length <= maximum && !string.IsNullOrWhiteSpace(value) && !value.Any(char.IsControl);
+        ValidateEvidenceRefRequest(request);
         var budget = request.Budget!;
         var literal = request.QueryKind == ExploreQueryKind.HttpGetLiteral;
         if (request.Query is null)
@@ -1124,6 +1125,8 @@ public sealed partial class ExplorationService
                     foreach (var candidate in requested)
                         ReadCandidate(candidate, failedFiles);
             }
+            if (globalCeiling is null && responseMode == ExploreResponseMode.Evidence)
+                ReadRequestedTypeMemberFallback();
             if (globalCeiling is null && responseMode is null or ExploreResponseMode.Detail)
                 CoalesceOwners(failedFiles, requestedOnly: true);
         }
@@ -1378,6 +1381,8 @@ public sealed partial class ExplorationService
             Line($"Freshness={freshness.State}; returned source ranges={units.Count}, hash-verified when returned.");
             Line($"Outcome={Outcome(units, omitted)}");
             AppendResponseMode(text, detailCount);
+            AppendEvidenceRefs(text, detailCount);
+            AppendTypeMemberFallback(text, omitted);
             AppendOwnerObservation(text);
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; completeness is the saved span only. Owner context does not select additional semantic targets or prove inactive text active.");
             if (project is not null || variant is not null || request.ResponseMode is not null)
@@ -1504,6 +1509,9 @@ public sealed partial class ExplorationService
                 text.AppendLine(FormattableString.Invariant($"Diagnostics omitted={diagnostics!.Count - 8}"));
         }
 
+        private bool CompactAgentMetadata => request.Format == ExploreFormat.Agent
+            && request.ResponseMode is ExploreResponseMode.Overview or ExploreResponseMode.Evidence;
+
         private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
         {
             var text = new StringBuilder();
@@ -1512,6 +1520,8 @@ public sealed partial class ExplorationService
             Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
             Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : responseMode == ExploreResponseMode.Overview ? "not-requested" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
             AppendResponseMode(text, detailCount);
+            AppendEvidenceRefs(text, detailCount);
+            AppendTypeMemberFallback(text, omitted);
             AppendOwnerObservation(text);
             if (!isDiscoveryGroup) AppendAgentContext(text);
             var scope = graph.Variants.FirstOrDefault(value => value.Id == variant);
@@ -1542,6 +1552,8 @@ public sealed partial class ExplorationService
                     Line($"{Safe(owner.Label(choice.Node), 160)} selector={choice.Node.Id} signature={Safe(choice.Node.Signature, 240)}");
                 if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
             }
+            if (CompactAgentMetadata)
+                text.AppendLine("Compact metadata: non-root/member signatures omitted; request detail or audit if needed. Member aliases reuse symbol metadata; omitted member variant equals Scope variant.");
             var shownRelations = relations.Take(relationCount).ToArray();
             var shownOmissions = responseMode == ExploreResponseMode.Overview ? [] : omitted.Take(detailCount).ToArray();
             var summaryAllowance = request.PathTo is null ? detailCount : detailCount - PathDetailsShown(detailCount);
@@ -1573,7 +1585,8 @@ public sealed partial class ExplorationService
                 if (units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)))
                     continue;
                 var details = selectors.Contains(item.Identity) ? " selector=" + item.Identity : "";
-                details += units.Any(unit => unit.SymbolIds.Contains(item.Node.Id)) ? " source" : " signature=" + Safe(item.Node.Signature, 240);
+                if (!CompactAgentMetadata || roots.Any(root => root.Identity == item.Identity))
+                    details += " signature=" + Safe(item.Node.Signature, 240);
                 if (item.Reason != "requested") details += " selection=" + Safe(item.Reason, 100);
                 if (item.Certainty != HarnessCertainty.Resolved)
                     details += " certainty=" + item.Certainty;
@@ -1625,10 +1638,17 @@ public sealed partial class ExplorationService
             }
             text.Append(metadata);
             if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
+            if (CompactAgentMetadata && shownOmissions.Any(omission => omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
+                text.AppendLine("Mode-deferred bodies were intentionally not requested; retrieve only missing evidence if needed, not larger budgets.");
             foreach (var omission in shownOmissions)
             {
-                var retry = omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)
-                    ? "body intentionally deferred; request only missing evidence if needed"
+                var deferred = omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal);
+                if (CompactAgentMetadata && deferred)
+                {
+                    Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)}");
+                    continue;
+                }
+                var retry = deferred ? "body intentionally deferred; request only missing evidence if needed"
                     : FormattableString.Invariant($"retryCharsAtLeast={omission.RequiredChars} retryBytesAtLeast={omission.RequiredBytes}");
                 Line($"{aliases[omission.Selection.Identity]} {sourceAliases[omission.Location.SourceId]}:{VerifiedLine(omission.Location, units)} reason={Safe(omission.Reason, 100)} {retry}");
             }
@@ -1748,7 +1768,14 @@ public sealed partial class ExplorationService
                 var status = covered ? (admitted ? "returned" : "saved-range-covered") + (missing ? "+omitted" : "")
                     : missing ? "omitted" : member.IncludeSource ? "not-returned" : "not-requested";
                 var at = location is not null ? sourceAliases[location.SourceId] + ":" + VerifiedLine(location, units) : "unknown";
-                Line($"Member {aliases[row.Root.Identity]} -> {aliases[member.Identity]} signature={Safe(member.Node.Signature, 240)} variant={member.Occurrence?.VariantId ?? "unknown"} at={at} source={status}");
+                if (CompactAgentMetadata)
+                {
+                    var memberVariant = member.Occurrence?.VariantId;
+                    var variantDetail = memberVariant is not null && memberVariant == variant ? "" : " variant=" + (memberVariant ?? "unknown");
+                    Line($"Member {aliases[row.Root.Identity]} -> {aliases[member.Identity]}{variantDetail} at={at} source={status}");
+                }
+                else
+                    Line($"Member {aliases[row.Root.Identity]} -> {aliases[member.Identity]} signature={Safe(member.Node.Signature, 240)} variant={member.Occurrence?.VariantId ?? "unknown"} at={at} source={status}");
             }
         }
 

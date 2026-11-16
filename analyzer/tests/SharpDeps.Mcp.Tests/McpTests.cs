@@ -9,6 +9,19 @@ using Xunit;
 public sealed class McpTests
 {
     [Fact]
+    public async Task ToolSchemasUsePortableTopLevelObjectsWithoutConditionalCombinators()
+    {
+        await using var adapter = new McpQueryAdapter(new(Path.GetTempPath(), Trusted: true, AllowMutations: true));
+        foreach (var tool in adapter.ListTools())
+        {
+            var schema = tool.InputSchema;
+            Assert.Equal("object", schema.GetProperty("type").GetString());
+            foreach (var keyword in new[] { "anyOf", "oneOf", "allOf", "not", "if", "then", "else" })
+                Assert.False(schema.TryGetProperty(keyword, out _), $"{tool.Name}: unsupported top-level {keyword}");
+        }
+    }
+
+    [Fact]
     public async Task HostCapabilityCannotBeEscalatedByToolArguments()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N")));
@@ -109,17 +122,21 @@ public sealed class McpTests
         Assert.Equal("symbol", kind.GetProperty("default").GetString());
         Assert.Equal(new[] { "symbol", "http-get-literal" }, kind.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(schema.GetProperty("properties").GetProperty("query").TryGetProperty("minLength", out _));
-        var branches = schema.GetProperty("anyOf").EnumerateArray().ToArray();
-        var literal = Assert.Single(branches, branch => branch.GetProperty("properties").TryGetProperty("queryKind", out var property)
-            && property.TryGetProperty("const", out var value) && value.GetString() == "http-get-literal");
-        Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
-        Assert.Contains("pathTo", literal.GetProperty("not").GetProperty("required").EnumerateArray().Select(value => value.GetString()));
-        var symbol = Assert.Single(branches, branch => branch.GetProperty("properties").TryGetProperty("query", out _));
-        Assert.Equal(1, symbol.GetProperty("properties").GetProperty("query").GetProperty("minLength").GetInt32());
+        Assert.Contains("Symbol queries must be nonempty", schema.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
+        Assert.Contains("Empty text requires explicit queryKind=http-get-literal", schema.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
         var modes = schema.GetProperty("properties").GetProperty("responseMode");
         Assert.Equal(new[] { "overview", "evidence", "detail" }, modes.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(modes.TryGetProperty("default", out _));
+        Assert.False(schema.GetProperty("properties").GetProperty("includeEvidenceRefs").GetProperty("default").GetBoolean());
+        Assert.Equal(47, schema.GetProperty("properties").GetProperty("evidenceRef").GetProperty("maxLength").GetInt32());
+
         foreach (var json in new[] {
+
+            JsonSerializer.Serialize(new { query = "Service", includeEvidenceRefs = "true" }),
+            JsonSerializer.Serialize(new { query = "Service", includeEvidenceRefs = (bool?)null }),
+            JsonSerializer.Serialize(new { query = "Service", evidenceRef = 1 }),
+            JsonSerializer.Serialize(new { query = "Service", evidenceRef = (string?)null }),
+            JsonSerializer.Serialize(new { query = "Service", evidenceRef = "er1_" + new string('a', 43) }),
             JsonSerializer.Serialize(new { query = "Service", responseMode = "auto" }),
             JsonSerializer.Serialize(new { query = "Service", responseMode = "Overview" }),
             JsonSerializer.Serialize(new { query = "Service", responseMode = 1 }),

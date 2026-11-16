@@ -44,7 +44,7 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
     private readonly PreparedExplorationHost preparation = new();
     private readonly SemaphoreSlim slots = new(4, 4);
     private static readonly JsonElement ExploreSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"A plain string, not an object. Put scope and budget fields beside query in one flat arguments object. Names, exact identities, or source paths by default; exact saved HttpGet text in literal mode."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"When omitted, ordinary unscoped names/paths use discover; explicit project or variant uses unique. Exact saved IDs, pathTo and http-get-literal use unique and reject discover. Discover returns separate saved project/variant groups; prefer-debug chooses only a single saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"responseMode":{"type":"string","enum":["overview","evidence","detail"],"description":"Opt-in retrieval depth; omitted preserves existing behavior. Overview returns saved candidates, relations and selectors without source bodies; exact saved selectors and pathTo use evidence instead. Evidence reads requested declarations; detail also reads related declarations. Source permission, freshness checks and budgets are unchanged."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"prepareMaxMilliseconds":{"type":"integer","default":30000,"minimum":10,"maximum":30000,"description":"split-v1: finite preparation budget for full saved-index validation and standard derived/lexical indexes. Omitted: 30000 ms. Does not extend maxMilliseconds."},"maxMilliseconds":{"type":"integer","default":1000,"minimum":10,"maximum":30000,"description":"split-v1: finite query budget after preparation. Omitted: 1000 ms; zero is invalid. The total request upper bound is prepareMaxMilliseconds plus maxMilliseconds. Defaults are not latency guarantees; keep frozen evaluation budgets unchanged."}},"required":["query"],"anyOf":[{"properties":{"queryKind":{"const":"http-get-literal"}},"required":["queryKind"],"not":{"required":["pathTo"]}},{"properties":{"queryKind":{"const":"symbol"},"query":{"minLength":1}}}],"examples":[{"query":"Service","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"A plain string, not an object. Put scope and budget fields beside query in one flat arguments object. Names, exact identities, or source paths by default; exact saved HttpGet text in literal mode. Symbol queries must be nonempty. Empty text requires explicit queryKind=http-get-literal, which forbids pathTo; the server validates these conditional rules."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"When omitted, ordinary unscoped names/paths use discover; explicit project or variant uses unique. Exact saved IDs, pathTo and http-get-literal use unique and reject discover. Discover returns separate saved project/variant groups; prefer-debug chooses only a single saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"responseMode":{"type":"string","enum":["overview","evidence","detail"],"description":"Optional depth; omitted preserves existing behavior. Prefer evidence for known names/selectors; use overview only for discovery, and detail for additional bodies. Overview defers bodies; exact selectors/pathTo use evidence. Evidence returns requested declarations or contained member fallback; detail also permits related declarations. Trust, freshness and budgets are unchanged."},"includeEvidenceRefs":{"type":"boolean","default":false,"description":"Opt-in saved-evidence guards for exact follow-up retrieval; not proof that the client retains source text and not a token-saving guarantee."},"evidenceRef":{"type":"string","minLength":47,"maxLength":47,"pattern":"^er1_[A-Za-z0-9_-]{43}$","description":"Saved-evidence guard returned by includeEvidenceRefs. Requires one exact saved code occurrence selector (hocc_), explicit projectId and variantId, unique scope and no pathPrefix/pathTo; symbol mode only. Normal source permission and freshness checks still apply."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"prepareMaxMilliseconds":{"type":"integer","default":30000,"minimum":10,"maximum":30000,"description":"split-v1: finite preparation budget for full saved-index validation and standard derived/lexical indexes. Omitted: 30000 ms. Does not extend maxMilliseconds."},"maxMilliseconds":{"type":"integer","default":1000,"minimum":10,"maximum":30000,"description":"split-v1: finite query budget after preparation. Omitted: 1000 ms; zero is invalid. The total request upper bound is prepareMaxMilliseconds plus maxMilliseconds. Defaults are not latency guarantees; keep frozen evaluation budgets unchanged."}},"required":["query"],"examples":[{"query":"Service","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
         {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
@@ -108,9 +108,10 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
     {
         if (request.Arguments is not { } properties || !properties.ContainsKey("query")) throw Invalid();
         string? query = null, project = null, variant = null, pathPrefix = null, pathTo = null,
-            freshness = null, format = null, scopePolicy = null, responseMode = null;
+            freshness = null, format = null, scopePolicy = null, responseMode = null, evidenceRef = null;
         int? maxChars = null, maxBytes = null, maxMilliseconds = null, prepareMaxMilliseconds = null;
         var observeOwner = false;
+        var includeEvidenceRefs = false;
         try
         {
             var queryKind = ExploreQueryKind.Symbol;
@@ -134,10 +135,11 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
                     if (queryKind == ExploreQueryKind.Symbol && query!.StartsWith("--", StringComparison.Ordinal)) throw Invalid();
                     continue;
                 }
-                if (name == "ownerStatus")
+                if (name is "ownerStatus" or "includeEvidenceRefs")
                 {
                     if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw Invalid();
-                    observeOwner = value.GetBoolean();
+                    if (name == "ownerStatus") observeOwner = value.GetBoolean();
+                    else includeEvidenceRefs = value.GetBoolean();
                     continue;
                 }
                 if (name is "maxChars" or "maxBytes" or "maxMilliseconds" or "prepareMaxMilliseconds")
@@ -152,7 +154,7 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
                     }
                     continue;
                 }
-                if (name is not ("projectId" or "variantId" or "pathPrefix" or "pathTo" or "freshness" or "format" or "scopePolicy" or "responseMode")) throw Invalid();
+                if (name is not ("projectId" or "variantId" or "pathPrefix" or "pathTo" or "freshness" or "format" or "scopePolicy" or "responseMode" or "evidenceRef")) throw Invalid();
                 if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text
                     || string.IsNullOrWhiteSpace(text) || text.Any(char.IsControl) || text.StartsWith("--", StringComparison.Ordinal)) throw Invalid();
                 ExploreRequestFactory.Text(name, text);
@@ -165,6 +167,7 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
                     case "freshness": freshness = text; break;
                     case "format": format = text; break;
                     case "responseMode": responseMode = text; break;
+                    case "evidenceRef": evidenceRef = text; break;
                     case "scopePolicy": scopePolicy = text; break;
                 }
             }
@@ -174,6 +177,7 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
                 ExploreRequestFactory.Format(format, ExploreFormat.Agent),
                 ExploreRequestFactory.ScopePolicy(scopePolicy, query!, project, variant, pathTo, queryKind), pathTo)
                 { ObserveOwner = observeOwner, QueryKind = queryKind, ResponseMode = ExploreRequestFactory.ResponseMode(responseMode),
+                    EvidenceRef = evidenceRef, IncludeEvidenceRefs = includeEvidenceRefs,
                     PrepareMaxMilliseconds = prepareMaxMilliseconds ?? 30000 });
         }
         catch (Exception error) when (error is CliFailure or JsonException or InvalidOperationException) { throw Invalid(); }

@@ -409,6 +409,25 @@ public sealed class CliTests
         ExploreRequest Request(params string[] arguments) => CliArguments.Parse(["explore", .. arguments]).ExplorationRequest();
         Assert.Equal(ExploreScopePolicy.RequireUnique, new ExploreRequest("Service").ScopePolicy);
         Assert.Null(Request("Service").ResponseMode);
+        Assert.False(Request("Service").IncludeEvidenceRefs);
+        Assert.Null(Request("Service").EvidenceRef);
+        Assert.True(Request("Service", "--include-evidence-refs").IncludeEvidenceRefs);
+        var evidenceRef = "er1_" + new string('a', 43);
+        var guarded = Request("hocc_" + new string('a', 64), "--project-id", "project", "--variant", "variant",
+            "--evidence-ref", evidenceRef);
+        Assert.Equal(evidenceRef, guarded.EvidenceRef);
+        foreach (var extra in new[]
+        {
+            new[] { "--path-prefix", "App.cs" }, new[] { "--path-to", "hocc_" + new string('b', 64) },
+            new[] { "--scope-policy", "discover" }, new[] { "--query-kind", "http-get-literal" }
+        })
+            Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => Request(["hocc_" + new string('a', 64),
+                "--project-id", "project", "--variant", "variant", "--evidence-ref", evidenceRef, .. extra])).Code);
+        foreach (var invalid in new[] { "bad", evidenceRef })
+            Assert.Equal("ARGUMENT_INVALID", Assert.Throws<CliFailure>(() => Request("Service", "--evidence-ref", invalid)).Code);
+        Assert.Equal("ARGUMENT_UNKNOWN", Assert.Throws<CliFailure>(() =>
+            CliArguments.Parse(["search", "--term", "Service", "--include-evidence-refs"])).Code);
+
         foreach (var mode in Enum.GetValues<ExploreResponseMode>())
             Assert.Equal(mode, Request("Service", "--response-mode", mode.ToString().ToLowerInvariant()).ResponseMode);
         foreach (var invalid in new[] { "auto", "Overview", "0" })

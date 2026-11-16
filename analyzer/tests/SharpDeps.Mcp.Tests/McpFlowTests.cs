@@ -444,10 +444,8 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 {
                     var schema = Assert.Single(tools.EnumerateArray()).GetProperty("inputSchema");
                     Assert.False(schema.GetProperty("properties").GetProperty("query").TryGetProperty("minLength", out _));
-                    var literal = Assert.Single(schema.GetProperty("anyOf").EnumerateArray(), branch =>
-                        branch.GetProperty("properties").TryGetProperty("queryKind", out var kind)
-                        && kind.TryGetProperty("const", out var value) && value.GetString() == "http-get-literal");
-                    Assert.Contains("queryKind", literal.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+                    Assert.False(schema.TryGetProperty("anyOf", out _));
+                    Assert.Contains("Symbol queries must be nonempty", schema.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
                 }
             }
             await Send("""{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"explore","arguments":{"query":{"query":"GrainFactory GetGrain GrainReferenceActivator","maxMilliseconds":8000}}}}""");
@@ -473,6 +471,61 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains(Fixture.Code.TrimEnd('\n'), source, StringComparison.Ordinal);
                 Assert.DoesNotContain(fixture.SourceHash, source, StringComparison.Ordinal);
+                Assert.DoesNotContain("Evidence ref ", source, StringComparison.Ordinal);
+            }
+            // Standard MCP round trip, not a claim about any particular AI host's native integration.
+            await Send(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 20, method = "tools/call",
+                @params = new { name = "explore", arguments = new { query = "Service", responseMode = "overview", includeEvidenceRefs = true, maxMilliseconds = 10000 } }
+            }));
+            string evidenceRef;
+            using (var overview = await Reply(20))
+            {
+                var result = overview.RootElement.GetProperty("result");
+                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
+                var text = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
+                Assert.DoesNotContain(fixture.SavedText, text, StringComparison.Ordinal);
+                var prefix = $"Evidence ref selector={fixture.Occurrence} project={fixture.Project} variant={fixture.Variant} evidenceRef=";
+                var line = Assert.Single(text.Split('\n'), line => line.StartsWith(prefix, StringComparison.Ordinal));
+                evidenceRef = line[prefix.Length..].TrimEnd('\r');
+                Assert.Matches("^er1_[A-Za-z0-9_-]{43}$", evidenceRef);
+            }
+            await Send(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 21, method = "tools/call",
+                @params = new { name = "explore", arguments = new { query = fixture.Occurrence, projectId = fixture.Project,
+                    variantId = fixture.Variant, scopePolicy = "unique", responseMode = "evidence", evidenceRef, maxMilliseconds = 10000 } }
+            }));
+            using (var exact = await Reply(21))
+            {
+                var result = exact.RootElement.GetProperty("result");
+                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
+                var text = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
+                Assert.Contains(fixture.SavedText, text, StringComparison.Ordinal);
+                var stdout = new StringWriter();
+                var exit = await CliApplication.RunAsync(["explore", "--root", fixture.Root, "--trusted", "--format", "agent",
+                    "--term", fixture.Occurrence, "--project-id", fixture.Project, "--variant", fixture.Variant,
+                    "--scope-policy", "unique", "--response-mode", "evidence", "--evidence-ref", evidenceRef,
+                    "--max-milliseconds", "10000"], stdout, new StringWriter());
+                Assert.Equal(0, exit);
+                Assert.EndsWith(stdout.NewLine, stdout.ToString(), StringComparison.Ordinal);
+                Assert.Equal(text, stdout.ToString()[..^stdout.NewLine.Length]);
+            }
+            var mismatchedRef = evidenceRef[..4] + (evidenceRef[4] == 'a' ? 'b' : 'a') + evidenceRef[5..];
+            await Send(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 22, method = "tools/call",
+                @params = new { name = "explore", arguments = new { query = fixture.Occurrence, projectId = fixture.Project,
+                    variantId = fixture.Variant, scopePolicy = "unique", evidenceRef = mismatchedRef, maxMilliseconds = 10000 } }
+            }));
+            using (var mismatch = await Reply(22))
+            {
+                var result = mismatch.RootElement.GetProperty("result");
+                Assert.True(result.GetProperty("isError").GetBoolean());
+                var text = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
+                Assert.Contains("EVIDENCE_REF_MISMATCH", text, StringComparison.Ordinal);
+                Assert.DoesNotContain(fixture.SavedText, text, StringComparison.Ordinal);
             }
             if (!allowMutations)
             {

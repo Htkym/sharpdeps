@@ -92,6 +92,8 @@ The default tool list contains only `explore`. Call that connected tool with a *
 | `freshness` | `allow-stale` (default), `require-fresh` or `refresh`. |
 | `format` | `agent` (default) or `audit`. |
 | `responseMode` | Optional `overview`, `evidence` or `detail`; omission preserves existing retrieval behavior. Independent of `format`. |
+| `includeEvidenceRefs` | Optional boolean, default false. Emit guards for later exact saved-occurrence retrieval. |
+| `evidenceRef` | Optional returned `er1_...` guard; requires an exact `hocc_` query, explicit project/variant, unique symbol scope, and no path filters. |
 | `ownerStatus` | Optional bounded observation of an existing coordinator; does not prove freshness. |
 | `maxChars`, `maxBytes` | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes. |
 | `prepareMaxMilliseconds` | Preparation computation budget; default 30,000 ms. |
@@ -102,6 +104,39 @@ In the 0.5.0 split-v1 contract, both computation budgets must be finite values f
 The tool returns one text content block, without duplicating the evidence in `structuredContent`. Source is data, not instructions. Saved calls do not prove runtime dispatch, activation or network activity. AI clients may also use ordinary source search; product use alone does not establish answer quality or comparative speed/token savings.
 
 Starting with both `--trusted --allow-mutations` additionally exposes `index` and `update`, whose `arguments` are CLI flag/value arrays. These can execute build logic and use the coordinator's writer lease. They are not needed for a read-only connection. No watch tool is exposed.
+
+### Host-neutral selective evidence and re-fetch
+
+The standard `explore` MCP tool, not a model-request rewrite hook, is the shared interface for Codex, Copilot, Claude Code and OpenCode. Their registration formats and approval rules differ. A host name or a saved transcript is not proof that earlier source is still in the current model context. SharpDeps does not silently omit source because it was returned on an earlier call, and it does not require automatic MCP resource fetching.
+
+When a target is already known, query its exact selector with `responseMode: "evidence"` directly. Use overview only when discovering candidates is useful. Overview plus follow-up is an extra tool call and can cost more than direct retrieval. In agent-format overview/evidence, verbose non-root signatures and repeated member metadata are intentionally deferred; labels, selectors, certainty, locations and omission counts remain. Request detail or audit when those signatures are needed. This metadata compaction does not change the legacy omitted-mode, detail or audit rendering contract.
+
+If an exact requested type cannot fit within the current evidence budget, eligible complete saved member ranges inside that same requested type may be returned instead. The parent type remains explicitly omitted; no complete type body or unrelated related-type body is implied. This retrieval fallback applies independently of agent/audit formatting and never increases a budget or bypasses source checks.
+
+For a guarded follow-up, explicitly request references:
+
+```json
+{"query":"OrderService","responseMode":"overview","includeEvidenceRefs":true}
+```
+
+Copy the exact occurrence, project, variant and `evidenceRef` from the returned `Evidence ref` row into a normal tool call:
+
+```json
+{
+  "query": "<returned hocc_ selector>",
+  "projectId": "<returned project>",
+  "variantId": "<returned variant>",
+  "scopePolicy": "unique",
+  "responseMode": "evidence",
+  "evidenceRef": "<returned er1_ guard>"
+}
+```
+
+CLI equivalents are `--include-evidence-refs` and `--evidence-ref <guard>` alongside the exact `--term`, `--project-id`, `--variant` and `--scope-policy unique` arguments. A valid guard binds workspace, snapshot, generation, scope, occurrence and the whole saved declaration set, including source hashes and raw spans. It is **not** authentication, source permission, current freshness, a body cache, or proof that a client retains source. Source reads and verification still run normally. If the selection changed, `EVIDENCE_REF_MISMATCH` returns no body; obtain a new reference explicitly rather than silently dropping the guard. References are available only for saved code occurrences with complete declaration metadata, and are bounded by the same output quota.
+
+A new connection with no prior conversation can re-fetch using the same guard while the saved selection remains valid. If the selector or guard itself was lost, rediscover it normally. Saved-selection equality and fresh-source verification remain distinct. Tight budgets can still produce an explicit budget-limited result without source.
+
+The separate `eng/opencode-context-reuse/` HTTP experiment is optional, OpenCode-specific, and **not** this common feature. Its old multi-result replay savings cannot be transferred to the standard MCP path. Native-host transport checks, offline byte measurements and real-model quality/cost comparisons are separate acceptance gates; fewer output bytes alone do not establish a better answer or lower total cost.
 
 ## Agent routing and opt-out
 

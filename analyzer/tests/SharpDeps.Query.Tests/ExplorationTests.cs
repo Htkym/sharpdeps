@@ -12,6 +12,236 @@ using Xunit;
 public sealed class ExplorationTests
 {
     [Theory]
+    [InlineData(ExploreResponseMode.Overview)]
+    [InlineData(ExploreResponseMode.Evidence)]
+    public void CompactAgentModesKeepBodiesProvenanceAndCountsWithoutRepeatedMetadata(ExploreResponseMode mode)
+    {
+        using var fixture = new Fixture(dense: true, partial: true, format: ExploreFormat.Agent);
+        var request = fixture.Request("Pump") with { ResponseMode = mode };
+        var compact = fixture.Engine().Execute(request);
+        Assert.True(compact.Succeeded);
+        Assert.Contains("Compact metadata: non-root/member signatures omitted", compact.Text);
+        Assert.Contains("request detail or audit", compact.Text);
+        var members = compact.Text.Split('\n').Where(line => line.StartsWith("Member ", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(members);
+        Assert.All(members, line =>
+        {
+            Assert.DoesNotContain("signature=", line);
+            Assert.DoesNotContain("variant=", line);
+            Assert.Contains(" at=", line);
+            Assert.Contains(" source=", line);
+        });
+        Assert.Contains("Scope project=" + fixture.Project + " variant=" + fixture.Variant, compact.Text);
+        Assert.Contains("coverage=Partial", compact.Text);
+        Assert.Contains("Freshness=unverified", compact.Text);
+        Assert.Contains("Retained overview roots=", compact.Text);
+        AssertWireBudget(compact, request.Budget!);
+        if (mode == ExploreResponseMode.Overview) Assert.Empty(compact.Units);
+        else Assert.NotEmpty(compact.Units);
+        foreach (var unchanged in new[]
+        {
+            request with { ResponseMode = null }, request with { ResponseMode = ExploreResponseMode.Detail },
+            request with { Format = ExploreFormat.Audit }
+        })
+        {
+            var reply = fixture.Engine().Execute(unchanged);
+            Assert.True(reply.Succeeded);
+            Assert.DoesNotContain("Compact metadata:", reply.Text);
+            Assert.DoesNotContain("Mode-deferred bodies were", reply.Text);
+            if (unchanged.Format == ExploreFormat.Agent)
+                Assert.All(reply.Text.Split('\n').Where(line => line.StartsWith("Member ", StringComparison.Ordinal)), line =>
+                { Assert.Contains("signature=", line); Assert.Contains("variant=", line); });
+        }
+        var evidence = fixture.Engine().Execute(fixture.Request(fixture.Occurrence(fixture.RunInt)) with
+            { ResponseMode = ExploreResponseMode.Evidence });
+        var deferred = evidence.Text.Split('\n').Where(line => line.Contains(" reason=response-mode:", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(deferred);
+        Assert.Single(evidence.Text.Split('\n'), line => line.StartsWith("Mode-deferred bodies were", StringComparison.Ordinal));
+        Assert.All(deferred, line =>
+        { Assert.DoesNotContain("body intentionally", line); Assert.DoesNotContain("AtLeast=", line); });
+        Assert.Contains("Omitted saved units=", evidence.Text);
+        Assert.Contains("SOURCE_DEFERRED_BY_MODE", evidence.Text);
+        Assert.All(evidence.Units, unit =>
+        {
+            Assert.True(unit.CompleteSavedRange);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+        });
+    }
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void EvidenceFallsBackOnlyToContainedMembersOfBudgetOmittedRequestedTypes(ExploreFormat format)
+    {
+        using var fixture = new Fixture(huge: true, dense: true, partial: true, format: format);
+        var selector = fixture.Occurrence(fixture.Pump);
+        var budget = Generous with { MaxChars = 8000, MaxBytes = 32000 };
+        var overview = fixture.Engine().Execute(fixture.Request("Pump") with
+            { ResponseMode = ExploreResponseMode.Overview, IncludeEvidenceRefs = true });
+        var reference = EvidenceRefFor(overview, selector);
+        var request = fixture.Request(selector, budget) with { ResponseMode = ExploreResponseMode.Evidence, EvidenceRef = reference };
+        var reply = fixture.Engine().Execute(request);
+        Assert.True(reply.Succeeded);
+        Assert.NotEmpty(reply.Units);
+        Assert.Contains("Requested type body remains omitted by budget", reply.Text);
+        Assert.Contains("not the complete type", reply.Text);
+        Assert.Contains("Evidence refs still bind the type's full saved declaration set", reply.Text);
+        Assert.Contains("OMITTED_UNITS", reply.OmissionReasons);
+        var parent = fixture.Snapshot.Graph.SymbolOccurrences.Single(item => item.Id == selector);
+        var memberIds = fixture.Snapshot.Graph.Nodes.Where(node => node.Kind == HarnessNodeKind.Member && node.ParentId == fixture.Pump)
+            .Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(reply.Units, unit => unit.Path == Fixture.CorePath && unit.SymbolIds.Any(memberIds.Contains));
+        Assert.All(reply.Units, unit =>
+        {
+            Assert.True(unit.CompleteSavedRange);
+            Assert.All(unit.SymbolIds, symbol => Assert.True(symbol == fixture.Pump || memberIds.Contains(symbol)));
+            Assert.Contains(parent.Declarations!, location => location.SourceId == unit.SourceId && location.ContentHash == unit.ContentHash
+                && location.RawSpan is { } span && unit.Span.Start >= span.Start && unit.Span.End <= span.End);
+            Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+        });
+        Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.SuspectPath);
+        Assert.DoesNotContain(reply.Units, unit => unit.Path == Fixture.CorePath && unit.SymbolIds.Contains(fixture.Pump));
+        AssertWireBudget(reply, budget);
+        foreach (var mode in new ExploreResponseMode?[] { null, ExploreResponseMode.Detail })
+            Assert.DoesNotContain("Requested type body remains omitted by budget", fixture.Engine().Execute(request with { ResponseMode = mode }).Text);
+        var tight = fixture.Engine().Execute(request with { Budget = budget with { MaxChars = 2048, MaxBytes = 2048 } });
+        AssertWireBudget(tight, budget with { MaxChars = 2048, MaxBytes = 2048 });
+        Assert.DoesNotContain(tight.Units, unit => unit.Path == Fixture.CorePath && unit.SymbolIds.Contains(fixture.Pump));
+        var untrusted = new ExplorationService(new FixedIndex(fixture.Snapshot), new QueryWorkspace(fixture.Root), false).Execute(request);
+        Assert.Empty(untrusted.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", untrusted.OmissionReasons);
+        File.WriteAllText(fixture.CoreFullPath, fixture.Sources[Fixture.CorePath] + "// dirty", Fixture.Utf8);
+        var dirty = fixture.Engine().Execute(request);
+        Assert.DoesNotContain(dirty.Units, unit => unit.Path == Fixture.CorePath);
+        Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", dirty.OmissionReasons);
+    }
+
+    private static string EvidenceRefFor(ExploreReply reply, string selector)
+        => reply.Text.Split('\n').Single(line => line.StartsWith("Evidence ref selector=" + selector + " ", StringComparison.Ordinal))
+            .Split("evidenceRef=", StringSplitOptions.None)[1].Trim();
+
+    [Theory]
+    [InlineData(ExploreFormat.Agent)]
+    [InlineData(ExploreFormat.Audit)]
+    public void EvidenceReferencesRoundTripWithoutBodyPossessionOrLegacyChanges(ExploreFormat format)
+    {
+        using var fixture = new Fixture(partial: true, format: format);
+        var engine = fixture.Engine();
+        var overviewRequest = fixture.Request("Run") with { ResponseMode = ExploreResponseMode.Overview };
+        var legacy = engine.Execute(overviewRequest);
+        Assert.Equal(JsonSerializer.Serialize(legacy), JsonSerializer.Serialize(engine.Execute(overviewRequest with
+        { IncludeEvidenceRefs = false, EvidenceRef = null })));
+        Assert.DoesNotContain("Evidence ref", legacy.Text);
+        var overview = engine.Execute(overviewRequest with { IncludeEvidenceRefs = true });
+        Assert.True(overview.Succeeded);
+        Assert.Empty(overview.Units);
+        var selector = fixture.Occurrence(fixture.RunInt);
+        var reference = EvidenceRefFor(overview, selector);
+        Assert.Matches("^er1_[A-Za-z0-9_-]{43}$", reference);
+        var exact = fixture.Request(selector) with { ResponseMode = ExploreResponseMode.Evidence, EvidenceRef = reference };
+        var direct = engine.Execute(exact with { EvidenceRef = null });
+        foreach (var mode in new[] { ExploreResponseMode.Evidence, ExploreResponseMode.Detail })
+        {
+            // A new engine has no receipt cache or host transcript; possession does not suppress source reads.
+            var guarded = fixture.Engine().Execute(exact with { ResponseMode = mode, IncludeEvidenceRefs = true });
+            Assert.True(guarded.Succeeded);
+            Assert.NotEmpty(guarded.Units);
+            Assert.Equal(reference, EvidenceRefFor(guarded, selector));
+            if (mode == ExploreResponseMode.Evidence)
+                Assert.Equal(JsonSerializer.Serialize(direct.Units), JsonSerializer.Serialize(guarded.Units));
+        }
+        Assert.Equal(direct.Text, engine.Execute(exact).Text);
+        var discovery = engine.Execute(overviewRequest with { ProjectId = null, VariantId = null,
+            ScopePolicy = ExploreScopePolicy.Discover, IncludeEvidenceRefs = true });
+        Assert.Equal(reference, EvidenceRefFor(discovery, selector));
+        var selectorMismatch = engine.Execute(exact with { Query = fixture.Occurrence(fixture.RunString) });
+        Assert.Empty(selectorMismatch.Units);
+        Assert.Contains(selectorMismatch.Errors, issue => issue.Code == "EVIDENCE_REF_MISMATCH");
+        Assert.Throws<ArgumentException>(() => engine.Execute(exact with { ProjectId = fixture.OtherProject }));
+        foreach (var scopeMismatch in new[] { exact with { VariantId = fixture.AlternateVariant } })
+        {
+            var rejected = engine.Execute(scopeMismatch);
+            Assert.False(rejected.Succeeded);
+            Assert.Empty(rejected.Units);
+        }
+        Assert.Contains("coverage=Partial", overview.Text);
+        Assert.Contains("not proof of body possession", overview.Text);
+        var mismatched = engine.Execute(exact with { EvidenceRef = "er1_" + new string('A', 43) });
+        Assert.False(mismatched.Succeeded);
+        Assert.Empty(mismatched.Units);
+        Assert.Contains(mismatched.Errors, error => error.Code == "EVIDENCE_REF_MISMATCH");
+        foreach (var invalid in new[]
+        {
+            exact with { Query = fixture.RunInt }, exact with { Query = selector + " " + selector },
+            exact with { ProjectId = null }, exact with { VariantId = null },
+            exact with { ScopePolicy = ExploreScopePolicy.Discover }, exact with { ScopePolicy = ExploreScopePolicy.PreferDebug },
+            exact with { PathTo = selector }, exact with { PathPrefix = "src" },
+            exact with { QueryKind = ExploreQueryKind.HttpGetLiteral }, exact with { EvidenceRef = "er1_bad" }
+        }) Assert.Throws<ArgumentException>(() => engine.Execute(invalid));
+        var untrusted = new ExplorationService(new FixedIndex(fixture.Snapshot), new QueryWorkspace(fixture.Root), false).Execute(exact);
+        Assert.Empty(untrusted.Units);
+        Assert.Contains("WORKSPACE_UNTRUSTED", untrusted.OmissionReasons);
+        File.WriteAllText(fixture.CoreFullPath, fixture.Sources[Fixture.CorePath] + "// dirty", Fixture.Utf8);
+        var dirty = engine.Execute(exact);
+        Assert.Empty(dirty.Units);
+        Assert.Contains("SOURCE_CHANGED_SINCE_SNAPSHOT", dirty.OmissionReasons);
+        var workspace = new QueryWorkspace(fixture.Root, _ => new(fixture.Inventory(), true));
+        var fresh = fixture.Engine(workspace).Execute(exact with { Freshness = QueryFreshnessPolicy.RequireFresh });
+        Assert.False(fresh.Succeeded);
+        Assert.Empty(fresh.Units);
+        foreach (var limit in new[] { 2048, 5500 })
+        {
+            var budget = Generous with { MaxChars = limit, MaxBytes = limit };
+            var bounded = engine.Execute(overviewRequest with { IncludeEvidenceRefs = true, Budget = budget });
+            AssertWireBudget(bounded, budget);
+            Assert.Empty(bounded.Units);
+            if (bounded.Succeeded) Assert.Contains("candidates not shown=", bounded.Text);
+        }
+    }
+
+    [Theory]
+    [InlineData("workspace")]
+    [InlineData("path")]
+    [InlineData("generation")]
+    [InlineData("snapshot")]
+    [InlineData("span")]
+    [InlineData("declarations")]
+    [InlineData("hash")]
+    public void EvidenceReferencesRejectChangedSavedSelections(string change)
+    {
+        using var fixture = new Fixture(splitRun: true);
+        var selector = fixture.Occurrence(fixture.RunString);
+        var request = fixture.Request(selector) with { IncludeEvidenceRefs = true, ResponseMode = ExploreResponseMode.Evidence };
+        var reference = EvidenceRefFor(fixture.Engine().Execute(request), selector);
+        var snapshot = fixture.Snapshot;
+        var occurrence = snapshot.Graph.SymbolOccurrences.Single(item => item.Id == selector);
+        var declarations = occurrence.Declarations!;
+        var changed = change switch
+        {
+            "workspace" => snapshot with { Graph = snapshot.Graph with { WorkspaceId = HarnessIdentity.WorkspaceId(Guid.NewGuid()) } },
+            "path" => snapshot with { Files = snapshot.Files.Select(file => file.SourceId == Fixture.PartialPath ? file with { RelativePath = "src/Other.cs" } : file).ToArray() },
+            "generation" => snapshot with { Graph = snapshot.Graph with { Generation = snapshot.Graph.Generation + 1 } },
+            "snapshot" => snapshot with { Graph = snapshot.Graph with { SnapshotId = "another-snapshot" } },
+            "hash" => fixture.NewGeneration(fixture.Sources[Fixture.CorePath] + "// changed") with
+                { Graph = fixture.NewGeneration(fixture.Sources[Fixture.CorePath] + "// changed").Graph with
+                    { Generation = snapshot.Graph.Generation, SnapshotId = snapshot.Graph.SnapshotId } },
+            _ => snapshot with { Graph = snapshot.Graph with { SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(item => item.Id != selector ? item : item with
+                { Declarations = change == "declarations" ? declarations.Take(1).ToArray() : declarations.Select((location, i) => i != 1 ? location : location with
+                    { RawSpan = new(location.RawSpan!.Value.Start, location.RawSpan.Value.Length - 1) }).ToArray() }).ToArray() } }
+        };
+        var reply = new ExplorationService(new FixedIndex(changed), new QueryWorkspace(fixture.Root), true)
+            .Execute(request with { EvidenceRef = reference });
+        Assert.False(reply.Succeeded);
+        Assert.Empty(reply.Units);
+        Assert.Contains(reply.Errors, issue => issue.Code == (change == "workspace" ? "INDEX_INVALID_SNAPSHOT" : "EVIDENCE_REF_MISMATCH"));
+        var reordered = snapshot with { Graph = snapshot.Graph with { SymbolOccurrences = snapshot.Graph.SymbolOccurrences.Select(item => item.Id != selector ? item : item with
+            { Declarations = declarations.Reverse().ToArray() }).ToArray() } };
+        var same = new ExplorationService(new FixedIndex(reordered), new QueryWorkspace(fixture.Root), true).Execute(request with { EvidenceRef = reference });
+        Assert.True(same.Succeeded);
+        Assert.Equal(reference, EvidenceRefFor(same, selector));
+    }
+
+    [Theory]
     [InlineData(ExploreFormat.Agent)]
     [InlineData(ExploreFormat.Audit)]
     public void ExactSavedIdentityCompletesStandardLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
@@ -35,6 +265,13 @@ public sealed class ExplorationTests
         Assert.Single(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
         Assert.True(engine.Execute(fixture.Request("Pump")).Succeeded);
         Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(request)));
+        var selector = fixture.Occurrence(fixture.RunInt);
+        var referenceRequest = fixture.Request(selector) with { IncludeEvidenceRefs = true, ResponseMode = ExploreResponseMode.Evidence };
+        var reference = EvidenceRefFor(engine.Execute(referenceRequest), selector);
+        var guarded = engine.Execute(referenceRequest with { EvidenceRef = reference });
+        Assert.True(guarded.Succeeded);
+        Assert.NotEmpty(guarded.Units);
+        Assert.Equal(reference, EvidenceRefFor(guarded, selector));
     }
 
     [Theory]

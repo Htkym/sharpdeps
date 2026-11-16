@@ -8,7 +8,7 @@ internal sealed class CliArguments
 {
     private readonly Dictionary<string, List<string>> values = new(StringComparer.Ordinal);
     private static readonly HashSet<string> Switches = new(StringComparer.Ordinal)
-    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch", "owner-status", "dry-run" };
+    { "trusted", "quiet", "include-candidates", "no-documents", "dependencies", "require-complete", "watch", "owner-status", "dry-run", "include-evidence-refs" };
     private static readonly HashSet<string> Repeated = new(StringComparer.Ordinal) { "project", "variant", "edge-kind" };
     private static readonly HashSet<string> Common = new(StringComparer.Ordinal) { "root", "index", "trusted", "quiet", "request-id" };
     private static readonly HashSet<string> Installation = new(StringComparer.Ordinal)
@@ -21,7 +21,7 @@ internal sealed class CliArguments
       "max-depth", "max-milliseconds", "max-chars", "max-bytes", "kind", "metrics-directory" };
     private static readonly HashSet<string> Explore = new(StringComparer.Ordinal)
     { "term", "project-id", "variant", "path-prefix", "freshness", "max-nodes", "max-edges",
-      "max-depth", "max-milliseconds", "prepare-max-milliseconds", "max-chars", "max-bytes", "format", "response-mode", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
+      "max-depth", "max-milliseconds", "prepare-max-milliseconds", "max-chars", "max-bytes", "format", "response-mode", "evidence-ref", "include-evidence-refs", "scope-policy", "path-to", "owner-status", "query-kind", "metrics-directory" };
     public string Command { get; private set; } = "help";
     public string RequestId => Get("request-id") ?? "cli";
     public bool Has(string name) => values.ContainsKey(name);
@@ -143,6 +143,7 @@ internal sealed class CliArguments
             ExploreRequestFactory.ScopePolicy(Get("scope-policy"), query, Get("project-id"), Get("variant"), Get("path-to"), queryKind), Get("path-to"))
             { ObserveOwner = Has("owner-status"), QueryKind = queryKind,
                 ResponseMode = ExploreRequestFactory.ResponseMode(Get("response-mode")),
+                EvidenceRef = Get("evidence-ref"), IncludeEvidenceRefs = Has("include-evidence-refs"),
                 PrepareMaxMilliseconds = ExplorePreparationMilliseconds() });
     }
 
