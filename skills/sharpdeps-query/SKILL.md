@@ -1,6 +1,6 @@
 ---
 name: sharpdeps-query
-description: Investigate .NET symbol identity, dependencies, callers/callees and saved call paths with an available SharpDeps CLI or MCP index. Prefer explore for indexed structural questions; use ordinary search for literal text or unindexed work. Respect user opt-out, exact scope, uncertainty and freshness; queries do not authorize setup or updates.
+description: Investigate .NET symbol identity, dependencies, callers/callees and saved call paths with an available SharpDeps CLI or MCP index. Start indexed .NET structural investigation with explore before source discovery; reuse its evidence and read only missing ranges. Use ordinary search for literal text or unindexed work. Respect user opt-out, exact scope, uncertainty and freshness; queries do not authorize setup or updates.
 ---
 
 # SharpDeps Query
@@ -11,7 +11,9 @@ This repository copy describes the 0.5.0 interface: discovery and omission-sensi
 
 ## Choose when to use SharpDeps
 
-For .NET symbol identity, dependencies, callers/callees, saved call paths or cross-file implementation questions covered by the configured index, prefer the available SharpDeps exploration entry point before broad repository searches. Choose ordinary read/search for a simple literal text lookup, documentation, dirty or unindexed files, a missing tool/index, or work outside the saved scope. Do not install or create an index merely to answer a query.
+For .NET symbol identity, dependencies, callers/callees, saved call paths or cross-file implementation questions covered by the configured index, you MUST begin investigation with available SharpDeps exploration before broad repository searches or opening source files to discover code. Start with a focused names/path query, use the returned source as primary evidence, and do not repeat a repository scan after a token tool call. Reuse complete ranges already in context with the same hash and span. For omitted members, follow the returned exact selector and scope; read only specific evidence still missing or changed. No repeat call is required for evidence already available in context.
+
+Choose ordinary read/search for a simple literal text lookup, documentation-only work, dirty or unindexed files, a missing tool/index, or work outside the saved scope. Required current-file verification before an edit is not a redundant read. If exploration is blocked, report the reason and use permitted targeted fallback without claiming the unavailable evidence was checked. Do not install or create an index merely to answer a query.
 
 A user opt-out or disabled integration takes precedence over this routing. Use ordinary tools until the user explicitly requests re-enabling it; do not reinstall, reconnect or restore removed settings yourself. Disabling automatic guidance does not ban an explicitly authorized CLI command. See the [opt-out and setup instructions](../../docs/mcp.md#agent-routing-and-opt-out).
 

@@ -48,7 +48,7 @@ Tool installation requires an SDK; running an installed tool requires the .NET 1
 
 The [CLI/MCP guide](docs/mcp.md) covers indexing, source queries, normal MCP connection, scope selection, trust, finite time budgets and recovery. For upgrade steps, see [migration from 0.4.0](docs/mcp.md#upgrade-from-040). For the older release, use the [0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
 
-For AI clients, follow [agent setup and opt-out](docs/mcp.md#agent-routing-and-opt-out). Use indexed tools for structural questions and ordinary search for simple text or unindexed work. A connection does not grant source access or permission to update an index. Partial coverage and unverified freshness remain visible; fewer reads, lower token use and universal one-second completion are not guaranteed.
+For AI clients, follow [agent setup and opt-out](docs/mcp.md#agent-routing-and-opt-out). For indexed .NET structural investigation, the agent workflow requires SharpDeps first, before broad source discovery, then reuses returned evidence and reads only missing or changed ranges. Simple text and unindexed work still use ordinary search. This is model guidance, not host-enforced tool ordering. A connection does not grant source access or permission to update an index. Partial coverage and unverified freshness remain visible; fewer reads, lower token use and universal one-second completion are not guaranteed.
 
 ## License
 

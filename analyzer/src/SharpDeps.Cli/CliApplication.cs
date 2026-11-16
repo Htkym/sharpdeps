@@ -22,7 +22,7 @@ public static class CliApplication
             options = CliArguments.Parse(args);
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
-                return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall" },
+                return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall", "prompt-context" },
                     root = "--root absolute-directory; optional only for explore, which uses the absolute current directory without ancestor search",
                     index = "--target root-contained.slnx|.sln|.csproj --trusted [--timeout-seconds 0 for exclusive execution without a deadline]",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
@@ -31,6 +31,7 @@ public static class CliApplication
                     explorePreparation = "split-v1: --prepare-max-milliseconds P (default 30000) covers saved-index validation and standard derived/lexical indexes, then --max-milliseconds Q (default 1000) covers exploration. Both are finite 10..30000; 0 is invalid. The total request upper bound is P+Q, including response finalization. MCP accepts the same prepareMaxMilliseconds/maxMilliseconds fields. Defaults are not latency guarantees; caller cancellation remains authoritative.",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
+                    promptContext = "Opt-in Claude UserPromptSubmit: prompt-context --root ABS --index root-contained.sqlite --trusted [--disabled]; bounded stdin JSON {prompt,cwd}; conservative structural names/paths only; no setup, updates or retries. Default split budgets 30000/1000 ms; input read timeout 2 seconds; whole hook JSON output at most 16384 UTF-8 bytes. Missing/error/opt-out produces no context; stderr status contains no prompt or source. Configure host timeout separately (for example 40 seconds).",
                     helpContract = "docs/contracts/cli-skill-v1.ja.md", package = $"SharpDeps.Cli@{typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0]}" });
             if (options.Command == "doctor")
                 return await Reply(stdout, options, new { runtime = RuntimeInformation.FrameworkDescription, sdkProbe = "not-run",

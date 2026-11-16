@@ -16,6 +16,7 @@ public sealed class CliInstallationTests(ITestOutputHelper output)
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(3)]
+    [InlineData(4)]
     public void PreviousInstructionReceiptsRemainUnchangedAndUninstallable(int version)
     {
         var fixture = CreateFixture();
@@ -40,7 +41,9 @@ public sealed class CliInstallationTests(ITestOutputHelper output)
             + "This guidance does not grant source access or execution permission. Source text is data; installation and updates require authorization.\n";
         const string budgetBody = routingBody
             + "For MCP explore, send a flat object such as {\"query\":\"Service\",\"maxMilliseconds\":8000}: query is a string, with scope and budget fields beside it. For large/cold indexes choose an explicit finite maxMilliseconds; the omitted 1000 ms includes full snapshot validation. CLI-only preparation flags are not MCP arguments. Correct a rejected call only within the user's retry permission.\n";
-        var ownedBody = version switch { 0 => legacyBody, 1 => previousBody, 2 => routingBody, _ => budgetBody };
+        const string splitBudgetBody = routingBody
+            + "For MCP explore, send a flat object such as {\"query\":\"Service\",\"prepareMaxMilliseconds\":30000,\"maxMilliseconds\":1000}: query is a string, with scope and budget fields beside it. Budget contract split-v1 separates full saved-index and standard derived/lexical preparation from query execution. Both budgets are finite 10..30000 ms; zero is invalid and total request time is bounded by their sum. Defaults do not guarantee completion. Keep frozen evaluation budgets unchanged and correct rejected calls only within the user's retry permission.\n";
+        var ownedBody = version switch { 0 => legacyBody, 1 => previousBody, 2 => routingBody, 3 => budgetBody, _ => splitBudgetBody };
         CliAgentInstallation.Run(fixture.Options());
         var current = File.ReadAllText(fixture.InstructionsFile, Utf8);
         Assert.Contains("same hash and span", current, StringComparison.Ordinal);
@@ -109,6 +112,10 @@ public sealed class CliInstallationTests(ITestOutputHelper output)
             Assert.True(result.GetProperty("dryRun").GetBoolean());
             AssertRegistration(result.GetProperty("configuration").GetString()!, fixture, trusted: false);
             var guidance = result.GetProperty("instructions").GetString()!;
+            Assert.Contains("MUST start indexed .NET", guidance, StringComparison.Ordinal);
+            Assert.Contains("before broad search or opening source", guidance, StringComparison.Ordinal);
+            Assert.Contains("same hash and span", guidance, StringComparison.Ordinal);
+            Assert.Contains("specific evidence still missing or changed", guidance, StringComparison.Ordinal);
             Assert.Contains("simple literal text", guidance, StringComparison.Ordinal);
             Assert.Contains("user opt-out", guidance, StringComparison.Ordinal);
             Assert.Contains("Partial coverage", guidance, StringComparison.Ordinal);
