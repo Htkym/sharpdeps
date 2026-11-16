@@ -10,7 +10,7 @@ The images show the 0.1.0 workbench. See the guides for current controls and sav
 
 ## Install
 
-Install **SharpDeps — .NET Dependency Map** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps), or download the VSIX from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) and choose **Extensions: Install from VSIX…** in VS Code. Version 0.4.0 is the latest released version.
+Install **SharpDeps — .NET Dependency Map** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps), or download the VSIX from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) and choose **Extensions: Install from VSIX…** in VS Code. This documentation describes 0.5.0. Check the Marketplace or release page for availability before installing.
 
 VS Code 1.90 or later is required. Trust the workspace before running analysis.
 
@@ -21,7 +21,7 @@ VS Code 1.90 or later is required. Trust the workspace before running analysis.
 
 The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) supplies the extension's runtime when needed. SharpDeps does not install an SDK or restore your project's packages.
 
-The extension bundles its own analysis and saved-index reader hosts. Installing a newer CLI does not update those hosts. The 0.4.0 reader supports index schemas 1/2/3; see [saved-index setup](docs/guide.md#read-a-saved-index) before using an index from another tool version.
+The extension bundles its own analysis and saved-index reader hosts. Installing a newer CLI does not update those hosts. The 0.5.0 reader supports index schemas 1/2/3; see [saved-index setup](docs/guide.md#read-a-saved-index) before using an index from another tool version.
 
 ## Open a map
 
@@ -40,13 +40,13 @@ Analysis and rendering run locally. A failed or cancelled analysis retains the l
 Install the separate [.NET CLI tool](https://www.nuget.org/packages/SharpDeps.Cli) and, when needed, the [MCP server](https://www.nuget.org/packages/SharpDeps.Mcp):
 
 ```bash
-dotnet tool install --global SharpDeps.Cli --version 0.4.0
-dotnet tool install --global SharpDeps.Mcp --version 0.4.0
+dotnet tool install --global SharpDeps.Cli --version 0.5.0
+dotnet tool install --global SharpDeps.Mcp --version 0.5.0
 ```
 
-Tool installation requires an SDK; running an installed tool requires the .NET 10 runtime. Indexing additionally requires the target's SDK and restored dependencies. The published 0.4.0 CLI/MCP tools use Syntamark 1.2.0 for Markdown; the current unreleased source selects 2.0.0. Neither parser is bundled in the VSIX.
+Tool installation requires an SDK; running an installed tool requires the .NET 10 runtime. Indexing additionally requires the target's SDK and restored dependencies. The published 0.4.0 CLI/MCP tools use Syntamark 1.2.0 for Markdown; the 0.5.0 tools use 2.0.0. Neither parser is bundled in the VSIX.
 
-The [CLI/MCP guide](docs/mcp.md) covers indexing, source queries, normal MCP connection, scope selection, trust, finite time budgets and recovery. It marks unreleased additions separately from published 0.4.0 behavior. For the released implementation, use the [0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
+The [CLI/MCP guide](docs/mcp.md) covers indexing, source queries, normal MCP connection, scope selection, trust, finite time budgets and recovery. For upgrade steps, see [migration from 0.4.0](docs/mcp.md#upgrade-from-040). For the older release, use the [0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
 
 For AI clients, follow [agent setup and opt-out](docs/mcp.md#agent-routing-and-opt-out). Use indexed tools for structural questions and ordinary search for simple text or unindexed work. A connection does not grant source access or permission to update an index. Partial coverage and unverified freshness remain visible; fewer reads, lower token use and universal one-second completion are not guaranteed.
 

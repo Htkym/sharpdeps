@@ -10,7 +10,7 @@ SharpDeps は .NET のプロジェクト・名前空間・型の依存関係を 
 
 ## インストール
 
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) から **SharpDeps — .NET Dependency Map** をインストールします。[GitHub Releases](https://github.com/Htkym/sharpdeps/releases) の VSIX を使う場合は、VS Code の **Extensions: Install from VSIX…** で選択してください。最新の公開版は 0.4.0 です。
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) から **SharpDeps — .NET Dependency Map** をインストールします。[GitHub Releases](https://github.com/Htkym/sharpdeps/releases) の VSIX を使う場合は、VS Code の **Extensions: Install from VSIX…** で選択してください。この文書は 0.5.0 を対象としています。インストール前に Marketplace またはリリースページで公開状況を確認してください。
 
 VS Code 1.90 以降が必要です。解析を実行する前に、ワークスペースを信頼済みにしてください。
 
@@ -19,9 +19,9 @@ VS Code 1.90 以降が必要です。解析を実行する前に、ワークス�
 | クイック | プロジェクト参照、C# の宣言、構文に基づく関係。 | .NET 10 ランタイム。SDK、MSBuild の評価、パッケージ復元は不要です。 |
 | セマンティック | 評価済みの C# 参照、シンボル解決済みの関係とソース位置。 | .NET 10 ランタイム、対象に対応する SDK、復元済みの対象パッケージ。 |
 
-拡張機能のランタイムは、必要に応じて [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) から取得します。SharpDeps が SDK をインストールしたり、対象パッケージを自動で復元したりすることはありません。
+拡張機能のランタイムは必要に応じて [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) から取得します。SharpDeps が SDK をインストールしたり、対象パッケージを自動で復元したりすることはありません。
 
-拡張機能には解析プログラムと保存索引の reader を同梱しています。CLI だけを更新しても、同梱プログラムは更新されません。0.4.0 の reader は索引の schema 1／2／3 に対応します。別の版で作った索引を使う際は、[保存索引の設定](docs/guide.ja.md#保存済み索引を使う)を確認してください。
+拡張機能には解析プログラムと保存索引の reader を同梱しています。CLI だけを更新しても、同梱プログラムは更新されません。0.5.0 の reader は索引の schema 1／2／3 に対応します。別のバージョンで作った索引を使う際は、[保存索引の設定](docs/guide.ja.md#保存済み索引を使う)を確認してください。
 
 ## マップを開く
 
@@ -40,13 +40,13 @@ VS Code 1.90 以降が必要です。解析を実行する前に、ワークス�
 [CLI ツール](https://www.nuget.org/packages/SharpDeps.Cli)と、必要に応じて [MCP サーバー](https://www.nuget.org/packages/SharpDeps.Mcp)をインストールします。
 
 ```bash
-dotnet tool install --global SharpDeps.Cli --version 0.4.0
-dotnet tool install --global SharpDeps.Mcp --version 0.4.0
+dotnet tool install --global SharpDeps.Cli --version 0.5.0
+dotnet tool install --global SharpDeps.Mcp --version 0.5.0
 ```
 
-ツールのインストールには SDK、インストール済みツールの実行には .NET 10 ランタイムが必要です。索引の作成には対象に対応する SDK と復元済みの依存関係も必要です。公開済み 0.4.0 の CLI／MCP は Markdown の解析に Syntamark 1.2.0 を使い、未リリースの現行ソースは 2.0.0 を採用しています。どちらのパーサーも VSIX には同梱しません。
+ツールのインストールには SDK、インストール済みツールの実行には .NET 10 ランタイムが必要です。索引の作成には対象に対応する SDK と復元済みの依存関係も必要です。公開済み 0.4.0 の CLI／MCP は Markdown の解析に Syntamark 1.2.0 を使い、0.5.0 のツールは 2.0.0 を使います。どちらのパーサーも VSIX には同梱しません。
 
-[CLI／MCP ガイド](docs/mcp.md)では、索引の作成、ソース検索、MCP 接続、範囲の選択、信頼、有限の時間予算とエラーへの対処を説明しています。未公開の追加機能は、公開済み 0.4.0 の動作と分けて記載しています。公開版の実装に対応する説明は [0.4.0 のガイド](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md)を参照してください。
+[CLI／MCP ガイド](docs/mcp.md)では、索引の作成、ソース検索、MCP 接続、範囲の選択、信頼、有限の時間予算とエラーへの対処を説明しています。更新手順は [0.4.0 からの移行](docs/mcp.md#upgrade-from-040)を参照してください。以前のバージョンに対応する説明は [0.4.0 のガイド](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md)を参照してください。
 
 AI クライアントで使う場合は、[導入とオプトアウト](docs/mcp.md#agent-routing-and-opt-out)を確認してください。構造に関する質問には索引を使い、単純な文字列や索引の範囲外は通常検索で調べます。接続だけでソースの読取りや索引更新が許可されるわけではありません。Partial coverage や鮮度未検証の状態はそのまま示します。取得回数やトークン使用量の削減、すべての操作が 1 秒以内に終わることは保証しません。
 

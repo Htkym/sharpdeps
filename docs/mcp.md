@@ -2,13 +2,13 @@
 
 [VS Code guide](guide.md) · [日本語操作ガイド](guide.ja.md) · [README](../README.md)
 
-The latest released CLI and MCP version is **0.4.0**. Install matching versions from [NuGet](https://www.nuget.org/packages/SharpDeps.Cli) or [GitHub Releases](https://github.com/Htkym/sharpdeps/releases). This guide also describes the current source tree. **Unreleased** features below are not present merely because a package is named 0.4.0; use the [tagged 0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md) for that release.
+This guide describes CLI/MCP 0.5.0. Check [NuGet](https://www.nuget.org/packages/SharpDeps.Cli) or [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) for availability and install matching versions. For the older release, use the [tagged 0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
 
 ## Install and create an index
 
 ```bash
-dotnet tool install --global SharpDeps.Cli --version 0.4.0
-dotnet tool install --global SharpDeps.Mcp --version 0.4.0
+dotnet tool install --global SharpDeps.Cli --version 0.5.0
+dotnet tool install --global SharpDeps.Mcp --version 0.5.0
 ```
 
 Installation and local-manifest tool restore require a .NET SDK. Running an installed tool or the tool DLL directly requires the .NET 10 runtime. Indexing also needs an SDK compatible with your target and its `global.json`, plus restored dependencies. SharpDeps does not acquire that SDK or restore the target automatically.
@@ -28,7 +28,7 @@ The default index is `.sharpdeps/index.sqlite` under the selected root. Use a ro
 [dnx](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-exec) is an alternative launcher with SDK 10.0.100 or later:
 
 ```bash
-dnx SharpDeps.Cli@0.4.0 --verbosity quiet -- help
+dnx SharpDeps.Cli@0.5.0 --verbosity quiet -- help
 ```
 
 First use can download packages and update caches. SDK 11 or later accepts `--yes` before `--` for unattended launch; the SDK 10 launcher does not.
@@ -43,17 +43,17 @@ CLI exploration defaults to `--format audit`, which retains full saved identitie
 
 Aliases such as `@1` and `F1` are local to one response group. Use the retained exact selector for later requests. Reuse complete saved ranges already in context with the same hash and span, and request only missing evidence. Ordinary read/search remains appropriate for dirty or unindexed files, documentation and questions outside the saved scope.
 
-### Unreleased discovery and source outcomes
+### Discovery and source outcomes
 
-In the current source tree, ordinary unscoped names/paths default to `discover`. Results keep independent project/variant groups under one pinned snapshot and shared collection, time and output budgets. Groups are not one call chain. Aliases may recur in different groups.
+In 0.5.0, ordinary unscoped names/paths default to `discover`. Results keep independent project/variant groups under one pinned snapshot and shared collection, time and output budgets. Groups are not one call chain. Aliases may recur in different groups.
 
-An explicit project or variant defaults to `unique`. Pass `--scope-policy unique` (MCP `scopePolicy: "unique"`) to retain the released unscoped selection behavior. Explicit `discover` can be combined with project/variant filters. Exact saved-ID queries, call-witness endpoints and HttpGet literal lookup use unique selection and reject explicit discovery. The typed Query API retains its `RequireUnique` default.
+An explicit project or variant defaults to `unique`. Pass `--scope-policy unique` (MCP `scopePolicy: "unique"`) to retain the 0.4.0 unscoped selection behavior. Explicit `discover` can be combined with project/variant filters. Exact saved-ID queries, call-witness endpoints and HttpGet literal lookup use unique selection and reject explicit discovery. The typed Query API retains its `RequireUnique` default.
 
 The existing `prefer-debug` policy selects Debug only when remaining alternatives are variants of one project and exactly one is Debug. It does not infer the desired target framework or grant source trust.
 
 Source outcomes include `source-returned`, `scope-choices`, `source-unavailable`, `budget-limited`, `no-match` and `failed`. Transport success alone does not establish that a source body was returned. Complete saved declarations can contain members without classifying executable bodies or proving that conditional text is active.
 
-The current CLI also accepts one positional query, such as `sharpdeps explore "OrderService Submit" --root /absolute/workspace`. Use either that value or `--term`, not both. For explore only, an omitted root means the absolute current directory, without ancestor search or index creation. Older released tools should use `--term` and an explicit root.
+The current CLI also accepts one positional query, such as `sharpdeps explore "OrderService Submit" --root /absolute/workspace`. Use either that value or `--term`, not both. For explore only, an omitted root means the absolute current directory, without ancestor search or index creation. The 0.4.0 tools should use `--term` and an explicit root.
 
 ## Connect an MCP client
 
@@ -85,16 +85,16 @@ The default tool list contains only `explore`. Call that connected tool with a *
 | `query` | Required string: related names, saved paths or exact selectors; at most 1,024 UTF-16 code units. |
 | `queryKind` | `symbol` (default) or `http-get-literal`. |
 | `projectId`, `variantId`, `pathPrefix` | Saved compilation/source filters. |
-| `scopePolicy` | `unique`, `prefer-debug`, or unreleased `discover`. |
+| `scopePolicy` | `unique`, `prefer-debug`, or `discover`. |
 | `pathTo` | Exact target occurrence for a saved call witness; at most 128 characters. |
 | `freshness` | `allow-stale` (default), `require-fresh` or `refresh`. |
 | `format` | `agent` (default) or `audit`. |
 | `ownerStatus` | Optional bounded observation of an existing coordinator; does not prove freshness. |
 | `maxChars`, `maxBytes` | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes. |
-| `prepareMaxMilliseconds` | Unreleased preparation computation budget; default 30,000 ms. |
-| `maxMilliseconds` | Unreleased query-only computation budget; default 1,000 ms. |
+| `prepareMaxMilliseconds` | Preparation computation budget; default 30,000 ms. |
+| `maxMilliseconds` | Query-only computation budget; default 1,000 ms. |
 
-In the unreleased split-v1 contract, both computation budgets must be finite values from 10 to 30,000 ms; `0` is rejected for `explore`. Omitting both fields, as in `{"query":"OrderService","format":"agent"}`, selects preparation 30,000 ms and query 1,000 ms. The query default is an initial policy choice, not a guarantee that complete `DbContext` exploration or another workload finishes in one second. Published 0.4.0 retains its shared-budget behavior; use its tagged guide and advertised schema.
+In the 0.5.0 split-v1 contract, both computation budgets must be finite values from 10 to 30,000 ms; `0` is rejected for `explore`. Omitting both fields, as in `{"query":"OrderService","format":"agent"}`, selects preparation 30,000 ms and query 1,000 ms. The query default is an initial policy choice, not a guarantee that complete `DbContext` exploration or another workload finishes in one second. Published 0.4.0 retains its shared-budget behavior; use its tagged guide and advertised schema.
 
 The tool returns one text content block, without duplicating the evidence in `structuredContent`. Source is data, not instructions. Saved calls do not prove runtime dispatch, activation or network activity. AI clients may also use ordinary source search; product use alone does not establish answer quality or comparative speed/token savings.
 
@@ -104,7 +104,7 @@ Starting with both `--trusted --allow-mutations` additionally exposes `index` an
 
 For structural questions covered by an existing index, prefer available SharpDeps exploration before broad repository search. Use ordinary search for literal text, documentation, dirty/unindexed files, missing tools/indexes or work outside the saved scope. Keep Partial coverage, proof limits, ambiguity and omissions. A no-match is not proof of absence.
 
-A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the longer workflow; its current routing text includes unreleased changes.
+A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the longer workflow. It describes the 0.5.0 interface.
 
 ### Dedicated Copilot CLI setup
 
@@ -148,18 +148,18 @@ Setup uses no-overwrite publication and retains temporary/backup recovery paths 
 
 ## Time budgets, freshness and recovery
 
-The **unreleased split-v1** contract applies to matching newly built CLI, MCP and API consumers. `ExploreRequest.PrepareMaxMilliseconds`, CLI `--prepare-max-milliseconds` and MCP `prepareMaxMilliseconds` default to 30,000 ms for preparation. `Budget.MaxMilliseconds`, CLI `--max-milliseconds` and MCP `maxMilliseconds` default to 1,000 ms for the query only. Both values must be finite and within 10..30,000 ms; explore rejects `0`. Omitting the options selects these same defaults:
+The 0.5.0 split-v1 contract applies to matching CLI, MCP and API consumers. `ExploreRequest.PrepareMaxMilliseconds`, CLI `--prepare-max-milliseconds` and MCP `prepareMaxMilliseconds` default to 30,000 ms for preparation. `Budget.MaxMilliseconds`, CLI `--max-milliseconds` and MCP `maxMilliseconds` default to 1,000 ms for the query only. Both values must be finite and within 10..30,000 ms; explore rejects `0`. Omitting the options selects these same defaults:
 
 ```bash
 sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent
 sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent --prepare-max-milliseconds 30000 --max-milliseconds 1000
 ```
 
-Preparation establishes a validated frozen snapshot and all standard derived and lexical indexes, including the HttpGet projection when requested. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The P1 path fully validates a fresh reader for each request. The current P2 code draft adds a bounded long-lived MCP host: Windows can reuse previously validated state only after native physical-identity and same-connection `data_version` proof; unsupported proof and Unix use fresh full validation. This host bypasses the P1 four-entry/64 MiB serialized-payload cache and retains one ready generation by default, without a heap-byte guarantee. One-shot CLI reads stay fresh. Limited Windows builds and 306 targeted tests passed with SDK 10.0.404, including small-fixture native warm reuse. Full acceptance and real-corpus/heap/concurrency/performance measurements remain pending. See the [prepared-exploration draft and pending acceptance](development/prepared-exploration.md).
+Preparation establishes a validated frozen snapshot and all standard derived and lexical indexes, including the HttpGet projection when requested. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation.
 
-One monotonic request owner bounds caller preparation/wait by `P`, query work by `Q`, and their total by `P + Q`. With request start `t0` and query start `tq`, the query deadline is `min(tq + Q, t0 + P + Q)`. P2's independent finite preparation owner may continue after the caller leaves; the request sum does not bound all later background CPU work. Cancellation is cooperative; individual I/O/JSON operations can complete before the next check. Process startup, MCP handshake, client permissions and transport are outside this computation bound. These values are not a universal latency guarantee.
+One monotonic request owner bounds caller preparation/wait by `P`, query work by `Q`, and their total by `P + Q`. With request start `t0` and query start `tq`, the query deadline is `min(tq + Q, t0 + P + Q)`. The MCP host's independent finite preparation owner may continue after the caller leaves; the request sum does not bound all later background CPU work. Cancellation is cooperative; individual I/O/JSON operations can complete before the next check. Process startup, MCP handshake, client permissions and transport are outside this computation bound. These values are not a universal latency guarantee.
 
-Migration changes the meaning of the existing `maxMilliseconds`/`--max-milliseconds` field from shared preparation/query time to query-only time. Freeze a new cohort manifest before replaying recorded inputs; do not reinterpret historical runs or compare the new values directly with the original 24-trial, shared 8-second P0 cohort. Existing recorded inputs remain unchanged. Explore's old zero/unlimited input must be replaced by an explicitly chosen finite value. Non-explore typed Query operations still allow `QueryBudget.MaxMilliseconds = 0`. Choose values for the purpose, workload and caller deadline; do not silently raise budgets or retry. This breaking behavior requires a new package version before release; published 0.4.0 is unaffected, and no release is performed by this source change. P1 does not change index schemas 1/2/3 or require an in-place migration.
+When upgrading from 0.4.0, `maxMilliseconds`/`--max-milliseconds` changes from shared preparation/query time to query-only time. Replace explore's old zero/unlimited input with an explicitly chosen finite value. Non-explore typed Query operations still allow `QueryBudget.MaxMilliseconds = 0`. Choose values for the purpose, workload and caller deadline; do not silently raise budgets or retry. Index schemas 1/2/3 are unchanged; there is no automatic in-place migration.
 
 | Result | Action |
 | --- | --- |
@@ -196,22 +196,32 @@ The CLI also provides `status`, `search`, `symbol`, `callers`, `callees`, `impac
 
 For .NET consumers, [saved-query/source contracts](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/query-context-v1.ja.md) describe snapshot identity, validation and source proofs. `IndexReader.Snapshot` exposes recursively read-only validated collections; arbitrary `IQueryIndex` inputs remain defensively validated. Reader lifetimes and generation pins still apply.
 
+## Upgrade from 0.4.0
+
+Update the CLI, MCP server and VS Code extension to matching 0.5.0 versions when available, and reconnect the MCP client so it loads the new server and schema. An external CLI update does not replace the VSIX's bundled reader. API consumers must also use the matching contract.
+
+Exploration now defaults to 30,000 ms preparation and 1,000 ms query-only time. Existing `maxMilliseconds`/`--max-milliseconds` is query-only; zero is rejected for explore. Ordinary unscoped names and paths now default to `discover`. Use `--scope-policy unique` or MCP `scopePolicy: "unique"` to retain the previous unscoped selection behavior. Read source outcomes and omissions rather than treating transport success as returned source.
+
+Index schemas 1/2/3 are unchanged, and old indexes are not converted in place. Retain the old tools and index for rollback; stop writers and close readers before copying the DB with its WAL/SHM. Use a separate source checkout and unused root-contained index path for independent trials.
+
+The 0.5.0 CLI/MCP tools use Syntamark 2.0.0 and its native YAML contract; 0.4.0 used 1.2.0. A parser-stamp mismatch prevents section-token reuse and does not rewrite old generations. Invalid frontmatter stops publication of the new Markdown facts and retains the previously committed generation. Keep evidence tied to its own snapshot. Incremental Markdown sessions remain disabled by default; the development opt-in does not change that default or promise a performance improvement.
+
 ## Upgrade from 0.3.0
 
 Keep the previous workspace identity, DB and any WAL/SHM together. Stop owner/watch and other writers and close readers before backing them up. Copying an active DB alone can omit committed WAL data. A separate source checkout and a new root-contained index path keep rollback independent of the new tools.
 
 New indexes use schema 3. Readers accept schemas 1/2/3, but generated source needs schema 2 or later and package-derived source needs schema 3. Incompatible writes return `INDEX_SCHEMA_MIGRATION_REQUIRED`; there is no in-place migration. The 0.3.0 tools cannot read schema 3. Update the VS Code extension as well: its 0.2.1 reader accepts only schema 1, and updating the external CLI does not replace it.
 
-The current source adopts Syntamark 2.0.0 and its native YAML contract. Its parser stamp differs from 1.2.0. Generations are not rewritten, and section tokens are not reused across a parser-stamp mismatch. Keep evidence tied to its own snapshot.
+For the Markdown parser change and retained-generation behavior, see [Upgrade from 0.4.0](#upgrade-from-040).
 
 ## Upgrade from 0.2.3
 
 Install matching released tools, update the client from the old MCP query tools to `explore`, and reindex the selected target with its required SDK and restored dependencies. Choose an unused root-contained index instead of deleting the old one:
 
 ```bash
-sharpdeps index --root /absolute/workspace --target YourSolution.sln --index .sharpdeps/explore-0.4.sqlite --configuration Release --trusted
-sharpdeps explore --root /absolute/workspace --index .sharpdeps/explore-0.4.sqlite --trusted --term "OrderService"
-sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/explore-0.4.sqlite --trusted
+sharpdeps index --root /absolute/workspace --target YourSolution.sln --index .sharpdeps/explore-0.5.sqlite --configuration Release --trusted
+sharpdeps explore --root /absolute/workspace --index .sharpdeps/explore-0.5.sqlite --trusted --term "OrderService"
+sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/explore-0.5.sqlite --trusted
 ```
 
 The extension reads only its default index path. Use another source checkout to try a new default index while retaining the previous workspace and index.

@@ -2,10 +2,12 @@
 
 Connect an MCP client to SharpDeps saved .NET dependency and source evidence.
 
+This guide describes 0.5.0. Check the package registry for availability before installing.
+
 ## Install and connect
 
 ```bash
-dotnet tool install --global SharpDeps.Mcp
+dotnet tool install --global SharpDeps.Mcp --version 0.5.0
 ```
 
 Installation requires a .NET SDK; the installed server requires the .NET 10 runtime. Create the index separately using a matching [SharpDeps.Cli](https://www.nuget.org/packages/SharpDeps.Cli) and the target's SDK/restored dependencies.
@@ -35,11 +37,11 @@ Use the advertised schema and a flat arguments object:
 
 `query` is a string. Do not nest another arguments object inside it. Use actual returned scope IDs/selectors for follow-ups and retain coverage, freshness/proof limits and omissions.
 
-The unreleased split-v1 contract defaults to 30,000 ms for preparation and 1,000 ms for the query only. Omitting both budget fields, as in `{"query":"OrderService","format":"agent"}`, selects those defaults. Both accept finite values from 10 to 30,000 ms; explore rejects zero. Preparation establishes a validated frozen snapshot and standard derived/lexical indexes before query time starts. One monotonic request owner caps caller wait/query computation at the sum of both allowances. Cancellation is cooperative; process startup, MCP handshake and transport are outside the bound. The query default is an initial candidate, not a complete-`DbContext` guarantee.
+The 0.5.0 split-v1 contract defaults to 30,000 ms for preparation and 1,000 ms for the query only. Omitting both budget fields, as in `{"query":"OrderService","format":"agent"}`, selects those defaults. Both accept finite values from 10 to 30,000 ms; explore rejects zero. Preparation establishes a validated frozen snapshot and standard derived/lexical indexes before query time starts. One monotonic request owner caps caller wait/query computation at the sum of both allowances. Cancellation is cooperative; process startup, MCP handshake and transport are outside the bound. The query default is not a complete-`DbContext` guarantee.
 
-The current P2 code draft owns a bounded prepared-generation host. Windows reuse requires native SQLite-handle identity and same-connection `data_version` proof; unsupported proof and Unix fall back to fresh full validation. Caller departure does not cancel the independent finite preparation owner; eventual abandoned readers are drained. Default retention is one ready generation, without a heap-byte guarantee. Embedding callers must await `McpQueryAdapter.DisposeAsync`, preferably with `await using`. Limited Windows builds and 306 targeted tests passed with SDK 10.0.404, including small-fixture native warm reuse. Full acceptance and real-corpus/heap/concurrency/performance measurements remain pending. See the [prepared-exploration draft](https://github.com/Htkym/sharpdeps/blob/main/docs/development/prepared-exploration.md).
+The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation. Embedding callers must await `McpQueryAdapter.DisposeAsync`, preferably with `await using`.
 
-Use matching newly built CLI/MCP/API consumers for this breaking contract. Existing `maxMilliseconds` now means query-only time; keep historical inputs frozen and create a new cohort manifest for replay. Do not silently raise budgets or retry. `PREPARATION_TIMEOUT`, `QUERY_TIMEOUT` and `REQUEST_TIMEOUT` return no source; caller `CANCELLED` takes priority and also returns no source. Published 0.4.0 keeps its released behavior; inspect the connected server's schema. No result or a successful transport alone proves that source was returned.
+Use matching 0.5.0 CLI/MCP/API consumers for this breaking contract. Existing `maxMilliseconds` now means query-only time. Do not silently raise budgets or retry. `PREPARATION_TIMEOUT`, `QUERY_TIMEOUT` and `REQUEST_TIMEOUT` return no source; caller `CANCELLED` takes priority and also returns no source. Published 0.4.0 keeps its released behavior; inspect the connected server's schema. No result or a successful transport alone proves that source was returned.
 
 See the [CLI/MCP guide](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md) for version-specific behavior, recovery and [agent setup/opt-out](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md#agent-routing-and-opt-out). Removing guidance is not a CLI execution ban. The [VS Code extension](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) is installed separately.
 
