@@ -230,7 +230,9 @@ public sealed class ExplorationTests
     {
         using var fixture = new Fixture(addScopes: true, partial: true, dense: true, format: format);
         var reads = 0;
-        var engine = new ExplorationService(new ObservedIndex(() => { reads++; return fixture.Snapshot; }), new QueryWorkspace(fixture.Root), true);
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with
+        { Diagnostics = Enumerable.Range(1, 10).Select(number => new HarnessGraphDiagnostic("test.diagnostic" + number, number)).ToArray() } };
+        var engine = new ExplorationService(new ObservedIndex(() => { reads++; return snapshot; }), new QueryWorkspace(fixture.Root), true);
         var request = new ExploreRequest("Pump Run", Budget: Generous, Format: format);
         var strict = engine.Execute(request);
         Assert.True(strict.Succeeded);
@@ -249,6 +251,16 @@ public sealed class ExplorationTests
             Assert.Equal(1, reply.Text.Split("Coverage: selected index;", StringSplitOptions.None).Length - 1);
             Assert.Equal(3, reply.Text.Split("SharpDeps explore generation=", StringSplitOptions.None).Length - 1);
             Assert.Equal(3, reply.Text.Split("Freshness=", StringSplitOptions.None).Length - 1);
+            Assert.Equal(1, reply.Text.Split("Diagnostic test.diagnostic1=1", StringSplitOptions.None).Length - 1);
+            Assert.Equal(1, reply.Text.Split("Diagnostics omitted=2", StringSplitOptions.None).Length - 1);
+            Assert.Contains("Index diagnostics (all saved scopes):", reply.Text);
+            foreach (var group in reply.Text.Split("SharpDeps explore generation=", StringSplitOptions.None).Skip(1))
+            {
+                Assert.Contains("Files (F identifiers are group-local):", group);
+                Assert.True(group.IndexOf("Files (", StringComparison.Ordinal) < group.IndexOf("Source F", StringComparison.Ordinal));
+                Assert.All(group.Split('\n').Where(line => line.StartsWith("Source F", StringComparison.Ordinal)),
+                    line => Assert.DoesNotContain(" path=", line, StringComparison.Ordinal));
+            }
         }
         Assert.Equal(new[] { fixture.Variant, fixture.AlternateVariant, fixture.OtherVariant }.Order(StringComparer.Ordinal),
             reply.Units.Select(unit => unit.VariantId!).Distinct().Order(StringComparer.Ordinal));

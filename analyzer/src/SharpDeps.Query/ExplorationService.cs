@@ -1443,12 +1443,22 @@ public sealed partial class ExplorationService
         }
 
         private bool isDiscoveryGroup;
+        private bool shareGraphDiagnostics;
 
         // Identical for all discovery groups; scope-specific evidence stays in each group.
         private static void AppendAgentContext(StringBuilder text)
         {
             text.AppendLine("Source defaults: completeSavedRange=true, body=unknown, role=saved-declaration; executable body is unclassified. Owner context adds no semantic targets or proof that inactive text is active.");
             text.AppendLine("Coverage: selected index; runtime consumers and unindexed code/tests remain unproven.");
+        }
+
+        private void AppendAgentDiagnostics(StringBuilder text)
+        {
+            var diagnostics = owner.saved.Graph.Diagnostics;
+            foreach (var diagnostic in (diagnostics ?? []).Take(8))
+                text.AppendLine(FormattableString.Invariant($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}"));
+            if ((diagnostics?.Count ?? 0) > 8)
+                text.AppendLine(FormattableString.Invariant($"Diagnostics omitted={diagnostics!.Count - 8}"));
         }
 
         private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
@@ -1467,8 +1477,7 @@ public sealed partial class ExplorationService
             AppendScopeDecision(text, detailCount);
             AppendHttpGetMatches(text);
             if (request.PathTo is not null) AppendRetainedPath(text, units, detailCount);
-            foreach (var diagnostic in (graph.Diagnostics ?? []).Take(8)) Line($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}");
-            if ((graph.Diagnostics?.Count ?? 0) > 8) Line($"Diagnostics omitted={graph.Diagnostics!.Count - 8}");
+            if (!shareGraphDiagnostics) AppendAgentDiagnostics(text);
             foreach (var error in Errors.Take(8)) Line($"Error {Safe(error.Code, 80)}: {Safe(error.Message, 240)} {Safe(error.Path, 160)}");
             if (freshness.DirtyPaths.Count > 0) Line($"Dirty sources={freshness.DirtyPaths.Count}: {string.Join(", ", freshness.DirtyPaths.Take(4).Select(path => Safe(path, 160)))}");
             if (freshness.Unverified.Count > 0) Line($"Unverified: {string.Join("; ", freshness.Unverified.Take(4).Select(value => Safe(value, 160)))}");
@@ -1531,8 +1540,11 @@ public sealed partial class ExplorationService
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var sourceAliases = sourceIds.Select((id, index) => (id, Alias: "F" + (index + 1).ToString(CultureInfo.InvariantCulture)))
                 .ToDictionary(pair => pair.id, pair => pair.Alias, StringComparer.Ordinal);
+            if (sourceIds.Length > 0)
+                header.AppendLine(isDiscoveryGroup ? "Files (F identifiers are group-local):" : "Files (F identifiers are reply-local):");
             foreach (var sourceId in sourceIds)
-                if (owner.files.TryGetValue(sourceId, out var file)) Line($"{sourceAliases[sourceId]} {file.RelativePath}");
+                if (owner.files.TryGetValue(sourceId, out var file))
+                    header.AppendLine(FormattableString.Invariant($"{sourceAliases[sourceId]} {file.RelativePath}"));
             AppendAgentSummary(text, summaryRows, units, omitted, aliases, sourceAliases, summaryAllowance);
             if (shownRelations.Length > 0) text.AppendLine("Saved relations (certainty is semantic evidence, not runtime dispatch):");
             foreach (var relation in shownRelations)
@@ -1558,7 +1570,7 @@ public sealed partial class ExplorationService
                             sourceDetails += " certainty=" + item.Certainty;
                         Line($"{aliases[item.Identity]} {Safe(owner.Label(item.Node), 160)} selector={item.Identity} source{sourceDetails}");
                     }
-                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)} path={unit.Path}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
+                Line($"Source {sourceAliases[unit.SourceId]}:{unit.FirstLine}-{lastLine} {string.Join(",", symbols)}{(unit.Role == "saved-declaration" ? "" : " role=" + unit.Role)}");
                 var lines = unit.Text.Split('\n');
                 for (var index = 0; index < lines.Length; index++)
                 {

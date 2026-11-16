@@ -138,6 +138,17 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         Assert.Equal("source-returned", discovery.Outcome);
         Assert.Contains("groups=4 omittedGroups=0", discovery.CliText, StringComparison.Ordinal);
         Assert.Equal(4, discovery.Units.Select(unit => (unit.ProjectId, unit.VariantId)).Distinct().Count());
+        var agent = observations.Single(item => item.Id == "agent-source");
+        var files = System.Text.RegularExpressions.Regex.Matches(agent.McpText!, @"(?m)^(F\d+) (.+?)\r?$")
+            .ToDictionary(match => match.Groups[1].Value, match => match.Groups[2].Value.TrimEnd('\r'));
+        var legacyAgent = System.Text.RegularExpressions.Regex.Replace(agent.McpText!,
+            @"(?m)^(Source (F\d+):\d+-\d+ @[\d,@]+)(?= role=|\r?$)",
+            match => match.Groups[1].Value + " path=" + files[match.Groups[2].Value]);
+        Assert.NotEqual(agent.McpText, legacyAgent);
+        var legacyUnits = FixedQueryReplay.ParseUnits(legacyAgent, fixture.Snapshot, fixture.Root,
+            Path.Combine(Path.GetDirectoryName(agent.ReceiptPath)!, "legacy-agent"));
+        Assert.Equal(agent.Units.Select(unit => (unit.Path, unit.Text, unit.Span)),
+            legacyUnits.Select(unit => (unit.Path, unit.Text, unit.Span)));
         var member = observations.Single(item => item.Id == "single-member");
         var withoutMetricsDirectory = ReceiptDirectory("metrics-disabled");
         using (var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1)))

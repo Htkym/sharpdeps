@@ -589,11 +589,12 @@ internal static class FixedQueryReplay
             var lines = group.Split('\n');
             for (var index = 0; index < lines.Length; index++)
             {
-                var header = Regex.Match(lines[index].TrimEnd('\r'), @"^Source (F\d+)(?::(\d+)-(\d+))? (@[\d,@]+) (?:span=(\d+):(\d+)|path=(.*?))(?: role=.*)?$");
+                var header = Regex.Match(lines[index].TrimEnd('\r'), @"^Source (F\d+)(?::(\d+)-(\d+))? (@[\d,@]+)(?: (?:span=(\d+):(\d+)|path=(.*?)))?(?: role=.*)?$");
                 if (!header.Success)
                 {
                     continue;
                 }
+                Require(header.Groups[2].Success || header.Groups[5].Success, "Source needs a line range or audit span.");
                 Require(aliases.TryGetValue(header.Groups[1].Value, out var reported), "Returned source alias is missing.");
                 var path = header.Groups[7].Success ? header.Groups[7].Value : reported.Path;
                 Require(path == reported.Path, "Returned source path differs from its file alias.");
