@@ -140,13 +140,46 @@ The separate `eng/opencode-context-reuse/` HTTP experiment is optional, OpenCode
 
 ## Agent routing and opt-out
 
-Use SharpDeps explore when indexed .NET symbol, dependency, caller/callee or cross-file structure would help resolve missing evidence. Tool use is optional: use targeted source read/search when the relevant location is already known. Query focused names/paths and reuse returned evidence; do not retrieve complete unchanged ranges already in context. Follow exact selectors only for specific evidence still missing or changed and needed for the task. Omissions do not require exhaustive exploration; stop when sufficient evidence is available. Use ordinary read/search for simple literal text or documentation-only lookups, dirty/unindexed/out-of-scope files, unavailable tools/indexes or user opt-out. Report blockers without claiming unverified evidence. No repeat call is required for evidence already in context.
+When missing indexed .NET symbol, dependency, caller/callee or cross-file evidence is needed, use one focused available SharpDeps explore before reconstructing that structure with broad text searches. This is not a mandatory first call for every task. Skip it when sufficient evidence is already available or a known location suffices for a self-contained single-file, literal or documentation lookup. A known file does not remove the need for structural evidence that is still missing. Reuse complete unchanged ranges still in context and stop when sufficient evidence is available.
 
 Use ordinary read/search for simple literal text or documentation-only questions, dirty/unindexed files, unavailable tools/indexes or work outside the saved scope. Necessary current-file verification before an edit remains allowed. Report a blocked exploration before using permitted targeted fallback; do not imply that unavailable evidence was checked. Keep Partial coverage, proof limits, ambiguity and omissions. A no-match is not proof of absence.
 
 The server sends this workflow in both initialization instructions and the `explore` tool description, so the tool description carries the core rule even when a client does not forward server instructions to its model. These are model-facing instructions, not a security boundary: the server cannot intercept another tool's reads/searches or prevent a final answer. Actual tool-order enforcement requires support and configuration in the AI host; connecting MCP alone does not provide it. Source permissions, user opt-out and higher-priority instructions still apply.
 
 A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the longer workflow. It describes the 0.5.0 interface.
+
+### Project-bound agent package setup
+
+`agent-export` is a separate, explicit setup path in the 0.5.0 candidate. Check release availability first; a source checkout or CI candidate does not mean 0.5.0 is published. It exports files for an already installed host. It does **not** install SharpDeps, create an index, activate a plugin, edit existing host profiles, grant source access, or enable experimental context reuse.
+
+Choose one registration path:
+
+- **SharpDeps MCP already registered:** keep that server and export routing only. Do not register a second server through the package.
+- **No SharpDeps MCP registered:** explicitly bundle its launch command, or register MCP separately using the host's normal workflow. Routing-only output without an accessible server is not a completed integration.
+
+Preview a routing-only package in an explicit project child directory:
+
+```bash
+sharpdeps agent-export --client portable --root /absolute/workspace --output-dir /absolute/workspace/sharpdeps-agent --dry-run
+```
+
+Use `portable` for Codex/Copilot, `claude-code` for Claude Code, or `opencode-v2` for OpenCode V2. The root and output parent must exist; the output must be a new project-contained directory. Review the returned files, then repeat without `--dry-run`. For optional MCP bundling add `--mcp-command`: portable requires an explicit bare executable such as `sharpdeps-mcp` on the host PATH; Claude/OpenCode require an absolute existing executable. Select the existing root-contained index with `--index`. Add `--trusted` only when source reads are authorized; exporting does not change index trust by itself. See the [export contract and thin shell/PowerShell entry points](../eng/agent-packages/README.md).
+
+| Host | What to activate explicitly | What the package provides |
+| --- | --- | --- |
+| Codex / Copilot | Load the portable package with that host's supported plugin mechanism; follow the generated README. | A discoverable routing skill, plus MCP only if requested. Skill discovery does not mean its full body was loaded. |
+| Claude Code | Load the exported plugin through Claude Code's supported plugin mechanism. | A routing skill and optional MCP registration. A plugin-root instruction file is not assumed to be always-on guidance. |
+| OpenCode V2 | Load the exported `opencode.config.json` through its supported configuration mechanism, without replacing unrelated settings. | `routing.md` through `instructions`, plus optional MCP. The same SharpDeps skill is deliberately not registered a second time. |
+
+Check these separately in a fresh host session:
+
+1. **Connection:** the intended SharpDeps server is connected and advertises `explore` with the expected workspace/index and permissions. A manifest-validation success alone is not this check.
+2. **Guidance:** the intended routing file or skill is discoverable/loaded through the host's actual path. Do not manually add a second copy of MCP initialization instructions, or infer full skill loading from a listed skill name.
+3. **Useful behavior:** for a real task needing missing cross-file evidence, inspect whether focused exploration returns useful source or explicit candidates and whether the answer has adequate evidence. Simple lookups may correctly skip it. A forced diagnostic call proves connectivity, not natural adoption or token savings. Testing with a real provider may incur charges.
+
+If a check fails, report which stage failed. Do not reinstall, reindex, change trust or grant permissions automatically. A no-hit or unavailable index is not evidence that the target is absent.
+
+To disable, first remove/disable the host's package activation or configuration entry. Then preview `sharpdeps agent-remove --root /absolute/workspace --output-dir /absolute/workspace/sharpdeps-agent --dry-run` and repeat without `--dry-run` only for an unchanged owned package. Removal moves it to an adjacent backup; modified, extra, moved or symlinked files are refused. Routing-only removal does not unregister an independently configured MCP server. Keep unrelated host settings and user instructions unchanged.
 
 ### Dedicated Copilot CLI setup
 
@@ -237,7 +270,7 @@ sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --f
 sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent --prepare-max-milliseconds 30000 --max-milliseconds 1000
 ```
 
-Preparation establishes a validated frozen snapshot and all standard derived and lexical indexes, including the HttpGet projection when requested. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation.
+Preparation establishes a validated frozen snapshot and query-required derived indexes, including the HttpGet projection when requested. A single existing saved identity or HttpGet literal request automatically skips unused lexical search preparation; ordinary names, mixed terms and multiple identities retain it. Snapshot validation, structural expansion, source checks and returned evidence are unchanged. This avoids unnecessary preparation, not model tokens by itself. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation.
 
 One monotonic request owner bounds caller preparation/wait by `P`, query work by `Q`, and their total by `P + Q`. With request start `t0` and query start `tq`, the query deadline is `min(tq + Q, t0 + P + Q)`. The MCP host's independent finite preparation owner may continue after the caller leaves; the request sum does not bound all later background CPU work. Cancellation is cooperative; individual I/O/JSON operations can complete before the next check. Process startup, MCP handshake, client permissions and transport are outside this computation bound. These values are not a universal latency guarantee.
 

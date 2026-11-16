@@ -60,9 +60,17 @@ public sealed partial class ExplorationService
         token.ThrowIfCancellationRequested();
         var saved = index is PinnedQueryIndex pinned ? pinned.PrepareExploration(token)
             : ExplorationSnapshotCache.Get(index.ReadSnapshot(token), token);
-        _ = saved.GetSearchIndex(token);
         if (request.QueryKind == ExploreQueryKind.HttpGetLiteral)
             _ = saved.GetHttpGetDeclarations(request.Query, token);
+        else
+        {
+            // A single existing saved identity resolves without lexical lookup or multi-match ranking.
+            // Keep ordinary, mixed, unknown and multiple-identity queries prepared before execution.
+            var query = request.Query.Trim();
+            if (!Run.IsSavedIdentity(query)
+                || !saved.nodes.ContainsKey(query) && !saved.occurrences.ContainsKey(query))
+                _ = saved.GetSearchIndex(token);
+        }
         token.ThrowIfCancellationRequested();
         return saved;
     }

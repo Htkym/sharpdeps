@@ -385,7 +385,7 @@ public sealed class ExplorationTests
     [Theory]
     [InlineData(ExploreFormat.Agent)]
     [InlineData(ExploreFormat.Audit)]
-    public void ExactSavedIdentityCompletesStandardLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
+    public void ExactSavedIdentitySkipsUnusedLexicalPreparationWithoutChangingReturnedSource(ExploreFormat format)
     {
         using var fixture = new Fixture(format: format);
         var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
@@ -403,8 +403,14 @@ public sealed class ExplorationTests
             metrics.Complete();
         }
         Assert.Equal("source-returned", exact.Outcome);
-        Assert.Single(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
-        Assert.True(engine.Execute(fixture.Request("Pump")).Succeeded);
+        Assert.DoesNotContain(ReadMetricPhases(directory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+        var lexicalDirectory = Path.Combine(fixture.Root, ".sharpdeps", "later-lexical-metrics");
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(lexicalDirectory, "explore")!)
+        {
+            Assert.True(engine.Execute(fixture.Request("Pump")).Succeeded);
+            metrics.Complete();
+        }
+        Assert.Single(ReadMetricPhases(lexicalDirectory), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
         Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(request)));
         var selector = fixture.Occurrence(fixture.RunInt);
         var referenceRequest = fixture.Request(selector) with { IncludeEvidenceRefs = true, ResponseMode = ExploreResponseMode.Evidence };
@@ -413,6 +419,109 @@ public sealed class ExplorationTests
         Assert.True(guarded.Succeeded);
         Assert.NotEmpty(guarded.Units);
         Assert.Equal(reference, EvidenceRefFor(guarded, selector));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HostedExactPreparationDefersLexicalWorkToTheNextNameRequestsPreparation(bool preCancelNamePreparation)
+    {
+        using var fixture = new Fixture();
+        var workspace = Guid.ParseExact(fixture.Snapshot.Graph.WorkspaceId[3..], "N");
+        var path = Path.Combine(fixture.Root, ".sharpdeps", "hosted-lazy.sqlite");
+        using var writer = IndexWriter.Open(fixture.Root, path, workspace, isTrusted: true);
+        writer.Commit(IndexStage.Create(fixture.Snapshot));
+        await using var host = new PreparedExplorationHost();
+        var owners = Path.Combine(fixture.Root, ".sharpdeps", "lazy-owner-metrics");
+        var exactRequest = fixture.Request(fixture.Occurrence(fixture.RunInt));
+        ExploreReply exact;
+        var exactMetrics = Path.Combine(fixture.Root, ".sharpdeps", "hosted-exact-metrics");
+        using (var execution = new ExplorationExecutionBudget(exactRequest, default))
+        using (var lease = await host.AcquireAsync(fixture.Root, path, workspace, owners, execution.Token))
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(exactMetrics, "explore")!)
+        {
+            var engine = new ExplorationService(lease.Pin(execution.Token), new QueryWorkspace(fixture.Root), true);
+            var prepared = engine.PrepareSnapshot(exactRequest, execution.Token);
+            Assert.Same(lease.Prepared, prepared);
+            execution.StartQuery();
+            exact = engine.ExecutePrepared(exactRequest, prepared, execution);
+            metrics.Complete();
+        }
+        Assert.Equal("source-returned", exact.Outcome);
+        Assert.DoesNotContain(ReadMetricPhases(exactMetrics), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+        Assert.All(Directory.GetFiles(owners, "*.jsonl", SearchOption.AllDirectories), file =>
+            Assert.DoesNotContain("explore.lexical-index", File.ReadAllText(file), StringComparison.Ordinal));
+
+        var nameRequest = fixture.Request("Pump");
+        if (preCancelNamePreparation)
+        {
+            using var lease = await host.AcquireAsync(fixture.Root, path, workspace, owners, default);
+            var engine = new ExplorationService(lease.Pin(default), new QueryWorkspace(fixture.Root), true);
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => engine.PrepareSnapshot(nameRequest, cancelled.Token));
+            Assert.Same(lease.Prepared.saved, lease.Reader.Snapshot());
+        }
+        var nameMetrics = Path.Combine(fixture.Root, ".sharpdeps", "hosted-name-metrics");
+        using (var execution = new ExplorationExecutionBudget(nameRequest, default))
+        using (var lease = await host.AcquireAsync(fixture.Root, path, workspace, owners, execution.Token))
+        {
+            var engine = new ExplorationService(lease.Pin(execution.Token), new QueryWorkspace(fixture.Root), true);
+            ExplorationSnapshot prepared;
+            using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(nameMetrics, "explore")!)
+            {
+                prepared = engine.PrepareSnapshot(nameRequest, execution.Token);
+                metrics.Complete();
+            }
+            // The preparation trace must already contain construction before starting the query clock.
+            Assert.Single(ReadMetricPhases(nameMetrics), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+            execution.StartQuery();
+            Assert.True(engine.ExecutePrepared(nameRequest, prepared, execution).Succeeded);
+            Assert.Equal(JsonSerializer.Serialize(exact), JsonSerializer.Serialize(engine.Execute(exactRequest)));
+        }
+        Assert.Single(ReadMetricPhases(nameMetrics), phase => phase.GetProperty("phase").GetString() == "explore.lexical-index");
+        Assert.All(Directory.GetFiles(owners, "*.jsonl", SearchOption.AllDirectories), file =>
+            Assert.DoesNotContain("explore.lexical-index", File.ReadAllText(file), StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("occurrence", false)]
+    [InlineData("path", false)]
+    [InlineData("http-get", false)]
+    [InlineData("multiple", true)]
+    [InlineData("mixed", true)]
+    [InlineData("unknown", true)]
+    [InlineData("name", true)]
+    public void PreparationWarmsLexicalIndexOnlyWhenResolutionMayNeedIt(string kind, bool lexical)
+    {
+        using var fixture = new Fixture(httpGetTemplate: "saved");
+        var (snapshot, _) = HttpGetSnapshot(fixture, "saved");
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request(fixture.Occurrence(fixture.RunInt));
+        request = kind switch
+        {
+            "path" => request with { PathTo = fixture.Occurrence(fixture.Helper) },
+            "http-get" => request with { Query = "saved", QueryKind = ExploreQueryKind.HttpGetLiteral },
+            "multiple" => request with { Query = fixture.RunInt + " " + fixture.RunString },
+            "mixed" => request with { Query = fixture.RunInt + " Pump" },
+            "unknown" => request with { Query = "hocc_" + new string('0', 64) },
+            "name" => request with { Query = "Pump" },
+            _ => request with { Query = " " + request.Query + " " }
+        };
+        var directory = Path.Combine(fixture.Root, ".sharpdeps", "route-preparation-metrics");
+        ExploreReply cold;
+        using (var metrics = SharpDeps.Analysis.Core.Diagnostics.PhaseMetrics.Start(directory, "explore")!)
+        {
+            cold = engine.Execute(request);
+            metrics.Complete();
+        }
+        var phases = ReadMetricPhases(directory);
+        Assert.Equal(lexical, phases.Any(phase => phase.GetProperty("phase").GetString() == "explore.lexical-index"));
+        Assert.Contains(phases, phase => phase.GetProperty("phase").GetString() == "explore.prepare-standard");
+        if (kind == "unknown") Assert.Contains(cold.Errors, issue => issue.Code == "SYMBOL_NOT_FOUND");
+        // Warming later must not change candidates, source, diagnostics, omissions or response mode.
+        Assert.True(engine.Execute(fixture.Request("Pump")).Succeeded);
+        Assert.Equal(JsonSerializer.Serialize(cold), JsonSerializer.Serialize(engine.Execute(request)));
     }
 
     [Theory]

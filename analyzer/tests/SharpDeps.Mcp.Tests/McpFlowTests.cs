@@ -411,9 +411,11 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var initialized = ready.RootElement.GetProperty("result");
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
-                Assert.Contains("Tool use is optional", instructions, StringComparison.Ordinal);
+                Assert.Contains("Use focused explore for missing .NET cross-file structure before broad reconstruction", instructions, StringComparison.Ordinal);
+                Assert.Contains("a known file alone is not enough", instructions, StringComparison.Ordinal);
+                Assert.Contains("single-file/literal/docs lookups", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", instructions, StringComparison.Ordinal);
-                Assert.Contains("stop when sufficient evidence is available", instructions, StringComparison.Ordinal);
+                Assert.Contains("Skip for sufficient evidence", instructions, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
                 Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);
@@ -430,7 +432,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
                 var explore = Assert.Single(tools.EnumerateArray(), tool => tool.GetProperty("name").GetString() == "explore");
                 var description = explore.GetProperty("description").GetString()!;
-                Assert.Contains("Tool use is optional", description, StringComparison.Ordinal);
+                Assert.Contains("use focused SharpDeps explore before broad reconstruction", description, StringComparison.Ordinal);
+                Assert.Contains("A known file suffices only for single-file/literal lookups, not missing cross-file evidence", description, StringComparison.Ordinal);
+                Assert.DoesNotContain("when the relevant location is already known", description, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", description, StringComparison.Ordinal);
                 Assert.Contains("complete unchanged ranges already in context", description, StringComparison.Ordinal);
                 Assert.Contains("specific evidence still missing or changed", description, StringComparison.Ordinal);

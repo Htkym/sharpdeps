@@ -43,7 +43,7 @@ One request clock bounds the work. For request start `t0`, preparation allowance
 query execution ends by `min(tq + Q, t0 + P + Q)`. Caller cancellation remains
 active across both phases.
 
-Preparation establishes a validated, frozen saved snapshot and all standard derived
+Preparation establishes a validated, frozen saved snapshot and query-required derived
 and lexical indexes before query execution starts. The P1 path opens a reader and
 fully hydrates/validates/freezes the snapshot on every request. P2 changes only how
 an eligible host can establish that already validated snapshot, as described below.
