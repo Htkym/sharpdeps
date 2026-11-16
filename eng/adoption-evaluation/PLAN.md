@@ -136,3 +136,16 @@ reconnected and has .NET 10 installed. No SDK installation is needed. The ordina
 Library transfer failed because its metadata helper does not support Windows
 extended attributes; no helper modification or raw-download bypass was used.
 No main change, merge or release is authorized by this transfer.
+
+Subsequent PC verification of that same code/tree passed 234 focused C# tests.
+The saved three-condition replay returned identical complete result objects before
+and after the change. A separate EF diagnostic pass confirmed lexical preparation
+is skipped for the cold exact request and deferred until the subsequent name query;
+this is not proof of less total work or model tokens. See [verification.json](verification.json).
+Natural adoption and comparative quality remain unmeasured for this candidate.
+
+The later complete-name phrase ranking change passed 166 scoped ExplorationTests
+on Windows with SDK 11.0.100 targeting net10.0, including six phrase boundary cases.
+An independent static review found a signature-like fallback boundary; the original
+query character check and `Order(user)` regression were added and the final review
+passed. These tests do not establish natural-use adoption or token savings.

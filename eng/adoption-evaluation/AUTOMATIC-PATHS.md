@@ -83,3 +83,45 @@ architectural observations, not SharpDeps savings claims:
 - [Aider repository map](https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/repomap.py#L420-L550): query-mentioned files/identifiers personalize graph ranking. Its host knows chat files; SharpDeps must not assume the same context visibility.
 - [GitNexus query tool](https://github.com/abhigyanpatwari/GitNexus/blob/9b77866c879124e81caf2eabbf274404497d73b6/gitnexus/src/mcp/tools.ts#L170-L255): section selection retains omission metadata, content appears once per repository/symbol in one response, explicit follow-up retrieves content. Its hybrid embedding architecture is not being adopted here.
 - [CodeGraph bounded context](https://github.com/colbymchenry/codegraph/blob/6560052a6f856855d3f71eee838fd66ccfa4285d/src/mcp/tools.ts#L287-L379): separately reviewed by the comparison workstream. Keep its selected defaults fixed in comparative runs rather than tuning only the competitor.
+
+## Next candidate: name-stage preparation (not implemented)
+
+A natural ambiguous name query currently pays for all saved signature/context word
+metadata before exact-name candidates are checked. A small name/alias stage could
+identify exact-name candidates first, preserving overloads and separate scopes;
+only a miss would need the full component/path index. This is distinct from the
+already implemented saved-ID optimization and from output/token reduction.
+
+Do not implement this as an unchecked early return. Scoped/path-filtered name hits
+may all disappear later, requiring full fallback. Multiple exact-name matches still
+use context/path ranking. Preparing only names but constructing those missing
+indexes inside query execution would merely move work into the smaller query budget.
+A viable design must prepare every needed candidate metadata/ranking dependency
+before StartQuery, preserve existing case/type-alias rules, and reuse name metadata
+when full search follows rather than retaining duplicate indexes.
+
+Before selecting an implementation, test common and uncommon exact names, overloaded
+members/types, broad fragments, same names across projects/variants, path-filtered
+misses, partial indexes and no-match requests. Compare full reply ordering, roots,
+source and omission status, plus cold/warm preparation and memory. Do not tune the
+ranking against private evaluation gold. Any change here needs a separately frozen
+candidate so its effects are not attributed to guidance or saved-ID preparation.
+
+## Complete multi-word name candidates
+
+A separate ranking change retains candidates whose names cover every distinct word
+of an ordinary multi-word query, even when another candidate exactly matches only
+one word. That complete-name layer ranks before the existing match tiers. For
+example, `Order user` can select `OrderUser` rather than discard it for `Order`.
+Partial matches retain their previous relative ordering. This is not fuzzy semantic
+search and does not assert that the first candidate is the user's intended target.
+
+The rule applies only to letter/digit/underscore words separated by whitespace.
+Single names, IDs, paths, qualified names, signatures (including unmatched
+signature-like inputs), wildcards and queries with no complete-name candidate keep
+the old rules. Scope filtering, ambiguity, provenance and budgets are unchanged.
+Multiple independent target words can change priority; exact selectors remain the
+way to request an explicit target. No real-AI quality or token benefit is established.
+
+This ranking change follows the saved-ID preparation replay recorded in
+`verification.json`; that earlier replay is not evidence for the new ranking.

@@ -633,7 +633,7 @@ public sealed partial class ExplorationService
                 matches.RemoveAll(m => m.Node.Kind == HarnessNodeKind.Member && !m.Qualified && m.Node.ParentId is { } parent
                     && !anchors.Contains(parent) && matches.Any(other => other.Node.Kind == HarnessNodeKind.Member && other.Node.Name == m.Node.Name
                         && other.Node.ParentId is { } otherParent && anchors.Contains(otherParent)));
-            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && !m.PathMatch);
+            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && !m.PathMatch && !CoversAllNameTerms(m));
             return matches;
         }
 
@@ -688,13 +688,25 @@ public sealed partial class ExplorationService
             return matches;
         }
 
+        private bool CoversAllNameTerms(Match match)
+        {
+            // A complete ordinary-name phrase must not be hidden by an exact match to only one word.
+            if (request.Query.Any(character => !char.IsLetterOrDigit(character) && character != '_' && !char.IsWhiteSpace(character))
+                || searchTerms.Length < 2 || searchTerms.Any(term => term.Length == 0
+                || !(char.IsLetter(term[0]) || term[0] == '_')
+                || term.Any(character => !char.IsLetterOrDigit(character) && character != '_')
+                || IsSavedIdentity(term))) return false;
+            var mask = searchTerms.Length == 32 ? uint.MaxValue : (1u << searchTerms.Length) - 1;
+            return (match.NameTerms & mask) == mask;
+        }
+
         private List<Match> OrderMatches(List<Match> matches)
         {
             // Ranking zero or one match needs no whole-snapshot lexical index.
             Check();
             if (matches.Count <= 1) return matches;
             var terms = searchTerms.Select(term => ExplorationSnapshot.Components(term, timer.Token)).ToArray();
-            var ranked = new List<(Match Match, int Context, int Penalty, string Path, int Start)>();
+            var ranked = new List<(Match Match, bool CompleteName, int Context, int Penalty, string Path, int Start)>();
             foreach (var match in matches)
             {
                 Check();
@@ -718,7 +730,7 @@ public sealed partial class ExplorationService
                         for (var index = 0; index < terms.Length; index++)
                             if (ContainsWords(components, terms[index])) context |= 1u << index;
                     }
-                ranked.Add((match, BitOperations.PopCount(context),
+                ranked.Add((match, CoversAllNameTerms(match), BitOperations.PopCount(context),
                     !match.Exact && !match.PathMatch && known && !unknown && deprioritized ? 1 : 0, path, start));
             }
             try
@@ -726,7 +738,8 @@ public sealed partial class ExplorationService
                 ranked.Sort((left, right) =>
                 {
                     Check();
-                    var order = left.Match.Tier.CompareTo(right.Match.Tier);
+                    var order = right.CompleteName.CompareTo(left.CompleteName);
+                    if (order == 0) order = left.Match.Tier.CompareTo(right.Match.Tier);
                     if (order == 0) order = BitOperations.PopCount(right.Match.MatchedTerms).CompareTo(BitOperations.PopCount(left.Match.MatchedTerms));
                     if (order == 0) order = BitOperations.PopCount(right.Match.NameTerms).CompareTo(BitOperations.PopCount(left.Match.NameTerms));
                     if (order == 0) order = right.Context.CompareTo(left.Context);

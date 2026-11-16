@@ -1,0 +1,112 @@
+{
+  "tree": "5db21c9485648ed0a9e22a61aebdc200d17b7382",
+  "diagnostic_replay": {
+    "model_calls": 0,
+    "owned_remaining": 0,
+    "requests": 4,
+    "cases": [
+      {
+        "corpus": "efcore",
+        "query_kind": "exact",
+        "identical_result": true,
+        "before_error": false,
+        "after_error": false,
+        "before_bytes": 6029,
+        "after_bytes": 6029
+      },
+      {
+        "corpus": "efcore",
+        "query_kind": "name",
+        "identical_result": true,
+        "before_error": false,
+        "after_error": false,
+        "before_bytes": 3293,
+        "after_bytes": 3293
+      }
+    ],
+    "before_mcp_sha256": "fe595bc26af5c9b39562b37682b8a5925e145b8268b1a5b496988ffd0d985441",
+    "after_mcp_sha256": "b4009d0dac7d7b0a8e85ba67d8f16bfb0717caa74a8336c00054470e7f362ca5",
+    "limits": "One pass; saved EF exact reordered first for cold preparation. Not a natural adoption or model-token study. No performance claim."
+  },
+  "index_unchanged": true,
+  "target_framework": "net10.0",
+  "tests": [
+    {
+      "suite": "query",
+      "filter": "ExplorationTests|PreparedExplorationHostTests|PreparedExplorationRetentionTests",
+      "failed": 0,
+      "total": 173,
+      "trx_sha256": "0feca7b297bd7d9dc26e14c286ccec345fc2d6af5e5f2ab65f87a7bdba893f63",
+      "passed": 173
+    },
+    {
+      "suite": "cli",
+      "filter": "CliInstallationTests|CliAgentPackageTests",
+      "failed": 0,
+      "total": 48,
+      "trx_sha256": "3175501c6d6d12ca805f0af02654b613df8d348e05481517807be7fc3178caff",
+      "passed": 48
+    },
+    {
+      "suite": "mcp",
+      "filter": "McpFlowTests",
+      "failed": 0,
+      "total": 13,
+      "trx_sha256": "619a6aec5d10121195e5bc5deb312d1c5c05f805c0747132d823962b69f62097",
+      "passed": 13
+    }
+  ],
+  "diagnostic_observation": {
+    "after_cold_exact_lexical_builds": 0,
+    "after_next_name_preparation_lexical_ms": 1429.2478,
+    "before_cold_exact_owner_lexical_ms": 1094.3998,
+    "scope": "single observed sequence; exact reordered first; no latency or total-work improvement claim"
+  },
+  "replay": {
+    "model_calls": 0,
+    "owned_remaining": 0,
+    "requests": 6,
+    "cases": [
+      {
+        "corpus": "efcore",
+        "query_kind": "exact",
+        "identical_result": true,
+        "before_error": false,
+        "after_error": false,
+        "before_bytes": 6029,
+        "after_bytes": 6029
+      },
+      {
+        "corpus": "efcore",
+        "query_kind": "name",
+        "identical_result": true,
+        "before_error": false,
+        "after_error": false,
+        "before_bytes": 3293,
+        "after_bytes": 3293
+      },
+      {
+        "corpus": "orleans",
+        "query_kind": "name",
+        "identical_result": true,
+        "before_error": false,
+        "after_error": false,
+        "before_bytes": 7170,
+        "after_bytes": 7170
+      }
+    ],
+    "before_mcp_sha256": "fe595bc26af5c9b39562b37682b8a5925e145b8268b1a5b496988ffd0d985441",
+    "after_mcp_sha256": "b4009d0dac7d7b0a8e85ba67d8f16bfb0717caa74a8336c00054470e7f362ca5",
+    "limits": "One pass; saved EF exact reordered first for cold preparation. Not a natural adoption or model-token study. No performance claim."
+  },
+  "platform": "Windows",
+  "candidate": "8a6b53d2a10b9d6940a5ea62de144361322f8cb4",
+  "limitations": [
+    "No new paid model calls or release",
+    "First replay diagnostic destination was outside the allowed workspace; original results retained, EF-only diagnostic follow-up used a new allowed directory",
+    "Pre-cancellation test is not a mid-build cancellation test",
+    "Natural adoption, model tokens, cache and quality effects require a separately approved comparison",
+    "Historical first-call query shape does not predict changed natural integration behavior"
+  ],
+  "sdk": "11.0.100"
+}

@@ -1418,7 +1418,7 @@ public sealed class ExplorationTests
         var index = new RankingIndex(snapshot, fixture.Count);
         var engine = new ExplorationService(index, null, false);
         var one = Generous with { MaxNodes = 1 };
-        AssertRankingSelectors(engine.Execute(fixture.Request("Order user", one)), fixture.Occurrence(fixture.RunInt));
+        AssertRankingSelectors(engine.Execute(fixture.Request("Order user", one)), fixture.Occurrence(fixture.RunString));
         AssertRankingSelectors(engine.Execute(fixture.Request("user", one)), fixture.Occurrence(fixture.RunString));
         AssertRankingSelectors(engine.Execute(fixture.Request("token", one)), fixture.Occurrence(fixture.Helper));
         AssertRankingSelectors(engine.Execute(fixture.Request("M:Demo.Pump.OrderUserUserUser(Token)", one)), fixture.Occurrence(fixture.Helper));
@@ -1451,6 +1451,28 @@ public sealed class ExplorationTests
             .Execute(fixture.Request("client", one)), fixture.Occurrence(expected));
     }
 
+    [Theory]
+    [InlineData("Order user", true)]
+    [InlineData("user Order", true)]
+    [InlineData("Order Order user", true)]
+    [InlineData("Order", false)]
+    [InlineData("Order missing", false)]
+    [InlineData("Order(user)", false)]
+    public void CompleteOrdinaryNamePhrasesSurvivePartialExactMatches(string query, bool complete)
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var snapshot = RankingSnapshot(fixture,
+            (fixture.RunInt, "Order", "M:Demo.Pump.Order()"),
+            (fixture.RunString, "OrderUser", "M:Demo.Pump.OrderUser()"),
+            (fixture.Helper, "Other", "M:Demo.Pump.Other(OrderUser)"));
+        var expected = fixture.Occurrence(complete ? fixture.RunString : fixture.RunInt);
+        var request = fixture.Request(query, Generous with { MaxNodes = 1 });
+        AssertRankingSelectors(new ExplorationService(new RankingIndex(snapshot, fixture.Helper), null, false)
+            .Execute(request), expected);
+        var reversed = snapshot with { Graph = snapshot.Graph with { Nodes = snapshot.Graph.Nodes.Reverse().ToArray() } };
+        AssertRankingSelectors(new ExplorationService(new RankingIndex(reversed, fixture.Helper), null, false)
+            .Execute(request), expected);
+    }
     [Fact]
     public void WeakPathPreferenceUsesOnlyTheSelectedVariantAndNeverExcludesExplicitTargets()
     {
