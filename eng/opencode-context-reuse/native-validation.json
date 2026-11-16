@@ -1,0 +1,216 @@
+{
+  "host": "OpenCode 2.2.0",
+  "paid_ai_calls": 0,
+  "fixture_only": true,
+  "hashes": {
+    "index.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+    "host-adapter.mjs": "dbf9949a298310e3db9ab2a8699107e5fde569d3e31f1860f6f0490e1c66f524",
+    "responses-transform.mjs": "feb0b5529aaa9d3b212a1a24555f099ade6f3f3725a0b430fabd4f08e013a4e8",
+    "host-adapter.test.mjs": "386705679f4b83544cba7ba40af163d2cdfd983735115e365a845ab7f2b80955"
+  },
+  "results": [
+    {
+      "case": "repeat",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "dbf9949a298310e3db9ab2a8699107e5fde569d3e31f1860f6f0490e1c66f524",
+        "responses-transform.mjs": "feb0b5529aaa9d3b212a1a24555f099ade6f3f3725a0b430fabd4f08e013a4e8"
+      },
+      "module_sha256": "feb0b5529aaa9d3b212a1a24555f099ade6f3f3725a0b430fabd4f08e013a4e8",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 1,
+      "refs": 1,
+      "third_request_before_bytes": 5964,
+      "third_request_after_bytes": 4913,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "earlier-missing",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 3993,
+      "third_request_after_bytes": 3993,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": true
+    },
+    {
+      "case": "partial",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 5758,
+      "third_request_after_bytes": 5758,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "non-target",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 5976,
+      "third_request_after_bytes": 5976,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "auto-truncation",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 6011,
+      "third_request_after_bytes": 6011,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "disabled",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 5970,
+      "third_request_after_bytes": 5970,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "other-plugin",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 5982,
+      "third_request_after_bytes": 5982,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "overlay",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 1,
+      "refs": 1,
+      "third_request_before_bytes": 6017,
+      "third_request_after_bytes": 4966,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    },
+    {
+      "case": "signed-request",
+      "artifact_hashes": {
+        "reuse-entry.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+        "host-adapter.mjs": "80eae77520fef5965067e9256641948597f20b2ae576df6bf0c3a3b5b63640f3",
+        "responses-transform.mjs": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77"
+      },
+      "module_sha256": "21f557c3f7af4a3a9004556ea55920e9c95aaaf9049d9baa1d3ac5c28b315d77",
+      "native_session_succeeded": true,
+      "cli_exit_pending_after_success": true,
+      "owned_remaining": 0,
+      "http_requests": 3,
+      "anchors": 0,
+      "refs": 0,
+      "third_request_before_bytes": 5988,
+      "third_request_after_bytes": 5988,
+      "tested_artifact_prettier_canonical_equal_to_final": true,
+      "all_requests_exactly_restorable": true,
+      "durable_tool_outputs_exact_fixture": true,
+      "simulated_missing_not_real_compaction": false
+    }
+  ],
+  "distribution_hashes": {
+    "index.ts": "088f3fcf9d6a944f0279dbd1aaeffdeca137269982fe5a38a2c057f71cf2f313",
+    "host-adapter.mjs": "dbf9949a298310e3db9ab2a8699107e5fde569d3e31f1860f6f0490e1c66f524",
+    "responses-transform.mjs": "feb0b5529aaa9d3b212a1a24555f099ade6f3f3725a0b430fabd4f08e013a4e8",
+    "host-adapter.test.mjs": "386705679f4b83544cba7ba40af163d2cdfd983735115e365a845ab7f2b80955"
+  },
+  "format_canonical_evidence": {
+    "formatter": "Prettier 3.9.4",
+    "configuration": "repository .prettierrc.json plus objectWrap=collapse for canonical comparison",
+    "comparison": "Every recorded native entry, adapter, and core artifact formatted canonically equals the final distribution artifact",
+    "all_cases_equal": true,
+    "final_repeat_exact_distribution_hashes": true
+  },
+  "host_binary_sha256": "4ed63e6bfe4595c810e3fd913ac5cf2868e4c34136f77599ce527f8eecc3f38e"
+}

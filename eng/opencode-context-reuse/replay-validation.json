@@ -1,0 +1,226 @@
+{
+  "schema": "sharpdeps-independent-responses-replay-v1",
+  "implementation_sha256": "feb0b5529aaa9d3b212a1a24555f099ade6f3f3725a0b430fabd4f08e013a4e8",
+  "options": {
+    "enabled": true,
+    "provider": "openai",
+    "api": "responses",
+    "toolNames": ["evidence_explore"]
+  },
+  "measurement": "Serialized synthetic Responses-shaped request UTF-8 bytes, not tokens or captured HTTP traffic.",
+  "fixture_construction": [
+    "One fixed user placeholder replaces all original user text.",
+    "Known reasoning items use synthetic opaque placeholders, not original encrypted reasoning.",
+    "Saved tool names, arguments and text content are retained; non-tool assistant prose omitted.",
+    "Absent tool text uses an explicit placeholder because original error wire encoding was not captured.",
+    "Twelve full histories and 140 tool-bearing assistant-boundary prefixes are separate datasets; prefixes overlap."
+  ],
+  "full": {
+    "requests": 12,
+    "changedRequests": 9,
+    "beforeBytes": 1988213,
+    "afterBytes": 1943125,
+    "savedBytes": 45088,
+    "anchors": 77,
+    "references": 117
+  },
+  "prefixes": {
+    "requests": 140,
+    "changedRequests": 91,
+    "beforeBytes": 15131879,
+    "afterBytes": 14785444,
+    "savedBytes": 346435,
+    "anchors": 517,
+    "references": 714
+  },
+  "per_session": [
+    {
+      "run": "natural-ef-cache-B",
+      "beforeBytes": 295384,
+      "afterBytes": 288587,
+      "savedBytes": 6797,
+      "anchors": 7,
+      "references": 7,
+      "requestSupported": true,
+      "parsedTargetOutputs": 22,
+      "opaqueTargetOutputs": 1,
+      "strict_verified_references": 7
+    },
+    {
+      "run": "natural-ef-cache-C",
+      "beforeBytes": 186136,
+      "afterBytes": 186136,
+      "savedBytes": 0,
+      "anchors": 0,
+      "references": 0,
+      "requestSupported": true,
+      "parsedTargetOutputs": 13,
+      "opaqueTargetOutputs": 0,
+      "strict_verified_references": 0
+    },
+    {
+      "run": "natural-ef-save-B",
+      "beforeBytes": 305093,
+      "afterBytes": 303620,
+      "savedBytes": 1473,
+      "anchors": 6,
+      "references": 6,
+      "requestSupported": true,
+      "parsedTargetOutputs": 17,
+      "opaqueTargetOutputs": 4,
+      "strict_verified_references": 6
+    },
+    {
+      "run": "natural-ef-save-C",
+      "beforeBytes": 263227,
+      "afterBytes": 254167,
+      "savedBytes": 9060,
+      "anchors": 15,
+      "references": 20,
+      "requestSupported": true,
+      "parsedTargetOutputs": 19,
+      "opaqueTargetOutputs": 2,
+      "strict_verified_references": 20
+    },
+    {
+      "run": "natural-orl-rpc-B",
+      "beforeBytes": 206512,
+      "afterBytes": 196860,
+      "savedBytes": 9652,
+      "anchors": 19,
+      "references": 36,
+      "requestSupported": true,
+      "parsedTargetOutputs": 15,
+      "opaqueTargetOutputs": 2,
+      "strict_verified_references": 36
+    },
+    {
+      "run": "natural-orl-rpc-C",
+      "beforeBytes": 210354,
+      "afterBytes": 200191,
+      "savedBytes": 10163,
+      "anchors": 18,
+      "references": 35,
+      "requestSupported": true,
+      "parsedTargetOutputs": 19,
+      "opaqueTargetOutputs": 1,
+      "strict_verified_references": 35
+    },
+    {
+      "run": "natural-orl-state-B",
+      "beforeBytes": 204685,
+      "afterBytes": 201897,
+      "savedBytes": 2788,
+      "anchors": 4,
+      "references": 5,
+      "requestSupported": true,
+      "parsedTargetOutputs": 16,
+      "opaqueTargetOutputs": 2,
+      "strict_verified_references": 5
+    },
+    {
+      "run": "natural-orl-state-C",
+      "beforeBytes": 174324,
+      "afterBytes": 172458,
+      "savedBytes": 1866,
+      "anchors": 4,
+      "references": 4,
+      "requestSupported": true,
+      "parsedTargetOutputs": 14,
+      "opaqueTargetOutputs": 2,
+      "strict_verified_references": 4
+    },
+    {
+      "run": "natural-t1-B",
+      "beforeBytes": 45526,
+      "afterBytes": 44860,
+      "savedBytes": 666,
+      "anchors": 2,
+      "references": 2,
+      "requestSupported": true,
+      "parsedTargetOutputs": 4,
+      "opaqueTargetOutputs": 0,
+      "strict_verified_references": 2
+    },
+    {
+      "run": "natural-t1-C",
+      "beforeBytes": 27099,
+      "afterBytes": 27099,
+      "savedBytes": 0,
+      "anchors": 0,
+      "references": 0,
+      "requestSupported": true,
+      "parsedTargetOutputs": 3,
+      "opaqueTargetOutputs": 0,
+      "strict_verified_references": 0
+    },
+    {
+      "run": "natural-t2-B",
+      "beforeBytes": 27154,
+      "afterBytes": 27154,
+      "savedBytes": 0,
+      "anchors": 0,
+      "references": 0,
+      "requestSupported": true,
+      "parsedTargetOutputs": 1,
+      "opaqueTargetOutputs": 1,
+      "strict_verified_references": 0
+    },
+    {
+      "run": "natural-t2-C",
+      "beforeBytes": 42719,
+      "afterBytes": 40096,
+      "savedBytes": 2623,
+      "anchors": 2,
+      "references": 2,
+      "requestSupported": true,
+      "parsedTargetOutputs": 4,
+      "opaqueTargetOutputs": 1,
+      "strict_verified_references": 2
+    }
+  ],
+  "strict_source_check": {
+    "method": "Read-only fixed index plus physical source hash; BOM preserved in UTF-16 raw-span coordinates; exact rendered text, line, workspace, snapshot, project, variant and role.",
+    "source_blocks": 1371,
+    "verified_source_blocks": 1370,
+    "unrecognized_selector_blocks": 1,
+    "loose_crosscall_blocks": 394,
+    "strict_crosscall_blocks": 393,
+    "loose_numbered_bytes": 89740,
+    "strict_numbered_bytes": 89446,
+    "transformed_full_references": 117,
+    "strict_verified_transformed_full_references": 117,
+    "verifier_correction": "An earlier independent verifier stripped UTF-8 BOM and undercounted eligible ranges. Corrected to the product BOM-preserving coordinate contract; transformer metrics unchanged. Final formatted core was replayed again with identical totals."
+  },
+  "preservation_checks": {
+    "all_152_roundtrips_equal": true,
+    "all_152_original_inputs_unchanged": true,
+    "all_152_non_target_fields_unchanged": true,
+    "all_152_non_increasing_json_bytes": true,
+    "disabled_returns_original_object": true,
+    "original_exports_hash_unchanged": true,
+    "core_hash_unchanged_during_replay": true
+  },
+  "limitations": [
+    "No model, API or network calls; no actual HTTP request reconstruction.",
+    "No measured token, cost, latency or answer-quality benefit.",
+    "Full-history ratios use the exact placeholder-based synthetic JSON denominator.",
+    "Prefix totals are overlapping projections, not actual cumulative model input savings.",
+    "All twelve source configurations disable automatic compaction and no compaction events were observed; persisted exports do not prove residency in each sent request.",
+    "Core reports parsed versus opaque target counts, not detailed skip reasons; zero-change sessions remain valid no-ops.",
+    "Transformer performs guarded literal factoring, not source-identity or semantic equivalence proof; strict source checks are independent offline evidence.",
+    "Historical frozen experimental outputs and scripts are unchanged; no raw fixtures are intended for repository publication."
+  ],
+  "reproduction_outline": [
+    "Obtain the authorized nonpublic frozen B/C exports and transport logs.",
+    "Construct fixed-placeholder Responses requests and tool-bearing assistant-boundary prefixes as described.",
+    "Import the exact hashed transformer; deep-freeze inputs; apply explicit enabled/openai/responses/evidence_explore options.",
+    "Check restore equality, no mutation, unchanged non-target items and fields, and non-increasing serialized JSON bytes.",
+    "Count changed target-body anchors/references and join their original body hashes to independently verified index/raw-span evidence.",
+    "Retain only this sanitized aggregate in the repository; retain source-bearing fixtures privately."
+  ],
+  "target_output_counts": {
+    "parsed": 147,
+    "opaque": 16
+  }
+}
