@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "study": "Approved natural two-task before/after follow-up",
+  "date_utc": "2026-11-16",
+  "before_commit": "0ca038129e915e825b6ffb45deba652a5496eb76",
+  "after_commit": "631e830e88697aeaa0f4e23d340c62b827f55990",
+  "design": {
+    "host": "OpenCode 2.2.0",
+    "model": "openai/gpt-6-sol",
+    "reasoning": "xhigh",
+    "service_tier": "default",
+    "adapter": "OFF in both conditions",
+    "tasks": ["NH-03 EF Core", "NH-04 Orleans"],
+    "sessions": 4,
+    "repetitions_per_task_condition": 1,
+    "order": ["NH-03 before", "NH-03 after", "NH-04 after", "NH-04 before"],
+    "retries": 0,
+    "budget_usd": 2
+  },
+  "rows": [
+    {
+      "task_id": "NH-03",
+      "arm": "before",
+      "total_host_tokens": 49433,
+      "host_cost_usd": 0.0775171,
+      "model_requests": 5,
+      "all_logical_tool_calls": 9,
+      "product_calls": 2,
+      "displayed_tool_text_error_bytes": 74801,
+      "wall_seconds": 35.281,
+      "score": 3,
+      "maximum": 3,
+      "complete_success": true,
+      "critical_error": false
+    },
+    {
+      "task_id": "NH-03",
+      "arm": "after",
+      "total_host_tokens": 44676,
+      "host_cost_usd": 0.06737660000000001,
+      "model_requests": 5,
+      "all_logical_tool_calls": 9,
+      "product_calls": 2,
+      "displayed_tool_text_error_bytes": 62272,
+      "wall_seconds": 30.172,
+      "score": 3,
+      "maximum": 3,
+      "complete_success": true,
+      "critical_error": false
+    },
+    {
+      "task_id": "NH-04",
+      "arm": "after",
+      "total_host_tokens": 58320,
+      "host_cost_usd": 0.0783662,
+      "model_requests": 5,
+      "all_logical_tool_calls": 17,
+      "product_calls": 1,
+      "displayed_tool_text_error_bytes": 67817,
+      "wall_seconds": 31.515,
+      "score": 4,
+      "maximum": 4,
+      "complete_success": true,
+      "critical_error": false
+    },
+    {
+      "task_id": "NH-04",
+      "arm": "before",
+      "total_host_tokens": 103834,
+      "host_cost_usd": 0.0889039,
+      "model_requests": 8,
+      "all_logical_tool_calls": 24,
+      "product_calls": 1,
+      "displayed_tool_text_error_bytes": 66672,
+      "wall_seconds": 39.093,
+      "score": 4,
+      "maximum": 4,
+      "complete_success": true,
+      "critical_error": false
+    }
+  ],
+  "quality": {
+    "before": {
+      "score": 7,
+      "maximum": 7,
+      "complete_successes": 2,
+      "answers": 2,
+      "critical_errors": 0
+    },
+    "after": {
+      "score": 7,
+      "maximum": 7,
+      "complete_successes": 2,
+      "answers": 2,
+      "critical_errors": 0
+    }
+  },
+  "totals": {
+    "before": {
+      "model_requests": 13,
+      "host_cost_usd": 0.16642099999999999,
+      "total_host_tokens": 153267,
+      "wall_seconds": 74.374,
+      "all_logical_tool_calls": 33,
+      "product_calls": 3,
+      "displayed_tool_text_error_bytes": 141473,
+      "sessions": 2,
+      "token_counters": {
+        "input": 39,
+        "output": 1852,
+        "reasoning": 1908,
+        "cache_read": 106490,
+        "cache_write": 42978
+      },
+      "input_total": 149507,
+      "output_total": 3760
+    },
+    "after": {
+      "model_requests": 10,
+      "host_cost_usd": 0.1457428,
+      "total_host_tokens": 102996,
+      "wall_seconds": 61.687,
+      "all_logical_tool_calls": 26,
+      "product_calls": 3,
+      "displayed_tool_text_error_bytes": 130089,
+      "sessions": 2,
+      "token_counters": {
+        "input": 30,
+        "output": 1634,
+        "reasoning": 1934,
+        "cache_read": 60214,
+        "cache_write": 39184
+      },
+      "input_total": 99428,
+      "output_total": 3568
+    }
+  },
+  "all_session_host_estimated_cost_usd": 0.3121638,
+  "actual_billed_cost_usd": null,
+  "validation": {
+    "all_pass": true,
+    "protocol_violations": 0,
+    "owned_remaining": 0,
+    "freeze_files_verified": 371,
+    "execution_gate_closed": true
+  },
+  "exposure": {
+    "NH-03": "Two new suffix rows were returned. Both old and new runs used the same exact selector with scope at call 2 and read the same candidate path at call 3.",
+    "NH-04": "Four new suffix rows were returned. New run read the matching path at call 5, but call 4 source_list also included that path; old run read it at call 23."
+  },
+  "limitations": [
+    "One trial per task and condition; observed differences are not general guarantees or causal estimates.",
+    "Quality was independently graded blind before condition mapping; both arms scored 7/7 with 2/2 complete and zero critical errors.",
+    "NH03 exact retrieval is not unique to the new feature; NH04 path selection cannot be attributed to the hint.",
+    "Request counts, retrieval choices, batching and cache state can affect tokens and cost.",
+    "Host-estimated cost is not a verified provider invoice.",
+    "No new four-host native acceptance or release authorization is implied."
+  ],
+  "evidence_sha256": {
+    "input-freeze.json": "cfa634acaf2d12b62fd0a887759c345db4684652e01ff27fac9d6b148aca29ec",
+    "completed-summary.json": "458a1c2d1eae89bb6721ada588d3f52316b5dcc70e7973e1f9d00334b6b577ef",
+    "final-verification.json": "624b24fb66f01f6bbb3f31059261006ed1b3fd6337a37054500597c9588e32e6",
+    "final-quality.json": "772d56cd223a225a748d4a4bfcda136d714ff974001ea2cadfed6030ecf823a6",
+    "final-analysis.json": "8c106ac30115d19efd6be6d5405b0d5f9c5216fe150ce86df415b8b0feef4f1f",
+    "blind-quality/pack-b.json": "27a94b502f78dbefd634430c368e0bfdcee7acbb01735b769b155cb067afb799",
+    "blind-quality/grade-b.json": "b3f07ac87599092197b2739115273785b583d8521b75891f6d1bcf9c8df81272",
+    "planning/independent-completed-audit.json": "f0e21f35dbd02996316d373d1232d549142dff6553d77690e23a55020803e4ec"
+  }
+}

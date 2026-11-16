@@ -1,0 +1,136 @@
+{
+  "scope": "Follow-up deterministic verification after the completed 27fba1e real-AI comparison; no additional AI execution.",
+  "historical_study": {
+    "main_commit": "40a5b5b",
+    "candidate_commit": "27fba1e",
+    "sessions": 12,
+    "outcome": "failed intended efficiency/quality goal",
+    "all_session_total_tokens": {
+      "main": 1080807,
+      "candidate": 1111981,
+      "increase_percent_rounded": 2.9
+    },
+    "all_session_tool_output_bytes": {
+      "main": 580817,
+      "candidate": 615406,
+      "increase_percent_rounded": 6.0
+    },
+    "rubric_score": {
+      "main": 48,
+      "candidate": 47,
+      "maximum": 57
+    },
+    "protocol_violations": [
+      {
+        "run": "orl-state-candidate",
+        "tool_calls": 40,
+        "limit": 36
+      },
+      {
+        "run": "orl-rpc-main",
+        "tool_calls": 42,
+        "limit": 36
+      }
+    ],
+    "all_session_totals_include_violations": true,
+    "historical_schema_increase_bytes": 593
+  },
+  "root_priority": {
+    "rule": "For omitted/detail only, search-selected Member roots are admitted after existing exact/path priorities but before related bodies; no special-case query or new parser.",
+    "source_set_changed": true,
+    "lossless_compression": false,
+    "fixed_call_replay": {
+      "calls": 14,
+      "no_error_calls": 14,
+      "identical_outputs": 11,
+      "changed_outputs": 3,
+      "old_total_bytes": 115919,
+      "new_total_bytes": 115559,
+      "delta_bytes": -360,
+      "added_explicitly_cited_lines": 118,
+      "removed_explicitly_cited_lines": 0,
+      "changes": [
+        {
+          "query": "BatchExecutor.ExecuteAsync",
+          "added_requested_range": [158, 260],
+          "added_cited_lines": 87,
+          "delta_bytes": -298
+        },
+        {
+          "query": "StateManager.SaveChangesAsync",
+          "added_requested_range": [1364, 1373],
+          "added_cited_lines": 10,
+          "delta_bytes": 77
+        },
+        {
+          "query": "ExecutionStrategy.OnFirstExecution",
+          "added_requested_range": [381, 402],
+          "added_cited_lines": 21,
+          "delta_bytes": -139
+        }
+      ],
+      "retained_literal_lines_equal": true,
+      "comparison_report_sha256": "c6ac8d3bf448bc14b94c045c1a75dddbe2777b9d428c24775c339817a72f4135",
+      "query_assembly_sha256": "8155120941520d0d1e3867d9d27658b47cd9aeb9dffe4457f4056b22025fcbe0"
+    },
+    "limitations": [
+      "Explicit citations are observable; internal model usage is not. Uncited source is not proven unnecessary.",
+      "Fixed-call replay does not measure future model quality, tokens or avoided source_read calls.",
+      "Broad type queries and oversized requested declarations can still omit bodies truthfully."
+    ]
+  },
+  "mcp_wording": {
+    "schema_bytes": {
+      "before": 3567,
+      "after": 3028
+    },
+    "tool_description_bytes": {
+      "before": 1707,
+      "after": 1182
+    },
+    "initialization_instruction_bytes": {
+      "before": 2116,
+      "after": 465
+    },
+    "measured_field_sum_reduction_bytes": 2715,
+    "not_provider_token_or_session_saving": true,
+    "example_change": "The known-target example now explicitly uses evidence. This may change model selection and is not merely lossless text shortening; runtime defaults and schema constraints are unchanged."
+  },
+  "rejected_experiments": {
+    "default_member_metadata_dedup": {
+      "adopted": false,
+      "evidence_and_patch_preserved": true
+    },
+    "startup_default_response_mode_flag": {
+      "adopted": false,
+      "evidence_and_patch_preserved": true
+    }
+  },
+  "verification": {
+    "query_tests": {
+      "passed": 141,
+      "failed": 0,
+      "scope": "ExplorationTests only, including six new cases; not the entire solution test suite."
+    },
+    "mcp_tests": {
+      "passed": 28,
+      "failed": 0,
+      "scope": "McpTests and McpFlowTests only."
+    },
+    "frozen_comparison_input_hashes_unchanged": 383,
+    "replay_owned_processes_remaining": 0,
+    "additional_real_ai_calls": 0,
+    "final_native_acceptance": {
+      "real_ai_calls": 0,
+      "report": "native-follow-up-verification.json",
+      "limits": "Normal calls match direct MCP exactly. Boundary rejection semantics and zero source pass on all hosts; Claude/OpenCode strip terminal CRLF, OpenCode also wraps errors. New-context refetch was repeated for Codex/Copilot only in this run. OpenCode auxiliary fixture rejections are retained.",
+      "status": "passed-with-documented-host-normalization",
+      "report_sha256": "15070679113649b873bbf1e1caa9715778725b397722395768783b0bdef9eaba",
+      "normal_calls": 16,
+      "new_context_retrieval_checks": 2,
+      "boundary_calls": 16,
+      "owned_remaining": 0
+    }
+  },
+  "release_authorized": false
+}

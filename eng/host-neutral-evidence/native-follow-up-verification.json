@@ -1,0 +1,370 @@
+{
+  "real_model_calls": 0,
+  "paid_calls": 0,
+  "owned_remaining": 0,
+  "hosts": [
+    {
+      "host": "codex",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "140af68c0b02f42ef814ec16bf38ac0e8ada24a60485391c9980b6e275c1f10f"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-codex-product-mcp-native-1794829316236078800",
+          "direct_match_scope": "All four normal-mode outputs exactly match direct.json for identical AsyncCommand arguments."
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "e52ed89233f187ce0aa9ae38b935bc9e5d1c5d181a787d664946277e2acc2b21",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "a1974240d5b0bacc909551a7605c70fabe8d0dc64b4e97bbbf8e6f63de973b00",
+            "30e0b6e6eb509fc08719cab0b39c95097522b9f31424e6d6d48ebb4a8be4fe92"
+          ],
+          "direct_match": null,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-codex-product-mcp-native-1794829317077423100",
+          "direct_match_scope": "Not evaluated: direct.json contains only the separate AsyncCommand four-mode fixture, not the IDispatcher guard/freshness fixture. This null is not a failed comparison."
+        }
+      ]
+    },
+    {
+      "host": "copilot",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "140af68c0b02f42ef814ec16bf38ac0e8ada24a60485391c9980b6e275c1f10f"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-copilot-product-mcp-native-1794829319279820600",
+          "direct_match_scope": "All four normal-mode outputs exactly match direct.json for identical AsyncCommand arguments."
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "e52ed89233f187ce0aa9ae38b935bc9e5d1c5d181a787d664946277e2acc2b21",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "a1974240d5b0bacc909551a7605c70fabe8d0dc64b4e97bbbf8e6f63de973b00",
+            "30e0b6e6eb509fc08719cab0b39c95097522b9f31424e6d6d48ebb4a8be4fe92"
+          ],
+          "direct_match": null,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-copilot-product-mcp-native-1794829320644561200",
+          "direct_match_scope": "Not evaluated: direct.json contains only the separate AsyncCommand four-mode fixture, not the IDispatcher guard/freshness fixture. This null is not a failed comparison."
+        }
+      ]
+    },
+    {
+      "host": "opencode",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "140af68c0b02f42ef814ec16bf38ac0e8ada24a60485391c9980b6e275c1f10f"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-opencode-product-mcp-1794829323530593800",
+          "direct_match_scope": "All four normal-mode outputs exactly match direct.json for identical AsyncCommand arguments."
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "e52ed89233f187ce0aa9ae38b935bc9e5d1c5d181a787d664946277e2acc2b21",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "8a944f0538400121eedc8299fe6191003bf57367a6731bd5afda8cd23b6ffe37",
+            "897ac1ad21fbc10c1ce1f0c2a574c6e0ab72a48d1cd5590a65da4cec27d0fc12"
+          ],
+          "direct_match": null,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-opencode-product-mcp-1794829328285136400",
+          "direct_match_scope": "Not evaluated: direct.json contains only the separate AsyncCommand four-mode fixture, not the IDispatcher guard/freshness fixture. This null is not a failed comparison."
+        }
+      ]
+    },
+    {
+      "host": "claude",
+      "runs": [
+        {
+          "case": "normal",
+          "calls": 4,
+          "output_sha256": [
+            "9aed221c0cc970d8f1bf37e850ab537b7d5101083868a08f66d18fa9226c5ea7",
+            "535d4bd506dbadd5c079a5714f95730dc4708e3f2d32cda44381ae2f7085b439",
+            "cbb9f32bc363f433c9533346b979d4b499b23edfff29a9befc28f1b3c9fbb3fa",
+            "140af68c0b02f42ef814ec16bf38ac0e8ada24a60485391c9980b6e275c1f10f"
+          ],
+          "direct_match": true,
+          "boundary_text_equal_after_terminal_newline_normalization": false,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-claude-product-mcp-1794829333717741900",
+          "direct_match_scope": "All four normal-mode outputs exactly match direct.json for identical AsyncCommand arguments."
+        },
+        {
+          "case": "guard-freshness",
+          "calls": 4,
+          "output_sha256": [
+            "e52ed89233f187ce0aa9ae38b935bc9e5d1c5d181a787d664946277e2acc2b21",
+            "b80a8d4da0f1e8a10a83591a49420b288f8272fb6e295ac422a6e6aa9ecf5e4e",
+            "8a944f0538400121eedc8299fe6191003bf57367a6731bd5afda8cd23b6ffe37",
+            "897ac1ad21fbc10c1ce1f0c2a574c6e0ab72a48d1cd5590a65da4cec27d0fc12"
+          ],
+          "direct_match": null,
+          "boundary_text_equal_after_terminal_newline_normalization": true,
+          "schema_and_short_description_accepted": true,
+          "owned_remaining": 0,
+          "receipt": "sd-claude-product-mcp-1794829335591798600",
+          "direct_match_scope": "Not evaluated: direct.json contains only the separate AsyncCommand four-mode fixture, not the IDispatcher guard/freshness fixture. This null is not a failed comparison."
+        }
+      ]
+    }
+  ],
+  "scope": "Native MCP acceptance with local fixture responses, not natural model quality or token savings; no startup option.",
+  "artifact_sha256": {
+    "SharpDeps.Mcp.dll": "79da4f6df564b447ede08df17a8374dd6aac75b49c33f48f39f5856189d36e75",
+    "SharpDeps.Query.dll": "8155120941520d0d1e3867d9d27658b47cd9aeb9dffe4457f4056b22025fcbe0"
+  },
+  "source_sha256": {
+    "analyzer/src/SharpDeps.Mcp/McpQueryAdapter.cs": "4588b6dc92fb3ae720a6407ffcceffbfda3673b42d8a706b04e8284b0c31a8c8",
+    "analyzer/src/SharpDeps.Mcp/Program.cs": "7317a1edc4cdc5b2b6b878c634fde7ca74707b1907293b45be0a5023d6f1ecff",
+    "analyzer/src/SharpDeps.Mcp/McpAgentGuidance.cs": "c208b982012a8a311d18b6c3aabdcfc1b99d97bb353b3ec2cfdb62e0dc2b319c",
+    "analyzer/src/SharpDeps.Query/ExplorationService.cs": "6ee4257c77bb3e929b4876851a569ef582df0c851c2b72c1f5561b1b9b0f1805",
+    "analyzer/src/SharpDeps.Query/ExplorationDiscovery.cs": "5a1529403f5bf92bf9bfcc47bca5e3307015de6a08f4a1193805bb28dd48aca2",
+    "analyzer/src/SharpDeps.Query/ExplorationEvidenceRef.cs": "ccf0edf5e89f5f879bda9252b8f124c25387bdb2c1fca3011af40aa1aeb00283",
+    "analyzer/src/SharpDeps.Query/ExploreRequest.cs": "30f1889f03454842cba74058818842e0fc25f32e876c2dfe0a5021784fc11f42",
+    "analyzer/tests/SharpDeps.Mcp.Tests/McpTests.cs": "21d49c9da6e347a368bbd81e970180a3d91ca3b6d4db262780fea6d215b8d72a",
+    "analyzer/tests/SharpDeps.Mcp.Tests/McpFlowTests.cs": "382ae2a000180a977abbed36f933356a9dec8ed34ce0d4ff72b118014cda3e6f",
+    "analyzer/tests/SharpDeps.Query.Tests/ExplorationTests.cs": "c195965979b24b30032d66113b1445b2abf56fdeda7f597932499ac3ec318ba8"
+  },
+  "limitations": [
+    "OpenCode wraps rejected MCP results in tool.execution JSON; Claude emits tool_result content with is_error=true. Both omit exactly the terminal CRLF (2 characters) from guard-mismatch and freshness-rejection messages. Codex/Copilot preserve it. After decoding OpenCode and normalizing terminal newlines, all four boundary texts match; successful overview/evidence texts match exactly.",
+    "Only Codex/Copilot repeated guarded retrieval in a new context in this run; no receipt implies source possession.",
+    "Codex app-server is intentionally terminated after direct tool RPCs; other native processes exited 0.",
+    "OpenCode normal and boundary runs each made one auxiliary loopback request without an explore tool; fixture rejected it with Expected one direct SharpDeps explore tool. Both primary native sessions subsequently succeeded, exit 0, with all expected results and owned0. No external model call."
+  ],
+  "artifact_version_metadata": {
+    "SharpDeps.Query.dll": {
+      "productVersion": "1.0.0+27fba1e5631d0cb4d23522ef134705f6dd348c04",
+      "fileVersion": "1.0.0.0"
+    },
+    "SharpDeps.Mcp.dll": {
+      "productVersion": "0.5.0+27fba1e5631d0cb4d23522ef134705f6dd348c04",
+      "fileVersion": "0.5.0.0"
+    }
+  },
+  "boundary_representation_check": {
+    "observed": {
+      "codex": [
+        {
+          "case": "overview",
+          "representation": "content text",
+          "chars": 4019,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "evidence",
+          "representation": "content text",
+          "chars": 2871,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "guardMismatch",
+          "representation": "content text",
+          "chars": 1794,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "requireFresh",
+          "representation": "content text",
+          "chars": 1539,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        }
+      ],
+      "copilot": [
+        {
+          "case": "overview",
+          "representation": "content text",
+          "chars": 4019,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "evidence",
+          "representation": "content text",
+          "chars": 2871,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "guardMismatch",
+          "representation": "content text",
+          "chars": 1794,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "requireFresh",
+          "representation": "content text",
+          "chars": 1539,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        }
+      ],
+      "opencode": [
+        {
+          "case": "overview",
+          "representation": "content text",
+          "chars": 4019,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "evidence",
+          "representation": "content text",
+          "chars": 2871,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "guardMismatch",
+          "representation": "tool.execution JSON",
+          "chars": 1792,
+          "ends_crlf": false,
+          "exact_equal_codex": false,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 2
+        },
+        {
+          "case": "requireFresh",
+          "representation": "tool.execution JSON",
+          "chars": 1537,
+          "ends_crlf": false,
+          "exact_equal_codex": false,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 2
+        }
+      ],
+      "claude": [
+        {
+          "case": "overview",
+          "representation": "content text",
+          "chars": 4019,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "evidence",
+          "representation": "content text",
+          "chars": 2871,
+          "ends_crlf": true,
+          "exact_equal_codex": true,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 0
+        },
+        {
+          "case": "guardMismatch",
+          "representation": "content text",
+          "chars": 1792,
+          "ends_crlf": false,
+          "exact_equal_codex": false,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 2
+        },
+        {
+          "case": "requireFresh",
+          "representation": "content text",
+          "chars": 1537,
+          "ends_crlf": false,
+          "exact_equal_codex": false,
+          "equal_after_terminal_newline_normalization": true,
+          "codex_chars_minus_actual": 2
+        }
+      ]
+    },
+    "source_current_match": {
+      "analyzer/src/SharpDeps.Mcp/McpQueryAdapter.cs": true,
+      "analyzer/src/SharpDeps.Mcp/Program.cs": true,
+      "analyzer/src/SharpDeps.Mcp/McpAgentGuidance.cs": true,
+      "analyzer/src/SharpDeps.Query/ExplorationService.cs": true,
+      "analyzer/src/SharpDeps.Query/ExplorationDiscovery.cs": true,
+      "analyzer/src/SharpDeps.Query/ExplorationEvidenceRef.cs": true,
+      "analyzer/src/SharpDeps.Query/ExploreRequest.cs": true,
+      "analyzer/tests/SharpDeps.Mcp.Tests/McpTests.cs": true,
+      "analyzer/tests/SharpDeps.Mcp.Tests/McpFlowTests.cs": true,
+      "analyzer/tests/SharpDeps.Query.Tests/ExplorationTests.cs": true
+    }
+  },
+  "source_hash_current_repo_verified": true,
+  "source_git_blobs": {
+    "analyzer/src/SharpDeps.Mcp/McpQueryAdapter.cs": "74478afe57fffb1460bf7ef79eea2072838ea5d5",
+    "analyzer/src/SharpDeps.Mcp/Program.cs": "4492fa1ec7a034eed36ceb68c50c6ea7dbb8602a",
+    "analyzer/src/SharpDeps.Mcp/McpAgentGuidance.cs": "da25968ccf5f0eb2f3d0058f6eb36511de8a9243",
+    "analyzer/src/SharpDeps.Query/ExplorationService.cs": "a076da93198203d0499a26fa7ae3a84377cbb19a",
+    "analyzer/src/SharpDeps.Query/ExplorationDiscovery.cs": "561724044b7382c0d69812af38cc59f90822ca4a",
+    "analyzer/src/SharpDeps.Query/ExplorationEvidenceRef.cs": "5d7c6c3aea8df862c5c2ee0466e71a85f20458cf",
+    "analyzer/src/SharpDeps.Query/ExploreRequest.cs": "a3451a82357ab433fac09203855ce49d46d7d9e4",
+    "analyzer/tests/SharpDeps.Mcp.Tests/McpTests.cs": "3efdf72d3ef9dec6981fff6dd2fe4dafa74d9a25",
+    "analyzer/tests/SharpDeps.Mcp.Tests/McpFlowTests.cs": "65f4c095b153b272edd1d6b24393279d222920dd",
+    "analyzer/tests/SharpDeps.Query.Tests/ExplorationTests.cs": "09892555b01e5e6ed4133d69b4d5bce245dd69da"
+  },
+  "source_sha256_basis": "Exact tested Windows working-tree bytes; Git blob IDs below account for repository line-ending normalization."
+}

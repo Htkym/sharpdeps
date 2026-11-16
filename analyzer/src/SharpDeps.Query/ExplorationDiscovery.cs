@@ -49,6 +49,49 @@ public sealed partial class ExplorationService
             return "source-unavailable";
         }
 
+        private bool requestedTypeMemberFallback;
+
+        private void AppendTypeMemberFallback(StringBuilder text, IReadOnlyList<Pending> omitted)
+        {
+            if (requestedTypeMemberFallback && omitted.Any(item => item.Reason == "budget"
+                && item.Selection.Node.Kind == HarnessNodeKind.Type && roots.Any(root => root.Identity == item.Selection.Identity)))
+                text.AppendLine("Requested type body remains omitted by budget; any returned member ranges are partial evidence for that selection, not the complete type. Evidence refs still bind the type's full saved declaration set.");
+        }
+
+        private void ReadRequestedTypeMemberFallback()
+        {
+            // Only budget-omitted requested type declarations may admit their own contained members.
+            // No related types, owner widening, extra budget or relaxed source validation.
+            var parents = pending.Where(item => item.Reason == "budget" && item.Selection.Node.Kind == HarnessNodeKind.Type
+                && roots.Any(root => root.Identity == item.Selection.Identity)
+                && item.Selection.Occurrence?.VariantId == variant && owner.Project(item.Selection.Node) == project
+                && item.Location.RawSpan is { Length: > 0 }).ToArray();
+            if (parents.Length == 0) return;
+            foreach (var member in selected.Values.Where(item => item.Node.Kind == HarnessNodeKind.Member
+                && item.Occurrence?.VariantId == variant && owner.Project(item.Node) == project)
+                .OrderBy(item => item.Identity, StringComparer.Ordinal).ToArray())
+            {
+                Check();
+                var declarations = member.Occurrence!.Declarations ?? (member.Occurrence.Location is { } location ? [location] : []);
+                foreach (var declaration in declarations.Distinct().Where(PathAllowed))
+                {
+                    Check();
+                    if (declaration.RawSpan is not { Length: > 0 } span || !parents.Any(parent =>
+                        parent.Selection.Node.Id == member.Node.ParentId
+                        && parent.Location.SourceId == declaration.SourceId && parent.Location.ContentHash == declaration.ContentHash
+                        && span.Start >= parent.Location.RawSpan!.Value.Start && span.End <= parent.Location.RawSpan.Value.End)) continue;
+                    var existing = pending.FirstOrDefault(item => item.Selection.Identity == member.Identity && item.Location == declaration);
+                    if (existing is not null && existing.Reason is not ("budget" or "response-mode:evidence")) continue;
+                    if (existing is null && allCandidates.Any(item => item.Selection.Identity == member.Identity && item.Location == declaration)) continue;
+                    var candidate = new Pending(member with { IncludeSource = true }, declaration, "budget", SourcePriority: 3);
+                    if (existing is not null) Replace(existing, candidate);
+                    else { pending.Add(candidate); allCandidates.Add(candidate); }
+                    requestedTypeMemberFallback = true;
+                    ReadCandidate(candidate, failedFiles);
+                }
+            }
+        }
+
         private void PrepareMemberFallback()
         {
             var omittedTypes = pending.Where(item => item.Reason == "budget" && item.Selection.Node.Kind == HarnessNodeKind.Type)
@@ -211,6 +254,8 @@ public sealed partial class ExplorationService
 
         private ExploreReply FinishDiscovery()
         {
+            foreach (var group in discoveryGroups!)
+                group.showCandidateLocations = request.Format == ExploreFormat.Agent && group.responseMode != ExploreResponseMode.Overview && group.symbolChoices.Count > 0;
             if (Errors.Count != 0)
                 foreach (var group in discoveryGroups!)
                     group.Units.Clear();
@@ -233,6 +278,11 @@ public sealed partial class ExplorationService
                         Outcome = AggregateDiscoveryOutcome(Errors.Count != 0, returned.Length,
                         groups.Select(group => group.Outcome(group.Units, group.pending)))
                     };
+                }
+                if (discoveryGroups!.Any(group => group.showCandidateLocations))
+                {
+                    foreach (var group in discoveryGroups) group.showCandidateLocations = false;
+                    continue;
                 }
                 reasons.Add("OUTPUT_LIMIT");
                 var optional = discoveryGroups!.LastOrDefault(group => group.relationDisplayLimit > 0 || group.omissionDisplayLimit > 0);

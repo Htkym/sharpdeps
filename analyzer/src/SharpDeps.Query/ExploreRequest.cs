@@ -39,6 +39,10 @@ public sealed record ExploreRequest(string Query, string? ProjectId = null, stri
     public int PrepareMaxMilliseconds { get; init; } = 30000;
     public bool ObserveOwner { get; init; }
     public ExploreResponseMode? ResponseMode { get; init; }
+    /// <summary>Optional saved-selection guard, not authorization or proof of body possession.</summary>
+    public string? EvidenceRef { get; init; }
+    /// <summary>Opt in to bounded references for saved code occurrences; does not read or omit bodies.</summary>
+    public bool IncludeEvidenceRefs { get; init; }
     public ExploreQueryKind QueryKind { get; init; }
 }
 

@@ -1,0 +1,183 @@
+{
+  "scope": "Deterministic follow-up only: short-type exact candidates and agent-overview pointer/symbol consolidation. No new AI calls; historical paid datasets unchanged.",
+  "source_sha256": {
+    "analyzer/src/SharpDeps.Query/ExplorationService.cs": "1c199807219eda15dcab522a3be29d47b7a422743c7ebf762801e9ee9ea6facd",
+    "analyzer/tests/SharpDeps.Query.Tests/ExplorationTests.cs": "875a04869870876f17d38fcfeb7a8284caf83525e34b88cf0eb7fa27af4e92a0"
+  },
+  "type_alias_fix": {
+    "behavior": "Use existing prepared Type SimpleName/BaseName aliases as case-sensitive exact candidates alongside exact Member matches. Preserve ambiguity and scope; no unconditional type preference, new index or whole-graph scan.",
+    "comparison_baseline": "07859f1 candidate artifact; type-only revision",
+    "saved_query_calls": 19,
+    "identical_text_results": 18,
+    "changed_case": {
+      "query": "PlacementStrategy",
+      "before_utf8_bytes": 5927,
+      "after_utf8_bytes": 5710,
+      "change": "Core.Abstractions ambiguous candidates 2 to 3, including the previously hidden type. Display budget retains two rows, so one previously displayed property is now explicitly omitted. Core source line and independent Runtime group remain unchanged.",
+      "lossless_candidate_selection_claim": false
+    },
+    "old_14_calls_identical": true
+  },
+  "overview_consolidation": {
+    "scope": "Agent effective overview only, roots with valid saved pointers. Audit/evidence/detail/omitted behavior unchanged. Ambiguous-only root-zero overview retains its prior ordering.",
+    "behavior": "Keep Saved pointer prefix, selector, path, hash and rawSpan; move matching alias/label/signature/selection into that row once, including for multiple declaration locations. Related metadata is not deferred or deleted.",
+    "plain_text_format_changed": true,
+    "external_plain_text_parser_compatibility_guaranteed": false,
+    "comparison_baseline": "Separately preserved type-only revision, not historical main output",
+    "saved_query_calls": 19,
+    "identical_text_results": 12,
+    "changed_text_results": 7,
+    "old_14_utf8_bytes": {
+      "before": 115559,
+      "after": 115159
+    },
+    "natural_5_utf8_bytes": {
+      "before": 38510,
+      "after": 38151
+    },
+    "root_candidate_counts_equal": true,
+    "prior_pointer_selector_scope_hash_span_and_symbol_information_preserved": true,
+    "numbered_source_ranges_and_text_equal": true,
+    "diagnostics_status_and_outcomes_equal": true,
+    "inverse_check": "Undo merged rows, then compare line multisets. The only removed old line is the updated relation-omission counter; all other old lines remain. Ordering is not restored byte-for-byte.",
+    "changed_cases": [
+      {
+        "query": "RelationalCommandCache",
+        "input_cohort": "old",
+        "saved_run": "ef-cache-main",
+        "ordinal": 27,
+        "before_utf8_bytes": 4133,
+        "after_utf8_bytes": 4053
+      },
+      {
+        "query": "StateStorageBridge",
+        "input_cohort": "old",
+        "saved_run": "orl-state-candidate",
+        "ordinal": 9,
+        "before_utf8_bytes": 3856,
+        "after_utf8_bytes": 3776
+      },
+      {
+        "query": "AddGrainStorage",
+        "input_cohort": "old",
+        "saved_run": "orl-state-main",
+        "ordinal": 20,
+        "before_utf8_bytes": 4083,
+        "after_utf8_bytes": 4003
+      },
+      {
+        "query": "IDispatcher",
+        "input_cohort": "old",
+        "saved_run": "t1-candidate",
+        "ordinal": 11,
+        "before_utf8_bytes": 3419,
+        "after_utf8_bytes": 3339
+      },
+      {
+        "query": "IDispatcher",
+        "input_cohort": "old",
+        "saved_run": "t1-main",
+        "ordinal": 20,
+        "before_utf8_bytes": 3419,
+        "after_utf8_bytes": 3339
+      },
+      {
+        "query": "Detect",
+        "input_cohort": "natural",
+        "saved_run": "nh-05-candidate",
+        "ordinal": 2,
+        "before_utf8_bytes": 12135,
+        "after_utf8_bytes": 11655
+      },
+      {
+        "query": "Detect",
+        "input_cohort": "natural",
+        "saved_run": "nh-05-main",
+        "ordinal": 2,
+        "before_utf8_bytes": 11534,
+        "after_utf8_bytes": 11655
+      }
+    ],
+    "bytes_increase_case": {
+      "saved_run": "nh-05-main",
+      "increase_utf8_bytes": 121,
+      "extra_information": [
+        "AddEntityFrameworkSqlEngine typeUse relation to SqlServerExceptionDetector",
+        "SqlServerExceptionDetector implements relation to IExceptionDetector",
+        "Two related symbol aliases and two file rows"
+      ],
+      "relation_omissions_before": 31,
+      "relation_omissions_after": 29,
+      "root_and_source_omission_counts_unchanged": true
+    },
+    "monotonic_byte_reduction_guaranteed": false
+  },
+  "verification": {
+    "full_mcp_release_build": {
+      "exit_code": 0,
+      "warnings": 0,
+      "errors": 0
+    },
+    "tests": {
+      "ExplorationTests": 147,
+      "McpTests_and_McpFlowTests": 28,
+      "failures": 0
+    },
+    "full_build_vs_isolated_final": {
+      "calls": 19,
+      "arguments_and_full_result_objects_equal_to_isolated_final": true,
+      "owned_remaining": 0,
+      "model_calls": 0
+    },
+    "final_full_build_artifact_sha256": {
+      "SharpDeps.Mcp.dll": "e2b14c8f6acb3616dbb1d25bff27bf8c9952042f34eeab9b6f4c018281c6641e",
+      "SharpDeps.Query.dll": "be1af3e424062564c17e297c4843f4650ec288d23b258c300621f8bf60751813",
+      "SharpDeps.Cli.dll": "cbe1d6c525a166a1b90d27cbf925c029811b0571d541f319eb3ccb6965bc6eba"
+    },
+    "independent_review": "PASS: source review plus independent inverse comparison of 19 saved pairs",
+    "excluded_attempt": "Replay after a failed concurrent CLI build used an older DLL and is retained separately, excluded from final evidence."
+  },
+  "evidence_sha256": {
+    "type_only_summary": "d337d53d81312dc44ecedec8af04a87da2e93401e005f7273aac78e15683b00b",
+    "metadata_summary": "dc61bf69fc15838b34527780caaef8c31682d825ad4e731d514a8027f209d43f",
+    "metadata_information_check": "55ab5d2504ab5a7ee05f2dfcb64540db8706920b1b6889da62c59a7e41cb181b",
+    "independent_code_review": "289b25d3f023fbde4f10dc4c2dc83cc8908c3aaeb591c860b29738b226de2bc5",
+    "full_build_summary": "a8dee615a2c569845263f3e61073fce8f9283e0038d404d7069b2196f3d7ab13",
+    "full_build_verification": "9ed0fda4124324a58b0bdd470d4ec399631459191ad5443cadbe90ffadcdcf10"
+  },
+  "limitations": [
+    "No new model quality, natural adoption, token, cache, cost or latency measurement for these changes.",
+    "Saved-query replay fixes arguments and does not predict later model tool choices.",
+    "No new four-host native acceptance is claimed by this Query/MCP replay.",
+    "Build hashes identify the tested revision; later packaging changes require their own build evidence.",
+    "No release approval is implied."
+  ],
+  "final_default_build_refresh": {
+    "configuration": "CLI and MCP project default false; no override supplied",
+    "build": {
+      "exit_code": 0,
+      "warnings": 0,
+      "errors": 0
+    },
+    "tests": {
+      "ExplorationTests": 147,
+      "McpTests_and_McpFlowTests": 28,
+      "failures": 0
+    },
+    "cli_tests": "47 passed by separate packaging worker; not repeated in this refresh",
+    "replay": {
+      "calls": 19,
+      "arguments_and_full_result_objects_equal_to_previous_full_build": true,
+      "owned_remaining": 0,
+      "model_calls": 0
+    },
+    "artifact_sha256": {
+      "SharpDeps.Mcp.dll": "81f1a3879aeb5d1ccfe54fb6f03e680ef2a0160ebeea54a7c105f37dc0f3f3e3",
+      "SharpDeps.Query.dll": "be1af3e424062564c17e297c4843f4650ec288d23b258c300621f8bf60751813",
+      "SharpDeps.Cli.dll": "afcae366a16793d7b9415c596079a22a0591f61ab4967230c361c7dd17fd7fa8"
+    },
+    "verification_sha256": "66ad8435fb3f2fdc3d4d9b3b86462e19a10efbf389dbbcdccf1587028c6c8f86",
+    "summary_sha256": "c6f81a0f400c79e76ce6090bae88c8f18bcbb915eb045762b2e8298735b46c1d",
+    "previous_evidence_retained": true
+  }
+}

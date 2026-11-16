@@ -1,0 +1,92 @@
+{
+  "scope": "Agent ambiguous-candidate saved-location display, non-Overview only. Additive deterministic verification, not a cost-reduction or model-quality claim.",
+  "comparison_baseline_commit": "0ca038129e915e825b6ffb45deba652a5496eb76",
+  "source_sha256": {
+    "analyzer/src/SharpDeps.Query/ExplorationService.cs": "414982dbb45e71ef9bd13d0d49670917720bcbcdadc8765d9019f5b23839b398",
+    "analyzer/src/SharpDeps.Query/ExplorationDiscovery.cs": "69fe387b70022ea435646f64e8d28c1c371fb01a40af729b2469a6bbf7b7434b",
+    "analyzer/tests/SharpDeps.Query.Tests/ExplorationTests.cs": "b0a407e466f1bf5933e7a0de4e972cb73d7742f2faac8735df8224fe4de2d3d6"
+  },
+  "artifact_sha256": {
+    "SharpDeps.Mcp.dll": "fe595bc26af5c9b39562b37682b8a5925e145b8268b1a5b496988ffd0d985441",
+    "SharpDeps.Query.dll": "ba94943569263353e83ecd28135dba3a2fe37b620729d7f79640da4db9411761"
+  },
+  "release_build": "success; zero warnings/errors; artifacts copied only after successful exit",
+  "exploration_tests": {
+    "passed": 151,
+    "failed": 0,
+    "scope": "existing 147 plus unique/discover tight-budget cases and absent-location/missing-source-ID cases"
+  },
+  "replay": {
+    "calls": 21,
+    "same_arguments": true,
+    "byte_identical_results": 18,
+    "all_original_result_objects_equal_after_new_suffix_inverse": true,
+    "changes": [
+      {
+        "cohort": "natural",
+        "case": "nh-04-main",
+        "ordinal": 1,
+        "before_utf8_bytes": 5710,
+        "after_utf8_bytes": 6260
+      },
+      {
+        "cohort": "current",
+        "case": "nh-04-candidate-off",
+        "ordinal": 1,
+        "before_utf8_bytes": 6446,
+        "after_utf8_bytes": 6996
+      },
+      {
+        "cohort": "current",
+        "case": "nh-04-candidate-on",
+        "ordinal": 1,
+        "before_utf8_bytes": 6446,
+        "after_utf8_bytes": 6996
+      }
+    ],
+    "new_errors": 0,
+    "existing_no_match_error_preserved": true,
+    "overview_new_suffix_rows": 0,
+    "owned_remaining": 0,
+    "model_calls": 0
+  },
+  "semantics": [
+    "Ranking, roots, candidate ID order, source bodies, signatures, scope, diagnostics, freshness, outcome and existing omissions are unchanged in these saved calls.",
+    "Saved relative paths and UTF-16 savedRawSpan(start,length) are not line ranges or proof of current/active source. No extra source read or freshness guarantee is introduced.",
+    "Overview retains its existing Saved pointer location metadata without new duplicate suffixes.",
+    "Candidate metadata is enabled only in final rendering; if it exceeds existing wire budgets it is discarded before existing information or OUTPUT_LIMIT is affected.",
+    "Multiple locations are bounded by the existing detail quota and have explicit locationsOmitted. An absent saved location is shown as unknown; corrupt missing source IDs are rejected by index validation.",
+    "Candidate Files-alias reuse was removed because ambiguous groups do not reach source planning and no legitimate positive case was found. Existing Files behavior is untouched."
+  ],
+  "limits": [
+    "Actual AI comparison evaluated 0ca0381, not this later display addition. Adoption, answer quality, total/cached tokens and costs for this change are unmeasured.",
+    "No new four-host native acceptance is claimed. Byte counts can increase; plain-text row additions may affect external parsers.",
+    "One unrelated limited C# test may have overlapped replay. No latency/performance claim; inverse comparison shows no new timeout, budget or other status difference. No repeat was performed."
+  ],
+  "evidence_sha256": {
+    "verification": "3c2b44442ab5ec3b00deb0a1608f41a323c96107f776bb818a1c74304f995d5b",
+    "query_test_log": "c315ddfcf5779a908dac598cafbd03e9c5b5a00107b8f454798780c0844f294a",
+    "build_log": "e748e51c1efba8b2615058fa4fc05f3f3efaa186e8c8c48990a8d153952904a1"
+  },
+  "additional_saved_condition": {
+    "arguments": {
+      "query": "AutoDetectChangesEnabled",
+      "responseMode": "evidence",
+      "format": "agent"
+    },
+    "saved_paid_occurrences": 2,
+    "distinct_conditions": 1,
+    "before_bytes": 2920,
+    "after_bytes": 3187,
+    "added_candidate_rows": 2,
+    "inverse_result_equal": true,
+    "before_is_error": false,
+    "after_is_error": false,
+    "owned_remaining": 0,
+    "model_calls": 0,
+    "baseline_mcp_sha256": "a45bc7ea669a75fbaf9f289654ef71ee4c6835fa39924bd241ad90feadf7fcac",
+    "new_mcp_sha256": "fe595bc26af5c9b39562b37682b8a5925e145b8268b1a5b496988ffd0d985441",
+    "evidence_sha256": "7494f3a7ae4da1be5386e3ea87e5319cff682a0b19586125153cefa2a728f08b",
+    "note": "Separate from the original 21 replay calls; one distinct args condition represents two saved paid calls (OFF/ON). No new AI execution."
+  }
+}

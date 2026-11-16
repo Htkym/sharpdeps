@@ -1,9 +1,9 @@
 # Release preparation
 
-This document describes the release inputs and procedure for version 0.4.0.
+This document describes the release inputs and procedure for the unreleased 0.5.0 candidate.
 Check NuGet, Visual Studio Marketplace and GitHub Releases for the versions
 actually available. Earlier changelog entries remain historical records.
-Open VSX is excluded from the 0.4.0 publication target.
+Open VSX is excluded from the 0.5.0 publication target.
 
 ## Choose the outputs
 
@@ -16,7 +16,7 @@ publication channels:
 | `nuget-and-marketplace` | Yes | Yes | Yes | No |
 | `all` | Yes | Yes | Yes | Yes |
 
-The 0.4.0 target is `nuget-and-marketplace`. Open VSX requires a separate explicit
+The 0.5.0 target is `nuget-and-marketplace`. Open VSX requires a separate explicit
 publication decision; its credential being present does not select that channel.
 The workflow requires the credentials for the selected marketplaces before it
 builds or publishes. This preflight checks their presence; publication still
@@ -28,9 +28,9 @@ also attach `sharpdeps-<version>.vsix` and its `.sha256` file. The NuGet job use
 the same verified tool packages preserved by the release job.
 
 The extension includes its own Quick, Semantic, and saved-index Query hosts.
-Updating a NuGet tool does not update those bundled hosts. The 0.4.0 reader accepts
+Updating a NuGet tool does not update those bundled hosts. The 0.5.0 candidate reader accepts
 SQLite index schemas 1/2/3; the 0.2.1 extension accepts schema 1 only. The published 0.4.0 CLI/MCP tools pin Syntamark 1.2.0; the unreleased source
-now selects 2.0.0. Neither is bundled in the VSIX. Review the [upgrade instructions](../docs/mcp.md#upgrade-from-030)
+for 0.5.0 selects 2.0.0. Neither is bundled in the VSIX. Review the [upgrade instructions](../docs/mcp.md#upgrade-from-040)
 and [extension setup](../docs/guide.md#read-a-saved-index) with the release notes.
 
 ## Prepare and verify a candidate
@@ -45,7 +45,7 @@ With the repository dependencies installed, validate the definitions locally:
 
 ```bash
 npm run check:release
-node scripts/check-release.js --tag v0.4.0
+node scripts/check-release.js --tag v0.5.0
 ```
 
 The `--tag` argument checks the version string and stable Syntamark pair locally;
@@ -68,6 +68,19 @@ Keep each candidate's version, source commit, identity report, and checksums
 together; retain earlier candidates and proof records when rebuilding.
 
 ## Publish from reviewed main
+
+Publication remains paused pending the owner's explicit decision after reviewing the
+comparison results. Candidate CI, local acceptance, and this document are not publication
+authorization. Keep the [limited real-AI observations](host-neutral-evidence/README.md)
+separate from host compatibility and package acceptance. Experimental request-context
+reuse remains opt-in; the latest four-session comparison disabled it.
+
+Record the final MCP package and assembly hashes for no-AI acceptance in Codex,
+Copilot, Claude Code, and OpenCode. Four OpenCode comparison sessions are not four-host
+acceptance. Retain each host's actual verification scope and any unavailable native
+behavior; do not infer equivalent model-facing delivery or natural adoption. If
+only documentation changes after acceptance, verify the product source blobs and
+package provenance rather than silently treating a different binary as tested.
 
 Merge the reviewed release-preparation PR and require the latest normal `ci.yml`
 push run for that exact current `main` commit to succeed. The release tag must be

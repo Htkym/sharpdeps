@@ -2,6 +2,8 @@
 
 This directory contains an experimental, explicitly opt-in OpenCode host adapter and its pure transformer. It is not bundled in the VSIX or MCP package and is not enabled by SharpDeps or any global host configuration. The Node-only tests run in CI without a provider call or new SDK dependency. The native entry uses the host-provided OpenCode plugin SDK.
 
+For the shared standard-MCP retrieval path, see [host-neutral evidence and re-fetch](../../docs/mcp.md#host-neutral-selective-evidence-and-re-fetch). This HTTP experiment is not required for that path and is not evidence of Codex, Copilot or Claude Code support.
+
 ## Boundary
 
 `transformResponsesRequest(request, options)` accepts a complete, plain-JSON OpenAI Responses request object. It returns the **same object** unless all gates pass. Options must explicitly contain `enabled: true`, `provider: "openai"`, `api: "responses"`, and a nonempty exact `toolNames` allowlist.
