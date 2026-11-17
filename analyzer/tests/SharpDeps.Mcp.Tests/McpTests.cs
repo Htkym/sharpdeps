@@ -127,7 +127,7 @@ public sealed class McpTests
         Assert.Contains("Empty text requires explicit queryKind=http-get-literal", schema.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
         var modes = schema.GetProperty("properties").GetProperty("responseMode");
         Assert.Equal(new[] { "overview", "evidence", "detail" }, modes.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
-        Assert.False(modes.TryGetProperty("default", out _));
+        Assert.Equal("evidence", modes.GetProperty("default").GetString());
         Assert.False(schema.GetProperty("properties").GetProperty("includeEvidenceRefs").GetProperty("default").GetBoolean());
         Assert.Equal(47, schema.GetProperty("properties").GetProperty("evidenceRef").GetProperty("maxLength").GetInt32());
 

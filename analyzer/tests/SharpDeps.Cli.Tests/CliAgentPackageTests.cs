@@ -1,6 +1,8 @@
 namespace SharpDeps.Cli.Tests;
 
 using System.Text;
+using System.Text.Json;
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using SharpDeps.Cli;
 using Xunit;
@@ -22,10 +24,14 @@ public sealed class CliAgentPackageTests
             Assert.DoesNotContain(preview.Files.Keys, path => path.StartsWith("skills/", StringComparison.Ordinal));
         else Assert.Contains("skills/sharpdeps-routing/SKILL.md", preview.Files.Keys);
         Assert.DoesNotContain(preview.Files.Keys, path => path is "mcp.json" or ".mcp.json");
-        Assert.Contains("before reconstructing", preview.Files["routing.md"]);
+        Assert.Contains("Use the smallest evidence source", preview.Files["routing.md"]);
         Assert.Contains("user opt-out", preview.Files["routing.md"]);
-        Assert.Contains("A known file does not remove the need", preview.Files["routing.md"]);
-        Assert.Contains("advertised tool schema supports responseMode=evidence", preview.Files["routing.md"]);
+        Assert.Contains("including across files", preview.Files["routing.md"]);
+        Assert.Contains("For an unfamiliar broad type/file, prefer overview", preview.Files["routing.md"]);
+        Assert.Contains("for a known needed member or selector, use evidence directly", preview.Files["routing.md"]);
+        Assert.Contains("Do not require an extra overview", preview.Files["routing.md"]);
+        Assert.Contains("state decisive branch conditions", preview.Files["routing.md"]);
+        Assert.Contains("advertised schema supports responseMode=evidence", preview.Files["routing.md"]);
         Assert.DoesNotContain("the file/location is known", preview.Files["routing.md"]);
         Assert.DoesNotContain("AGENTS.md", preview.Files.Keys);
         var exported = CliAgentPackage.Run(f.Options(client));
@@ -48,6 +54,28 @@ public sealed class CliAgentPackageTests
             Assert.Equal(Path.Combine(f.Output, "routing.md"), (string?)json["instructions"]![0]);
             Assert.Single(json["instructions"]!.AsArray());
         }
+    }
+
+    [Theory]
+    [InlineData("portable")]
+    [InlineData("claude-code")]
+    public void RoutingV2SkillFrontmatterHasSafePlainScalarDescription(string client)
+    {
+        using var f = new Fixture();
+        var result = CliAgentPackage.Run(f.Options(client, "--dry-run"));
+        var skill = result.Files["skills/sharpdeps-routing/SKILL.md"];
+        var lines = skill.Split('\n');
+        Assert.Equal("---", lines[0]);
+        Assert.Equal("name: sharpdeps-routing", lines[1]);
+        Assert.Equal("---", lines[3]);
+        Assert.StartsWith("description: ", lines[2]);
+        var description = lines[2]["description: ".Length..];
+        Assert.StartsWith("Use the smallest sufficient evidence with direct reads", description);
+        // YAML plain scalars must not introduce a nested mapping or comment.
+        Assert.DoesNotContain(": ", description);
+        Assert.DoesNotContain(" #", description);
+        Assert.DoesNotContain('\r', description);
+        Assert.Equal(skill, CliAgentPackage.Run(f.Options(client)).Files["skills/sharpdeps-routing/SKILL.md"]);
     }
 
     [Theory]
@@ -114,6 +142,7 @@ public sealed class CliAgentPackageTests
     [InlineData("extra-directory")]
     [InlineData("missing")]
     [InlineData("unknown-receipt")]
+    [InlineData("unknown-guidance")]
     public void ModifiedOrForeignPackageIsNeverOverwrittenOrRemoved(string change)
     {
         using var f = new Fixture();
@@ -126,6 +155,11 @@ public sealed class CliAgentPackageTests
         {
             var p = Path.Combine(f.Output, "sharpdeps-package.json");
             File.WriteAllText(p, File.ReadAllText(p).Replace("sharpdeps-agent-package/v1", "sharpdeps-agent-package/v99"));
+        }
+        if (change == "unknown-guidance")
+        {
+            var p = Path.Combine(f.Output, "sharpdeps-package.json");
+            File.WriteAllText(p, File.ReadAllText(p).Replace("routing-v2", "routing-v99"));
         }
         Assert.Throws<CliFailure>(() => CliAgentPackage.Run(f.Options("portable")));
         Assert.Throws<CliFailure>(() => CliAgentPackage.Run(f.Remove()));
@@ -268,6 +302,65 @@ public sealed class CliAgentPackageTests
         Assert.Equal("explicit-uninstalled-tool.exe", (string?)JsonNode.Parse(result.Files["mcp.json"])!["mcpServers"]!["sharpdeps"]!["command"]);
         Assert.Equal("unchanged", CliAgentPackage.Run(f.Options("portable", "--mcp-command", "explicit-uninstalled-tool.exe")).Status);
         Assert.Equal("removed", CliAgentPackage.Run(f.Remove()).Status);
+    }
+
+    [Theory]
+    [InlineData("portable")]
+    [InlineData("claude-code")]
+    [InlineData("opencode-v2")]
+    public void RoutingV1RemainsImmutableAndRequiresExplicitRemoveThenExport(string client)
+    {
+        using var f = new Fixture();
+        var previous = WriteRoutingV1(f, client);
+        Assert.Throws<CliFailure>(() => CliAgentPackage.Run(f.Options(client)));
+        Assert.All(previous, item => Assert.Equal(item.Value, File.ReadAllText(Path.Combine(f.Output, item.Key))));
+        var preview = CliAgentPackage.Run(f.Remove("--dry-run"));
+        Assert.Equal("preview", preview.Status);
+        Assert.All(previous, item => Assert.Equal(item.Value, preview.Files[item.Key]));
+        var removed = CliAgentPackage.Run(f.Remove());
+        Assert.Equal("removed", removed.Status);
+        var backup = Assert.Single(removed.RetainedPaths);
+        Assert.All(previous, item => Assert.Equal(item.Value, File.ReadAllText(Path.Combine(backup, item.Key))));
+        var current = CliAgentPackage.Run(f.Options(client));
+        Assert.Equal("exported", current.Status);
+        Assert.Equal("routing-v2", (string?)JsonNode.Parse(current.Files["sharpdeps-package.json"])!["registration"]!["guidanceVersion"]);
+        Assert.Contains("including across files", current.Files["routing.md"]);
+        Assert.All(previous, item => Assert.Equal(item.Value, File.ReadAllText(Path.Combine(backup, item.Key))));
+    }
+
+    [Theory]
+    [InlineData("portable")]
+    [InlineData("claude-code")]
+    [InlineData("opencode-v2")]
+    public void UserEditsToRoutingV1AreNotRemovedOrOverwritten(string client)
+    {
+        using var f = new Fixture();
+        WriteRoutingV1(f, client);
+        var path = Path.Combine(f.Output, "routing.md");
+        File.AppendAllText(path, "Owner: keep my routing changes.\n");
+        var modified = File.ReadAllBytes(path);
+        Assert.Throws<CliFailure>(() => CliAgentPackage.Run(f.Options(client)));
+        Assert.Throws<CliFailure>(() => CliAgentPackage.Run(f.Remove()));
+        Assert.Equal(modified, File.ReadAllBytes(path));
+    }
+
+    private static Dictionary<string, string> WriteRoutingV1(Fixture f, string client)
+    {
+        // Pin the historical bytes independently: v1 must never silently follow the current routing.
+        Assert.Equal("78e38bc6f1c8b71bb4e8faeb58f625824057cbf085484533ffafe597601d4cb5",
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(CliAgentPackage.RoutingV1))).ToLowerInvariant());
+        var current = CliAgentPackage.Run(f.Options(client));
+        var files = current.Files.ToDictionary(item => item.Key, item => item.Value);
+        files["routing.md"] = CliAgentPackage.RoutingV1 + "\n";
+        if (client != "opencode-v2")
+            files["skills/sharpdeps-routing/SKILL.md"] = "---\nname: sharpdeps-routing\ndescription: Resolve missing indexed .NET caller, callee, implementation and cross-project structure with focused SharpDeps evidence before broad structural text searches. Skip self-contained single-file/literal lookups, unavailable indexes and opt-out.\n---\n\n" + CliAgentPackage.RoutingV1 + "\n";
+        var receipt = JsonNode.Parse(files["sharpdeps-package.json"])!;
+        receipt["registration"]!["guidanceVersion"] = "routing-v1";
+        foreach (var (name, content) in files.Where(item => item.Key != "sharpdeps-package.json"))
+            receipt["sha256"]![name] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+        files["sharpdeps-package.json"] = receipt.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
+        foreach (var (name, content) in files) File.WriteAllText(Path.Combine(f.Output, name), content, new UTF8Encoding(false));
+        return files;
     }
 
     private sealed class Fixture : IDisposable

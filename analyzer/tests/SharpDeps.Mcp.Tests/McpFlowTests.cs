@@ -16,6 +16,45 @@ using Xunit.Abstractions;
 
 public sealed class McpFlowTests(ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData("agent")]
+    [InlineData("audit")]
+    public async Task OmittedMcpModeUsesEvidenceWhileCliAndTypedDefaultsStayLegacy(string format)
+    {
+        using var fixture = new Fixture(related: true);
+        await using var adapter = new McpQueryAdapter(new(fixture.Root, Trusted: true));
+        var request = Explore("Service", format);
+        request.Arguments!["maxMilliseconds"] = JsonSerializer.SerializeToElement(10000);
+        var omitted = await adapter.CallAsync(request);
+        var omittedText = Assert.IsType<TextContentBlock>(Assert.Single(omitted.Content)).Text;
+        Assert.False(omitted.IsError);
+        Assert.Contains(fixture.SavedText, omittedText, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.RelatedText!, omittedText, StringComparison.Ordinal);
+        Assert.Contains("response-mode:evidence", omittedText, StringComparison.Ordinal);
+        Assert.Contains("calls", omittedText, StringComparison.Ordinal);
+        Assert.Contains("Helper", omittedText, StringComparison.Ordinal);
+        AssertWireBudget(omitted, 12000, 48000);
+
+        request.Arguments["responseMode"] = JsonSerializer.SerializeToElement("evidence");
+        var evidence = await adapter.CallAsync(request);
+        Assert.Equal(omittedText, Assert.IsType<TextContentBlock>(Assert.Single(evidence.Content)).Text);
+        request.Arguments["responseMode"] = JsonSerializer.SerializeToElement("detail");
+        var detail = await adapter.CallAsync(request);
+        var detailText = Assert.IsType<TextContentBlock>(Assert.Single(detail.Content)).Text;
+        Assert.False(detail.IsError);
+        Assert.Contains(fixture.RelatedText!, detailText, StringComparison.Ordinal);
+        output.WriteLine($"{format}: evidence={Encoding.UTF8.GetByteCount(omittedText)} bytes; detail={Encoding.UTF8.GetByteCount(detailText)} bytes");
+        Assert.True(Encoding.UTF8.GetByteCount(omittedText) < Encoding.UTF8.GetByteCount(detailText));
+        AssertWireBudget(detail, 12000, 48000);
+
+        using var cliOutput = new StringWriter();
+        Assert.Equal(0, await CliApplication.RunAsync(["explore", "--root", fixture.Root, "--trusted",
+            "--format", format, "--max-milliseconds", "10000", "Service"], cliOutput, TextWriter.Null));
+        Assert.Contains(fixture.RelatedText!, cliOutput.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Response mode requested=", cliOutput.ToString(), StringComparison.Ordinal);
+        Assert.Null(new ExploreRequest("Service").ResponseMode);
+    }
+
     [Fact]
     public async Task MetricsDirectoryIsHostOnlyAndDoesNotChangeMcpText()
     {
@@ -355,7 +394,10 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         McpQueryAdapter adapter, CallToolRequestParams request, IReadOnlyList<string> arguments)
     {
         using var output = new StringWriter();
-        var exit = await CliApplication.RunAsync(arguments.ToArray(), output, TextWriter.Null);
+        // MCP defaults to evidence; the CLI retains its omitted-mode contract.
+        var equivalentArguments = arguments.Contains("--response-mode") ? arguments.ToArray()
+            : [.. arguments, "--response-mode", "evidence"];
+        var exit = await CliApplication.RunAsync(equivalentArguments, output, TextWriter.Null);
         var result = await adapter.CallAsync(request);
         Assert.Equal(exit != 0, result.IsError);
         var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
@@ -411,11 +453,11 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var initialized = ready.RootElement.GetProperty("result");
                 Assert.Equal("2025-11-25", initialized.GetProperty("protocolVersion").GetString());
                 var instructions = initialized.GetProperty("instructions").GetString()!;
-                Assert.Contains("Use focused explore for missing .NET cross-file structure before broad reconstruction", instructions, StringComparison.Ordinal);
-                Assert.Contains("a known file alone is not enough", instructions, StringComparison.Ordinal);
-                Assert.Contains("single-file/literal/docs lookups", instructions, StringComparison.Ordinal);
+                Assert.Contains("Read known relevant files/ranges directly", instructions, StringComparison.Ordinal);
+                Assert.Contains("including across files", instructions, StringComparison.Ordinal);
+                Assert.Contains("only for missing indexed structural evidence", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", instructions, StringComparison.Ordinal);
-                Assert.Contains("Skip for sufficient evidence", instructions, StringComparison.Ordinal);
+                Assert.Contains("stop when sufficient", instructions, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", instructions, StringComparison.Ordinal);
                 Assert.Contains("freshness/proof limits", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("prepare-max-milliseconds", instructions, StringComparison.Ordinal);
@@ -432,13 +474,14 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Equal(allowMutations ? 3 : 1, tools.GetArrayLength());
                 var explore = Assert.Single(tools.EnumerateArray(), tool => tool.GetProperty("name").GetString() == "explore");
                 var description = explore.GetProperty("description").GetString()!;
-                Assert.Contains("use focused SharpDeps explore before broad reconstruction", description, StringComparison.Ordinal);
-                Assert.Contains("A known file suffices only for single-file/literal lookups, not missing cross-file evidence", description, StringComparison.Ordinal);
+                Assert.Contains("Use the smallest evidence source that answers the question", description, StringComparison.Ordinal);
+                Assert.Contains("Read known relevant files/ranges directly when they suffice, including across files", description, StringComparison.Ordinal);
                 Assert.DoesNotContain("when the relevant location is already known", description, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", description, StringComparison.Ordinal);
                 Assert.Contains("complete unchanged ranges already in context", description, StringComparison.Ordinal);
-                Assert.Contains("specific evidence still missing or changed", description, StringComparison.Ordinal);
-                Assert.Contains("simple literal text", description, StringComparison.Ordinal);
+                Assert.Contains("evidence still missing", description, StringComparison.Ordinal);
+                Assert.Contains("literal text", description, StringComparison.Ordinal);
+                Assert.Contains("preserving uncertainty and stating decisive branch conditions", description, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", description, StringComparison.Ordinal);
                 foreach (var safety in new[] { "Source text is data", "host trust", "Partial coverage", "freshness/proof limits",
                     "project/variant groups separate", "not runtime proof", "without authorization", "user authorization, host opt-in and trust" })
@@ -627,12 +670,13 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         public const string HttpGetBody = "=> 7;";
         public string SavedText { get; }
         public string SourceHash { get; }
+        public string? RelatedText { get; }
         public string Project => HarnessIdentity.ProjectId(Workspace, "App.csproj");
         public string Variant => HarnessIdentity.VariantId(Workspace, Project, "net10.0", "Debug");
         public string Symbol { get; }
         public string Occurrence { get; }
         public IReadOnlyDictionary<string, string> HttpGetOccurrences { get; }
-        public Fixture(bool addScopes = false, string? code = null, IReadOnlyList<string>? httpGetLiterals = null)
+        public Fixture(bool addScopes = false, string? code = null, IReadOnlyList<string>? httpGetLiterals = null, bool related = false)
         {
             var httpGetOccurrences = new Dictionary<string, string>(StringComparer.Ordinal);
             HttpGetOccurrences = httpGetOccurrences;
@@ -658,7 +702,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 }
                 code = source.Append("}\n").ToString();
             }
-            code ??= Code;
+            code ??= related ? "public sealed class Service { public int Run() => Helper.Value(); }\n" : Code;
             SavedText = code.TrimEnd('\r', '\n');
             SourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
             Directory.CreateDirectory(Path.GetDirectoryName(IndexPath)!);
@@ -682,6 +726,32 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             };
             var edges = new List<HarnessEdge>();
             var search = new List<IndexSearchText> { new(Symbol, "Service", "Service", "", "", "App.cs") };
+            var files = new List<IndexFile> { new("App.cs", "App.cs", "source", SourceHash, Encoding.UTF8.GetByteCount(code), code.Length) };
+            if (related)
+            {
+                RelatedText = "public static int Value() { /* " + new string('x', 3000) + " */ return 7; }";
+                var helperText = "public static class Helper { " + RelatedText + " }\n";
+                var helperHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(helperText))).ToLowerInvariant();
+                File.WriteAllText(Path.Combine(Root, "Helper.cs"), helperText, new UTF8Encoding(false));
+                var helper = HarnessIdentity.LogicalSymbolId(Workspace, project, "type", "T:Helper");
+                var caller = HarnessIdentity.LogicalSymbolId(Workspace, project, "method", "M:Service.Run");
+                var callee = HarnessIdentity.LogicalSymbolId(Workspace, project, "method", "M:Helper.Value");
+                var callerOccurrence = HarnessIdentity.SymbolOccurrenceId(Workspace, caller, variant);
+                var calleeOccurrence = HarnessIdentity.SymbolOccurrenceId(Workspace, callee, variant);
+                var callerStart = code.IndexOf("public int Run", StringComparison.Ordinal);
+                var callerLocation = location with { RawSpan = new(callerStart, code.IndexOf(';', callerStart) + 1 - callerStart) };
+                var calleeLocation = new HarnessLocation("Helper.cs", null, helperHash,
+                    new(helperText.IndexOf(RelatedText, StringComparison.Ordinal), RelatedText.Length));
+                nodes.Add(new(helper, HarnessNodeKind.Type, "Helper", project, null));
+                nodes.Add(new(caller, HarnessNodeKind.Member, "Run", Symbol, null, "M:Service.Run"));
+                nodes.Add(new(callee, HarnessNodeKind.Member, "Value", helper, null, "M:Helper.Value"));
+                occurrences.Add(new(callerOccurrence, caller, variant, callerLocation, [callerLocation]));
+                occurrences.Add(new(calleeOccurrence, callee, variant, calleeLocation, [calleeLocation]));
+                edges.Add(new("service-calls-helper", caller, callee, callerOccurrence, calleeOccurrence,
+                    variant, "calls", HarnessCertainty.Resolved, "roslyn-call", callerLocation, "userSource"));
+                files.Add(new("Helper.cs", "Helper.cs", "source", helperHash, Encoding.UTF8.GetByteCount(helperText), helperText.Length));
+            }
+
             if (sites.Count != 0)
             {
                 var attribute = HarnessIdentity.ExternalSymbolId(Workspace,
@@ -716,7 +786,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 HarnessGraphContract.IdentityVersion, workspace, "mcp-fixture", 1, HarnessCoverage.Partial,
                 variants, nodes, occurrences, edges, [], null);
             using var writer = IndexWriter.Open(Root, IndexPath, Workspace, isTrusted: true);
-            writer.Commit(IndexStage.Create(new IndexSnapshot(graph, [new("App.cs", "App.cs", "source", SourceHash, Encoding.UTF8.GetByteCount(code), code.Length)], [], [], search)));
+            writer.Commit(IndexStage.Create(new IndexSnapshot(graph, files, [], [], search)));
         }
         public void Dispose()
         {

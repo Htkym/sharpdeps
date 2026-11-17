@@ -170,6 +170,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             using var receipt = JsonDocument.Parse(File.ReadAllBytes(observation.ReceiptPath));
             var requested = cases.Single(item => item.Id == observation.Id);
             var effective = receipt.RootElement.GetProperty("effective");
+            Assert.Equal(requested.ResponseMode, effective.GetProperty("responseMode").GetString());
             Assert.Equal("split-v1", effective.GetProperty("budgetContract").GetString());
             Assert.Equal(requested.PrepareMaxMilliseconds ?? 30000, effective.GetProperty("prepareMaxMilliseconds").GetInt32());
             Assert.Equal(requested.MaxMilliseconds ?? 1000, effective.GetProperty("maxMilliseconds").GetInt32());
@@ -180,6 +181,8 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
             using var mcpRequest = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(caseDirectory, "mcp.request.json")));
             var arguments = cliArguments.RootElement.GetProperty("arguments").EnumerateArray().Select(value => value.GetString()).ToArray();
             var toolArguments = mcpRequest.RootElement.GetProperty("params").GetProperty("arguments");
+            Assert.Equal(requested.ResponseMode, arguments[Array.IndexOf(arguments, "--response-mode") + 1]);
+            Assert.Equal(requested.ResponseMode, toolArguments.GetProperty("responseMode").GetString());
             AssertBudgetArgument("--max-milliseconds", "maxMilliseconds", requested.MaxMilliseconds);
             AssertBudgetArgument("--prepare-max-milliseconds", "prepareMaxMilliseconds", requested.PrepareMaxMilliseconds);
             foreach (var host in new[] { "cli", "mcp" })
@@ -506,8 +509,8 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
         {
             var unit = Assert.Single(item.Units);
             Assert.Equal(ReplayFixture.Markdown, unit.Text);
-            Assert.Equal(format == "audit" ? null : "unselected", unit.ProjectId);
-            Assert.Equal(format == "audit" ? null : "unselected", unit.VariantId);
+            Assert.Equal("unselected", unit.ProjectId);
+            Assert.Equal("unselected", unit.VariantId);
             Assert.True(unit.WholeSavedRangeVerified);
         }
         var preferred = observed.Single(value => value.Id == "document-prefer-debug");

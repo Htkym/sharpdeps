@@ -1558,13 +1558,20 @@ public sealed partial class ExplorationService
 
         private bool CompactAgentMetadata => request.Format == ExploreFormat.Agent
             && request.ResponseMode is ExploreResponseMode.Overview or ExploreResponseMode.Evidence;
+        private bool SharedCompactMetadata => CompactAgentMetadata && isDiscoveryGroup && shareGraphDiagnostics;
+
+        private const string CompactMetadataNotice = "Compact metadata: non-root/member signatures omitted; request detail or audit if needed. Member aliases reuse symbol metadata; omitted member variant equals Scope variant.";
+        private const string OmittedBodyNotice = "No omitted body is claimed complete. Retrieve only specific missing evidence needed for the task, within authorized budgets; do not reread evidence in context or exhaust omissions. Mode-deferred bodies were not requested, not a reason to enlarge budgets.";
 
         private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
         {
             var text = new StringBuilder();
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
             var graph = owner.saved.Graph;
-            Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
+            if (SharedCompactMetadata)
+                Line($"Group coverage={graph.Coverage} Freshness={freshness.State}");
+            else
+                Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
             Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : responseMode == ExploreResponseMode.Overview ? "not-requested" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
             AppendResponseMode(text, detailCount, includePointers: roots.Count == 0);
             AppendEvidenceRefs(text, detailCount);
@@ -1617,8 +1624,8 @@ public sealed partial class ExplorationService
                 }
                 if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
             }
-            if (CompactAgentMetadata)
-                text.AppendLine("Compact metadata: non-root/member signatures omitted; request detail or audit if needed. Member aliases reuse symbol metadata; omitted member variant equals Scope variant.");
+            if (CompactAgentMetadata && !SharedCompactMetadata)
+                text.AppendLine(CompactMetadataNotice);
             var shownRelations = relations.Take(relationCount).ToArray();
             var shownOmissions = responseMode == ExploreResponseMode.Overview ? [] : omitted.Take(detailCount).ToArray();
             var summaryAllowance = request.PathTo is null ? detailCount : detailCount - PathDetailsShown(detailCount);
@@ -1709,8 +1716,14 @@ public sealed partial class ExplorationService
                 }
             }
             text.Append(metadata);
-            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
-            if (CompactAgentMetadata && shownOmissions.Any(omission => omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
+            if (omitted.Count > 0)
+            {
+                if (SharedCompactMetadata)
+                    Line($"Omitted saved units={omitted.Count}; see shared omission policy.");
+                else
+                    Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
+            }
+            if (CompactAgentMetadata && !SharedCompactMetadata && shownOmissions.Any(omission => omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
                 text.AppendLine("Mode-deferred bodies were intentionally not requested; retrieve only missing evidence if needed, not larger budgets.");
             foreach (var omission in shownOmissions)
             {

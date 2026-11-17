@@ -933,6 +933,21 @@ public sealed class ExplorationTests
                 staged.Text.Split("Diagnostic test.diagnostic1=1", StringSplitOptions.None).Length - 1);
             Assert.Equal(format == ExploreFormat.Agent ? 1 : 3,
                 staged.Text.Split("Diagnostics omitted=2", StringSplitOptions.None).Length - 1);
+            if (format == ExploreFormat.Agent && mode is ExploreResponseMode.Overview or ExploreResponseMode.Evidence)
+            {
+                Assert.Single(staged.Text.Split('\n'), line => line.Contains("snapshot=", StringComparison.Ordinal));
+                Assert.Equal(3, staged.Text.Split("Group coverage=", StringSplitOptions.None).Length - 1);
+                Assert.Equal(3, staged.Text.Split("Freshness=", StringSplitOptions.None).Length - 1);
+                Assert.Single(staged.Text.Split('\n'), line => line.StartsWith("Compact metadata:", StringComparison.Ordinal));
+                Assert.Single(staged.Text.Split('\n'), line => line.StartsWith("Shared omission policy:", StringComparison.Ordinal));
+                Assert.Contains("No omitted body is claimed complete", staged.Text);
+                Assert.Contains("within authorized budgets", staged.Text);
+                Assert.All(staged.Units, unit =>
+                {
+                    Assert.True(unit.CompleteSavedRange);
+                    Assert.Equal(fixture.Sources[unit.Path].Substring(unit.Span.Start, unit.Span.Length), unit.Text);
+                });
+            }
             if (mode == ExploreResponseMode.Overview)
             {
                 Assert.Empty(staged.Units);
@@ -984,6 +999,44 @@ public sealed class ExplorationTests
         Assert.Contains(tight.Outcome, new[] { "failed", "budget-limited" });
     }
 
+    [Theory]
+    [InlineData(ExploreResponseMode.Evidence)]
+    [InlineData(ExploreResponseMode.Overview)]
+    public void CompactDiscoveryPreservesSharedPolicyAndWireBoundaries(ExploreResponseMode mode)
+    {
+        using var fixture = new Fixture(addScopes: true, partial: true, dense: true, format: ExploreFormat.Agent);
+        var request = new ExploreRequest("Pump Run", Budget: Generous, Format: ExploreFormat.Agent,
+            ScopePolicy: ExploreScopePolicy.Discover) { ResponseMode = mode };
+        var engine = fixture.Engine();
+        var full = engine.Execute(request);
+        Assert.True(full.Succeeded);
+        AssertWireBudget(full, Generous);
+        foreach (var limit in new[]
+        {
+            Generous with { MaxChars = full.WireChars, MaxBytes = full.WireBytes },
+            Generous with { MaxChars = Math.Max(2048, full.WireChars - 1), MaxBytes = full.WireBytes },
+            Generous with { MaxChars = 2048, MaxBytes = 8192 }
+        })
+        {
+            var bounded = engine.Execute(request with { Budget = limit });
+            AssertWireBudget(bounded, limit);
+            if (!bounded.Succeeded) Assert.Empty(bounded.Units);
+            if (bounded.Text.Contains("Group coverage=", StringComparison.Ordinal))
+            {
+                Assert.Single(bounded.Text.Split('\n'), line => line.StartsWith("Shared omission policy:", StringComparison.Ordinal));
+                Assert.Contains("No omitted body is claimed complete", bounded.Text);
+            }
+            if (mode == ExploreResponseMode.Overview) Assert.Empty(bounded.Units);
+        }
+        var single = engine.Execute(request with { VariantId = fixture.OtherVariant });
+        Assert.True(single.Succeeded);
+        Assert.Contains("groups=1", single.Text);
+        Assert.Single(single.Text.Split('\n'), line => line.StartsWith("Compact metadata:", StringComparison.Ordinal));
+        Assert.Single(single.Text.Split('\n'), line => line.StartsWith("SharpDeps explore generation=", StringComparison.Ordinal));
+        Assert.DoesNotContain("Shared omission policy:", single.Text);
+        Assert.All(single.Units, unit => Assert.Equal(fixture.OtherVariant, unit.VariantId));
+    }
+
     [Fact]
     public void DiscoveryOutcomeUsesTheSamePriorityForMixedGroupOrders()
     {
@@ -998,9 +1051,10 @@ public sealed class ExplorationTests
     }
 
     [Theory]
-    [InlineData(ExploreFormat.Agent)]
-    [InlineData(ExploreFormat.Audit)]
-    public void DiscoveryKeepsAGroupDirtyWhenSourceChangesAfterTheInitialProof(ExploreFormat format)
+    [InlineData(ExploreFormat.Agent, null)]
+    [InlineData(ExploreFormat.Audit, null)]
+    [InlineData(ExploreFormat.Agent, ExploreResponseMode.Evidence)]
+    public void DiscoveryKeepsAGroupDirtyWhenSourceChangesAfterTheInitialProof(ExploreFormat format, ExploreResponseMode? mode)
     {
         using var fixture = new Fixture(addScopes: true, format: format);
         var proofs = 0;
@@ -1011,7 +1065,7 @@ public sealed class ExplorationTests
             return new(fixture.Inventory(), true);
         });
         var reply = fixture.Engine(workspace).Execute(new ExploreRequest("Pump Run", Budget: Generous, Format: format,
-            ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh));
+            ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh) { ResponseMode = mode });
         Assert.Equal(1, proofs);
         Assert.False(reply.Succeeded);
         Assert.Equal("failed", reply.Outcome);
@@ -1024,9 +1078,11 @@ public sealed class ExplorationTests
     }
 
     [Theory]
-    [InlineData(ExploreFormat.Agent)]
-    [InlineData(ExploreFormat.Audit)]
-    public void DiscoveryUsesOneBeforeAndAfterFreshnessProofAndClearsEveryGroupOnFailure(ExploreFormat format)
+    [InlineData(ExploreFormat.Agent, null)]
+    [InlineData(ExploreFormat.Audit, null)]
+    [InlineData(ExploreFormat.Agent, ExploreResponseMode.Evidence)]
+    [InlineData(ExploreFormat.Agent, ExploreResponseMode.Overview)]
+    public void DiscoveryUsesOneBeforeAndAfterFreshnessProofAndClearsEveryGroupOnFailure(ExploreFormat format, ExploreResponseMode? mode)
     {
         using var fixture = new Fixture(addScopes: true, format: format);
         var proofs = 0;
@@ -1034,10 +1090,11 @@ public sealed class ExplorationTests
         var workspace = new QueryWorkspace(fixture.Root, _ => new(fixture.Inventory(), ++proofs != 2 || !failAfter));
         var engine = fixture.Engine(workspace);
         var request = new ExploreRequest("Pump Run", Budget: Generous, Format: format,
-            ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh);
+            ScopePolicy: ExploreScopePolicy.Discover, Freshness: QueryFreshnessPolicy.RequireFresh) { ResponseMode = mode };
         var reply = engine.Execute(request);
         Assert.True(reply.Succeeded);
-        Assert.NotEmpty(reply.Units);
+        if (mode == ExploreResponseMode.Overview) Assert.Empty(reply.Units);
+        else Assert.NotEmpty(reply.Units);
         Assert.Equal(2, proofs);
         proofs = 0; failAfter = true;
         var failed = engine.Execute(request);
