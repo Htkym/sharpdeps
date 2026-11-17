@@ -11,6 +11,65 @@ using Xunit;
 
 public sealed class ExplorationTests
 {
+    [Theory]
+    [InlineData(ExploreResponseMode.Overview)]
+    [InlineData(ExploreResponseMode.Evidence)]
+    public void CompactCollectorInventoryDoesNotHideWarningsOrChangeEvidence(ExploreResponseMode mode)
+    {
+        using var fixture = new Fixture(dense: true, partial: true, format: ExploreFormat.Agent);
+        var diagnostics = fixture.Snapshot.Graph.Variants
+            .Select(variant => new HarnessGraphDiagnostic("cli.projectExtracted." + variant.Id, 1))
+            .Concat(new[] { new HarnessGraphDiagnostic("cli.projectReused." + fixture.Variant, 1),
+                new HarnessGraphDiagnostic("cli.loaderLimitations", 2),
+                new HarnessGraphDiagnostic("unknown.warning", 3),
+                new HarnessGraphDiagnostic("cli.projectExtracted.hvar_warning", 1),
+                new HarnessGraphDiagnostic("cli.projectExtracted." + fixture.Variant + ".failure", 1),
+                new HarnessGraphDiagnostic("cli.projectReused.hvar_unexpected", 2) }).ToArray();
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Diagnostics = diagnostics } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var request = fixture.Request("Pump") with { ResponseMode = mode };
+        var compact = engine.Execute(request);
+        Assert.Contains("Collector inventory: entries=" + (fixture.Snapshot.Graph.Variants.Count + 1), compact.Text);
+        // Diagnostic codes are display-truncated at 80 characters. The sole matching
+        // prefix below must be the unknown .failure entry, not the inventory entry.
+        var variantPrefix = fixture.Variant[..40];
+        Assert.Equal(1, compact.Text.Split("Diagnostic cli.projectExtracted." + variantPrefix, StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("Diagnostic cli.projectReused." + variantPrefix, compact.Text);
+        Assert.Contains("Diagnostic cli.loaderLimitations=2", compact.Text);
+        Assert.Contains("Diagnostic unknown.warning=3", compact.Text);
+        Assert.Contains("Diagnostic cli.projectExtracted.hvar_warning=1", compact.Text);
+        Assert.Contains("Diagnostic cli.projectReused.hvar_unexpected=2", compact.Text);
+        Assert.Contains("coverage=Partial", compact.Text);
+        Assert.Contains("Freshness=unverified", compact.Text);
+        AssertWireBudget(compact, request.Budget!);
+        var unchanged = fixture.Engine().Execute(request);
+        Assert.Equal(unchanged.Units.Select(unit => (unit.Path, unit.Span, unit.Text)),
+            compact.Units.Select(unit => (unit.Path, unit.Span, unit.Text)));
+        foreach (var expanded in new[] { request with { ResponseMode = (ExploreResponseMode?)null },
+            request with { ResponseMode = ExploreResponseMode.Detail },
+            request with { Format = ExploreFormat.Audit } })
+        {
+            var reply = engine.Execute(expanded);
+            Assert.Equal(2, reply.Text.Split("Diagnostic cli.projectExtracted." + variantPrefix, StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("Collector inventory:", reply.Text);
+        }
+    }
+
+    [Fact]
+    public void CompactDiagnosticOmissionsCountOnlyUnshownNonInventoryEntries()
+    {
+        using var fixture = new Fixture(format: ExploreFormat.Agent);
+        var diagnostics = new[] { new HarnessGraphDiagnostic("cli.projectExtracted." + fixture.Variant, 1) }
+            .Concat(Enumerable.Range(1, 9).Select(number => new HarnessGraphDiagnostic("unknown.warning" + number, 1))).ToArray();
+        var snapshot = fixture.Snapshot with { Graph = fixture.Snapshot.Graph with { Diagnostics = diagnostics } };
+        var engine = new ExplorationService(new FixedIndex(snapshot), new QueryWorkspace(fixture.Root), true);
+        var reply = engine.Execute(fixture.Request("Pump") with { ResponseMode = ExploreResponseMode.Overview });
+        Assert.Contains("Collector inventory: entries=1", reply.Text);
+        Assert.Contains("Diagnostic unknown.warning8=1", reply.Text);
+        Assert.DoesNotContain("Diagnostic unknown.warning9=1", reply.Text);
+        Assert.Contains("Diagnostics omitted=1", reply.Text);
+    }
+
     [Fact]
     public void AgentOverviewCombinesRootSymbolAndSavedPointerWithoutLosingFields()
     {

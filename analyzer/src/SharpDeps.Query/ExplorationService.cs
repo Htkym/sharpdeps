@@ -1537,6 +1537,19 @@ public sealed partial class ExplorationService
         private void AppendAgentDiagnostics(StringBuilder text)
         {
             var diagnostics = owner.saved.Graph.Diagnostics;
+            // These are collector-success inventory entries, not warnings. Compact modes
+            // retain all other diagnostics, including unknown codes and unexpected counts.
+            var inventoryCodes = CompactAgentMetadata ? owner.saved.Graph.Variants
+                .SelectMany(variant => new[] { "cli.projectExtracted." + variant.Id, "cli.projectReused." + variant.Id })
+                .ToHashSet(StringComparer.Ordinal) : [];
+            bool IsCollectorInventory(HarnessGraphDiagnostic diagnostic)
+                => diagnostic.Count == 1 && inventoryCodes.Contains(diagnostic.Code);
+            var inventory = CompactAgentMetadata ? (diagnostics ?? []).Count(IsCollectorInventory) : 0;
+            if (inventory > 0)
+            {
+                text.AppendLine(FormattableString.Invariant($"Collector inventory: entries={inventory}; per-variant IDs omitted; detail or audit uses bounded per-entry display."));
+                diagnostics = diagnostics!.Where(diagnostic => !IsCollectorInventory(diagnostic)).ToArray();
+            }
             foreach (var diagnostic in (diagnostics ?? []).Take(8))
                 text.AppendLine(FormattableString.Invariant($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}"));
             if ((diagnostics?.Count ?? 0) > 8)

@@ -54,6 +54,10 @@ sharpdeps explore --root ROOT_ABS --term "Parser" --project-id PROJECT_ID --vari
 
 A complete saved range already in the current context with the same hash and span need not be reread. This is a context-local decision, not a persistent already-read flag. Use normal read/search for dirty or unindexed files, other spans, documentation not returned, or lost context.
 
+When the host supports parallel calls, batch independent targeted reads whose paths and ranges are already known. Keep dependent scope/selector choices sequential; do not guess identities to create a batch. Count every call in a batch against the remaining retrieval budget. Fewer tool calls do not necessarily mean fewer model round trips.
+
+For investigation-only requests, stop once the requested entry points and supporting source are established, with remaining uncertainty stated. Do not exhaust omitted relations or search for unrelated tests merely to fill the budget. A successful source read followed by an explore of the same unchanged body is unnecessary unless the latter supplies specific structural evidence still missing. Current-file checks genuinely required before an authorized edit remain separate.
+
 For missing members or omitted source, re-query the exact returned `selector` and retain the intended scope. Narrow names/paths before raising only the necessary budget. Aliases such as `@1` and `F1` are local to one discovery group, or to one reply for a single-scope request, and are not durable selectors. The same alias can recur across groups. Qualified names may still be ambiguous between overloads. Each request pins its own generation, so compare snapshots before combining replies.
 
 ```text
