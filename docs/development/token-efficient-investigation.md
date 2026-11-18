@@ -43,7 +43,7 @@ very small body. Do not hide omitted evidence or weaken the answer to meet a tok
 
 Existing managed installation blocks are preserved. Updating this source does not silently rewrite
 an installed block; use the supported explicit uninstall/install workflow, preserving user content.
-New `agent-export` packages use `routing-v2`; existing immutable `routing-v1` packages remain
+New `agent-export` packages use `routing-v4`; existing immutable `routing-v1`/`routing-v2`/`routing-v3` packages remain
 recognized and removable. An export does not overwrite an older or edited package. Use explicit
 `agent-remove` then export to adopt the new guidance, retaining the removal backup.
 

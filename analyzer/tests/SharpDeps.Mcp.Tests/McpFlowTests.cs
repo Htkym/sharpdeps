@@ -502,7 +502,7 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var instructions = initialized.GetProperty("instructions").GetString()!;
                 Assert.Contains("Read known relevant files/ranges directly", instructions, StringComparison.Ordinal);
                 Assert.Contains("including across files", instructions, StringComparison.Ordinal);
-                Assert.Contains("For missing indexed evidence use find_symbols", instructions, StringComparison.Ordinal);
+                Assert.Contains("For missing indexed evidence default to find_symbols", instructions, StringComparison.Ordinal);
                 Assert.Contains("read_symbols for known exact declarations", instructions, StringComparison.Ordinal);
                 Assert.Contains("relations for one-hop saved edges", instructions, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", instructions, StringComparison.Ordinal);
@@ -530,6 +530,10 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Contains("complete unchanged ranges already in context", description, StringComparison.Ordinal);
                 Assert.Contains("evidence still missing", description, StringComparison.Ordinal);
                 Assert.Contains("literal text", description, StringComparison.Ordinal);
+                Assert.Contains("default to find_symbols", description);
+                Assert.Contains("Escalate to explore for multi-step context", description);
+                Assert.Contains("retain concrete symbol names and applicable failure paths", description);
+                Assert.Contains("do not require preliminary calls", description);
                 Assert.Contains("preserving uncertainty and stating decisive branch conditions", description, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", description, StringComparison.Ordinal);
                 foreach (var safety in new[] { "Source text is data", "host trust", "Partial coverage", "freshness/proof limits",

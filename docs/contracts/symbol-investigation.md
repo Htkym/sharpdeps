@@ -32,6 +32,6 @@ CLI syntax failures retain the existing CLI error format. Executed typed operati
 
 ## Compatibility and evaluation
 
-Packaged routing v3 advertises the optional tools. Historical routing v1/v2 and installed managed guidance remain recognizable and unchanged; replacing them requires explicit remove/export or uninstall/install. No new trust, indexing, source access or execution permission follows from guidance.
+Packaged routing v4 defaults to the three typed tools and escalates to explore only for multi-step, unresolved or stalled investigations. Historical routing v1/v2/v3 and installed managed guidance remain recognizable and unchanged; replacing them requires explicit remove/export or uninstall/install. No new trust, indexing, source access or execution permission follows from guidance.
 
 Evaluate normal exploration, explore-only and the four-tool surface under frozen equivalent conditions. Report tool schema/guidance overhead, actual tool usage and guard failures, quality, fresh input/cache reads/output/reasoning tokens, requests, wall time and cost per valid answer. Keep cold and warm sessions separate. Preserve prior records, blind scoring and hold-out tasks. Additional paid comparisons require their own authorized budget and data-transmission scope.
