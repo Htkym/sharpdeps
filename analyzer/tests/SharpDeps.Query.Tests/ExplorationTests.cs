@@ -9,7 +9,7 @@ using SharpDeps.Analysis.Core.Identity;
 using SharpDeps.Index;
 using Xunit;
 
-public sealed class ExplorationTests
+public sealed partial class ExplorationTests
 {
     [Theory]
     [InlineData(ExploreResponseMode.Overview)]

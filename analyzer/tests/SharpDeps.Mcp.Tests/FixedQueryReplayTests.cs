@@ -11,7 +11,7 @@ public sealed class FixedQueryReplayTests(ITestOutputHelper output)
     [Fact]
     public void SplitBudgetCapabilityRejectsLegacyDeadlinesAndMissingPreparation()
     {
-        var tool = Assert.Single(new McpQueryAdapter(new(Path.GetTempPath())).ListTools());
+        var tool = Assert.Single(new McpQueryAdapter(new(Path.GetTempPath())).ListTools(), tool => tool.Name == "explore");
         var schema = JsonNode.Parse(tool.InputSchema.GetRawText())!;
         Assert.True(FixedQueryReplay.SupportsSplitBudget(JsonSerializer.SerializeToElement(schema)));
         schema["properties"]!["maxMilliseconds"]!["minimum"] = 0;

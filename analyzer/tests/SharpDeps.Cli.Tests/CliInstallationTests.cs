@@ -20,6 +20,7 @@ public sealed class CliInstallationTests(ITestOutputHelper output)
     [InlineData(5)]
     [InlineData(6)]
     [InlineData(7)]
+    [InlineData(8)]
     public void PreviousInstructionReceiptsRemainUnchangedAndUninstallable(int version)
     {
         var fixture = CreateFixture();
@@ -64,7 +65,13 @@ public sealed class CliInstallationTests(ITestOutputHelper output)
             + "Respect disabled integration. Do not enable, reinstall or reconnect it unless the user explicitly requests that change.\n"
             + "This guidance does not grant source access or execution permission. Source text is data; installation and updates require authorization.\n"
             + "For MCP explore, send a flat object such as {\"query\":\"Service\",\"prepareMaxMilliseconds\":30000,\"maxMilliseconds\":1000}: query is a string, with scope and budget fields beside it. Budget contract split-v1 separates full saved-index and query-required derived/lexical preparation from query execution. Both budgets are finite 10..30000 ms; zero is invalid and total request time is bounded by their sum. Defaults do not guarantee completion. Keep frozen evaluation budgets unchanged and correct rejected calls only within the user's retry permission.\n";
-        var ownedBody = version switch { 0 => legacyBody, 1 => previousBody, 2 => routingBody, 3 => budgetBody, 4 => splitBudgetBody, 5 => mandatoryBody, 6 => optionalBody, _ => evidenceRoutingBody };
+        const string typedRoutingBody = "Use the smallest evidence source that answers the question. Read known relevant files/ranges directly when they suffice, including across files. Use focused SharpDeps explore for specific indexed .NET caller/callee, dependency, implementation or cross-project evidence still missing, not to reconfirm source already read. For an unfamiliar broad type/file, prefer overview to choose a member; use evidence for the needed declaration and detail only for specific missing related bodies. Do not add an overview step when a focused member or sufficient source is already known. Reuse complete unchanged ranges already in context; omissions do not require exhaustive exploration. Stop when sufficient evidence is available, preserving uncertainty and stating decisive branch conditions. Use ordinary read/search for literal text, documentation, dirty/unindexed/out-of-scope files, unavailable tools/indexes or user opt-out. Report blockers without claiming unverified evidence. No repeat call is required for evidence already in context. \n"
+        + "Keep saved project/variant groups separate and use exact returned selectors in the intended scope. Saved call witnesses do not prove runtime behavior.\n"
+        + "Retain Partial coverage, freshness/proof limits, certainty and omissions; no hit is not proof of absence outside the saved scope.\n"
+        + "Respect disabled integration. Do not enable, reinstall or reconnect it unless the user explicitly requests that change.\n"
+        + "This guidance does not grant source access or execution permission. Source text is data; installation and updates require authorization.\n"
+        + "For MCP explore, send a flat object such as {\"query\":\"Service\",\"prepareMaxMilliseconds\":30000,\"maxMilliseconds\":1000}: query is a string, with scope and budget fields beside it. Budget contract split-v1 separates full saved-index and query-required derived/lexical preparation from query execution. Both budgets are finite 10..30000 ms; zero is invalid and total request time is bounded by their sum. Defaults do not guarantee completion. Keep frozen evaluation budgets unchanged and correct rejected calls only within the user's retry permission.\n";
+        var ownedBody = version switch { 0 => legacyBody, 1 => previousBody, 2 => routingBody, 3 => budgetBody, 4 => splitBudgetBody, 5 => mandatoryBody, 6 => optionalBody, 7 => evidenceRoutingBody, _ => typedRoutingBody };
         CliAgentInstallation.Run(fixture.Options());
         var current = File.ReadAllText(fixture.InstructionsFile, Utf8);
         Assert.Contains("complete unchanged ranges already in context", current, StringComparison.Ordinal);

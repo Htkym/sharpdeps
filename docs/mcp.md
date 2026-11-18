@@ -4,6 +4,8 @@
 
 This guide describes CLI/MCP 0.5.0. Check [NuGet](https://www.nuget.org/packages/SharpDeps.Cli) or [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) for availability and install matching versions. For the older release, use the [tagged 0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
 
+The development branch also provides [additive typed symbol investigation](contracts/symbol-investigation.md); this is unreleased and not a claim about the published version above.
+
 ## Install and create an index
 
 ```bash

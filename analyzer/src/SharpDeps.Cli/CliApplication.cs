@@ -11,7 +11,7 @@ using Microsoft.Data.Sqlite;
 using SharpDeps.Index;
 using SharpDeps.Query;
 
-public static class CliApplication
+public static partial class CliApplication
 {
     public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, CancellationToken token = default)
     {
@@ -22,12 +22,13 @@ public static class CliApplication
             options = CliArguments.Parse(args);
             token.ThrowIfCancellationRequested();
             if (options.Command == "help")
-                return await Reply(stdout, options, new { commands = new[] { "explore", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall", "agent-export", "agent-remove", "prompt-context" },
+                return await Reply(stdout, options, new { commands = new[] { "explore", "find-symbols", "read-symbols", "relations", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall", "agent-export", "agent-remove", "prompt-context" },
                     root = "--root absolute-directory; optional only for explore, which uses the absolute current directory without ancestor search",
                     index = "--target root-contained.slnx|.sln|.csproj --trusted [--timeout-seconds 0 for exclusive execution without a deadline]",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
-                    query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh; saved query commands other than explore accept --max-milliseconds 0 to disable their computation deadline",
+                    query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh; legacy saved query commands (search/symbol/callers/callees/impact/context/query) accept --max-milliseconds 0 to disable their computation deadline",
                     explore = "names-or-file-paths | --term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --response-mode overview|evidence|detail --include-evidence-refs --evidence-ref ref --scope-policy discover|unique|prefer-debug --path-to occurrence-id --owner-status]; ordinary names/paths default to discover unless project or variant is explicit; exact saved IDs, path-to and http-get-literal default to unique and reject discover; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions; response-mode is opt-in (omitted preserves existing behavior): overview returns saved pointers without bodies, exact saved selectors/path-to use evidence; evidence reads requested declarations; detail also reads related declarations; include-evidence-refs emits optional saved-evidence guards; evidence-ref requires one exact saved code occurrence selector (hocc_) with explicit project/variant, unique scope, symbol mode and no path-prefix/path-to; it validates saved identity, not possession of source text or token savings",
+                    symbols = "find-symbols --term name [--max-results 1..32]; read-symbols|relations --ids hocc_a[,hocc_b] --project-id id --variant id; at most 8 exact same-scope selectors. relations accepts --direction incoming|outgoing and repeated --edge-kind. All return apiVersion=1 symbol JSON with bounded per-item outcomes, no cursor and no implicit status call. Preparation/query budgets match explore; zero is invalid.",
                     explorePreparation = "split-v1: --prepare-max-milliseconds P (default 30000) covers saved-index validation and query-required derived/lexical indexes, then --max-milliseconds Q (default 1000) covers exploration. Both are finite 10..30000; 0 is invalid. The total request upper bound is P+Q, including response finalization. MCP accepts the same prepareMaxMilliseconds/maxMilliseconds fields. Defaults are not latency guarantees; caller cancellation remains authoritative.",
                     watch = "serve --trusted --watch --target root-contained.csproj|.sln|.slnx [--watch-resync-seconds 30]",
                     installation = "install|uninstall --client copilot-cli --root absolute-directory --config-file absolute-new-file --instructions-file absolute-new-file [--dry-run]; install also requires --mcp-command absolute-existing-file; existing files must be the exact unchanged owned pair; uninstall retains adjacent backups",
@@ -57,6 +58,14 @@ public static class CliApplication
                     : Array.Empty<QueryIssue>();
                 await Reply(stdout, options, installation, issues);
                 return installation.ErrorCode is null ? 0 : installation.ErrorCode == "CANCELLED" ? 130 : 5;
+            }
+            if (options.Command is "find-symbols" or "read-symbols" or "relations")
+            {
+                var symbols = options.SymbolsRequest();
+                var result = await SymbolsCoreAsync(options.Require("root"), options.Get("index") ?? ".sharpdeps/index.sqlite",
+                    options.Has("trusted"), symbols, options.Get("metrics-directory"), options.RequestId, token, null);
+                await stdout.WriteLineAsync(result.Text);
+                return result.ExitCode;
             }
             // Validate request syntax before opening any stored data.
             var exploration = options.Command == "explore" ? options.ExplorationRequest() : null;
