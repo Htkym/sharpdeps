@@ -47,7 +47,7 @@ used at launch; never repair, clamp, or expand budgets after a failure.
 
 Supported schema vocabulary is deliberately small: explicit primitive/object/
 array types, closed properties, required, enum, numeric bounds, string length
-and pattern, array items/length, and defaults. Unknown constraints, `$ref` and
+and pattern, array items/length/uniqueness, and defaults. Unknown constraints, `$ref` and
 schema combinators fail closed. Descriptions/titles/examples/comments are
 ignored; required/enum order is immaterial. Patterns are compared literally,
 not proven semantically equivalent. Default differences are contract failures.

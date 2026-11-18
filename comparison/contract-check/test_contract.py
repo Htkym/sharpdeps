@@ -70,6 +70,36 @@ class ContractTests(unittest.TestCase):
         a, e = fixture(); a['tools'][0]['inputSchema']['properties']['maxChars']['maximum'] = True
         with self.assertRaises(ContractError): check(a, e)
 
+    def test_unique_items_match_true_and_false(self):
+        for value in (True, False):
+            a, e = fixture()
+            for x in (a, e):
+                x['tools'][0]['inputSchema']['properties']['selectors'] = {
+                    'type': 'array', 'items': {'type': 'string'}, 'uniqueItems': value}
+            self.assertEqual(check(a, e), ['explore'])
+
+    def test_unique_items_missing_or_changed_is_mismatch(self):
+        for original in (True, False):
+            for missing in (True, False):
+                a, e = fixture()
+                for x in (a, e):
+                    x['tools'][0]['inputSchema']['properties']['selectors'] = {
+                        'type': 'array', 'items': {'type': 'string'}, 'uniqueItems': original}
+                prop = a['tools'][0]['inputSchema']['properties']['selectors']
+                if missing: del prop['uniqueItems']
+                else: prop['uniqueItems'] = not original
+                with self.subTest(original=original, missing=missing), self.assertRaises(ContractError):
+                    check(a, e)
+
+    def test_unique_items_rejects_nonbool_even_if_both_agree(self):
+        for value in (0, 1, 'true', 'false', None, [], {}):
+            a, e = fixture()
+            for x in (a, e):
+                x['tools'][0]['inputSchema']['properties']['selectors'] = {
+                    'type': 'array', 'items': {'type': 'string'}, 'uniqueItems': value}
+            with self.subTest(value=value), self.assertRaisesRegex(ContractError, 'invalid uniqueItems'):
+                check(a, e)
+
     def test_duplicate_json_key(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / 'bad.json'; p.write_text('{"tools":[],"tools":[]}')

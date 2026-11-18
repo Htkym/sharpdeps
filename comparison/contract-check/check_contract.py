@@ -37,7 +37,7 @@ def canonical(schema, where):
     annotations = {'description', 'title', 'examples', '$comment'}
     supported = {'type', 'properties', 'required', 'additionalProperties', 'enum',
                  'minimum', 'maximum', 'minLength', 'maxLength', 'pattern', 'default',
-                 'items', 'minItems', 'maxItems'}
+                 'items', 'minItems', 'maxItems', 'uniqueItems'}
     require(not set(schema) - supported - annotations, where + ': unsupported schema keywords')
     result = {k: v for k, v in schema.items() if k not in annotations}
     kind = result.get('type')
@@ -50,6 +50,8 @@ def canonical(schema, where):
         require(len(set(required)) == len(required) and set(required) <= set(props), where + ': invalid required names')
         result['required'] = sorted(required)
         result['properties'] = {k: canonical(v, where + '.' + k) for k, v in props.items()}
+    if 'uniqueItems' in result:
+        require(type(result['uniqueItems']) is bool, where + ': invalid uniqueItems')
     if 'items' in result:
         result['items'] = canonical(result['items'], where + '[]')
     if kind == 'array':
