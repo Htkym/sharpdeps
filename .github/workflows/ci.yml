@@ -61,6 +61,9 @@ jobs:
       - name: Evaluation harness contract and F4 source checks (no model calls)
         run: |
           python3 -m unittest discover -s comparison/contract-check -p 'test_*.py'
+          python3 -m unittest discover -s comparison/f4-verification/runner -p 'test_*.py'
+          python3 -m unittest discover -s comparison/f4-verification/evaluator-only -p 'test_*.py'
+          python3 comparison/f4-verification/runner/dry_run.py
           dotnet run --project comparison/f4-verification/evaluator-only/F4Fixture.csproj --configuration Release
 
       - name: Experimental OpenCode context reuse tests

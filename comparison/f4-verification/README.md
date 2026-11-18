@@ -1,6 +1,6 @@
 # F4 exception-path verification pilot (not yet measured)
 
-Two small synthetic C# tasks, three arms, two independent repetitions: 12 sessions. This is a diagnostic **material set**, not a paid model launcher. No model results or spending approval are included. It does not establish a benefit of mandatory rechecking.
+Two small synthetic C# tasks, three arms, two independent repetitions: 12 sessions. This contains diagnostic materials plus an **offline contract and blinded-scoring controller**, not a paid model launcher. No model results or spending approval are included. It does not establish a benefit of mandatory rechecking.
 
 - `runner/`: tasks, frozen arm plan, generic and exception-specific recheck prompts.
 - `corpus/`: two permitted solver source files and a minimal Library project (`F4Solver.csproj`) for semantic indexing. Stage an isolated workspace containing only this corpus directory; do not index this repository or the evaluator directory.
@@ -27,3 +27,17 @@ dotnet run --project comparison/f4-verification/evaluator-only/F4Fixture.csproj 
 Expected: `PASS 16 deterministic source cases; no model calls`. This checks source semantics, not whether any AI will find or explain them. The fixture is deliberately small/public and targets known exception-path errors; do not label it an unseen real-world benchmark or generalize token savings from it.
 
 Existing sdfx1118/r2/r3 artifacts and frozen scores remain historical and must not be rewritten or pooled into this new design.
+
+## Offline controller and synthetic integration test
+
+`runner/phase_contract.py` validates frozen session specifications, a common neutral instruction stack, one-turn direct versus two-turn rechecks, prefix integrity, and accepted/delivered evidence joins. A recheck with no new tool call is valid. Its fresh-approval preflight is not authorization acquisition or a running budget ledger: the separately reviewed host must authenticate approval, enforce every reservation/settlement, and supply trustworthy delivery observations.
+
+`evaluator-only/evaluation.py` validates a full twelve-slot receipt export, creates separate FINAL and PRECHECK blind packets, freezes adjudicated scores, and aggregates three arms. See `evaluator-only/CONTROLLER.md`. Never expose the private mapping or evaluator materials to solving/scoring agents prematurely.
+
+```powershell
+python -B -m unittest discover -s comparison/f4-verification/runner -p 'test_*.py'
+python -B -m unittest discover -s comparison/f4-verification/evaluator-only -p 'test_*.py'
+python -B comparison/f4-verification/runner/dry_run.py
+```
+
+The last command constructs twelve **synthetic** receipts and fake answers/scores, tests all phase shapes including zero-new-call rechecks, creates twelve FINAL plus eight PRECHECK packets, freezes scores and aggregates. It invokes no host, tool or model. Synthetic scores are not quality measurements; a successful run does not certify the live transport, neutral descriptions actually sent to a provider, authentication, or paid execution readiness. Use `--output NEW_DIRECTORY` to preserve the synthetic evidence; existing outputs are never overwritten.
