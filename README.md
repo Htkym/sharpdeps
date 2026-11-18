@@ -8,6 +8,14 @@ SharpDeps shows .NET project, namespace and type dependencies in VS Code, with s
 
 The images show the 0.1.0 workbench. See the guides for current controls and saved-index compatibility.
 
+## AI investigation: measured results and limits
+
+SharpDeps defaults to typed symbol lookup, exact reads and one-hop relations. Check the final answer against existing evidence, including branch conditions and exception/cleanup paths; retrieve only missing evidence. `explore` remains available for explicit requests or manual investigation, not automatic escalation.
+
+A November 18, 2026 diagnostic compared mandatory typed/source re-checks with mandatory explore re-checks (two tasks, two repetitions per arm). Final quality was **11/12 for both arms on EF Core** and **12/12 for both on Orleans**; no critical errors were scored. Five of eight answers improved between the provisional and final answer, but **there was no no-recheck control**, so this does not establish the causal benefit of requiring a check. Neither method repaired EF's release-failure logging and finally-cleanup exception-replacement omissions.
+
+Orleans used a revised exact-selector harness, so the tasks are reported separately, not pooled as an identical eight-session experiment. Costs differed by task; neither an efficiency winner nor quality equivalence is established by this small sample. [Measurement details and limitations](docs/development/forced-verification-results.md).
+
 ## Install
 
 Install **SharpDeps — .NET Dependency Map** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps), or download the VSIX from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) and choose **Extensions: Install from VSIX…** in VS Code. This documentation describes 0.5.0. Check the Marketplace or release page for availability before installing.

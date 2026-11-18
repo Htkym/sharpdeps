@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "status": "prepared_not_model_executed",
+  "product_commit": "freeze actual tested commit before execution",
+  "corpus": "synthetic diagnostic, public, not natural real-world tasks",
+  "tasks": 2,
+  "repetitions": 2,
+  "arms": {
+    "direct": "typed/source investigation then one final answer; no explicit recheck instruction",
+    "generic": "same typed/source tools; provisional answer then generic verification instruction",
+    "exception_checklist": "same typed/source tools; provisional answer then targeted exception-path verification"
+  },
+  "planned_independent_sessions": 12,
+  "service_tier": "default",
+  "paid_approved": false,
+  "budget_usd": "0",
+  "explore_automatic": false,
+  "metric": "F4 proposition coverage, final quality, critical errors, total and marginal host usage and separate ledger settlement",
+  "limitations": [
+    "No claim that past forced verification caused improvement",
+    "Independent initial answers differ; paired PRECHECK deltas are descriptive, not shared-state causal estimates",
+    "Synthetic tasks expose known failure modes; do not present as unseen natural tasks",
+    "Do not reuse legacy approvals or mutate prior kits"
+  ],
+  "stop": "Any contract mismatch, unknown delivery, unknown usage, unapproved spend or failed receipt stops batch; no automatic retries",
+  "base_guide": "Identical neutral typed/source guide across arms, no final-check/checklist instructions anywhere in model-visible stack. Do not inject routing-v5 checklist. If unavoidable, direct is no-extra-turn, not no-recheck."
+}

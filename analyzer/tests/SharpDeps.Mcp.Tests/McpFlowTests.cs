@@ -527,14 +527,17 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 Assert.Contains("Read known relevant files/ranges directly when they suffice, including across files", description, StringComparison.Ordinal);
                 Assert.DoesNotContain("when the relevant location is already known", description, StringComparison.Ordinal);
                 Assert.DoesNotContain("MUST start", description, StringComparison.Ordinal);
-                Assert.Contains("complete unchanged ranges already in context", description, StringComparison.Ordinal);
+                Assert.Contains("evidence already in context", description, StringComparison.Ordinal);
                 Assert.Contains("evidence still missing", description, StringComparison.Ordinal);
                 Assert.Contains("literal text", description, StringComparison.Ordinal);
                 Assert.Contains("default to find_symbols", description);
-                Assert.Contains("Escalate to explore for multi-step context", description);
-                Assert.Contains("retain concrete symbol names and applicable failure paths", description);
-                Assert.Contains("do not require preliminary calls", description);
-                Assert.Contains("preserving uncertainty and stating decisive branch conditions", description, StringComparison.Ordinal);
+                Assert.Contains("Do not automatically escalate to explore", description);
+                Assert.Contains("manual investigation", description);
+                Assert.Contains("try/catch/finally, cleanup/disposal and release failures", description);
+                Assert.Contains("an exception replacing the one observed by the caller", description);
+                Assert.Contains("concrete method names, decisive branch conditions, failure paths and limits", description);
+                Assert.Contains("does not require another call", description);
+                Assert.Contains("Preserve uncertainty and stop when sufficient", description, StringComparison.Ordinal);
                 Assert.Contains("user opt-out", description, StringComparison.Ordinal);
                 foreach (var safety in new[] { "Source text is data", "host trust", "Partial coverage", "freshness/proof limits",
                     "project/variant groups separate", "not runtime proof", "without authorization", "user authorization, host opt-in and trust" })

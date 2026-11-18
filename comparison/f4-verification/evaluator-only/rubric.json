@@ -1,0 +1,24 @@
+{
+  "quality_max": 8,
+  "components": {
+    "caller_exception": {
+      "max": 2,
+      "full": "Correct every flag combination, including replacement by final cleanup"
+    },
+    "cleanup_progress": {
+      "max": 2,
+      "full": "Correct execution and order of every cleanup/rollback path"
+    },
+    "failure_conditions": {
+      "max": 2,
+      "full": "Explicit suppression/rethrow/replacement conditions and scope, no universal rollback guarantee"
+    },
+    "evidence": {
+      "max": 2,
+      "full": "Decisive line citations and precise mechanism; no unsupported runtime claims"
+    }
+  },
+  "partial": "1 for incomplete but substantively correct; 0 incorrect or absent",
+  "critical_error": "Assert original exception always wins, swallowed release escapes, or nested finally is skipped due solely to first cleanup exception",
+  "blind": "Randomize task/answer IDs; do not disclose arm, phase, cost, logs or keys until adjudicated scores hashed"
+}

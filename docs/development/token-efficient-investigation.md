@@ -43,7 +43,7 @@ very small body. Do not hide omitted evidence or weaken the answer to meet a tok
 
 Existing managed installation blocks are preserved. Updating this source does not silently rewrite
 an installed block; use the supported explicit uninstall/install workflow, preserving user content.
-New `agent-export` packages use `routing-v4`; existing immutable `routing-v1`/`routing-v2`/`routing-v3` packages remain
+New `agent-export` packages use `routing-v5`; existing immutable `routing-v1`/`routing-v2`/`routing-v3`/`routing-v4` packages remain
 recognized and removable. An export does not overwrite an older or edited package. Use explicit
 `agent-remove` then export to adopt the new guidance, retaining the removal backup.
 
@@ -81,3 +81,5 @@ cache reuse. Report cache behavior as observed rather than promising a discount.
 No further paid model comparison is part of this implementation step. The previous follow-up's
 $4 budget and its unsettled reservations do not authorize new spending. Merge and release remain
 separate decisions.
+
+The November 18 [forced-verification diagnostic](forced-verification-results.md) does not establish a causal benefit from mandatory checking: it lacks a no-recheck control. Routing v5 removes automatic explore escalation and adds a bounded final evidence/exception-path check as an unvalidated candidate workflow. Historical routing bytes remain immutable.

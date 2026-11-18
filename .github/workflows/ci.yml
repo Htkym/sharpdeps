@@ -58,6 +58,11 @@ jobs:
           node --test eng/markdown/Verify-ConsumerArtifacts.Tests.mjs
           node eng/markdown/Verify-ConsumerArtifacts.mjs eng/markdown/feed/pair-manifest-2.0.0.json eng/markdown/feed analyzer/src/SharpDeps.Analysis.Markdown/obj/project.assets.json
 
+      - name: Evaluation harness contract and F4 source checks (no model calls)
+        run: |
+          python3 -m unittest discover -s comparison/contract-check -p 'test_*.py'
+          dotnet run --project comparison/f4-verification/evaluator-only/F4Fixture.csproj --configuration Release
+
       - name: Experimental OpenCode context reuse tests
         run: node --test eng/opencode-context-reuse/*.test.mjs
 

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "F4-R",
+    "source": "ReleaseFlow.cs",
+    "prompt": "Explain Run for all combinations of its three failure flags. State the exception (if any) observed by the caller, the trace entries in order, and which later actions still run. Cite decisive source lines and distinguish suppression, propagation, and replacement. Do not infer guarantees outside this code."
+  },
+  {
+    "id": "F4-N",
+    "source": "NestedCleanup.cs",
+    "prompt": "Explain Run for all combinations of its three failure flags. State the exception (if any) observed by the caller and whether each cleanup executes. Cite decisive source lines; explain the effect of nested finally blocks without assuming that the first failure is always preserved."
+  }
+]

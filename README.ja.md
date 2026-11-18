@@ -8,6 +8,14 @@ SharpDeps は .NET のプロジェクト・名前空間・型の依存関係を 
 
 画像は 0.1.0 の画面です。現在の操作と保存索引の互換性は、各ガイドで説明しています。
 
+## AI 調査の測定結果と限界
+
+通常はシンボル検索・正確な定義取得・1 段の関係取得を使います。提出前に、既にある証拠と回答を照合し、分岐条件や例外・後始末の経路を確認します。追加取得は不足する証拠だけに限定します。`explore` は明示的な依頼や手動調査用として残し、自動では切り替えません。
+
+2026 年 11 月 18 日の診断では、typed／ソースによる必須再確認と explore による必須再確認を、2 課題・各条件 2 回で比較しました。最終品質は **EF Core で両条件 11／12、Orleans で両条件 12／12**、重大誤りは 0 件でした。8 回答中 5 回答は仮回答から改善しましたが、**再確認なしの対照条件がないため、確認を必須にする効果は未検証**です。EF の release 失敗のログと finally の後始末例外による置換は、どちらの方法でも書き落とされました。
+
+Orleans では検証用の契約を変更しているため、課題ごとに別集計としています。費用の傾向も課題で異なり、この少数例から効率の優劣や品質の同等性は主張できません。[測定の詳細と限界](docs/development/forced-verification-results.md)。
+
 ## インストール
 
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) から **SharpDeps — .NET Dependency Map** をインストールします。[GitHub Releases](https://github.com/Htkym/sharpdeps/releases) の VSIX を使う場合は、VS Code の **Extensions: Install from VSIX…** で選択してください。この文書は 0.5.0 を対象としています。インストール前に Marketplace またはリリースページで公開状況を確認してください。
