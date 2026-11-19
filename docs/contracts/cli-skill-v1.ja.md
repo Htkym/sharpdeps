@@ -1,8 +1,8 @@
 # SharpDeps CLI／repo skill契約 v1
 
-CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。基礎契約は0.4.0に対応し、discoveryとその既定値、exploreでのroot省略、および準備／探索の予算を分けるsplit-v1は未公開の開発版の仕様である。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持し、同梱解析プログラムとQueryHostを更新する。
+CLIはnet10の.NET toolで、PackageIdは`SharpDeps.Cli`、ToolCommandNameは`sharpdeps`である。基礎契約は0.4.0に対応し、discoveryとその既定値、exploreでのroot省略、および準備／探索の予算を分けるsplit-v1は未公開の開発版の仕様である。0.4.0ではCLI／MCPと拡張機能を配布対象とし、実際の提供状況はレジストリ、Marketplace、GitHub Releaseで確認する。Explore、MCP変更、索引の再作成条件は[CLI and MCP exploration](../mcp.md)を参照する。旧report v1/v2とQuick／Semanticの実行境界を維持する。
 
-候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。公開する最終版と配布先の判断は別に行う。
+候補packでは基準版に`-ci.<run>.<attempt>`や`-rc.<id>`を付け、helpにも実際のpackage版を表示する。VSIXの基準版とCLIの基準版は一致させる。基準版の設定だけで安定公開済みとは判定しない。固定Syntamark runtime/source pairがpreviewの間は、release tagからの公開を拒否する。
 
 ## 起動と取得
 
@@ -23,23 +23,23 @@ dotnet tool install SharpDeps.Cli --local --version 0.4.0 --configfile 'D:\work\
 dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 ```
 
-既存manifestや認証設定を上書きしない。latest、wildcard、暗黙の別版fallbackを使わない。実pack、local manifestへのinstall、実CLIの検証結果はtaskの検証証跡で確認する。
+既存manifestや認証設定を上書きしない。latest、wildcard、暗黙の別版fallbackを使わない。インストール後はCLIのhelpで利用中のpackage版を確認する。
 
 ## commandsと引数
 
 `help`と`doctor`を除くworkspace commandには絶対local pathの`--root`を指定する。root外、UNC、symlink/junction/reparse pathは受け入れない。`--index`はroot内のindex pathで、省略時は`.sharpdeps/index.sqlite`。index pathを変更して旧indexを上書きする操作をqueryのfallbackにしない。
 
-| command | 対象と実行境界 |
-|---|---|
-| `index`, `update` | root内の`sln`/`slnx`/`csproj`を`--target`で指定し、`--trusted`を明示する。解析・書込み。updateは[差分更新契約](incremental-update-v1.ja.md)で閉じた入力を照合できる場合にMarkdown差分を処理し、それ以外はfull rebuildへ戻す |
-| `serve` | `--trusted`を明示し、root/indexのownerを起動する。更新は専用local IPCで受理する。`--watch --target TARGET`で同ownerに保存入力の監視を接続し、`--watch-resync-seconds`（1〜3600、既定30）で周期full抽出を行う |
-| `coordinator-status` | ownerの状態を専用IPCで読む。保存Queryのstatusやfreshnessとは別 |
-| `status`, `search`, `symbol`, `callers`, `callees`, `impact`, `context` | committed indexのQuery。untrustedでも保存値の読取りは可能。`--trusted`を指定したcontextだけが検証済みsource snippetを読める |
-| `query --kind search\|symbol\|callers\|callees\|impact\|context\|status` | 同じQueryへのalias |
-| `explore` | `--term`を入口に保存済み実装と参照根拠を予算内でまとめる。既定は`--format audit`で、`agent`も選べる。source本文には`--trusted`が必要 |
-| `install`, `uninstall` | `--client copilot-cli`の明示設定操作。rootと絶対パスの`--config-file`／`--instructions-file`を指定する。installには既存実行ファイルの`--mcp-command`も必要。`--dry-run`で書込み前に確認できる。既存ファイルは所有する未変更の組だけを扱い、uninstallは隣接backupを残す |
-| `doctor` | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す |
-| `help` | commandと引数の案内 |
+| command                                                                  | 対象と実行境界                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index`, `update`                                                        | root内の`sln`/`slnx`/`csproj`を`--target`で指定し、`--trusted`を明示する。解析・書込み。updateは[差分更新契約](incremental-update-v1.ja.md)で閉じた入力を照合できる場合にMarkdown差分を処理し、それ以外はfull rebuildへ戻す                                            |
+| `serve`                                                                  | `--trusted`を明示し、root/indexのownerを起動する。更新は専用local IPCで受理する。`--watch --target TARGET`で同ownerに保存入力の監視を接続し、`--watch-resync-seconds`（1〜3600、既定30）で周期full抽出を行う                                                           |
+| `coordinator-status`                                                     | ownerの状態を専用IPCで読む。保存Queryのstatusやfreshnessとは別                                                                                                                                                                                                         |
+| `status`, `search`, `symbol`, `callers`, `callees`, `impact`, `context`  | committed indexのQuery。untrustedでも保存値の読取りは可能。`--trusted`を指定したcontextだけが検証済みsource snippetを読める                                                                                                                                            |
+| `query --kind search\|symbol\|callers\|callees\|impact\|context\|status` | 同じQueryへのalias                                                                                                                                                                                                                                                     |
+| `explore`                                                                | `--term`を入口に保存済み実装と参照根拠を予算内でまとめる。既定は`--format audit`で、`agent`も選べる。source本文には`--trusted`が必要                                                                                                                                   |
+| `install`, `uninstall`                                                   | `--client copilot-cli`の明示設定操作。rootと絶対パスの`--config-file`／`--instructions-file`を指定する。installには既存実行ファイルの`--mcp-command`も必要。`--dry-run`で書込み前に確認できる。既存ファイルは所有する未変更の組だけを扱い、uninstallは隣接backupを残す |
+| `doctor`                                                                 | runtimeと実装の境界を表示する。SDK/MSBuildの実probeは行わず、`sdkProbe: "not-run"`を返す                                                                                                                                                                               |
+| `help`                                                                   | commandと引数の案内                                                                                                                                                                                                                                                    |
 
 解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定1800、最大3600で、通常は共有ownerへの応答待ち期限である。短命ownerは期限後も受理済み処理の終了を待つため、process全体の上限ではない。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
 
@@ -55,12 +55,12 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 `--query-kind http-get-literal`は保存済みのHttpGet宣言断片との完全一致を調べ、実効URLの一致を保証しない。`--path-to`はsymbol探索で、exactな開始occurrenceから対象occurrenceへの保存済みcall witnessを要求する。`--owner-status`は既存ownerを観測するだけで鮮度の証明ではない。探索形式と根拠の限界は[Exploreの案内](../mcp.md)に従う。
 
-| Query command | 必須selector |
-|---|---|
-| `status` | selectorなし |
-| `search` | `--term`のみ |
-| `symbol`, `callers`, `callees` | `--id`または`--ids`のどちらか一つ |
-| `impact`, `context` | `--term`、`--id`、`--ids`のいずれか一つ |
+| Query command                  | 必須selector                            |
+| ------------------------------ | --------------------------------------- |
+| `status`                       | selectorなし                            |
+| `search`                       | `--term`のみ                            |
+| `symbol`, `callers`, `callees` | `--id`または`--ids`のどちらか一つ       |
+| `impact`, `context`            | `--term`、`--id`、`--ids`のいずれか一つ |
 
 `--project-id`、`--path-prefix`、繰返し`--variant`、`--node-kind`でscopeを絞る。statusのscopeは`--variant`だけで、実装されていないproject/path/node-kind filterを拒否する。繰返し`--edge-kind`、`--include-candidates`、`--no-documents`、`--max-edges`、`--max-depth`は`callers`/`callees`/`impact`/`context`で使う。候補の取得と文書関係の除外を明示し、search/symbol/statusにはこれらの探索flagを渡さない。Impactの既定はdependentsで、Impact専用の`--dependencies`は依存先方向を選ぶ。`--page-size`は既定100、`--cursor`は同じquery/世代の次pageへ使う。
 
@@ -70,9 +70,9 @@ Queryのselectorは次のとおり。`--term`、`--id`、comma区切りの`--ids
 
 未公開の開発版`explore`はCLI／MCP／APIで同じsplit-v1契約を使う。準備予算はCLIの`--prepare-max-milliseconds`、MCPのflatな`prepareMaxMilliseconds`、APIの`ExploreRequest.PrepareMaxMilliseconds`で指定し、既定は30000msである。探索だけの予算はCLIの`--max-milliseconds`、MCPの`maxMilliseconds`、APIの`Budget.MaxMilliseconds`で指定し、既定は1000msである。両方とも10〜30000msの有限値で、0・範囲外・不正数・重複は拒否する。両方を省略してもこの既定値を使い、従来の共有期限には戻らない。
 
-準備にはsaved-index readerのopen、全snapshotの読取り／整合性検証／read-only化と、標準の派生index／lexical indexの準備を含む。HttpGet projectionも要求された場合はこの段階で準備する。探索の計時はその完了後に始まり、探索、source／鮮度検証、出力に適用する。一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。caller取消は両段階で有効であり、期限切れより優先する。取消は協調的で、同期処理の即時停止を保証するOS制限ではない。process起動、MCP handshake、transportはこの計算時間に含めない。
+準備にはsaved-index readerのopen、全snapshotの読取り／整合性検証／read-only化と、要求に必要な派生index／lexical indexの準備を含む。HttpGet projectionも要求された場合はこの段階で準備する。実在する単一のsaved identityまたはHttpGet literalの要求では、不要なlexical indexの準備を自動で省く。snapshotの検証、構造探索、sourceと鮮度の検証は省略しない。探索の計時はその完了後に始まり、探索、source／鮮度検証、出力に適用する。一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。caller取消は両段階で有効であり、期限切れより優先する。取消は協調的で、同期処理の即時停止を保証するOS制限ではない。process起動、MCP handshake、transportはこの計算時間に含めない。
 
-準備期限切れは`PREPARATION_TIMEOUT`、探索期限切れは`QUERY_TIMEOUT`、request全体の期限切れは`REQUEST_TIMEOUT`で、いずれもexit 4となる。caller取消は`CANCELLED`でexit 130となる。これらの失敗ではsourceを返さない。P1では各requestが新しいSQLite readerで全snapshotを検証し、4entry／serialized payload 64MiBの派生cacheを使う。現在のP2 code draftではMCP hostがWindowsの物理同一性を検査し、pin後の同一connectionの`data_version`が保持値と一致する場合に検証済みsnapshotを再利用する。証明できない場合とUnixでは新しいreaderで全量検証する。このhostは従来の64MiB cacheを経由せず、既定で一つの準備済み世代を保持するが、heap byte数の上限は保証しない。独立した準備ownerの既定期限は30000msで、callerが待機を終えても継続できるため、requestのP＋Qはその後のbackground処理全体の上限ではない。one-shot CLIは新しいreaderを使う。P2はWindows／SDK 10.0.404で限定buildと対象test 306件が成功し、失敗・skipはともに0件だった。小fixtureでdefault Windows経路のnative warm reuseも観測した。完全受入や実コーパスでの性能改善を示すものではなく、[検証範囲と未実施の受入項目](../development/prepared-exploration.md#diagnostics-and-validation-scope)を参照する。
+準備期限切れは`PREPARATION_TIMEOUT`、探索期限切れは`QUERY_TIMEOUT`、request全体の期限切れは`REQUEST_TIMEOUT`で、いずれもexit 4となる。caller取消は`CANCELLED`でexit 130となる。これらの失敗ではsourceを返さない。MCPの準備hostがWindowsの物理同一性を検査し、pin後の同一connectionの`data_version`が保持値と一致する場合に検証済みsnapshotを再利用する。証明できない場合とUnixでは新しいreaderで全量検証する。このhostは既定で一つの準備済み世代を保持するが、heap byte数の上限は保証しない。独立した準備ownerの既定期限は30000msで、callerが待機を終えても継続できるため、requestのP＋Qはその後のbackground処理全体の上限ではない。one-shot CLIは新しいreaderを使う。
 
 次の2例はどちらも準備30000ms、探索1000msを使う。値を変える場合は、対応CLIのhelpを確認し、用途・indexの規模・負荷・呼出し側の期限に応じて有限budgetを選ぶ。
 
@@ -81,24 +81,24 @@ sharpdeps explore --root /absolute/workspace --term "related names" --format age
 sharpdeps explore --root /absolute/workspace --term "related names" --format agent --prepare-max-milliseconds 30000 --max-milliseconds 1000
 ```
 
-探索の既定1000msは初期候補であり、`DbContext`全体やすべてのindex・操作の完了を保証しない。失敗時は返されたstageとerrorを確認し、失敗だけを理由に自動再試行や予算の引上げをしない。sourceを読む`--trusted`は別途許可が必要で、選択済み`--index`も保持する。この案内は設定変更・opt-out解除・追加アクセスを許可しない。
+探索の既定1000msは、大きな型の全体取得やすべてのindex・操作の完了を保証しない。失敗時は返されたstageとerrorを確認し、失敗だけを理由に自動再試行や予算の引上げをしない。sourceを読む`--trusted`は別途許可が必要で、選択済み`--index`も保持する。この案内は設定変更・opt-out解除・追加アクセスを許可しない。
 
-移行時には、同じ名前の`maxMilliseconds`／`--max-milliseconds`が準備を含む共有予算から探索だけの予算へ変わる点を確認する。過去の記録入力は変更せず、新しいcohort manifestを固定してから再計測する。元の24trial／共有8秒のP0 cohortとは値を直接比較しない。従来のexploreの0指定は目的に合う有限値へ明示的に変更する。この破壊的変更には同じ新しいbuildのCLI／MCP／API利用側が必要であり、公開時には新しいpackage versionを使う。公開済み0.4.0は変更せず、今回のsource変更ではreleaseを行わない。index schema 1／2／3も変更せず、in-place migrationは行わない。[準備済み探索の設計](../development/prepared-exploration.md)も参照する。
+移行時には、同じ名前の`maxMilliseconds`／`--max-milliseconds`が準備を含む共有予算から探索だけの予算へ変わる点を確認する。旧版と同じ予算値でも処理時間の範囲が異なる。従来のexploreの0指定は目的に合う有限値へ明示的に変更する。split-v1には対応する同一版のCLI／MCP／API利用側が必要であり、公開済み0.4.0の共有予算契約とは互換性がない。index schema 1／2／3も変更せず、in-place migrationは行わない。
 
 ## JSONと終了コード
 
 Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま一つのJSON objectとして出す。`apiVersion: "1"`、requestId、snapshot、items/candidates/unresolved、budget、truncated/reasons、diagnostics/errors等を保持し、CLI envelopeで包み直さない。command成功は`apiVersion: "1"`、command、requestId、result、空errorsの別envelopeで返す。Query開始前のCLI errorは同じ識別fieldとerrorsを持ち、resultを省略する。stderr progressをstdoutへ混ぜず、stack traceや秘密をJSON/logへ出さない。
 
-| exit | 意味 |
-|---:|---|
-| 0 | 成功。空hitも含む |
-| 2 | 不正引数、曖昧なtarget/選択 |
-| 3 | index未作成、freshness条件未達 |
-| 4 | SDK/MSBuild/restore/解析/coverage失敗、index入力の`CLI_ENCODING_UNSUPPORTED`、TIMEOUT、require-completeの打切り・不足 |
-| 5 | trust、root containment、source access拒否、保存indexのopen失敗、Query errorの`INVALID_SOURCE_ENCODING` |
-| 6 | lock、schema/protocol、cursor失敗 |
-| 7 | 内部失敗 |
-| 130 | cancellation |
+| exit | 意味                                                                                                                  |
+| ---: | --------------------------------------------------------------------------------------------------------------------- |
+|    0 | 成功。空hitも含む                                                                                                     |
+|    2 | 不正引数、曖昧なtarget/選択                                                                                           |
+|    3 | index未作成、freshness条件未達                                                                                        |
+|    4 | SDK/MSBuild/restore/解析/coverage失敗、index入力の`CLI_ENCODING_UNSUPPORTED`、TIMEOUT、require-completeの打切り・不足 |
+|    5 | trust、root containment、source access拒否、保存indexのopen失敗、Query errorの`INVALID_SOURCE_ENCODING`               |
+|    6 | lock、schema/protocol、cursor失敗                                                                                     |
+|    7 | 内部失敗                                                                                                              |
+|  130 | cancellation                                                                                                          |
 
 未リリースの開発版CLIはSQLiteの`SQLITE_CANTOPEN`（primary code 14、拡張codeを含む）を`INDEX_OPEN_FAILED`（exit 5）として返し、例外本文・stack trace・内部pathは出さない。これはindexまたは必要なfileを開けない状態で、sandbox拒否・OS ACL拒否・TEMP欠落のいずれかをcodeだけで断定しない。まず現在の権限内で選択したindex、既存WAL/SHM、runtimeの一時directoryの欠落・不正path・利用可能性を確認する。欠落や誤った選択はpermission reviewでは修復できず、既に許可された範囲で選択を直せない場合はblockerを報告する。pathが正しく、sandboxのaccess制限を示す根拠があり、その操作と再試行が許可されている場合だけ、clientの通常の対象限定permission reviewを依頼する。codeだけを根拠に審査や再試行をしない。OS ACL制限の確認時や審査拒否時は停止してblockerを報告し、権限変更・sandbox無効化・index複製やcheckpoint・immutable指定で迂回しない。失敗した個別fileが未特定なら未特定と明記し、許可された通常検索へ戻れる。予算延長はaccess問題の解決にならない。未知の例外は従来どおり`INTERNAL_ERROR`（exit 7）を保つ。
 
@@ -118,6 +118,6 @@ index/updateの選択入力はstrict UTF-8と、BOM付きUTF-16 LE/BEを扱う�
 
 `--trusted`は利用者が許可した解析/sourceアクセスを明示するflagで、repo本文から権限を得る仕組みではない。MSBuild/project/analyzer/generatorが実行し得るコードのsandboxや通信禁止を保証しない。install/restore、解析・更新、外部送信の許可を分け、無許可の自動update/install・全repo scan・無制限grepを行わない。固定Markdown pairの再pack、同版上書き、sourceの公開送信をCLI/skillから自動実行しない。
 
-repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)は、索引範囲内のsymbol・依存関係・保存call pathの質問で利用可能なexploreを優先し、単純な文字列検索や範囲外では通常検索へ戻る。status/search/contextの固定列は要求しない。利用者のopt-outを尊重し、無効化した設定を自動復元しない。導入・無効化は[AI向け設定の案内](../mcp.md#agent-routing-and-opt-out)に従い、personal skillや既存ユーザー設定を自動変更しない。
+repo用[sharpdeps-query skill](../../skills/sharpdeps-query/SKILL.md)は、索引範囲内のsymbol・依存関係にはtyped toolと必要箇所のsource読取りを使い、exploreへの自動切替は行わない。exploreは明示的な依頼や手動調査に利用できる。単純な文字列検索や範囲外では通常検索へ戻る。status/search/contextの固定列は要求しない。利用者のopt-outを尊重し、無効化した設定を自動復元しない。導入・無効化は[AI向け設定の案内](../mcp.md#agent-routing-and-opt-out)に従い、personal skillや既存ユーザー設定を自動変更しない。
 
 新規索引はSQLite schema 3で、現行readerはschema 1／2／3を受理する。古い索引をその場で変換せず、必要な本文保存機能を使う場合は旧DBとsidecarを保持した別パスへ再作成する。生成本文はschema 2以降、パッケージ本文はschema 3が必要である。VS Codeは同梱QueryHostで読むため、外部CLIの更新だけではreaderの互換性は変わらない。[索引保存契約](index-storage-v1.ja.md)と[操作ガイド](../guide.ja.md#保存済み索引を使う)を参照する。

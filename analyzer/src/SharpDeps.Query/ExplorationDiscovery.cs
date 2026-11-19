@@ -227,6 +227,13 @@ public sealed partial class ExplorationService
                 groups.Select(group => group.Outcome(group.Units, group.pending)));
             var text = new StringBuilder($"SharpDeps discover generation={owner.saved.Graph.Generation} snapshot={Safe(owner.saved.Graph.SnapshotId, 160)} outcome={outcome} groups={groups.Count} omittedGroups={omittedGroups}\n");
             if (request.Format == ExploreFormat.Agent && groups.Count > 0) AppendAgentContext(text);
+            if (CompactAgentMetadata && groups.Count > 1)
+            {
+                // One saved snapshot and shared prose, but each group's scope, freshness,
+                // errors, omissions, aliases and source evidence remain independent below.
+                text.AppendLine(CompactMetadataNotice);
+                text.AppendLine("Shared omission policy: " + OmittedBodyNotice);
+            }
             if (request.Format == ExploreFormat.Agent && groups.Count > 1 && (owner.saved.Graph.Diagnostics?.Count ?? 0) > 0)
             {
                 text.AppendLine("Index diagnostics (all saved scopes):");

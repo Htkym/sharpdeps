@@ -12,14 +12,14 @@ DTOはContracts/Harness、pure identity helperはCore/Identity/HarnessIdentity�
 
 workspace UUIDには呼出し側が永続化した非empty Guidを渡します。ID helperがrootからUUIDを生成したり、untrusted状態でsidecarを作成したりしません。WorkspaceIdはhw_とlowercase UUIDのN形式です。同じworkspaceを移動する場合はUUIDを保持し、canonical rootは属性として更新します。別workspaceは別UUIDです。
 
-| ID | 入力と意味 |
-| --- | --- |
-| hpr | workspace UUIDと正規化した相対project pathからの初期seed |
+| ID   | 入力と意味                                                                                  |
+| ---- | ------------------------------------------------------------------------------------------- |
+| hpr  | workspace UUIDと正規化した相対project pathからの初期seed                                    |
 | hsym | workspace UUID、persisted project ID（hpr）、symbol kind、Roslyn側で正規化した完全signature |
-| hvar | workspace UUID、project ID、TFM、Configuration、nullable Platform/RIDの選択条件 |
-| hocc | workspace UUID、logical symbol ID、variant ID |
-| hdoc | workspace UUIDと永続document UUID。pathは入力にしない |
-| hsec | workspace UUID、document ID、確定した永続section token |
+| hvar | workspace UUID、project ID、TFM、Configuration、nullable Platform/RIDの選択条件             |
+| hocc | workspace UUID、logical symbol ID、variant ID                                               |
+| hdoc | workspace UUIDと永続document UUID。pathは入力にしない                                       |
+| hsec | workspace UUID、document ID、確定した永続section token                                      |
 
 hpr以降はfull SHA256の64桁です。hashはidentityVersion、prefix、各fieldを順に処理します。fieldはnullなら1byteの0、既知なら1byteの1、UTF-8 byte長のuint64 big-endian、strict UTF-8 bytesです。framingではnullと空文字を区別し、曖昧なseparator連結を使いません。Platform/RIDのselectionだけは先にnull/空/whitespaceを未指定のnullへ正規化します。MSBuildの取得経路によって同じ選択が二つのvariantへ分かれないようにします。
 
@@ -41,11 +41,11 @@ JSON property名はcamelCase、enum値はC# enum名の文字列です。新Harne
 
 ## read/write trust
 
-| 操作 | trusted | untrusted |
-| --- | --- | --- |
-| ReadSaved / readSaved | 許可 | 許可 |
-| Index、Update、Watch、Restore、WriteStore | 許可 | 拒否 |
-| 未知の操作 | 拒否 | 拒否 |
+| 操作                                      | trusted | untrusted |
+| ----------------------------------------- | ------- | --------- |
+| ReadSaved / readSaved                     | 許可    | 許可      |
+| Index、Update、Watch、Restore、WriteStore | 許可    | 拒否      |
+| 未知の操作                                | 拒否    | 拒否      |
 
 ReadSavedは保存済みの検証された結果だけを対象にします。workspaceのsource読取り、解析、更新、sidecar/DBの作成・migration・cache書込みを含めません。既存trustDecisionのQuick/Semantic gateとメッセージを維持します。helperはC#とTypeScriptで同じ操作表を持ち、CLI/storage/watchの入口で操作前に明示適用します。保存表示だけでsource読取りや更新の権限を得ることはありません。
 

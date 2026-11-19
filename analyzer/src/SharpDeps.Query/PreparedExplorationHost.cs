@@ -111,7 +111,10 @@ internal sealed class PreparedExplorationHost : IAsyncDisposable
                 using var standard = PhaseMetrics.Measure("explore.prepare-standard");
                 prepared = new ExplorationSnapshot(snapshot, owner.Token,
                     reader.ValidatedNodes, reader.ValidatedOccurrences, reader.ValidatedFiles);
-                _ = prepared.GetSearchIndex(owner.Token);
+                // The independent owner validates the generation and builds shared graph maps only.
+                // Request-specific lexical/literal preparation stays under the caller's preparation
+                // budget in ExplorationService.PrepareSnapshot, before StartQuery. A cancelled
+                // lexical build publishes nothing and does not invalidate this validated generation.
                 owner.Token.ThrowIfCancellationRequested();
                 entry.Prepared = prepared;
                 PhaseMetrics.Decision("explore.host", "generation-prepared");

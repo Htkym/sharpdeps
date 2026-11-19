@@ -56,6 +56,13 @@ const REQUIRED = [
   'docs/guide.md',
   'docs/guide.ja.md',
   'docs/mcp.md',
+  'docs/multihop-comparison-results.md',
+  'docs/multihop-comparison-results.json',
+  'docs/forced-verification-results.md',
+  'docs/agent-packages.md',
+  'docs/context-reuse.md',
+  'docs/metrics.md',
+  'docs/process-observation.md',
   ...['overview', 'evidence', 'spacing', 'table'].flatMap((name) =>
     ['en', 'ja'].map((language) => `images/${name}-${language}.png`)
   ),

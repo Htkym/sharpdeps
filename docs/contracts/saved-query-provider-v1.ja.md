@@ -1,6 +1,6 @@
 # 保存済みQuery provider 契約 v1
 
-共通Queryの保存済み索引を既存webviewへつなぐ契約である。全機能・全環境の受入完了を意味しない。旧report v1/v2とprotocol v2のIDを維持する。0.4.0は同梱QueryHostを更新し、SQLite schema 1／2／3を読む。現在の利用手順と旧VSIXからの切替は[操作ガイド](../guide.ja.md#保存済み索引を使う)に従う。
+共通Queryの保存済み索引を既存webviewへつなぐ契約である。旧report v1/v2とprotocol v2のIDを維持する。0.4.0は同梱QueryHostを更新し、SQLite schema 1／2／3を読む。現在の利用手順と旧VSIXからの切替は[操作ガイド](../guide.ja.md#保存済み索引を使う)に従う。
 
 ## 選択、世代と実行境界
 
@@ -30,14 +30,14 @@ NamespaceへのdrillとNamespace parentのBrowseは`namespaceBrowseVersion=1`を
 
 `QueryResultMetadata`はanalysisComplete/searchResults/details/evidencePageの直下、projectionの内部に任意fieldとして渡す。
 
-| field | 表示・解釈 |
-|---|---|
-| provider | `savedIndex` |
-| workspaceId / snapshotId / generation / variantIds | 保存世代と選択variant。分析tab・inspector等で表示 |
-| coverage / freshness | 共通Queryの元状態。CompleteWithinScope/Partial/Failedと鮮度を補完しない |
-| returnedCount / totalKind | `totalKind: returned`。providerが表示へ渡した項目数（node等）であり、未返却を含む全hit数ではない |
-| truncated / truncationReasons | Queryの打切りと理由。打切りなしも全sourceの完全解析証明ではない |
-| diagnostics / candidateCount / unresolvedCount | 共通Queryの診断、候補数、未解決数を表示。関係の候補を含むため、表示項目数との和・一致を主張しない |
+| field                                              | 表示・解釈                                                                                        |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| provider                                           | `savedIndex`                                                                                      |
+| workspaceId / snapshotId / generation / variantIds | 保存世代と選択variant。分析tab・inspector等で表示                                                 |
+| coverage / freshness                               | 共通Queryの元状態。CompleteWithinScope/Partial/Failedと鮮度を補完しない                           |
+| returnedCount / totalKind                          | `totalKind: returned`。providerが表示へ渡した項目数（node等）であり、未返却を含む全hit数ではない  |
+| truncated / truncationReasons                      | Queryの打切りと理由。打切りなしも全sourceの完全解析証明ではない                                   |
+| diagnostics / candidateCount / unresolvedCount     | 共通Queryの診断、候補数、未解決数を表示。関係の候補を含むため、表示項目数との和・一致を主張しない |
 
 初期analysisCompleteの表示状態はpartialとし、表示subsetが未計測であることを示す。engine coverageはmetadataにそのまま残す。従来protocolが要求するcoverage/evidenceCount/inCycleの0/false placeholderを、saved UIで解析件数ゼロ・evidenceゼロ・cycleなしの事実として表示しない。
 
