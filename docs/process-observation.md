@@ -1,6 +1,6 @@
 # Attach-only process observation
 
-`scripts/observe-process.ps1` is a separate, opt-in observer for SDN-09 and SDN-18.
+`scripts/observe-process.ps1` is a separate, opt-in observer.
 It requires PowerShell 7 on Windows with identified local-volume paths and an
 explicitly supplied, already running PID. It never
 launches, signals, suspends, kills or changes the target, follows no descendants,
@@ -127,7 +127,7 @@ unfinished evidence. The observer never claims a product exit status or success.
   cumulative writes would require additional file-I/O tracing (for example ETW with
   appropriate access/trace configuration) or instrumented SQLite/VFS boundaries,
   with their own overhead and validation. Neither is enabled here; process-wide
-  counters do not complete the SDN-18 file-write acceptance requirement.
+  counters do not complete the per-file write verification requirement.
 - Null metrics always have a fixed reason. Zero is retained only when observed.
   CPU/I/O reference intervals, sizes and process reads are sequential, not an atomic snapshot.
 
@@ -160,7 +160,12 @@ A caller can append explicit markers to `-MarkerPath`, one newline-terminated JS
 object per record, using this schema:
 
 ```json
-{"schema":"sharpdeps-observer-marker/1","sequence":1,"utc":"2026-11-08T00:00:00.0000000+00:00","kind":"idle-start"}
+{
+  "schema": "sharpdeps-observer-marker/1",
+  "sequence": 1,
+  "utc": "2026-11-08T00:00:00.0000000+00:00",
+  "kind": "idle-start"
+}
 ```
 
 Allowed kinds are `checkout-start`, `checkout-end`, `acquisition-start`,
@@ -187,25 +192,6 @@ keep a separately authorized private manifest with commit/binary/corpus hashes,
 SDK/machine, configuration/TFM/RID, restore/cache state and parallelism. This
 observer neither creates that manifest nor copies arbitrary manifest contents.
 
-## Synthetic checks
-
-After resource authorization, run:
-
-```powershell
-pwsh -NoProfile -File scripts/Test-ProcessObservation.ps1
-pwsh -NoProfile -File scripts/Test-ProcessIoObservation.ps1
-```
-
-These checks use injected counters/time and temporary byte fixtures. The I/O
-checks invoke no OS provider and cover missing/partial counters, reused identity,
-unsupported platforms, exact UInt64 deltas, regression, gaps, unequal collection delays, backward UTC changes and privacy. They cover
-C0 caller boundaries, CPU baselines/regression/missing samples, lifetime versus sampled peaks, negative
-size changes, absent WAL, identity/exit, fixed lifecycle projection and privacy,
-partial/malformed/truncated/bounded and late-created input, required role guards,
-both overlap directions, injected reparse ancestors, mocked physical aliases, volume-root containment,
-unknown canonical identity, output isolation, cancellation, duration
-and collection failure. They launch no product process and perform no benchmark.
-
 ## Acceptance limits
 
 CIM/attach acceptance is limited to a short functional smoke with an explicitly
@@ -216,7 +202,6 @@ a broader root, change permissions or use another path to force launch.
 
 Natural exit, Ctrl+C under the actual host, long watch/resync, resource caps and
 observer overhead still require separate acceptance runs.
-
 
 Official contracts: [Win32_Process read-only counters](https://learn.microsoft.com/windows/win32/cimwin32prov/win32-process),
 [IO_COUNTERS scope](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-io_counters)

@@ -74,12 +74,12 @@ Switch to **Table** for a sortable list of the same scope. Select a row to inspe
 
 An arrow points from the dependent entity to the entity it depends on. Node colors identify project kinds, with a legend above the graph.
 
-| Appearance | Meaning |
-| --- | --- |
-| Solid line | At least one included relation is declared, evaluated, or symbol-resolved. In Quick, a declared project reference does not prove that the compiled code uses it. |
-| Dashed line | Only inferred relationships exist, such as a namespace dependency suggested by `using`. |
-| Red line or cycle mark | The connection or entity belongs to a detected cycle group. |
-| `G` / `ext` | Generated code / an external type. These marks are separate from the relation's basis. |
+| Appearance             | Meaning                                                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Solid line             | At least one included relation is declared, evaluated, or symbol-resolved. In Quick, a declared project reference does not prove that the compiled code uses it. |
+| Dashed line            | Only inferred relationships exist, such as a namespace dependency suggested by `using`.                                                                          |
+| Red line or cycle mark | The connection or entity belongs to a detected cycle group.                                                                                                      |
+| `G` / `ext`            | Generated code / an external type. These marks are separate from the relation's basis.                                                                           |
 
 A directed node pair has one visible connection. When several relations contribute to it, Details retains their separate basis and occurrence counts. Selecting an underlying relation keeps its own evidence selected and highlights the shared connection.
 
@@ -99,12 +99,12 @@ From a C# editor, **SharpDeps: Show Type Dependencies (cursor)** and **Show Type
 
 The controls stay in the **bottom bar**:
 
-| Control | Action |
-| --- | --- |
-| Direction | Switch between **Horizontal** and **Vertical**. Vertical graphs center horizontally when they fit. |
-| `+`, `−`, Zoom percent | Change magnification. You can also use Ctrl/Command + wheel over the graph. |
-| Fit | Fit the whole graph into the visible area. Large graphs may become small; zoom in and scroll to read them. |
-| Spacing | Open the settings above the button; adjust **Node spacing** and **Rank spacing**. |
+| Control                      | Action                                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Direction                    | Switch between **Horizontal** and **Vertical**. Vertical graphs center horizontally when they fit.                         |
+| `+`, `−`, Zoom percent       | Change magnification. You can also use Ctrl/Command + wheel over the graph.                                                |
+| Fit                          | Fit the whole graph into the visible area. Large graphs may become small; zoom in and scroll to read them.                 |
+| Spacing                      | Open the settings above the button; adjust **Node spacing** and **Rank spacing**.                                          |
 | Cancel layout / Retry layout | Stop or retry graph placement without cancelling analysis. The table remains available if placement fails or is cancelled. |
 
 ![Vertical layout with Spacing opening above the bottom bar](../images/spacing-en.png)
@@ -133,41 +133,41 @@ The view retains its target, scope, selection, filters, layout, pane sizes, and 
 
 Search and view shortcuts apply when you are not typing into an input; zoom shortcuts require focus in the graph. Escape can still close an open popup or Details.
 
-| Key | Action |
-| --- | --- |
-| `/` | Focus search. |
-| `g` / `t` | Show the graph / table. |
-| Tab / Shift+Tab | Move between controls. |
-| Enter | Select or activate a focused node, connection, or row. |
-| Space | Select a focused graph node, connection, or table row. |
-| Escape | Close a popup or Details; otherwise clear selection. |
-| `+` / `−` / `0` | Zoom in / out / fit the graph. |
-| Arrow keys on a pane divider | Resize the pane. |
+| Key                          | Action                                                 |
+| ---------------------------- | ------------------------------------------------------ |
+| `/`                          | Focus search.                                          |
+| `g` / `t`                    | Show the graph / table.                                |
+| Tab / Shift+Tab              | Move between controls.                                 |
+| Enter                        | Select or activate a focused node, connection, or row. |
+| Space                        | Select a focused graph node, connection, or table row. |
+| Escape                       | Close a popup or Details; otherwise clear selection.   |
+| `+` / `−` / `0`              | Zoom in / out / fit the graph.                         |
+| Arrow keys on a pane divider | Resize the pane.                                       |
 
 ## Settings and troubleshooting
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `sharpdeps.analysisMode` | `quick` | Initial mode. |
-| `sharpdeps.resultProvider` | `legacy` | Quick/Semantic or stored `savedIndex` results. |
-| `sharpdeps.savedIndexVariant` | `""` | Exact saved `hvar_` ID; required when an index has multiple variants. |
-| `sharpdeps.savedIndexAutoRefresh` | `false` | Adopt committed generations from an explicitly started CLI watch. |
-| `sharpdeps.savedIndexCliPath` | `""` | Absolute path to a compatible CLI DLL for explicit updates and owner-status observation; does not replace the bundled reader. |
-| `sharpdeps.savedIndexUpdateTimeoutSeconds` | `1800` | Saved-index reply wait in seconds, from 1 to 3600. Cooperative cancellation and owner drain may take longer; separate from Quick/Semantic analysis. |
-| `sharpdeps.analysisTimeoutSeconds` | `180` | Analysis time limit in seconds. |
-| `sharpdeps.maxProjects` | `60` | Project/namespace display limit. |
-| `sharpdeps.maxVisibleTypes` | `100` | Type display limit. |
-| `sharpdeps.maxEdges` | `200` | Connection display limit. |
-| `sharpdeps.dotnetPath` | `""` | Optional absolute path to `dotnet`. Semantic uses this setting or `PATH` and checks SDK resolution in the target directory. |
+| Setting                                    | Default  | Purpose                                                                                                                                             |
+| ------------------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sharpdeps.analysisMode`                   | `quick`  | Initial mode.                                                                                                                                       |
+| `sharpdeps.resultProvider`                 | `legacy` | Quick/Semantic or stored `savedIndex` results.                                                                                                      |
+| `sharpdeps.savedIndexVariant`              | `""`     | Exact saved `hvar_` ID; required when an index has multiple variants.                                                                               |
+| `sharpdeps.savedIndexAutoRefresh`          | `false`  | Adopt committed generations from an explicitly started CLI watch.                                                                                   |
+| `sharpdeps.savedIndexCliPath`              | `""`     | Absolute path to a compatible CLI DLL for explicit updates and owner-status observation; does not replace the bundled reader.                       |
+| `sharpdeps.savedIndexUpdateTimeoutSeconds` | `1800`   | Saved-index reply wait in seconds, from 1 to 3600. Cooperative cancellation and owner drain may take longer; separate from Quick/Semantic analysis. |
+| `sharpdeps.analysisTimeoutSeconds`         | `180`    | Analysis time limit in seconds.                                                                                                                     |
+| `sharpdeps.maxProjects`                    | `60`     | Project/namespace display limit.                                                                                                                    |
+| `sharpdeps.maxVisibleTypes`                | `100`    | Type display limit.                                                                                                                                 |
+| `sharpdeps.maxEdges`                       | `200`    | Connection display limit.                                                                                                                           |
+| `sharpdeps.dotnetPath`                     | `""`     | Optional absolute path to `dotnet`. Semantic uses this setting or `PATH` and checks SDK resolution in the target directory.                         |
 
-| Symptom | What to check |
-| --- | --- |
-| Analysis cannot start | Trust the workspace. For Quick, check the runtime; for Semantic, check the installed SDK, `global.json`, and package restore. |
-| Type view is unavailable | Check the target and limitations. Quick shows syntax declarations; Semantic shows semantic analysis results. |
-| Entities are missing from the picture | Check scope, search, filters, and display limits. Search still covers the analyzed index; limitations describe anything not analyzed. |
-| Graph layout failed or was cancelled | Use Table to inspect the result; use Spacing → Retry layout to try placement again. |
-| Result is stale | Save intended edits. Analyze again for legacy, or explicitly update then Refresh for savedIndex. |
-| Analysis failed or was stopped | Check Analysis limitations and the **SharpDeps** channel in VS Code's Output panel. The last successful result remains available. |
-| A new saved index cannot be opened | Check the installed extension version, schema, runtime, and exact variant. The 0.2.1 VSIX cannot read schema 2/3; upgrading only the external CLI does not update its reader. |
-| Index/update reports `INDEX_SCHEMA_MIGRATION_REQUIRED` | Retain the old index and rebuild into a new index with compatible tools. No automatic schema conversion occurs. The extension reads only the default index path; use a separate source checkout to try a new default index without replacing the old one. |
+| Symptom                                                  | What to check                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analysis cannot start                                    | Trust the workspace. For Quick, check the runtime; for Semantic, check the installed SDK, `global.json`, and package restore.                                                                                                                                                                                                                                          |
+| Type view is unavailable                                 | Check the target and limitations. Quick shows syntax declarations; Semantic shows semantic analysis results.                                                                                                                                                                                                                                                           |
+| Entities are missing from the picture                    | Check scope, search, filters, and display limits. Search still covers the analyzed index; limitations describe anything not analyzed.                                                                                                                                                                                                                                  |
+| Graph layout failed or was cancelled                     | Use Table to inspect the result; use Spacing → Retry layout to try placement again.                                                                                                                                                                                                                                                                                    |
+| Result is stale                                          | Save intended edits. Analyze again for legacy, or explicitly update then Refresh for savedIndex.                                                                                                                                                                                                                                                                       |
+| Analysis failed or was stopped                           | Check Analysis limitations and the **SharpDeps** channel in VS Code's Output panel. The last successful result remains available.                                                                                                                                                                                                                                      |
+| A new saved index cannot be opened                       | Check the installed extension version, schema, runtime, and exact variant. The 0.2.1 VSIX cannot read schema 2/3; upgrading only the external CLI does not update its reader.                                                                                                                                                                                          |
+| Index/update reports `INDEX_SCHEMA_MIGRATION_REQUIRED`   | Retain the old index and rebuild into a new index with compatible tools. No automatic schema conversion occurs. The extension reads only the default index path; use a separate source checkout to try a new default index without replacing the old one.                                                                                                              |
 | CLI index/update reports `CLI_MARKDOWN_FACTS_INCOMPLETE` | Markdown facts contain invalid, truncated, or unsupported source structure. No new generation is published; a previous snapshot remains available and may be stale. Review the input and parser limits. Supported opaque/decoded-mapping Partial facts with complete raw structure can be indexed while retaining Partial coverage. Markdown is not silently excluded. |

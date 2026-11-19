@@ -12,9 +12,11 @@ The images show the 0.1.0 workbench. See the guides for current controls and sav
 
 SharpDeps defaults to typed symbol lookup, exact reads and one-hop relations. Check the final answer against existing evidence, including branch conditions and exception/cleanup paths; retrieve only missing evidence. `explore` remains available for explicit requests or manual investigation, not automatic escalation.
 
+In a separate **historical controlled comparison**, typed-only SharpDeps used **43.4% fewer total host tokens** and had **34.3% lower host-estimated cost per valid answer** than source-only investigation without SharpDeps. Two selected multihop tasks × two repetitions per arm scored 11.50/12 versus 11.25/12, with no critical errors. These are small-sample observations from a modified harness, **not current-product guarantees or evidence that the final-answer/F4 checklist helps**. [Conditions, numerical evidence and calculation](docs/multihop-comparison-results.md).
+
 A November 18, 2026 diagnostic compared mandatory typed/source re-checks with mandatory explore re-checks (two tasks, two repetitions per arm). Final quality was **11/12 for both arms on EF Core** and **12/12 for both on Orleans**; no critical errors were scored. Five of eight answers improved between the provisional and final answer, but **there was no no-recheck control**, so this does not establish the causal benefit of requiring a check. Neither method repaired EF's release-failure logging and finally-cleanup exception-replacement omissions.
 
-Orleans used a revised exact-selector harness, so the tasks are reported separately, not pooled as an identical eight-session experiment. Costs differed by task; neither an efficiency winner nor quality equivalence is established by this small sample. [Measurement details and limitations](docs/development/forced-verification-results.md).
+Orleans used a revised exact-selector harness, so the tasks are reported separately, not pooled as an identical eight-session experiment. Costs differed by task; neither an efficiency winner nor quality equivalence is established by this small sample. [Measurement details and limitations](docs/forced-verification-results.md).
 
 ## Install
 
@@ -22,9 +24,9 @@ Install **SharpDeps — .NET Dependency Map** from the [Visual Studio Marketplac
 
 VS Code 1.90 or later is required. Trust the workspace before running analysis.
 
-| Mode | Use it for | Requirements |
-| --- | --- | --- |
-| Quick | Project references, C# declarations and syntax-based relationships. | .NET 10 runtime; no SDK, MSBuild evaluation or package restore. |
+| Mode     | Use it for                                                                  | Requirements                                                               |
+| -------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Quick    | Project references, C# declarations and syntax-based relationships.         | .NET 10 runtime; no SDK, MSBuild evaluation or package restore.            |
 | Semantic | Evaluated C# references, symbol-resolved relationships and source evidence. | .NET 10 runtime, a target-compatible SDK and restored target dependencies. |
 
 The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) supplies the extension's runtime when needed. SharpDeps does not install an SDK or restore your project's packages.

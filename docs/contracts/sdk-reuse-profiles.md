@@ -89,6 +89,7 @@ path alias, including DOS 8.3 aliases.
 Resource limits apply to the whole set, not separately to each package.
 Retained/expanded byte caps are logical accounting limits, not peak-memory or
 RSS limits:
+
 - Per inventory: at most 2048 retained package files, 64 MiB retained package bytes
   and 64 MiB declared archive expanded bytes.
 - Shared across BOTH inventories, SDK pin reads and owner inputs: 8192 visited,

@@ -10,7 +10,7 @@
 
 restore後に `Verify-ConsumerArtifacts.mjs` で同pair、feedの両artifact、実際のrestored runtime/Source nupkg、runtime DLL、依存が空であることを確認します。trusted Index入口では、ロード済みruntime DLL hashとcallerが期待したParserVersionを照合し、不一致・確認不能を拒否します。parse後もfactsのparser/contract/profileと`native-yaml/1`を確認します。startupのassembly hash読取りはconsumer hostのI/Oで、共有parserのI/Oではありません。
 
-固定artifactは`eng/markdown/feed`に保存し、`NuGet.Config`のexact package mappingで復元します。2.0.0では正式GitHub Releaseのsealed原本を保存しており、その原本はNuGet署名付き版と署名以外のpayloadが一致します。現行analyzer solutionはCLI／MCPとMarkdown testsを含み、参照先のMarkdown projectもビルドします。metadataの`sourceRepository`は移管先の`Htkym/syntamark`を示し、`source-history.json`は元の履歴対応を保持します。SyntamarkはCLI／MCPの依存であり、VSIXへ同梱するQuick／Semantic／QueryHostの直接依存ではありません。
+固定artifactは`eng/markdown/feed`に保存し、`NuGet.Config`のexact package mappingで復元します。2.0.0では正式GitHub Releaseのsealed原本を保存しており、その原本はNuGet署名付き版と署名以外のpayloadが一致します。metadataの`sourceRepository`は移管先の`Htkym/syntamark`を示し、`source-history.json`は元の履歴対応を保持します。SyntamarkはCLI／MCPの依存であり、VSIXへ同梱するQuick／Semantic／QueryHostの直接依存ではありません。
 
 ## 元factsを保持する投影
 
