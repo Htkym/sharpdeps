@@ -31,7 +31,7 @@ In a build from this branch, repeat `--project` to index the C# projects you wan
 sharpdeps index --root /absolute/workspace --target YourSolution.sln --project src/Api/Api.csproj --project src/Services/Services.csproj --configuration Release --trusted
 ```
 
-Paths are relative to `--root`. Use the same selection with `update`. A scoped index omits workspace Markdown and collects code from the selected compilations. Unused files in local package caches do not consume its input budget. Scoped updates load the compilations again. Queries report `unverified` freshness and verify the hashes of source they return. To keep the whole-workspace generation available alongside the scoped generation, give the scoped index its own `--index` path.
+Paths are relative to `--root`. Use the same selection with `update`. A scoped index omits workspace Markdown and collects code from the selected compilations. Its saved diagnostics include the number of explicitly selected projects in `cli.explicitlySelectedProjects`. Unused files in local package caches do not consume its input budget. Scoped updates load the compilations again. Queries report `unverified` freshness and verify the hashes of source they return. To keep the whole-workspace generation available alongside the scoped generation, give the scoped index its own `--index` path.
 
 [dnx](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-exec) is an alternative launcher with SDK 10.0.100 or later:
 

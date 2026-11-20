@@ -569,6 +569,8 @@ public static class CliIndexer
             }
             if (loaded.Report.Diagnostics.Count != 0)
                 diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
+            if (scoped)
+                diagnostics["cli.explicitlySelectedProjects"] = selectedPaths.Count;
             if (loaded.Report.Limitations.Count != 0)
                 diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
             var compilerErrors = variants.Sum(v => v.ErrorDiagnosticCount);

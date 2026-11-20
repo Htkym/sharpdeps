@@ -1765,6 +1765,7 @@ public sealed class CliTests
             using var reader = IndexReader.Open(fixture.IndexPath, workspace);
             var snapshot = reader.Snapshot();
             Assert.Equal(generation, snapshot.Graph.Generation);
+            Assert.Contains(snapshot.Graph.Diagnostics!, item => item.Code == "cli.explicitlySelectedProjects" && item.Count == 2);
             Assert.All(snapshot.Files, file => Assert.Null(file.Reuse));
             var handler = Assert.Single(snapshot.Graph.Nodes, node => node.Name == "Handle");
             var service = Assert.Single(snapshot.Graph.Nodes, node => node.Name == name);
