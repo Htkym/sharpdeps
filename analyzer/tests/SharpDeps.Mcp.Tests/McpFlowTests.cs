@@ -437,6 +437,22 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         }
     }
 
+    [Fact]
+    public async Task EmptyIndexReturnsSourceFallbackThroughCliAndReadOnlyMcp()
+    {
+        using var fixture = new Fixture();
+        const string empty = "empty.sqlite";
+        using (IndexWriter.Open(fixture.Root, Path.Combine(fixture.Root, empty), fixture.Workspace, isTrusted: true)) { }
+        await using var adapter = new McpQueryAdapter(new(fixture.Root, Index: empty));
+        var (exit, text, _) = await AssertEquivalent(adapter, Explore("Service"),
+            ["explore", "--root", fixture.Root, "--index", empty, "--format", "agent", "--term", "Service"]);
+        Assert.Equal(3, exit);
+        using var response = JsonDocument.Parse(text);
+        var issue = Assert.Single(response.RootElement.GetProperty("errors").EnumerateArray());
+        Assert.Equal("INDEX_NO_SNAPSHOT", issue.GetProperty("code").GetString());
+        Assert.Contains("source read/search", issue.GetProperty("message").GetString());
+    }
+
     private static async Task<(int Exit, string Text, CallToolResult Result)> AssertEquivalent(
         McpQueryAdapter adapter, CallToolRequestParams request, IReadOnlyList<string> arguments)
     {
@@ -486,9 +502,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
         if (allowMutations)
         {
             start.ArgumentList.Add("--allow-mutations");
-            File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), """
-                <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>
-                """);
+            SelectFixtureSdk(start);
+            try { await PrepareScopedProjectsAsync(fixture.Root, analyzer.Parent!.FullName); }
+            catch (Exception error) { output.WriteLine("Scoped fixture setup: {0}", error); throw; }
         }
         using var process = Process.Start(start)!;
         var stderr = process.StandardError.ReadToEndAsync();
@@ -644,7 +660,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
                 var text = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains("HTTP_GET_DECLARATION_NOT_FOUND", text, StringComparison.Ordinal);
             }
-            await Send("""{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"index","arguments":{"arguments":["--target","App.csproj"]}}}""");
+            var selection = new { target = "Playback.slnx", projects = new[] { "App.csproj", "Playback/Services.csproj" },
+                configuration = "Release", targetFramework = "net10.0" };
+            await Call(4, "index", selection);
             using (var indexed = await Reply(4))
             {
                 if (allowMutations) AssertMutation(indexed, "index");
@@ -652,15 +670,47 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             }
             if (allowMutations)
             {
+                await Call(24, "explore", new { query = "HandlePlayback", format = "audit", scopePolicy = "unique",
+                    responseMode = "detail", maxMilliseconds = 10000 });
+                using (var evidence = await Reply(24))
+                {
+                    var result = evidence.RootElement.GetProperty("result");
+                    Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
+                    var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+                    Assert.Contains("Freshness=unverified", text);
+                    Assert.Contains("QueryHandler.cs", text);
+                    Assert.Contains("--calls/Resolved-->", text);
+                    Assert.Matches(@"(?m)^3\t\s*public int HandlePlayback\(\) => PlayService\.ReadPlayback\(\);", text);
+                }
+                await Call(26, "explore", new { query = "ReadPlayback", format = "audit", scopePolicy = "unique",
+                    responseMode = "evidence", maxMilliseconds = 10000 });
+                using (var service = await Reply(26))
+                {
+                    var result = service.RootElement.GetProperty("result");
+                    Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
+                    var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+                    Assert.Contains("Playback/PlayService.cs", text);
+                    Assert.Matches(@"(?m)^1\t[^\r\n]*public static int ReadPlayback\(\) => 7;", text);
+                }
+                await Call(25, "explore", new { query = "HandlePlayback", format = "audit", scopePolicy = "unique",
+                    freshness = "require-fresh", maxMilliseconds = 10000 });
+                using (var fresh = await Reply(25))
+                {
+                    var result = fresh.RootElement.GetProperty("result");
+                    Assert.True(result.GetProperty("isError").GetBoolean(), result.GetRawText());
+                    var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+                    Assert.Contains("FRESHNESS_REQUIREMENT_NOT_MET", text);
+                    Assert.DoesNotContain("PlayService.ReadPlayback()", text);
+                }
                 File.AppendAllText(Path.Combine(fixture.Root, "App.cs"), " public sealed class Added { }");
-                await Send("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update","arguments":{"arguments":["--target","App.csproj"]}}}""");
+                await Call(5, "update", selection);
                 using (var updated = await Reply(5)) AssertMutation(updated, "update");
                 await Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explore","arguments":{"query":"Added","format":"audit","maxMilliseconds":10000}}}""");
                 using var saved = await Reply(6);
-                var result = saved.RootElement.GetProperty("result");
-                Assert.False(result.GetProperty("isError").GetBoolean(), result.GetRawText());
-                Assert.False(result.TryGetProperty("structuredContent", out _));
-                var source = Assert.Single(result.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
+                var updatedResult = saved.RootElement.GetProperty("result");
+                Assert.False(updatedResult.GetProperty("isError").GetBoolean(), updatedResult.GetRawText());
+                Assert.False(updatedResult.TryGetProperty("structuredContent", out _));
+                var source = Assert.Single(updatedResult.GetProperty("content").EnumerateArray()).GetProperty("text").GetString()!;
                 Assert.Contains("public sealed class Added { }", source, StringComparison.Ordinal);
                 Assert.Contains(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(fixture.Root, "App.cs")))).ToLowerInvariant(), source, StringComparison.Ordinal);
                 using var latest = IndexReader.Open(fixture.IndexPath, fixture.Workspace);
@@ -671,10 +721,15 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             Assert.Equal(0, process.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(await stderr));
         }
+        catch (Exception error)
+        {
+            output.WriteLine("MCP stdio flow failed before cleanup: {0}", error);
+            throw;
+        }
         finally
         {
             // This test created this exact Process handle; a timed-out fixture must not leave its host running.
-            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
+            if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); }
             try
             {
                 var diagnostic = await stderr.WaitAsync(TimeSpan.FromSeconds(10));
@@ -687,6 +742,9 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             }
         }
         async Task Send(string line) { await process.StandardInput.WriteLineAsync(line); await process.StandardInput.FlushAsync(); }
+        Task Call(int id, string name, object arguments) => Send(JsonSerializer.Serialize(new {
+            jsonrpc = "2.0", id, method = "tools/call", @params = new { name, arguments }
+        }));
         async Task<JsonDocument> Reply(int id)
         {
             var line = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(90));
@@ -704,6 +762,55 @@ public sealed class McpFlowTests(ITestOutputHelper output)
             Assert.Equal(command, content.GetProperty("command").GetString());
             Assert.Empty(content.GetProperty("errors").EnumerateArray());
         }
+    }
+
+    private static async Task PrepareScopedProjectsAsync(string root, string repository)
+    {
+        void Write(string path, string text) => File.WriteAllText(Path.Combine(root, path), text);
+        Directory.CreateDirectory(Path.Combine(root, "Playback"));
+        Directory.CreateDirectory(Path.Combine(root, ".nuget"));
+        using (var cache = File.Create(Path.Combine(root, ".nuget", "unused.nupkg")))
+            cache.SetLength(257L * 1024 * 1024);
+        Write("Playback.slnx", """<Solution><Project Path="App.csproj" /><Project Path="Playback/Services.csproj" /></Solution>""");
+        Write("Playback/Services.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>
+            """);
+        Write("Playback/PlayService.cs", "public static class PlayService { public static int ReadPlayback() => 7; }");
+        Write("QueryHandler.cs", """
+            public sealed class QueryHandler
+            {
+                public int HandlePlayback() => PlayService.ReadPlayback();
+            }
+            """);
+        Write("App.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+              <ItemGroup><Compile Include="App.cs;QueryHandler.cs" /><ProjectReference Include="Playback/Services.csproj" /></ItemGroup>
+            </Project>
+            """);
+        File.Copy(Path.Combine(repository, "tests", "fixtures", "semantic-baseline", "global.json"), Path.Combine(root, "global.json"));
+        Write("NuGet.Config", "<configuration><packageSources><clear /></packageSources></configuration>");
+        var start = new ProcessStartInfo(FixedQueryReplay.Dotnet) { WorkingDirectory = root, UseShellExecute = false,
+            CreateNoWindow = true, ArgumentList = { "restore", "App.csproj", "--configfile", "NuGet.Config", "--disable-build-servers", "-m:1",
+            "-flp:logfile=restore.log;verbosity=minimal" } };
+        SelectFixtureSdk(start);
+        using var restore = Process.Start(start)!;
+        try { await restore.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2)); }
+        finally
+        {
+            if (!restore.HasExited) { restore.Kill(entireProcessTree: true); await restore.WaitForExitAsync(); }
+        }
+        Assert.True(restore.ExitCode == 0, File.ReadAllText(Path.Combine(root, "restore.log")));
+    }
+
+    // dotnet test may have selected a different SDK than the fixture's global.json.
+    private static void SelectFixtureSdk(ProcessStartInfo start)
+    {
+        foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("MSBuild", StringComparison.OrdinalIgnoreCase)
+            || key.StartsWith("DOTNET_MSBUILD_SDK_RESOLVER_", StringComparison.OrdinalIgnoreCase)).ToArray())
+            start.Environment.Remove(key);
+        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
     }
 
     private static CallToolRequestParams Explore(string query, string? format = null, string? scopePolicy = null, string? pathTo = null)

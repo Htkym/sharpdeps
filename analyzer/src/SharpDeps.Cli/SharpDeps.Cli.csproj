@@ -7,10 +7,12 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps</ToolCommandName>
     <PackageId>SharpDeps.Cli</PackageId>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Description>Explicit trusted indexing and saved graph queries for SharpDeps.</Description>
+    <Description>Index a .NET solution locally. Search C# symbols, find callers and callees, and inspect the matching source lines from the command line.</Description>
+    <PackageTags>dotnet;csharp;code-search;call-graph;dependency-analysis;static-analysis;cli</PackageTags>
+    <PackageProjectUrl>https://github.com/Htkym/sharpdeps</PackageProjectUrl>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <!-- Optimize first-call saved queries; this does not change query deadlines or library hosts. -->

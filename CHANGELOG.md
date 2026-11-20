@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.5.1
+
+- Index the C# projects you want to investigate in a large solution. Repeat `--project` in the CLI, or pass `target`, `projects` and `configuration` to the MCP `index` and `update` tools. Select both ends of a cross-project call to see its source locations. The existing MCP `arguments` array is also supported.
+- Project-scoped indexing reads the selected compilations and their required references. Unused package caches and workspace Markdown are outside that scope. Scoped queries report `unverified` freshness, and `require-fresh` declines to return source when it cannot establish a closed input set. Use a separate `--index` path to keep a whole-workspace index alongside a scoped one.
+- Failed index builds and updates keep the previous generation. The CLI and MCP now report the failed stage, which input limit was reached, or the affected project, target framework and a representative diagnostic when available.
+- Discover `SharpDeps.Mcp` as an MCP server on NuGet and configure its workspace root through the packaged server manifest. The [MCP guide](https://github.com/Htkym/sharpdeps/blob/v0.5.1/docs/mcp.md) covers setup and project selection. The [VS Code guide](https://github.com/Htkym/sharpdeps/blob/v0.5.1/docs/guide.md) covers the visual dependency map.
+
 ## 0.5.0
 
 - Add explicit project-bound agent package export/removal for portable Codex/Copilot packages, Claude Code and OpenCode V2. Routing-only is the default; MCP bundling and source trust are separate choices. Activation remains host-specific and explicit, existing profiles are not edited, and removal preserves an adjacent backup of unchanged owned files. Experimental request-context reuse is never enabled by export.

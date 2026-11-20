@@ -4,6 +4,7 @@ using SharpDeps.Analysis.Core.Diagnostics;
 
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.CodeAnalysis;
 using Syntamark;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Analysis.Core.Identity;
@@ -86,6 +87,33 @@ public static class CliIndexer
         Action<CliProofAdmission>? observeProof, MarkdownPreparedCache.Candidate? preparedCache,
         CliSemanticSession.Update? semanticUpdate = null)
     {
+        var stage = "selection";
+        string? completed = null;
+        try
+        {
+            return await BuildCoreAsync(options, previous, token, afterPartialExtraction, allocateIdentity,
+                observeProof, preparedCache, semanticUpdate, next => { completed = stage; stage = next; });
+        }
+        catch (Exception error)
+        {
+            var detail = CliIndexDiagnostics.Get(error);
+            var reason = error switch
+            {
+                IOException or UnauthorizedAccessException => "read-failed",
+                CliFailure { Code: "PATH_LINK_FORBIDDEN" } or CliIndexException { Code: "CLI_LINK_INPUT_REJECTED" } => "link-rejected",
+                _ => null
+            };
+            CliIndexDiagnostics.Attach(error, detail is null ? new(stage, completed, Reason: reason)
+                : detail with { LastCompletedStage = detail.LastCompletedStage ?? completed });
+            throw;
+        }
+    }
+
+    private static async Task<CliIndexBuild> BuildCoreAsync(CliIndexOptions options, IndexSnapshot? previous,
+        CancellationToken token, Action<int, int>? afterPartialExtraction, Func<Guid>? allocateIdentity,
+        Action<CliProofAdmission>? observeProof, MarkdownPreparedCache.Candidate? preparedCache,
+        CliSemanticSession.Update? semanticUpdate, Action<string> enterStage)
+    {
         using var buildMetrics = PhaseMetrics.Measure("index.build");
         ArgumentNullException.ThrowIfNull(options);
         var root = CliPaths.Root(options.Root);
@@ -115,18 +143,22 @@ public static class CliIndexer
         token = timeout.Token;
         var snapshotId = (allocateIdentity?.Invoke() ?? Guid.NewGuid()).ToString("N");
         var generation = previous is null ? 1 : checked(previous.Graph.Generation + 1);
+        enterStage("input-scan");
         var manifest = new Dictionary<string, InputText>(StringComparer.OrdinalIgnoreCase);
+        var referenceFiles = new Dictionary<string, (IndexFile File, Guid ModuleVersion)>(PathComparer);
         var packageVerifiers = new List<Action<CancellationToken>>();
         long inputBytes = 0;
 
-        // Capture selected documentation/configuration before evaluation. The configuration inventory is
-        // deliberately not claimed complete: SDK imports and generator inputs are not exposed by the loader.
-        foreach (var path in WalkInputs(root, options.IndexPath, token))
-            await Capture(path, IsMarkdown(path) ? "markdown" : "configuration");
+        // An explicit project selection indexes compilation inputs. Arbitrary MSBuild tasks,
+        // imports and globs prevent that selection from proving a closed dependency inventory.
+        var scoped = selectedPaths.Count != 0;
+        if (!scoped)
+            foreach (var path in WalkInputs(root, options.IndexPath, token))
+                await Capture(path, IsMarkdown(path) ? "markdown" : "configuration");
         await Capture(target, "configuration");
         foreach (var path in selectedPaths)
             await Capture(path, "configuration");
-        var initialInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token)
+        var initialInputs = scoped ? null : await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token, required: true)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
 
         var optionsHash = OptionsHash(options, root, target);
@@ -134,7 +166,7 @@ public static class CliIndexer
         IReadOnlyList<MarkdownSymbolCandidate> catalogSymbols;
         Dictionary<string, int> diagnostics;
         IndexReuseProof? reuseProof = null;
-        var savedProof = previous?.Files.SingleOrDefault(f => PathComparer.Equals(f.RelativePath,
+        var savedProof = scoped ? null : previous?.Files.SingleOrDefault(f => PathComparer.Equals(f.RelativePath,
             Path.GetRelativePath(root, target).Replace('\\', '/')))?.Reuse;
         var currentInputHash = options.AllowSemanticReuse && savedProof is not null
             ? await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token) : null;
@@ -174,16 +206,16 @@ public static class CliIndexer
                 : previous.Files.Any(QueryWorkspace.IsStored) ? "stored-generated-or-package-input"
                 : savedProof?.Projects?.Version != CliProjectReuse.Version ? "missing-or-unsupported-project-proof"
                 : currentInputHash is null ? "input-inventory-unavailable" : "proof-mismatch");
+            enterStage("semantic-load");
             if (!SemanticEnvironment.TryRegister(Path.GetDirectoryName(target)!, out var registrationFailure))
                 throw new CliIndexException("CLI_TARGET_SDK_UNAVAILABLE",
                     registrationFailure ?? "No target MSBuild SDK is available.");
-            var fullFingerprint = excludedTarget ? null
+            var fullFingerprint = scoped || excludedTarget ? null
                 : CliReuseProof.Capture(root, SemanticEnvironment.Describe(Path.GetDirectoryName(target)!).MsBuildPath, token);
             IReadOnlyList<ProjectVariantSelection>? selections = null;
-            if (!string.IsNullOrWhiteSpace(options.TargetFramework))
+            if (selectedPaths.Count == 0 && !string.IsNullOrWhiteSpace(options.TargetFramework))
             {
-                string[] requested = selectedPaths.Count > 0 ? selectedPaths.ToArray()
-                    : target.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ? [target] : [];
+                string[] requested = target.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ? [target] : [];
                 var loaderRoot = Path.GetDirectoryName(target)!;
                 selections = requested.Select(path => new ProjectVariantSelection(
                     Identity.ProjectLogicalId(Identity.WorkspaceRootId(loaderRoot), Path.GetRelativePath(loaderRoot, path)),
@@ -208,21 +240,33 @@ public static class CliIndexer
                 }
             }
             using var coldLoad = warmed is null ? await SemanticLoader.LoadCandidateAsync(new(target, options.Configuration,
-                options.Platform, options.TimeoutSeconds, selections), token) : null;
+                options.Platform, options.TimeoutSeconds, selections)
+            {
+                SelectedProjectPaths = selectedPaths,
+                SelectedTargetFramework = options.TargetFramework
+            }, token) : null;
             var loaded = warmed ?? coldLoad!.Result;
             var variants = loaded.Report.Variants.Where(v => selectedPaths.Count == 0
                     || selectedPaths.Contains(Path.GetFullPath(v.ProjectPath)))
                 .Where(v => options.TargetFramework is null || v.TargetFramework == options.TargetFramework).ToArray();
-            if (variants.Length == 0 || variants.Any(v => v.LoadState != "loaded" || !v.CompilationObtained
-                    || !loaded.Compilations.ContainsKey(v.VariantKey) || string.IsNullOrWhiteSpace(v.TargetFramework)))
-                throw new CliIndexException("CLI_SEMANTIC_LOAD_INCOMPLETE");
-            if (selectedPaths.Any(path => !variants.Any(v => PathComparer.Equals(path, Path.GetFullPath(v.ProjectPath)))))
-                throw new CliIndexException("CLI_SELECTED_VARIANT_NOT_AVAILABLE");
+            var required = selectedPaths.Count == 0 ? variants : loaded.Report.Variants;
+            var failed = required.FirstOrDefault(v => v.LoadState != "loaded" || !v.CompilationObtained
+                || !loaded.Compilations.ContainsKey(v.VariantKey) || string.IsNullOrWhiteSpace(v.TargetFramework)
+                || selectedPaths.Count > 0 && v.ErrorDiagnosticCount > 0);
+            if (failed is not null || loaded.Report.Limitations.Any(l => l.Code == "semantic.loadFailed")
+                || selectedPaths.Count > 0 && (loaded.Report.Coverage.Unresolved > 0
+                    || loaded.Report.Diagnostics.Any(d => d.Kind == "Failure")))
+                throw CliIndexDiagnostics.Semantic("CLI_SEMANTIC_LOAD_INCOMPLETE", loaded.Report, failed);
+            var missing = selectedPaths.FirstOrDefault(path => !variants.Any(v => PathComparer.Equals(path, Path.GetFullPath(v.ProjectPath))));
+            if (missing is not null)
+                throw CliIndexDiagnostics.Semantic("CLI_SELECTED_VARIANT_NOT_AVAILABLE", loaded.Report, null, missing, options.TargetFramework);
+            if (variants.Length == 0)
+                throw CliIndexDiagnostics.Semantic("CLI_SEMANTIC_LOAD_INCOMPLETE", loaded.Report, null, target, options.TargetFramework);
             // A variant whose generated documents could not even be enumerated cannot
             // be indexed honestly: fail with the reason and keep the previous snapshot.
-            if (variants.Any(v => v.GeneratedDocumentError is not null))
-                throw new CliIndexException("CLI_GENERATED_INPUT_UNSUPPORTED",
-                    "The generated documents of a selected variant could not be enumerated.");
+            if (required.FirstOrDefault(v => v.GeneratedDocumentError is not null) is { } failedGenerator)
+                throw CliIndexDiagnostics.Semantic("CLI_GENERATED_INPUT_UNSUPPORTED", loaded.Report, failedGenerator);
+            enterStage("semantic-extraction");
             var generatedByVariant = loaded.GeneratedDocuments
                 .GroupBy(document => document.VariantKey, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
@@ -262,20 +306,24 @@ public static class CliIndexer
             var inputs = variants.Select(v => new SymbolIndexInput(v.VariantKey, v.ProjectName,
                 loaded.Compilations[v.VariantKey])).ToArray();
             foreach (var reference in inputs.SelectMany(i => i.Compilation.References)
-                .OfType<Microsoft.CodeAnalysis.PortableExecutableReference>())
+                .OfType<PortableExecutableReference>())
             {
                 if (reference.FilePath is not { } path || !Path.IsPathFullyQualified(path))
                     continue;
                 var full = Path.GetFullPath(path);
                 var relative = Path.GetRelativePath(root, full);
-                if (relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-                    && !Path.IsPathRooted(relative) && relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                        .Any(part => part.Equals(".git", StringComparison.OrdinalIgnoreCase)
-                            || part.Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)
-                            || part.Equals("obj", StringComparison.OrdinalIgnoreCase)
-                            || part.Equals("bin", StringComparison.OrdinalIgnoreCase)))
+                if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                    || Path.IsPathRooted(relative))
+                    continue;
+                if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Any(part => part.Equals(".git", StringComparison.OrdinalIgnoreCase)
+                        || part.Equals(".sharpdeps", StringComparison.OrdinalIgnoreCase)
+                        || !scoped && (part.Equals("obj", StringComparison.OrdinalIgnoreCase)
+                            || part.Equals("bin", StringComparison.OrdinalIgnoreCase))))
                     throw new CliIndexException("CLI_REFERENCE_INPUT_UNSUPPORTED",
                         "A workspace PE reference inside an excluded output or private subtree cannot be verified before evaluation.");
+                if (scoped)
+                    await CaptureReference(reference, full);
             }
             var documents = new SourceDocumentRegistry(Identity.WorkspaceRootId(root), root, workspaceId);
             // Generated documents are registered before any tree is visited, so the
@@ -373,7 +421,7 @@ public static class CliIndexer
                                 info.Text!, false));
                             inputBytes = checked(inputBytes + info.ByteLength);
                             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
-                                throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                                throw CliIndexDiagnostics.Budget("total-bytes", IndexSnapshotValidator.MaximumInputTotalBytes, inputBytes);
                         }
                         ownedSources.Add(generated.Id);
                         continue;
@@ -398,7 +446,7 @@ public static class CliIndexer
                                     info.ContentHash, info.ByteLength, info.Text.Length), info.Text, false));
                             inputBytes = checked(inputBytes + info.ByteLength);
                             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
-                                throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                                throw CliIndexDiagnostics.Budget("total-bytes", IndexSnapshotValidator.MaximumInputTotalBytes, inputBytes);
                         }
                         ownedSources.Add(package.Id);
                         continue;
@@ -430,12 +478,13 @@ public static class CliIndexer
                 }
                 projectSources.Add(input.VariantId, ownedSources);
             }
-            var projectSelections = CliProjectReuse.Selections(options.WorkspaceUuid, projects, inputs, projectSources, loaded);
-            var capturedFiles = manifest.Values.ToDictionary(i => i.File.SourceId, i => i.File, StringComparer.Ordinal);
-            var ownedPaths = manifest.Values.Where(i => i.File.Kind == "source").Select(i => i.File.RelativePath).ToHashSet(PathComparer);
-            var structureHash = fullFingerprint is null || projectSelections is null ? null
+            var projectSelections = fullFingerprint is null ? null
+                : CliProjectReuse.Selections(options.WorkspaceUuid, projects, inputs, projectSources, loaded);
+            var capturedFiles = projectSelections is null ? [] : manifest.Values.ToDictionary(i => i.File.SourceId, i => i.File, StringComparer.Ordinal);
+            var structureHash = projectSelections is null ? null
                 : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token,
-                    includeMarkdown: true, ownedSourcePaths: ownedPaths);
+                    includeMarkdown: true, ownedSourcePaths: capturedFiles.Values.Where(f => f.Kind == "source")
+                        .Select(f => f.RelativePath).ToHashSet(PathComparer));
             var projectPlan = options.AllowSemanticReuse && previous is not null && savedProof is not null
                 && !hasGenerated && !hasPackage && !previous.Files.Any(QueryWorkspace.IsStored)
                 && CliReuseProof.Matches(savedProof, fullFingerprint, optionsHash, savedProof.InputHash)
@@ -467,7 +516,10 @@ public static class CliIndexer
             }
             // Every target is present while dirty collectors resolve cross-project edges.
             var symbols = CliProjectReuse.CombineSymbols(symbolParts.Values, documents, inputs.Length);
-            var resolver = new SymbolResolver(loaded.DefiningVariantByAssembly);
+            var resolver = new SymbolResolver(loaded.DefiningVariantByAssembly)
+            {
+                IndexedVariants = inputs.Select(input => input.VariantId).ToHashSet(StringComparer.Ordinal)
+            };
             var extractions = new Dictionary<string, CliProjectReuse.Extraction>(StringComparer.Ordinal);
             foreach (var input in inputs)
             {
@@ -517,6 +569,8 @@ public static class CliIndexer
             }
             if (loaded.Report.Diagnostics.Count != 0)
                 diagnostics["cli.loaderDiagnostics"] = loaded.Report.Diagnostics.Count;
+            if (scoped)
+                diagnostics[QueryWorkspace.SelectedProjectsDiagnostic] = selectedPaths.Count;
             if (loaded.Report.Limitations.Count != 0)
                 diagnostics["cli.loaderLimitations"] = loaded.Report.Limitations.Count;
             var compilerErrors = variants.Sum(v => v.ErrorDiagnosticCount);
@@ -536,7 +590,8 @@ public static class CliIndexer
             if (reused.Count > 0)
                 afterPartialExtraction?.Invoke(extracted.Count, reused.Count);
             var afterFingerprint = fullFingerprint is null ? null : CliReuseProof.Capture(root, fullFingerprint.SdkPath, token);
-            var stableInputsAfter = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
+            var stableInputsAfter = scoped ? null
+                : await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
             var inputHash = afterFingerprint is null ? null : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token);
             var closedReferences = fullFingerprint is not null && inputs.All(i => i.Compilation.References.All(reference =>
                 reference is Microsoft.CodeAnalysis.CompilationReference
@@ -544,7 +599,7 @@ public static class CliIndexer
                     && ReferenceInsideProof(path, root, fullFingerprint.SdkPath, fullFingerprint.PackageRoot, fullFingerprint.PackageRootSet)));
             observeProof?.Invoke(new(!hasGenerated, !hasPackage, closedReferences, fullFingerprint is not null,
                 afterFingerprint is not null, fullFingerprint is not null && fullFingerprint == afterFingerprint,
-                initialInputs == stableInputsAfter, inputHash is not null));
+                !scoped && initialInputs == stableInputsAfter, inputHash is not null));
             // No reuse proof is issued for a run with generated/package inputs: their currency
             // cannot be proven from fingerprints, so later queries stay unverified.
             if (!hasGenerated && !hasPackage && closedReferences && fullFingerprint is not null && afterFingerprint is not null
@@ -569,6 +624,7 @@ public static class CliIndexer
         graph = graph with { Nodes = Array.AsReadOnly(graph.Nodes.Concat(sourceNodes).ToArray()) };
         // Document projection coverage must not change the completeness of the supplied code catalog.
         var codeCatalog = graph;
+        enterStage("markdown-extraction");
         var adapter = new LithoSharpMarkdownAdapter();
         var prepareCalls = 0;
         var preparedCacheHits = 0;
@@ -654,6 +710,7 @@ public static class CliIndexer
             .Select(d => new HarnessGraphDiagnostic(d.Key, d.Value)).ToArray())
         };
         IReadOnlyList<IndexSearchText> search;
+        enterStage("snapshot-build");
         using (PhaseMetrics.Measure("search-text.build"))
             search = MakeSearch(graph, manifest, projections.Select(p => p.Projection));
         foreach (var input in manifest.Values)
@@ -677,8 +734,10 @@ public static class CliIndexer
             .OrderBy(b => b.SourceId, StringComparer.Ordinal).ToArray();
         foreach (var verifyPackage in packageVerifiers)
             verifyPackage(token);
-        var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
+        var snapshot = new IndexSnapshot(graph, manifest.Values.Select(i => i.File).Concat(referenceFiles.Values.Select(r => r.File))
+            .OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToArray(),
             identities.ToArray(), [], search, generatedBodies, packageBodies);
+        enterStage("snapshot-validation");
         using (PhaseMetrics.Measure("snapshot.validate"))
             IndexSnapshotValidator.Validate(snapshot);
         PhaseMetrics.Count("markdown.prepare.calls", prepareCalls);
@@ -687,23 +746,24 @@ public static class CliIndexer
         PhaseMetrics.Count("input.bytes", inputBytes);
         PhaseMetrics.Count("graph.nodes", snapshot.Graph.Nodes.Count);
         PhaseMetrics.Count("graph.edges", snapshot.Graph.Edges.Count);
-        var finalInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token);
-        if (initialInputs != finalInputs)
+        if (!scoped && initialInputs != await FingerprintInputs(root, options.IndexPath, includeOutputs: false, token))
             throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
-        var publicationInputs = await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token)
+        var publicationInputs = scoped ? null : await FingerprintInputs(root, options.IndexPath, includeOutputs: true, token, required: true)
             ?? throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
         token.ThrowIfCancellationRequested();
         var files = snapshot.Files;
         return new(snapshot, () =>
         {
-            VerifySelection(options, files, publicationInputs, publicationToken);
+            // The writer rechecks every manifest hash immediately before publication.
+            if (publicationInputs is not null)
+                VerifySelection(options, files, publicationInputs, publicationToken);
             foreach (var verifyPackage in packageVerifiers)
                 verifyPackage(publicationToken);
         })
         {
             // Only a production extraction with a closed dependency/SDK proof may attest freshness.
             // Retain file metadata/options, not the graph or compiler workspace.
-            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs),
+            VerifyQueryInputs = reuseProof is null ? null : QueryVerifier(options, files, publicationInputs!),
             MarkdownPrepareCalls = prepareCalls,
             MarkdownPreparedCacheHits = preparedCacheHits
         };
@@ -728,6 +788,45 @@ public static class CliIndexer
             => manifest.Values.Where(i => i.File.Kind == "source" && !i.File.Deleted).ToDictionary(i => i.AbsolutePath,
                 i => new SemanticSourceInput(i.Text, i.File.ContentHash, i.EncodingName), PathComparer);
 
+        async Task CaptureReference(PortableExecutableReference reference, string path)
+        {
+            path = InsideRoot(root, path);
+            var module = reference.GetMetadata() switch
+            {
+                AssemblyMetadata assembly when assembly.GetModules() is [var single] => single,
+                ModuleMetadata single => single,
+                _ => throw new CliIndexException("CLI_REFERENCE_INPUT_UNSUPPORTED",
+                    "A selected workspace assembly has multiple modules.")
+            };
+            var moduleVersion = module.GetModuleVersionId();
+            if (referenceFiles.TryGetValue(path, out var existing))
+            {
+                if (existing.ModuleVersion != moduleVersion)
+                    throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+                return;
+            }
+            var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+            IndexSnapshotValidator.ValidateRelativePath(relative);
+            using var stream = File.OpenRead(path);
+            using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
+            var bytes = stream.Length;
+            if (bytes > IndexSnapshotValidator.MaximumInputFileBytes)
+                throw CliIndexDiagnostics.Budget("file-bytes", IndexSnapshotValidator.MaximumInputFileBytes, bytes);
+            inputBytes = checked(inputBytes + bytes);
+            if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
+                throw CliIndexDiagnostics.Budget("total-bytes", IndexSnapshotValidator.MaximumInputTotalBytes, inputBytes);
+            var content = new byte[checked((int)bytes)];
+            await stream.ReadExactlyAsync(content, token);
+            if (stream.ReadByte() != -1 || stream.Length != bytes)
+                throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+            using var diskModule = ModuleMetadata.CreateFromStream(new MemoryStream(content, writable: false));
+            if (diskModule.GetModuleVersionId() != moduleVersion)
+                throw new CliIndexException("SOURCE_CHANGED_SINCE_STAGING");
+            var hash = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+            RejectLinks(path);
+            referenceFiles.Add(path, (new("cli-reference:" + relative, relative, "reference", hash, bytes, null), moduleVersion));
+        }
+
         async Task<InputText> Capture(string path, string kind)
         {
             path = InsideRoot(root, path);
@@ -743,7 +842,7 @@ public static class CliIndexer
             var text = await ReadInput(path, token);
             inputBytes = checked(inputBytes + text.Bytes);
             if (inputBytes > IndexSnapshotValidator.MaximumInputTotalBytes)
-                throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                throw CliIndexDiagnostics.Budget("total-bytes", IndexSnapshotValidator.MaximumInputTotalBytes, inputBytes);
             var input = new InputText(path, new("cli-input:" + relative, relative, kind, text.Hash,
                 text.Bytes, text.Text.Length), text.Text, text.HasBom, text.EncodingName);
             manifest.Add(relative, input);
@@ -871,7 +970,7 @@ public static class CliIndexer
                 || name.Equals("obj", StringComparison.OrdinalIgnoreCase) || name.Equals("bin", StringComparison.OrdinalIgnoreCase));
 
     private static async Task<string?> FingerprintInputs(string root, string indexPath, bool includeOutputs, CancellationToken token,
-        bool includeMarkdown = false, IReadOnlySet<string>? ownedSourcePaths = null)
+        bool includeMarkdown = false, IReadOnlySet<string>? ownedSourcePaths = null, bool required = false)
     {
         using var fingerprintMetrics = PhaseMetrics.Measure(ownedSourcePaths is not null ? "input.fingerprint-structure"
             : includeOutputs ? "input.fingerprint-with-outputs" : "input.fingerprint-selected");
@@ -893,7 +992,7 @@ public static class CliIndexer
                 {
                     token.ThrowIfCancellationRequested();
                     if (++count > MaximumWalkEntries)
-                        return null;
+                        return Unavailable("walk-entries", MaximumWalkEntries, count);
                     var attributes = File.GetAttributes(path);
                     var name = Path.GetFileName(path);
                     if ((attributes & FileAttributes.Directory) != 0)
@@ -904,7 +1003,7 @@ public static class CliIndexer
                                 || name.Equals("bin", StringComparison.OrdinalIgnoreCase)))
                             continue;
                         if ((attributes & FileAttributes.ReparsePoint) != 0)
-                            return null;
+                            return Unavailable("link-rejected");
                         directoryPaths.Add(path);
                         directories.Push(path);
                     }
@@ -913,7 +1012,7 @@ public static class CliIndexer
                         if (IsIndexOutput(path, absoluteIndex))
                             continue;
                         if ((attributes & FileAttributes.ReparsePoint) != 0)
-                            return null;
+                            return Unavailable("link-rejected");
                         if (includeMarkdown || !IsMarkdown(path))
                             paths.Add(path);
                     }
@@ -950,10 +1049,10 @@ public static class CliIndexer
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
                 using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
                 if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes)
-                    return null;
+                    return Unavailable("file-bytes", IndexSnapshotValidator.MaximumInputFileBytes, stream.Length);
                 total = checked(total + stream.Length);
                 if (total > IndexSnapshotValidator.MaximumInputTotalBytes)
-                    return null;
+                    return Unavailable("total-bytes", IndexSnapshotValidator.MaximumInputTotalBytes, total);
                 using var content = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 var expectedLength = stream.Length;
                 long read = 0;
@@ -962,20 +1061,29 @@ public static class CliIndexer
                 {
                     read = checked(read + bytes);
                     if (read > expectedLength)
-                        return null;
+                        return Unavailable("file-changed");
                     content.AppendData(buffer, 0, bytes);
                 }
                 if (read != expectedLength || stream.Length != expectedLength)
-                    return null;
+                    return Unavailable("file-changed");
                 hash.AppendData(content.GetHashAndReset());
                 RejectLinks(path);
             }
             if (ownedSourcePaths is not null && !foundSources.SetEquals(ownedSourcePaths))
-                return null;
+                return Unavailable("missing-source");
             return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or OverflowException or CliFailure)
         {
+            return Unavailable(error is CliFailure { Code: "PATH_LINK_FORBIDDEN" } ? "link-rejected"
+                : error is OverflowException ? "length-overflow" : "read-failed");
+        }
+
+        string? Unavailable(string reason, long? limit = null, long? observed = null)
+        {
+            if (required)
+                throw CliIndexDiagnostics.Attach(new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED"),
+                    new("input-scan", Reason: reason, Limit: limit, Observed: observed));
             return null;
         }
     }
@@ -995,7 +1103,7 @@ public static class CliIndexer
             {
                 token.ThrowIfCancellationRequested();
                 if (++count > MaximumWalkEntries)
-                    throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+                    throw CliIndexDiagnostics.Budget("walk-entries", MaximumWalkEntries, count);
                 if (IsIndexOutput(path, indexPath))
                     continue;
                 var attributes = File.GetAttributes(path);
@@ -1024,7 +1132,7 @@ public static class CliIndexer
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
         using var readMetrics = PhaseMetrics.ObserveRead(PhaseMetrics.ReadCategory.Workspace, stream);
         if (stream.Length > IndexSnapshotValidator.MaximumInputFileBytes)
-            throw new CliIndexException("CLI_INPUT_BUDGET_EXCEEDED");
+            throw CliIndexDiagnostics.Budget("file-bytes", IndexSnapshotValidator.MaximumInputFileBytes, stream.Length);
         var bytes = new byte[checked((int)stream.Length)];
         await stream.ReadExactlyAsync(bytes, token);
         if (await stream.ReadAsync(new byte[1], token) != 0)

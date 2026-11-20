@@ -1,34 +1,40 @@
 # SharpDeps.Cli
 
-Save and explore .NET dependency and source evidence from the command line.
+Search C# symbols and trace .NET dependencies from your terminal. SharpDeps saves a local index of your solution so you can look up a method, find its callers and inspect the source. AI assistants can explore the same index through [SharpDeps.Mcp](https://www.nuget.org/packages/SharpDeps.Mcp).
 
-This guide describes 0.5.0. Check the package registry for availability before installing.
+## Index a solution
 
-## Install
+Install the tool with a .NET SDK. Running the tool requires the .NET 10 runtime. Indexing also requires an SDK compatible with your solution and its restored dependencies.
 
-```bash
-dotnet tool install --global SharpDeps.Cli --version 0.5.0
+```sh
+dotnet tool install --global SharpDeps.Cli
+dotnet restore /absolute/path/to/Shop/Shop.sln
+sharpdeps index --root /absolute/path/to/Shop --target Shop.sln --configuration Release --trusted
 ```
 
-Installation requires a .NET SDK. An installed tool requires the .NET 10 runtime. Creating or updating an index additionally requires an SDK compatible with the target and its `global.json`, plus restored target dependencies. SharpDeps does not install an SDK or restore your project automatically.
+Replace the path and solution name with your own. Index workspaces you trust because indexing can run build logic and source generators. The default index is `.sharpdeps/index.sqlite` inside the workspace.
 
-## Index and explore
+## Find a declaration and its callers
 
-For a workspace you trust:
+Use a method name from your solution. For example, to inspect `OrderStore.Save` and its indexed relationships, run:
 
-```bash
-sharpdeps index --root /absolute/workspace --target YourSolution.sln --configuration Release --trusted
-sharpdeps explore --root /absolute/workspace --trusted --term "OrderService Submit" --format agent
+```sh
+sharpdeps explore --root /absolute/path/to/Shop --term "OrderStore.Save" --trusted --format agent
 ```
 
-Indexing evaluates build logic and can run source generators. Exploration reads a saved generation and does not start indexing. The default index is `.sharpdeps/index.sqlite`; retain any chosen `--index` path in subsequent calls.
+The result can include the declaration, related symbols and source locations. If several projects or target frameworks match, select the one you want. Partial coverage means other relationships may fall outside the index.
 
-Use actual returned project/variant IDs and exact selectors to resolve ambiguity. Partial coverage, source/proof limits, freshness and omissions qualify the result; a missing match is not proof that code is absent.
+For a list of callers for an exact method, search by name and copy the matching result's `id`. Replace `ID_FROM_SEARCH` in the second command with that value.
 
-The 0.5.0 split-v1 exploration contract defaults to 30,000 ms for preparation (`--prepare-max-milliseconds`) and 1,000 ms for the query only (`--max-milliseconds`). Both accept finite values from 10 to 30,000 ms; explore rejects zero. Omitting both options selects these defaults. Preparation includes full snapshot validation/freezing and standard derived/lexical indexes before query time starts. One monotonic request owner also caps total computation at the sum of both allowances. Cancellation is cooperative; startup and transport are outside the bound. The query default is not a completion guarantee for every workload.
+```sh
+sharpdeps search --root /absolute/path/to/Shop --term Save
+sharpdeps callers --root /absolute/path/to/Shop --id ID_FROM_SEARCH --edge-kind calls
+```
 
-Matching 0.5.0 CLI/MCP/API consumers are required for this breaking contract; MCP uses flat `prepareMaxMilliseconds` and `maxMilliseconds` fields. Existing `--max-milliseconds` now means query-only time. Do not silently raise budgets or retry. Preparation, query and total-request timeouts return no source, as does caller cancellation. Published 0.4.0 retains its released behavior; consult the installed tool's help. Index schemas 1/2/3 are unchanged.
+After changing code, refresh the index with the same target and configuration:
 
-See the [CLI/MCP user guide](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md), including migration from 0.4.0, and `sharpdeps help` for supported arguments. [VS Code](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) and [SharpDeps.Mcp](https://www.nuget.org/packages/SharpDeps.Mcp) are separate installations. Installing this tool does not replace the extension's bundled reader.
+```sh
+sharpdeps update --root /absolute/path/to/Shop --target Shop.sln --configuration Release --trusted
+```
 
-[Source and issues](https://github.com/Htkym/sharpdeps) · [MIT license](https://github.com/Htkym/sharpdeps/blob/main/LICENSE)
+[CLI and MCP guide](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md) · [Dependency map for VS Code](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)

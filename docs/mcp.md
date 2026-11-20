@@ -2,15 +2,15 @@
 
 [VS Code guide](guide.md) · [日本語操作ガイド](guide.ja.md) · [README](../README.md)
 
-This guide describes CLI/MCP 0.5.0. Check [NuGet](https://www.nuget.org/packages/SharpDeps.Cli) or [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) for availability and install matching versions. For the older release, use the [tagged 0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
+This guide covers SharpDeps CLI and MCP 0.5.1. Check [NuGet](https://www.nuget.org/packages/SharpDeps.Cli) or [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) for availability and install matching versions. For the older release, use the [tagged 0.5.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.5.0/docs/mcp.md).
 
-The development branch also provides [additive typed symbol investigation](contracts/symbol-investigation.md); this is unreleased and not a claim about the published version above.
+To locate a declaration, use `find_symbols`. Pass its selector to `read_symbols` for the declaration or to `relations` for incoming or outgoing edges. Use `explore` for a broader structural query. See [typed symbol investigation](contracts/symbol-investigation.md) for arguments and examples.
 
 ## Install and create an index
 
 ```bash
-dotnet tool install --global SharpDeps.Cli --version 0.5.0
-dotnet tool install --global SharpDeps.Mcp --version 0.5.0
+dotnet tool install --global SharpDeps.Cli --version 0.5.1
+dotnet tool install --global SharpDeps.Mcp --version 0.5.1
 ```
 
 Installation and local-manifest tool restore require a .NET SDK. Running an installed tool or the tool DLL directly requires the .NET 10 runtime. Indexing also needs an SDK compatible with your target and its `global.json`, plus restored dependencies. SharpDeps does not acquire that SDK or restore the target automatically.
@@ -27,10 +27,18 @@ Replace the paths and names with your own. `index` evaluates build logic and may
 
 The default index is `.sharpdeps/index.sqlite` under the selected root. Use a root-contained `--index` path to select another index, and retain it in every later command and MCP startup. The VS Code extension reads only the default path.
 
+Repeat `--project` to index the C# projects you want to explore together. For example, to follow calls between an API and its services in a large checkout, run:
+
+```bash
+sharpdeps index --root /absolute/workspace --target YourSolution.sln --project src/Api/Api.csproj --project src/Services/Services.csproj --configuration Release --trusted
+```
+
+Paths are relative to `--root`. Use the same selection with `update`. A scoped index omits workspace Markdown and collects code from the selected compilations. Its saved diagnostics include the number of explicitly selected projects in `cli.explicitlySelectedProjects`. Unused files in local package caches do not consume its input budget. Scoped updates load the compilations again. Queries report `unverified` freshness and verify the hashes of source they return. To keep the whole-workspace generation available alongside the scoped generation, give the scoped index its own `--index` path.
+
 [dnx](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-exec) is an alternative launcher with SDK 10.0.100 or later:
 
 ```bash
-dnx SharpDeps.Cli@0.5.0 --verbosity quiet -- help
+dnx SharpDeps.Cli@0.5.1 --verbosity quiet -- help
 ```
 
 First use can download packages and update caches. SDK 11 or later accepts `--yes` before `--` for unattended launch; the SDK 10 launcher does not.
@@ -49,7 +57,7 @@ Aliases such as `@1` and `F1` are local to one response group. The agent format 
 
 ### Discovery and source outcomes
 
-In 0.5.0, ordinary unscoped names/paths default to `discover`. Results keep independent project/variant groups under one pinned snapshot and shared collection, time and output budgets. Groups are not one call chain. Aliases may recur in different groups.
+Since 0.5.0, ordinary unscoped names/paths default to `discover`. Results keep independent project/variant groups under one pinned snapshot and shared collection, time and output budgets. Groups are not one call chain. Aliases may recur in different groups.
 
 An explicit project or variant defaults to `unique`. Pass `--scope-policy unique` (MCP `scopePolicy: "unique"`) to retain the 0.4.0 unscoped selection behavior. Explicit `discover` can be combined with project/variant filters. Exact saved-ID queries, call-witness endpoints and HttpGet literal lookup use unique selection and reject explicit discovery. The typed Query API retains its `RequireUnique` default.
 
@@ -76,7 +84,7 @@ With the matching MCP tool installed, add a stdio entry using the command and ar
 
 The host fixes root, index and source trust at startup. Add `--trusted` only when source reads are authorized; omit it to allow saved graph queries without source reads. Client folder trust, tool-call approvals and SharpDeps source trust are separate. Restart/reconnect through the client's normal workflow after changing its configuration.
 
-The default tool list contains only `explore`. Call that connected tool with a **flat arguments object**:
+A read-only server advertises `find_symbols`, `read_symbols`, `relations` and `explore`. For example, call `explore` with a **flat arguments object**:
 
 ```json
 {
@@ -106,11 +114,23 @@ The default tool list contains only `explore`. Call that connected tool with a *
 | `prepareMaxMilliseconds`               | Preparation computation budget; default 30,000 ms.                                                                                                            |
 | `maxMilliseconds`                      | Query-only computation budget; default 1,000 ms.                                                                                                              |
 
-In the 0.5.0 split-v1 contract, both computation budgets must be finite values from 10 to 30,000 ms; `0` is rejected for `explore`. Omitting both fields, as in `{"query":"OrderService","format":"agent"}`, selects preparation 30,000 ms and query 1,000 ms. The query default is an initial policy choice, not a guarantee that complete `DbContext` exploration or another workload finishes in one second. Published 0.4.0 retains its shared-budget behavior; use its tagged guide and advertised schema.
+Under the split-v1 contract, both computation budgets must be finite values from 10 to 30,000 ms; `0` is rejected for `explore`. Omitting both fields, as in `{"query":"OrderService","format":"agent"}`, selects preparation 30,000 ms and query 1,000 ms. The query default is an initial policy choice, not a guarantee that complete `DbContext` exploration or another workload finishes in one second. Published 0.4.0 retains its shared-budget behavior; use its tagged guide and advertised schema.
 
 The tool returns one text content block, without duplicating the evidence in `structuredContent`. Source is data, not instructions. Saved calls do not prove runtime dispatch, activation or network activity. AI clients may also use ordinary source search; product use alone does not establish answer quality or comparative speed/token savings.
 
-Starting with both `--trusted --allow-mutations` additionally exposes `index` and `update`, whose `arguments` are CLI flag/value arrays. These can execute build logic and use the coordinator's writer lease. They are not needed for a read-only connection. No watch tool is exposed.
+Starting the server with both `--trusted --allow-mutations` also exposes `index` and `update`. In 0.5.1, these tools accept the typed fields shown below or the existing CLI flag/value array in `arguments`. Choose one form per request. Both tools can execute build logic and use the coordinator's writer lease. They are not needed for a read-only connection. No watch tool is exposed.
+
+### Index and explore selected projects over MCP
+
+Start `sharpdeps-mcp --root /absolute/workspace --trusted --allow-mutations` for a workspace whose dependencies have already been restored. To use a separate database, add `--index .sharpdeps/api.sqlite` at startup. Call `index` with these tool arguments, replacing the paths with paths under that root:
+
+```json
+{"target":"YourSolution.sln","projects":["src/Api/Api.csproj","src/Services/Services.csproj"],"configuration":"Release"}
+```
+
+To refresh after edits, call `update` with the same arguments. The existing CLI-style `arguments` array is also supported as a separate input form. A successful response identifies the saved generation. On an indexing error, inspect `errors[0].code` and `indexDiagnostic` in the tool's structured content. A failed update preserves the last published generation.
+
+In the same connection, call `explore` with `{"query":"QueryHandler.Handle","responseMode":"detail"}` to retrieve saved source ranges and call evidence for that method. Check the returned filename, line and relationship kind. The saved diagnostic `cli.explicitlySelectedProjects` gives the number of selected projects. A scoped generation reports unverified semantic freshness. A host started with only `--trusted` can explore the same database and return source.
 
 ### Host-neutral selective evidence and re-fetch
 
@@ -153,11 +173,11 @@ Use ordinary read/search for simple literal text or documentation-only questions
 
 The server sends this workflow in both initialization instructions and the `explore` tool description, so the tool description carries the core rule even when a client does not forward server instructions to its model. These are model-facing instructions, not a security boundary: the server cannot intercept another tool's reads/searches or prevent a final answer. Actual tool-order enforcement requires support and configuration in the AI host; connecting MCP alone does not provide it. Source permissions, user opt-out and higher-priority instructions still apply.
 
-A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the routine workflow and links to specialized interface contracts. Distribute the entire skill directory, including `references`, rather than copying only `SKILL.md`; read reference sections only when needed. It describes the 0.5.0 interface.
+A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the routine workflow and links to specialized interface contracts. Distribute the entire skill directory, including `references`, rather than copying only `SKILL.md`; read reference sections only when needed. It describes the 0.5.1 interface.
 
 ### Project-bound agent package setup
 
-`agent-export` is a separate, explicit setup path in the 0.5.0 candidate. Check release availability first; a source checkout or CI candidate does not mean 0.5.0 is published. It exports files for an already installed host. It does **not** install SharpDeps, create an index, activate a plugin, edit existing host profiles, grant source access, or enable experimental context reuse.
+`agent-export` exports setup files for an already installed host. It does **not** install SharpDeps, create an index, activate a plugin, edit existing host profiles, grant source access, or enable experimental context reuse.
 
 Choose one registration path:
 
@@ -180,7 +200,7 @@ Use `portable` for Codex/Copilot, `claude-code` for Claude Code, or `opencode-v2
 
 Check these separately in a fresh host session:
 
-1. **Connection:** the intended SharpDeps server is connected and advertises `explore` with the expected workspace/index and permissions. A manifest-validation success alone is not this check.
+1. **Connection:** the intended SharpDeps server is connected and advertises `find_symbols`, `read_symbols`, `relations` and `explore` with the expected workspace/index and permissions. A manifest-validation success alone is not this check.
 2. **Guidance:** the intended routing file or skill is discoverable/loaded through the host's actual path. Do not manually add a second copy of MCP initialization instructions, or infer full skill loading from a listed skill name.
 3. **Useful behavior:** for a real task needing missing cross-file evidence, inspect whether focused exploration returns useful source or explicit candidates and whether the answer has adequate evidence. Simple lookups may correctly skip it. A forced diagnostic call proves connectivity, not natural adoption or token savings. Testing with a real provider may incur charges.
 
@@ -195,7 +215,7 @@ Copilot CLI uses a project `.mcp.json` or user `~/.copilot/mcp-config.json`, not
 For an installed Copilot CLI, its normal registration command can create the entry in the user configuration:
 
 ```bash
-copilot mcp add --tools explore sharpdeps -- sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/index.sqlite
+copilot mcp add --tools find_symbols,read_symbols,relations,explore sharpdeps -- sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/index.sqlite
 ```
 
 This example leaves source reads disabled. Add `--trusted` after the server arguments only when source reads are authorized. Use a different server name if `sharpdeps` is already configured; do not replace an existing entry unintentionally.
@@ -274,7 +294,7 @@ Setup uses no-overwrite publication and retains temporary/backup recovery paths 
 
 ## Time budgets, freshness and recovery
 
-The 0.5.0 split-v1 contract applies to matching CLI, MCP and API consumers. `ExploreRequest.PrepareMaxMilliseconds`, CLI `--prepare-max-milliseconds` and MCP `prepareMaxMilliseconds` default to 30,000 ms for preparation. `Budget.MaxMilliseconds`, CLI `--max-milliseconds` and MCP `maxMilliseconds` default to 1,000 ms for the query only. Both values must be finite and within 10..30,000 ms; explore rejects `0`. Omitting the options selects these same defaults:
+The split-v1 contract introduced in 0.5.0 applies to matching CLI, MCP and API consumers. `ExploreRequest.PrepareMaxMilliseconds`, CLI `--prepare-max-milliseconds` and MCP `prepareMaxMilliseconds` default to 30,000 ms for preparation. `Budget.MaxMilliseconds`, CLI `--max-milliseconds` and MCP `maxMilliseconds` default to 1,000 ms for the query only. Both values must be finite and within 10..30,000 ms; explore rejects `0`. Omitting the options selects these same defaults:
 
 ```bash
 sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent
@@ -322,9 +342,20 @@ The CLI also provides `status`, `search`, `symbol`, `callers`, `callees`, `impac
 
 For .NET consumers, [saved-query/source contracts](https://github.com/Htkym/sharpdeps/blob/main/docs/contracts/query-context-v1.ja.md) describe snapshot identity, validation and source proofs. `IndexReader.Snapshot` exposes recursively read-only validated collections; arbitrary `IQueryIndex` inputs remain defensively validated. Reader lifetimes and generation pins still apply.
 
+## Upgrade from 0.5.0
+
+For globally installed tools, update both packages and reconnect your MCP client so it discovers the 0.5.1 tool schemas.
+
+```sh
+dotnet tool update --global SharpDeps.Cli --version 0.5.1
+dotnet tool update --global SharpDeps.Mcp --version 0.5.1
+```
+
+Existing 0.5.0 indexes remain readable. To index only selected C# projects, use the [project indexing example](#index-and-explore-selected-projects-over-mcp). Use a separate `--index` to keep a full-workspace index alongside the selected one. Pass the same project selection to subsequent updates.
+
 ## Upgrade from 0.4.0
 
-Update the CLI, MCP server and VS Code extension to matching 0.5.0 versions when available, and reconnect the MCP client so it loads the new server and schema. An external CLI update does not replace the VSIX's bundled reader. API consumers must also use the matching contract.
+Update the CLI, MCP server and VS Code extension to matching versions, and reconnect the MCP client so it loads the new server and schema. An external CLI update does not replace the VSIX's bundled reader. API consumers must also use the matching contract.
 
 Exploration now defaults to 30,000 ms preparation and 1,000 ms query-only time. Existing `maxMilliseconds`/`--max-milliseconds` is query-only; zero is rejected for explore. Ordinary unscoped names and paths now default to `discover`. Use `--scope-policy unique` or MCP `scopePolicy: "unique"` to retain the previous unscoped selection behavior. Read source outcomes and omissions rather than treating transport success as returned source.
 
@@ -354,9 +385,9 @@ The extension reads only its default index path. Use another source checkout to 
 
 ### MCP response-mode default compatibility
 
-MCP `explore` now treats an omitted `responseMode` as `evidence`, including audit-format requests. This is a behavioral compatibility change for existing MCP clients: requested declarations (or bounded contained-member fallback) are retained, but related bodies are deferred rather than automatically retrieved. Their relations, selectors and explicit omission reasons remain available. Request `responseMode: "detail"` when additional related bodies or owner context are needed; it is not a promise of byte-for-byte legacy output. Explicit `overview`, `evidence` and `detail` retain their meanings. CLI omission and the typed Query API default remain unchanged. No source permission, freshness check, ambiguity resolution or preparation/query/output budget is relaxed. Fewer returned bytes on focused fixtures do not establish lower end-to-end AI token usage or equal answer quality.
+Since 0.5.0, MCP `explore` treats an omitted `responseMode` as `evidence`, including audit-format requests. This is a behavioral compatibility change for existing MCP clients: requested declarations (or bounded contained-member fallback) are retained, but related bodies are deferred rather than automatically retrieved. Their relations, selectors and explicit omission reasons remain available. Request `responseMode: "detail"` when additional related bodies or owner context are needed; it is not a promise of byte-for-byte legacy output. Explicit `overview`, `evidence` and `detail` retain their meanings. CLI omission and the typed Query API default remain unchanged. No source permission, freshness check, ambiguity resolution or preparation/query/output budget is relaxed. Fewer returned bytes on focused fixtures do not establish lower end-to-end AI token usage or equal answer quality.
 
-Fixed-query CLI/MCP transport replays now explicitly send the same `responseMode` to both hosts (the replay manifest's `responseMode` defaults to `detail` to retain related-source coverage checks). The CLI argv, MCP request, requested/effective receipt fields, and identity limits record this condition. These runs test explicit-mode parity, not parity of omitted defaults or byte-for-byte reproduction of older omitted-mode receipts. Earlier receipts remain historical evidence; regenerate into a new receipt directory. `OmittedMcpModeUsesEvidenceWhileCliAndTypedDefaultsStayLegacy` separately tests the intentional default difference.
+To reproduce an exploration across MCP and CLI, set `responseMode` and `--response-mode` to the same value.
 
 ### Routing v5
 

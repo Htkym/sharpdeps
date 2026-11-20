@@ -1,65 +1,57 @@
-# SharpDeps — .NET Dependency Map
+# SharpDeps
 
-English · [日本語](README.ja.md) · [VS Code guide](docs/guide.md) · [CLI and MCP](docs/mcp.md)
+[日本語](README.ja.md) · [MCP server on NuGet](https://www.nuget.org/packages/SharpDeps.Mcp) · [VS Code extension](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
 
-SharpDeps shows .NET project, namespace and type dependencies in VS Code, with source locations for the relationships it collected. The separate CLI saves an index for repeatable queries; the optional MCP server lets an AI client explore that index.
+SharpDeps is a local Model Context Protocol (MCP) server for C# code search and dependency analysis. An AI coding assistant can trace calls across .NET projects and show you the files and lines where one method calls another. The VS Code extension lets you explore the same code visually, from project references down to individual types.
 
-![Project dependencies in SharpDeps](images/overview-en.png)
+## Ask an AI assistant about your code
 
-The images show the 0.1.0 workbench. See the guides for current controls and saved-index compatibility.
+Before changing a method, try a question like this.
 
-## AI investigation: measured results and limits
+> Use SharpDeps to find `OrderStore.Save`. What does it call? Show me the file and line for each call you find, and open the declaration of the method it calls.
 
-SharpDeps defaults to typed symbol lookup, exact reads and one-hop relations. Check the final answer against existing evidence, including branch conditions and exception/cleanup paths; retrieve only missing evidence. `explore` remains available for explicit requests or manual investigation, not automatic escalation.
+Use a method name from your own solution. For the example above, the assistant can call the MCP tool `explore` with `{"query":"OrderStore.Save","responseMode":"detail"}`. Follow the returned file and line to check the call. A call marked `Resolved` identifies the target the compiler found for that build configuration. Runtime dispatch can select a different implementation.
 
-In a separate **historical controlled comparison**, typed-only SharpDeps used **43.4% fewer total host tokens** and had **34.3% lower host-estimated cost per valid answer** than source-only investigation without SharpDeps. Two selected multihop tasks × two repetitions per arm scored 11.50/12 versus 11.25/12, with no critical errors. These are small-sample observations from a modified harness, **not current-product guarantees or evidence that the final-answer/F4 checklist helps**. [Conditions, numerical evidence and calculation](docs/multihop-comparison-results.md).
+### Connect the MCP server
 
-A November 18, 2026 diagnostic compared mandatory typed/source re-checks with mandatory explore re-checks (two tasks, two repetitions per arm). Final quality was **11/12 for both arms on EF Core** and **12/12 for both on Orleans**; no critical errors were scored. Five of eight answers improved between the provisional and final answer, but **there was no no-recheck control**, so this does not establish the causal benefit of requiring a check. Neither method repaired EF's release-failure logging and finally-cleanup exception-replacement omissions.
+You can use the MCP server directly from an assistant such as Codex, Claude Code or GitHub Copilot. You need the .NET 10 runtime to run the server and a .NET SDK to install it. To index a solution, use an SDK compatible with that solution and restore its dependencies. Run these commands in the solution directory, replacing `Shop.sln` with your solution's filename.
 
-Orleans used a revised exact-selector harness, so the tasks are reported separately, not pooled as an identical eight-session experiment. Costs differed by task; neither an efficiency winner nor quality equivalence is established by this small sample. [Measurement details and limitations](docs/forced-verification-results.md).
-
-## Install
-
-Install **SharpDeps — .NET Dependency Map** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps), or download the VSIX from [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) and choose **Extensions: Install from VSIX…** in VS Code. This documentation describes 0.5.0. Check the Marketplace or release page for availability before installing.
-
-VS Code 1.90 or later is required. Trust the workspace before running analysis.
-
-| Mode     | Use it for                                                                  | Requirements                                                               |
-| -------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Quick    | Project references, C# declarations and syntax-based relationships.         | .NET 10 runtime; no SDK, MSBuild evaluation or package restore.            |
-| Semantic | Evaluated C# references, symbol-resolved relationships and source evidence. | .NET 10 runtime, a target-compatible SDK and restored target dependencies. |
-
-The [.NET Install Tool](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.vscode-dotnet-runtime) supplies the extension's runtime when needed. SharpDeps does not install an SDK or restore your project's packages.
-
-The extension bundles its own analysis and saved-index reader hosts. Installing a newer CLI does not update those hosts. The 0.5.0 reader supports index schemas 1/2/3; see [saved-index setup](docs/guide.md#read-a-saved-index) before using an index from another tool version.
-
-## Open a map
-
-1. Open your solution folder in VS Code.
-2. Right-click a `.sln`, `.slnx` or supported project file and choose **SharpDeps: Show Dependency Map**.
-3. Select a node or connection to inspect **Details**. Use **Dependencies** or **Dependents** to narrow the view.
-
-Quick accepts `.csproj`, `.fsproj`, `.vbproj` and `.vcxproj`; Semantic targets SDK-style C# projects. A project target includes its transitive project references. Choose **Semantic** and **Analyze** for symbol-resolved results.
-
-Search, filters, the graph and the table share the current scope. Display limits restrict the picture, not the analyzed data or cycle detection. Quick/Semantic views export Mermaid, JSON, SVG or PNG; the saved-index view exports JSON. **Copy for agent** writes context to the clipboard and does not send it to an AI service.
-
-Analysis and rendering run locally. A failed or cancelled analysis retains the last successful view. Read coverage, certainty and limitations before interpreting a missing or inferred relationship. See the [VS Code guide](docs/guide.md) for settings, source navigation and troubleshooting.
-
-## CLI and MCP
-
-Install the separate [.NET CLI tool](https://www.nuget.org/packages/SharpDeps.Cli) and, when needed, the [MCP server](https://www.nuget.org/packages/SharpDeps.Mcp):
-
-```bash
-dotnet tool install --global SharpDeps.Cli --version 0.5.0
-dotnet tool install --global SharpDeps.Mcp --version 0.5.0
+```sh
+dotnet tool install --global SharpDeps.Mcp
+dotnet restore Shop.sln
 ```
 
-Tool installation requires an SDK; running an installed tool requires the .NET 10 runtime. Indexing additionally requires the target's SDK and restored dependencies. The published 0.4.0 CLI/MCP tools use Syntamark 1.2.0 for Markdown; the 0.5.0 tools use 2.0.0. Neither parser is bundled in the VSIX.
+Add `sharpdeps-mcp` as a stdio server in your assistant's MCP settings. The example below is for clients that use `mcpServers`.
 
-The [CLI/MCP guide](docs/mcp.md) covers indexing, source queries, normal MCP connection, scope selection, trust, finite time budgets and recovery. For upgrade steps, see [migration from 0.4.0](docs/mcp.md#upgrade-from-040). For the older release, use the [0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
+```json
+{
+  "mcpServers": {
+    "sharpdeps": {
+      "command": "sharpdeps-mcp",
+      "args": ["--root", "/absolute/path/to/Shop", "--trusted", "--allow-mutations"]
+    }
+  }
+}
+```
 
-For AI clients, start with [project-bound agent setup](docs/mcp.md#project-bound-agent-package-setup) and [routing and opt-out](docs/mcp.md#agent-routing-and-opt-out). A registered MCP server and loaded routing guidance are separate checks. For missing indexed structural evidence, use a focused explore before broad structural text searches; a known file alone does not supply missing cross-file evidence. Targeted reads remain appropriate for self-contained single-file or literal lookups. Reuse evidence and stop when it is sufficient. The prompt-context hook is experimental and opt-in; it can add tokens and duplicate later evidence. This is model guidance, not host-enforced tool ordering. A connection does not grant source access or permission to update an index. Partial coverage and unverified freshness remain visible; fewer reads, lower token use and universal one-second completion are not guaranteed.
+Replace the example path with the absolute path to your solution directory. Use these settings for a workspace you trust. `--trusted` allows the assistant to read source through the server. `--allow-mutations` also lets it create and update the index, which can run the project's build logic and source generators.
 
-## License
+Reconnect the client and ask it to index `Shop.sln` in Release with SharpDeps. Once indexing finishes, ask your question about the code. On a large solution, if the `index` tool offers a `projects` field, select the `.csproj` files for both the caller and the callee. After editing the code, ask the assistant to update the index with the same selection and configuration.
 
-[MIT](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for bundled components.
+If you prefer to create the index yourself, use the CLI and omit `--allow-mutations` from the MCP settings. Your assistant can then query the saved index in read-only mode. [SharpDeps CLI on NuGet](https://www.nuget.org/packages/SharpDeps.Cli) · [CLI and MCP guide](docs/mcp.md)
+
+`Partial` means that a missing call may be outside the indexed scope. With `unverified` freshness, SharpDeps could not confirm that all inputs still match the index. Before quoting a workspace file, the server checks its contents against the saved hash.
+
+## Explore the dependency map in VS Code
+
+Install [SharpDeps from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) in VS Code 1.90 or later. The extension works independently of the MCP server.
+
+1. Open a solution folder you trust. In Explorer, right-click a `.sln`, `.slnx` or `.csproj` file and choose **SharpDeps: Show Dependency Map**.
+2. Use **Quick** for an overview of project references. To inspect C# calls and type references, restore the solution, select **Semantic**, then choose **Analyze**.
+3. Select a connection on the map. In **Details**, choose **Open in editor** beside a reference to jump to the source line.
+
+![The OrderStore to Order dependency selected in VS Code, with the reference in OrderStore.cs visible in Details](images/evidence-en.png)
+
+Use **Copy for agent** to put the selected context on the clipboard when you want to discuss it with your assistant. Quick mode needs the .NET 10 runtime, which the extension can obtain for you. Semantic mode also needs the solution's SDK and restored dependencies. [VS Code guide](docs/guide.md)
+
+[MIT license](LICENSE) · [Third-party notices](THIRD-PARTY-NOTICES.md)

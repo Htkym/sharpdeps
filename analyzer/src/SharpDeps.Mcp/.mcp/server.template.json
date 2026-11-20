@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.Htkym/sharpdeps",
+  "description": "Search C# symbols and trace .NET dependencies, callers and callees to source locations.",
+  "version": "@PACKAGE_VERSION@",
+  "repository": {
+    "url": "https://github.com/Htkym/sharpdeps",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "nuget",
+      "identifier": "SharpDeps.Mcp",
+      "version": "@PACKAGE_VERSION@",
+      "runtimeHint": "dnx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "--root" },
+        {
+          "type": "positional",
+          "value": "{workspace_root}",
+          "variables": {
+            "workspace_root": {
+              "description": "Absolute path to your workspace containing the saved SharpDeps index.",
+              "isRequired": true
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -73,7 +73,7 @@ public sealed class QueryService
                 else if (workspace is null) work.Error("FRESHNESS_UNVERIFIED", "Supply a complete input inventory and configuration verification.");
                 else
                 {
-                    freshness = workspace.Verify(saved, work.Token);
+                    freshness = workspace.VerifyForQuery(saved, work.Token);
                     work.Check();
                     if (freshness.State != "verified-current")
                         work.Error("FRESHNESS_REQUIREMENT_NOT_MET", "Update the index and reopen the reader after verifying all inputs.");

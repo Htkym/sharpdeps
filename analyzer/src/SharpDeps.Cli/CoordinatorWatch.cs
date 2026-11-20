@@ -103,10 +103,13 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
                     using (PhaseMetrics.Measure("watch.settle"))
                         await Task.Delay(100, stopped.Token); // one bounded settle interval per reconciliation
                     var captured = Volatile.Read(ref revision);
-                    string inputs;
-                    using (PhaseMetrics.Measure("watch.input-scan"))
+                    string? inputs = null;
+                    if (selection.Options.ProjectPaths is not { Count: > 0 })
+                    {
+                        using var scan = PhaseMetrics.Measure("watch.input-scan");
                         inputs = await CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, stopped.Token)
                             ?? throw new CliFailure("CLI_INPUT_BUDGET_EXCEEDED", 4);
+                    }
                     VerifyRevision(captured);
                     var update = selection with { Full = full, Options = selection.Options with { AllowSemanticReuse = !full } };
                     CoordinatorReply reply;
@@ -115,9 +118,8 @@ internal sealed class CoordinatorWatch(CliCoordinator owner, CoordinatorUpdate s
                         reply = await owner.UpdateAsync(update, "watch", stopped.Token, operationToken =>
                         {
                             VerifyRevision(captured);
-                            var current = CliIndexer.CaptureWatchInputsAsync(selection.Options.Root, selection.Options.IndexPath, operationToken)
-                                .GetAwaiter().GetResult();
-                            if (current != inputs)
+                            if (inputs is not null && CliIndexer.CaptureWatchInputsAsync(selection.Options.Root,
+                                    selection.Options.IndexPath, operationToken).GetAwaiter().GetResult() != inputs)
                                 throw new CliFailure("WATCH_INPUT_CHANGED", 3);
                             VerifyRevision(captured);
                         });

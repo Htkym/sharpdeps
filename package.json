@@ -1,8 +1,8 @@
 {
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
-  "description": "Explore .NET project, namespace, and type dependencies with source evidence and cycle detection.",
-  "version": "0.5.0",
+  "description": "Map .NET dependencies in VS Code, find cycles, and jump to C# source. Copy dependency context for your AI assistant.",
+  "version": "0.5.1",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {
@@ -25,6 +25,9 @@
     "csharp",
     "dependency",
     "graph",
+    "dependency graph",
+    "static analysis",
+    "code navigation",
     "mermaid",
     "architecture",
     "namespace",

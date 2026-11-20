@@ -24,7 +24,7 @@ public static partial class CliApplication
             if (options.Command == "help")
                 return await Reply(stdout, options, new { commands = new[] { "explore", "find-symbols", "read-symbols", "relations", "index", "update", "serve", "coordinator-status", "status", "search", "symbol", "callers", "callees", "impact", "context", "query", "doctor", "help", "install", "uninstall", "agent-export", "agent-remove", "prompt-context" },
                     root = "--root absolute-directory; optional only for explore, which uses the absolute current directory without ancestor search",
-                    index = "--target root-contained.slnx|.sln|.csproj --trusted [--timeout-seconds 0 for exclusive execution without a deadline]",
+                    index = "--target root-contained.slnx|.sln|.csproj --trusted [--project path.csproj (repeat for each project to index)] [--timeout-seconds 0 for exclusive execution without a deadline]",
                     updateMode = "closed-input-project-markdown-or-full-rebuild",
                     query = "--term text | --id graph-id; --freshness allow-stale|require-fresh|refresh; legacy saved query commands (search/symbol/callers/callees/impact/context/query) accept --max-milliseconds 0 to disable their computation deadline",
                     explore = "names-or-file-paths | --term names-or-file-paths [--query-kind symbol|http-get-literal --project-id id --variant id --format audit|agent --response-mode overview|evidence|detail --include-evidence-refs --evidence-ref ref --scope-policy discover|unique|prefer-debug --path-to occurrence-id --owner-status]; ordinary names/paths default to discover unless project or variant is explicit; exact saved IDs, path-to and http-get-literal default to unique and reject discover; http-get-literal matches the exact saved declaration fragment, including empty text, not an effective URL; path-to is Symbol-only and requires an exact source occurrence term; owner-status observes an existing coordinator without proving freshness; defaults to audit and returns bounded source evidence with explicit freshness and omissions; response-mode is opt-in (omitted preserves existing behavior): overview returns saved pointers without bodies, exact saved selectors/path-to use evidence; evidence reads requested declarations; detail also reads related declarations; include-evidence-refs emits optional saved-evidence guards; evidence-ref requires one exact saved code occurrence selector (hocc_) with explicit project/variant, unique scope, symbol mode and no path-prefix/path-to; it validates saved identity, not possession of source text or token savings",
@@ -107,7 +107,8 @@ public static partial class CliApplication
         {
             var failure = Failure(error);
             metrics?.Fail(failure.Code == "CANCELLED");
-            return await Error(stdout, options, failure.Code, failure.ExitCode);
+            return await Error(stdout, options, failure.Code, failure.ExitCode,
+                options?.Command is "index" or "update" ? CliIndexDiagnostics.Get(error) ?? new("unknown") : null);
         }
         finally
         {
@@ -202,7 +203,8 @@ public static partial class CliApplication
                 "QUERY_TIMEOUT" => $"The configured {request.Budget!.MaxMilliseconds} ms query deadline expired during exploration. No source evidence was returned. Preparation used its separate finite budget. Narrow the query within the agreed budget.",
                 "REQUEST_TIMEOUT" => $"The configured {execution!.TotalMilliseconds} ms total request deadline expired. No source evidence was returned. Preparation, exploration and response finalization share this total upper bound.",
                 "INDEX_PREPARATION_BUSY" => "Prepared-index capacity is occupied by active requests. No source evidence was returned. Wait for the active requests to finish; retry only when authorized within the agreed budget.",
-                "INDEX_MISSING" or "WORKSPACE_STATE_MISSING" => $"No usable saved index at '{index}' for selected root '{root}'. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command.",
+                "INDEX_MISSING" or "WORKSPACE_STATE_MISSING" => $"No usable saved index at '{index}' for selected root '{root}'. Use source read/search for this investigation. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command.",
+                "INDEX_NO_SNAPSHOT" => "No committed generation exists. Use source read/search for this investigation. An explicitly authorized trusted index can publish the first generation.",
                 _ => null
             };
             return (ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode);
@@ -305,7 +307,8 @@ public static partial class CliApplication
                 try { reply = await owner.UpdateAsync(update, options.RequestId, operation.Token); }
                 finally { await owner.DrainAsync(); } // client cancellation cannot terminate other admitted clients
             }
-            if (reply.ErrorCode is { } code) throw new CliFailure(code, ExitFor(code));
+            if (reply.ErrorCode is { } code)
+                throw CliIndexDiagnostics.Attach(new CliFailure(code, ExitFor(code)), reply.IndexDiagnostic ?? new("unknown"));
             var result = reply.Result ?? throw new CliFailure("COORDINATOR_REPLY_INVALID", 6);
             if (!options.Has("quiet")) await stderr.WriteLineAsync($"sharpdeps: {result.UpdateMode} committed");
             return await Reply(stdout, options, new { result.WorkspaceId, result.SnapshotId, result.Generation,
@@ -328,9 +331,17 @@ public static partial class CliApplication
         using var executor = new CoordinatorExecutor(writer);
         var built = await executor.BuildExclusiveAsync(update, token);
         token.ThrowIfCancellationRequested();
-        var stage = IndexStage.Create(built.Snapshot);
-        token.ThrowIfCancellationRequested();
-        writer.Commit(stage, token, built.VerifySelection);
+        try
+        {
+            var stage = IndexStage.Create(built.Snapshot);
+            token.ThrowIfCancellationRequested();
+            writer.Commit(stage, token, built.VerifySelection);
+        }
+        catch (Exception error)
+        {
+            CliIndexDiagnostics.Attach(error, CliIndexDiagnostics.Get(error) ?? new("publication", "snapshot-validation"));
+            throw;
+        }
         metrics?.Complete();
         var snapshot = built.Snapshot;
         var mode = snapshot.Graph.Diagnostics?.Any(d => d.Code == "cli.semanticGraphReused" && d.Count == 1) == true
@@ -410,13 +421,15 @@ public static partial class CliApplication
             requestId = options.RequestId, result, errors = issues ?? Array.Empty<QueryIssue>() }, QueryJson.Options));
         return 0;
     }
-    private static async Task<int> Error(TextWriter output, CliArguments? options, string code, int exitCode)
+    private static async Task<int> Error(TextWriter output, CliArguments? options, string code, int exitCode,
+        CliIndexDiagnostic? diagnostic = null)
     {
-        await output.WriteLineAsync(ErrorText(options?.Command ?? "unknown", options?.RequestId ?? "cli", code));
+        await output.WriteLineAsync(ErrorText(options?.Command ?? "unknown", options?.RequestId ?? "cli", code, diagnostic: diagnostic));
         return exitCode;
     }
 
-    private static string ErrorText(string command, string requestId, string code, string? recovery = null)
+    private static string ErrorText(string command, string requestId, string code, string? recovery = null,
+        CliIndexDiagnostic? diagnostic = null)
     {
         var message = recovery ?? (code switch
         {
@@ -425,6 +438,6 @@ public static partial class CliApplication
             _ => "See CLI contract for the recovery action."
         });
         return JsonSerializer.Serialize(new { apiVersion = "1", command,
-            requestId, errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options);
+            requestId, indexDiagnostic = diagnostic, errors = new[] { new QueryIssue(code, message) } }, QueryJson.Options);
     }
 }

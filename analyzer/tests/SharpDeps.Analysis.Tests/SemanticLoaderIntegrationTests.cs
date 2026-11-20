@@ -81,6 +81,24 @@ public sealed class SemanticLoaderIntegrationTests
     }
 
     [Fact]
+    public async Task ScopedSolutionKeepsOnlyRequestedVariantAndItsEvaluatedReferences()
+    {
+        var target = TestPaths.Fixture("semantic-baseline", "SemanticBaseline.sln");
+        var application = Path.Combine(Path.GetDirectoryName(target)!, "src", "Application", "Application.csproj");
+        var load = await SemanticLoader.LoadAsync(new(target)
+        {
+            SelectedProjectPaths = new HashSet<string> { application },
+            SelectedTargetFramework = "net8.0"
+        });
+
+        Assert.Collection(load.Report.Variants.OrderBy(v => v.ProjectName),
+            owner => Assert.Equal(("Application", "net8.0"), (owner.ProjectName, owner.TargetFramework)),
+            dependency => Assert.Equal(("Domain", "netstandard2.0"),
+                (Path.GetFileNameWithoutExtension(dependency.ProjectPath), dependency.TargetFramework)));
+        Assert.Equal("compatible", Assert.Single(load.Report.References).Resolution);
+    }
+
+    [Fact]
     public async Task EvaluatesConditionalProjectReferencesPerConfiguration()
     {
         var debug = await LoadAsync("semantic-baseline/SemanticBaseline.sln", configuration: "Debug");

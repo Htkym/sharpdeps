@@ -719,6 +719,41 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void SelectedProjectSnapshotRejectsRequiredFreshnessWithoutReadingSourcesOrAskingTheOwner()
+    {
+        using var fixture = new StoreFixture();
+        var snapshot = fixture.Snapshot(1);
+        var index = new FixedIndex(snapshot with
+        {
+            Graph = snapshot.Graph with { Diagnostics = [new(QueryWorkspace.SelectedProjectsDiagnostic, 1)] }
+        });
+        File.Delete(fixture.CodePath);
+        var ownerCalls = 0;
+        var workspace = new QueryWorkspace(fixture.Root, _ => { ownerCalls++; return new(StoreFixture.InputPaths, true); });
+
+        var query = new QueryService(index, workspace, isTrusted: true).Execute(
+            new("fresh", QueryKind.Status, Freshness: QueryFreshnessPolicy.RequireFresh, Budget: Generous));
+        Error(query, "FRESHNESS_REQUIREMENT_NOT_MET");
+        Assert.Null(query.Envelope.Snapshot.CheckedAt);
+        Assert.Empty(query.Envelope.Snapshot.DirtyPaths);
+        Assert.Contains("SELECTED_PROJECT_INPUTS_UNVERIFIED", query.Envelope.Snapshot.Unverified);
+        var service = new ExplorationService(index, workspace, isTrusted: true);
+        var explore = service.Execute(new("Service", Freshness: QueryFreshnessPolicy.RequireFresh, Budget: Generous));
+        Assert.Contains(explore.Errors, issue => issue.Code == "FRESHNESS_REQUIREMENT_NOT_MET");
+        Assert.Empty(explore.Units);
+        var symbols = service.ExecuteSymbols(new(SymbolQueryOperation.FindSymbols, Query: "Service",
+            Freshness: QueryFreshnessPolicy.RequireFresh, Budget: Generous));
+        Assert.Equal("FRESHNESS_REQUIREMENT_NOT_MET", Assert.Single(symbols.Envelope.Errors).Code);
+        Assert.Empty(symbols.Envelope.Items);
+        Assert.Equal(0, ownerCalls);
+
+        var inspection = workspace.Verify(index.Snapshot);
+        Assert.Contains("src/App.cs", inspection.DirtyPaths);
+        Assert.Contains("SELECTED_PROJECT_INPUTS_UNVERIFIED", inspection.Unverified);
+        Assert.Equal(1, ownerCalls);
+    }
+
+    [Fact]
     public void RequiredFreshnessNeedsCompleteInventoryAndConfigurationProof()
     {
         using var fixture = new StoreFixture();
@@ -1009,10 +1044,8 @@ public sealed class QueryTests
         private const string Markdown = "# 設定\r\n\r\n😀 設定の手順を説明する。\r\n";
         private const string Configuration = "<Project />\n";
         public static readonly string[] InputPaths = ["src/App.cs", "other/Other.cs", "readme.md", "config.props"];
-        private static readonly string FixtureBase = OperatingSystem.IsWindows()
-            ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd206-20261010-01\fixtures"
-            : OperatingSystem.IsMacOS() ? "/private/tmp/sharpdeps-sd206-fixtures"
-            : Path.Combine(Path.GetTempPath(), "sharpdeps-sd206-fixtures");
+        private static readonly string FixtureBase = OperatingSystem.IsMacOS()
+            ? "/private/tmp/sharpdeps-sd206-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-sd206-fixtures");
         private static readonly byte[] CursorKey = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
         public Guid Workspace { get; } = Guid.NewGuid();
         private Guid Document { get; } = Guid.NewGuid();
