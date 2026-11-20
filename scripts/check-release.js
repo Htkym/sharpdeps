@@ -159,6 +159,7 @@ async function checkTool(file, version, definition, packageId, command, extraReq
     (name) =>
       name === 'icon.png' ||
       name === 'README.md' ||
+      name === '.mcp/server.json' ||
       /^[^/]+\.nuspec$/.test(name) ||
       required.some((item) => name === prefix + item)
   );
@@ -167,6 +168,17 @@ async function checkTool(file, version, definition, packageId, command, extraReq
   const spec = entries[specs[0]].toString('utf8');
   assert.equal(xmlValue(spec, 'id'), packageId);
   assert.equal(xmlValue(spec, 'version'), version);
+  if (packageId === definition.mcpPackageId) {
+    assert.match(spec, /<packageType\s+name="McpServer"/);
+    assert.match(spec, /<packageType\s+name="DotnetTool"/);
+    assert.ok(entries['.mcp/server.json'], 'Missing NuGet MCP server manifest');
+    const server = JSON.parse(entries['.mcp/server.json'].toString('utf8'));
+    assert.equal(server.version, version, 'MCP server version');
+    const nuget = server.packages.find(
+      (item) => item.registryType === 'nuget' && item.identifier === packageId
+    );
+    assert.equal(nuget?.version, version, 'MCP package reference');
+  }
   assert.equal(xmlValue(spec, 'icon'), 'icon.png', `${packageId} icon metadata`);
   assert.equal(xmlValue(spec, 'readme'), 'README.md', `${packageId} readme metadata`);
   assert.ok(entries['README.md']?.length, `${packageId} user README payload`);

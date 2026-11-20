@@ -5,7 +5,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps-mcp</ToolCommandName>
     <PackageId>SharpDeps.Mcp</PackageId>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Description>A Model Context Protocol (MCP) server for AI coding assistants. Search C# symbols, trace calls across .NET projects, and cite files and lines from a local index.</Description>

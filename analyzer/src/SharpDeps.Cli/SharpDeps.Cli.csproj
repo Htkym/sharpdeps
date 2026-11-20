@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sharpdeps</ToolCommandName>
     <PackageId>SharpDeps.Cli</PackageId>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Description>Index a .NET solution locally. Search C# symbols, find callers and callees, and inspect the matching source lines from the command line.</Description>

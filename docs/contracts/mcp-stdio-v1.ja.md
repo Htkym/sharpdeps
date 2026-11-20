@@ -3,13 +3,12 @@
 SharpDeps.Mcpは独立した任意toolであり、既存CLI／Skill／VSCodeの必須依存にはしない。
 ModelContextProtocol.Core 2.2.0のstdio transport、lifecycle、request cancellationを使用し、
 protocolは2025-11-25に固定する。HTTP listener、外部port、LLM呼出し、認証変更は追加しない。
-配布名はSharpDeps.Mcp、起動コマンドはsharpdeps-mcpとする。基礎契約はCLI／VSIXと同じ0.4.0に対応し、discoveryとその既定値、および準備／探索の予算を分けるsplit-v1は未公開の開発版の仕様である。実際の提供状況はレジストリまたはGitHub Releaseで確認する。利用手順と移行条件は[CLI and MCP exploration](../mcp.md)を参照する。
+この契約は `SharpDeps.Mcp` 0.5.1 に対応する。起動コマンドは `sharpdeps-mcp`。利用手順と移行条件は[CLI and MCP exploration](../mcp.md)を参照する。
 
-rootとindexは起動時に固定する。0.3.0以降の読取りtoolはtypedな`explore`だけであり、
-旧search／symbol／callers／callees／impact／context／status toolは公開しない。CLIの個別Query commandは維持する。
+読み取り用のツールは `find_symbols`、`read_symbols`、`relations`、`explore` の4つで、いずれも起動時に指定した root と索引を使う。宣言の特定、本文の取得、関係の照会には[シンボル照会ツール](symbol-investigation.md)を使う。
 `explore`はCLIのflag配列を受け取らず、下記のtyped fieldを検証して共通探索へ渡す。
 root／index／trusted／quietをclientが差し替えるrequestは拒否し、saved coverage／unverifiedの意味を変えない。
-未公開の開発版exploreは準備／探索とも有限の時間予算を使い、0を拒否する。explore以外のtyped Query APIは従来どおり時間予算0を受理する。
+`explore` は準備／探索とも有限の時間予算を使い、0を拒否する。explore以外のtyped Query APIは従来どおり時間予算0を受理する。
 各requestは独自の実reader pinを持ち、同request内のFTSとgraphは同じgenerationを使う。
 同時request全体が同じgenerationになるという保証ではない。
 
@@ -22,10 +21,11 @@ root／index／trusted／quietをclientが差し替えるrequestは拒否し、s
 | `pathTo`                               | symbol探索でexactな開始occurrenceを`query`に指定したとき、対象occurrenceまでの保存済みcall witnessを要求する                                                                                                                                                              |
 | `freshness`                            | `allow-stale`／`require-fresh`／`refresh`。自動更新の許可ではない                                                                                                                                                                                                         |
 | `ownerStatus`                          | 既定false。既存ownerの観測だけで、起動や鮮度の証明をしない                                                                                                                                                                                                                |
+| `responseMode` | `overview` は候補、`evidence` は指定した宣言、`detail` は関連する宣言も対象とする。MCP の既定は `evidence`。 |
 | `format`                               | 既定`agent`。`audit`は保存IDとprovenanceを詳しく返す                                                                                                                                                                                                                      |
 | `maxChars`, `maxBytes`                 | 出力予算。文字数2048〜1000000、UTF-8 bytes 2048〜4000000。MCPはCLIのnode／edge／depth flagを受け取らない                                                                                                                                                                  |
-| `prepareMaxMilliseconds`               | 未公開の準備予算。既定30000ms、10〜30000msの有限値。0は拒否する                                                                                                                                                                                                           |
-| `maxMilliseconds`                      | 未公開の探索だけの予算。既定1000ms、10〜30000msの有限値。0は拒否する                                                                                                                                                                                                      |
+| `prepareMaxMilliseconds`               | 準備の予算。既定30000ms、10〜30000msの有限値。0は拒否する                                                                                                                                                                                                           |
+| `maxMilliseconds`                      | 探索だけの予算。既定1000ms、10〜30000msの有限値。0は拒否する                                                                                                                                                                                                      |
 
 toolの引数はflatなobjectで渡す。例は `{"query":"Service","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}`。
 `query`は文字列であり、scope／budgetは同じ階層に置く。
@@ -60,7 +60,7 @@ index schema 1／2／3は変更せず、in-place migrationは行わない。
 応答はsource返却、無一致、scope候補、予算不足、source利用不可、失敗を区別する。巨大typeの保存範囲が予算に入らない場合は、予算内で完全に返せる関連memberの保存範囲を候補とし、返していないtype全体を返却済みとは扱わない。
 
 `--trusted --allow-mutations`を両方指定したhostだけがindex／updateを追加する。
-`index` と `update` には、開発版から解析対象を次の形式で渡せる。`target` と `projects` のパスは起動時の `--root` を基準にする。
+0.5.1 では、`index` と `update` に解析対象を次の形式で渡せる。`target` と `projects` のパスは起動時の `--root` を基準にする。
 
 ```json
 {"target":"App.slnx","projects":["src/Api/Api.csproj","src/Services/Services.csproj"],"configuration":"Release"}

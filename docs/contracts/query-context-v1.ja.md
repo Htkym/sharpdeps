@@ -46,7 +46,7 @@ JSON escape、envelope、coverage/診断、error、cursor、使用量fieldを含
 
 usedCharsは最終JSONのUTF-16長、usedBytesはそのUTF-8長である。estimatedTokensは文字数からの推定で、tokenizerの厳密な制限ではない。取消と時間枠は探索、source読取境界、最終wire構築で検査し、CANCELLED/QUERY_TIMEOUTを返す。同期SQLite/serializer/filesystem呼出そのものを強制中断するOS sandboxではない。
 
-未公開の開発版exploreはCLI／MCP／API共通のsplit-v1契約を使う。`ExploreRequest.PrepareMaxMilliseconds`は準備予算で既定30000ms、`Budget.MaxMilliseconds`は探索だけの予算で既定1000msである。CLIでは`--prepare-max-milliseconds`／`--max-milliseconds`、MCPではflatな`prepareMaxMilliseconds`／`maxMilliseconds`に対応する。両方とも10〜30000msの有限値とし、0を拒否する。省略時もこの既定値を使い、共有期限には戻らない。
+`explore` はCLI／MCP／API共通のsplit-v1契約を使う。`ExploreRequest.PrepareMaxMilliseconds`は準備予算で既定30000ms、`Budget.MaxMilliseconds`は探索だけの予算で既定1000msである。CLIでは`--prepare-max-milliseconds`／`--max-milliseconds`、MCPではflatな`prepareMaxMilliseconds`／`maxMilliseconds`に対応する。両方とも10〜30000msの有限値とし、0を拒否する。省略時もこの既定値を使い、共有期限には戻らない。
 
 準備には新しい`IndexReader`のopen、全snapshotの読取り／検証／read-only化と、要求に必要な派生index／lexical indexを含む。要求されたHttpGet projectionもこの段階で準備する。実在する単一のsaved identityまたはHttpGet literalの要求では、不要なlexical indexの準備を自動で省く。snapshotの検証、構造探索、sourceと鮮度の検証は省略しない。探索の計時は準備完了後に始まり、探索、source／鮮度検証、出力に適用する。一つの単調時計を持つrequest ownerが準備をP以内、探索をQ以内、合計をP＋Q以内に制限する。request開始をt0、探索開始をtqとすると、探索期限は`min(tq + Q, t0 + P + Q)`である。caller取消は両段階に適用し、期限切れより優先する。協調的な取消であり、process起動、MCP handshake、transportはこの計算時間に含めない。
 

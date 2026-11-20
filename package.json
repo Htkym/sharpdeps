@@ -2,7 +2,7 @@
   "name": "sharpdeps",
   "displayName": "SharpDeps — .NET Dependency Map",
   "description": "Map .NET dependencies in VS Code, find cycles, and jump to C# source. Copy dependency context for your AI assistant.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "htkym",
   "license": "MIT",
   "repository": {

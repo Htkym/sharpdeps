@@ -1,6 +1,6 @@
 # Index storage v1
 
-`SharpDeps.Index`はContracts/Coreを参照する独立したnet10 projectである。SQLite依存はこのprojectに閉じ、旧report v2とreportStoreを別の保存形式として維持する。現行のCLI、QueryHost、MCPとcoordinatorがこの保存層を使う。0.4.0の利用手順は[操作ガイド](../guide.ja.md#保存済み索引を使う)、CLIの境界は[CLI契約](cli-skill-v1.ja.md)を参照する。
+`SharpDeps.Index`はContracts/Coreを参照する独立したnet10 projectである。SQLite依存はこのprojectに閉じ、旧report v2とreportStoreを別の保存形式として維持する。現行のCLI、QueryHost、MCPとcoordinatorがこの保存層を使う。現在の利用手順は[操作ガイド](../guide.ja.md#保存済み索引を使う)、CLIの境界は[CLI契約](cli-skill-v1.ja.md)を参照する。
 
 ## 所有権と保存範囲
 

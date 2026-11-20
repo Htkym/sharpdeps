@@ -1,6 +1,6 @@
-# Typed symbol investigation (unreleased)
+# Typed symbol investigation
 
-The additive MCP tools `find_symbols`, `read_symbols`, and `relations` supplement `explore`; they do not replace it. Existing exploration and saved-query formats remain unchanged. No performance or quality improvement over ordinary exploration is established yet.
+Since 0.5.0, the MCP server provides `find_symbols`, `read_symbols`, and `relations` alongside `explore`. Existing exploration and saved-query formats remain unchanged. No performance or quality improvement over ordinary exploration is established yet.
 
 ## Routing and requests
 
