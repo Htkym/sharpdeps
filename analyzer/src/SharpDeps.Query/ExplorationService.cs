@@ -60,9 +60,17 @@ public sealed partial class ExplorationService
         token.ThrowIfCancellationRequested();
         var saved = index is PinnedQueryIndex pinned ? pinned.PrepareExploration(token)
             : ExplorationSnapshotCache.Get(index.ReadSnapshot(token), token);
-        _ = saved.GetSearchIndex(token);
         if (request.QueryKind == ExploreQueryKind.HttpGetLiteral)
             _ = saved.GetHttpGetDeclarations(request.Query, token);
+        else
+        {
+            // A single existing saved identity resolves without lexical lookup or multi-match ranking.
+            // Keep ordinary, mixed, unknown and multiple-identity queries prepared before execution.
+            var query = request.Query.Trim();
+            if (!Run.IsSavedIdentity(query)
+                || !saved.nodes.ContainsKey(query) && !saved.occurrences.ContainsKey(query))
+                _ = saved.GetSearchIndex(token);
+        }
         token.ThrowIfCancellationRequested();
         return saved;
     }
@@ -625,7 +633,7 @@ public sealed partial class ExplorationService
                 matches.RemoveAll(m => m.Node.Kind == HarnessNodeKind.Member && !m.Qualified && m.Node.ParentId is { } parent
                     && !anchors.Contains(parent) && matches.Any(other => other.Node.Kind == HarnessNodeKind.Member && other.Node.Name == m.Node.Name
                         && other.Node.ParentId is { } otherParent && anchors.Contains(otherParent)));
-            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && !m.PathMatch);
+            if (matches.Any(m => m.Exact)) matches.RemoveAll(m => !m.Exact && !m.PathMatch && !CoversAllNameTerms(m));
             return matches;
         }
 
@@ -680,13 +688,25 @@ public sealed partial class ExplorationService
             return matches;
         }
 
+        private bool CoversAllNameTerms(Match match)
+        {
+            // A complete ordinary-name phrase must not be hidden by an exact match to only one word.
+            if (request.Query.Any(character => !char.IsLetterOrDigit(character) && character != '_' && !char.IsWhiteSpace(character))
+                || searchTerms.Length < 2 || searchTerms.Any(term => term.Length == 0
+                || !(char.IsLetter(term[0]) || term[0] == '_')
+                || term.Any(character => !char.IsLetterOrDigit(character) && character != '_')
+                || IsSavedIdentity(term))) return false;
+            var mask = searchTerms.Length == 32 ? uint.MaxValue : (1u << searchTerms.Length) - 1;
+            return (match.NameTerms & mask) == mask;
+        }
+
         private List<Match> OrderMatches(List<Match> matches)
         {
             // Ranking zero or one match needs no whole-snapshot lexical index.
             Check();
             if (matches.Count <= 1) return matches;
             var terms = searchTerms.Select(term => ExplorationSnapshot.Components(term, timer.Token)).ToArray();
-            var ranked = new List<(Match Match, int Context, int Penalty, string Path, int Start)>();
+            var ranked = new List<(Match Match, bool CompleteName, int Context, int Penalty, string Path, int Start)>();
             foreach (var match in matches)
             {
                 Check();
@@ -710,7 +730,7 @@ public sealed partial class ExplorationService
                         for (var index = 0; index < terms.Length; index++)
                             if (ContainsWords(components, terms[index])) context |= 1u << index;
                     }
-                ranked.Add((match, BitOperations.PopCount(context),
+                ranked.Add((match, CoversAllNameTerms(match), BitOperations.PopCount(context),
                     !match.Exact && !match.PathMatch && known && !unknown && deprioritized ? 1 : 0, path, start));
             }
             try
@@ -718,7 +738,8 @@ public sealed partial class ExplorationService
                 ranked.Sort((left, right) =>
                 {
                     Check();
-                    var order = left.Match.Tier.CompareTo(right.Match.Tier);
+                    var order = right.CompleteName.CompareTo(left.CompleteName);
+                    if (order == 0) order = left.Match.Tier.CompareTo(right.Match.Tier);
                     if (order == 0) order = BitOperations.PopCount(right.Match.MatchedTerms).CompareTo(BitOperations.PopCount(left.Match.MatchedTerms));
                     if (order == 0) order = BitOperations.PopCount(right.Match.NameTerms).CompareTo(BitOperations.PopCount(left.Match.NameTerms));
                     if (order == 0) order = right.Context.CompareTo(left.Context);
@@ -1516,6 +1537,19 @@ public sealed partial class ExplorationService
         private void AppendAgentDiagnostics(StringBuilder text)
         {
             var diagnostics = owner.saved.Graph.Diagnostics;
+            // These are collector-success inventory entries, not warnings. Compact modes
+            // retain all other diagnostics, including unknown codes and unexpected counts.
+            var inventoryCodes = CompactAgentMetadata ? owner.saved.Graph.Variants
+                .SelectMany(variant => new[] { "cli.projectExtracted." + variant.Id, "cli.projectReused." + variant.Id })
+                .ToHashSet(StringComparer.Ordinal) : [];
+            bool IsCollectorInventory(HarnessGraphDiagnostic diagnostic)
+                => diagnostic.Count == 1 && inventoryCodes.Contains(diagnostic.Code);
+            var inventory = CompactAgentMetadata ? (diagnostics ?? []).Count(IsCollectorInventory) : 0;
+            if (inventory > 0)
+            {
+                text.AppendLine(FormattableString.Invariant($"Collector inventory: entries={inventory}; per-variant IDs omitted; detail or audit uses bounded per-entry display."));
+                diagnostics = diagnostics!.Where(diagnostic => !IsCollectorInventory(diagnostic)).ToArray();
+            }
             foreach (var diagnostic in (diagnostics ?? []).Take(8))
                 text.AppendLine(FormattableString.Invariant($"Diagnostic {Safe(diagnostic.Code, 80)}={diagnostic.Count}"));
             if ((diagnostics?.Count ?? 0) > 8)
@@ -1524,13 +1558,20 @@ public sealed partial class ExplorationService
 
         private bool CompactAgentMetadata => request.Format == ExploreFormat.Agent
             && request.ResponseMode is ExploreResponseMode.Overview or ExploreResponseMode.Evidence;
+        private bool SharedCompactMetadata => CompactAgentMetadata && isDiscoveryGroup && shareGraphDiagnostics;
+
+        private const string CompactMetadataNotice = "Compact metadata: non-root/member signatures omitted; request detail or audit if needed. Member aliases reuse symbol metadata; omitted member variant equals Scope variant.";
+        private const string OmittedBodyNotice = "No omitted body is claimed complete. Retrieve only specific missing evidence needed for the task, within authorized budgets; do not reread evidence in context or exhaust omissions. Mode-deferred bodies were not requested, not a reason to enlarge budgets.";
 
         private string RenderAgent(IReadOnlyList<ExploreUnit> units, IReadOnlyList<Pending> omitted, int relationCount, int detailCount)
         {
             var text = new StringBuilder();
             void Line(FormattableString value) => text.AppendLine(value.ToString(CultureInfo.InvariantCulture));
             var graph = owner.saved.Graph;
-            Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
+            if (SharedCompactMetadata)
+                Line($"Group coverage={graph.Coverage} Freshness={freshness.State}");
+            else
+                Line($"SharpDeps explore generation={graph.Generation} snapshot={Safe(graph.SnapshotId, 160)} coverage={graph.Coverage} Freshness={freshness.State}");
             Line($"Outcome={Outcome(units, omitted)} source={(units.Count > 0 ? "returned" : responseMode == ExploreResponseMode.Overview ? "not-requested" : "unavailable")} range=complete-saved-declaration executableBody=unclassified");
             AppendResponseMode(text, detailCount, includePointers: roots.Count == 0);
             AppendEvidenceRefs(text, detailCount);
@@ -1583,8 +1624,8 @@ public sealed partial class ExplorationService
                 }
                 if (symbolChoices.Count > detailCount) Line($"Symbol choices omitted={symbolChoices.Count - detailCount}.");
             }
-            if (CompactAgentMetadata)
-                text.AppendLine("Compact metadata: non-root/member signatures omitted; request detail or audit if needed. Member aliases reuse symbol metadata; omitted member variant equals Scope variant.");
+            if (CompactAgentMetadata && !SharedCompactMetadata)
+                text.AppendLine(CompactMetadataNotice);
             var shownRelations = relations.Take(relationCount).ToArray();
             var shownOmissions = responseMode == ExploreResponseMode.Overview ? [] : omitted.Take(detailCount).ToArray();
             var summaryAllowance = request.PathTo is null ? detailCount : detailCount - PathDetailsShown(detailCount);
@@ -1675,8 +1716,14 @@ public sealed partial class ExplorationService
                 }
             }
             text.Append(metadata);
-            if (omitted.Count > 0) Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
-            if (CompactAgentMetadata && shownOmissions.Any(omission => omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
+            if (omitted.Count > 0)
+            {
+                if (SharedCompactMetadata)
+                    Line($"Omitted saved units={omitted.Count}; see shared omission policy.");
+                else
+                    Line($"Omitted saved units={omitted.Count}; no omitted body is claimed complete. Only if needed for the task, query its exact selector within authorized budgets or read the specific missing source range. Do not retrieve evidence already in context or exhaust all omissions.");
+            }
+            if (CompactAgentMetadata && !SharedCompactMetadata && shownOmissions.Any(omission => omission.Reason.StartsWith("response-mode:", StringComparison.Ordinal)))
                 text.AppendLine("Mode-deferred bodies were intentionally not requested; retrieve only missing evidence if needed, not larger budgets.");
             foreach (var omission in shownOmissions)
             {

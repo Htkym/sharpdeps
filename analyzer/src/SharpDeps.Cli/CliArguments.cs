@@ -4,7 +4,7 @@ using System.Globalization;
 using SharpDeps.Analysis.Contracts.Harness;
 using SharpDeps.Query;
 
-internal sealed class CliArguments
+internal sealed partial class CliArguments
 {
     private readonly Dictionary<string, List<string>> values = new(StringComparer.Ordinal);
     private static readonly HashSet<string> Switches = new(StringComparer.Ordinal)
@@ -62,7 +62,7 @@ internal sealed class CliArguments
         if (args.Length == 0 || args is ["--help"] or ["-h"]) return parsed;
         if (args.Length > 200) throw new CliFailure("ARGUMENT_INVALID", 2);
         parsed.Command = args[0].ToLowerInvariant();
-        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help" or "install" or "uninstall" or "agent-export" or "agent-remove")
+        if (parsed.Command is not ("index" or "update" or "serve" or "coordinator-status" or "query" or "explore" or "doctor" or "help" or "install" or "uninstall" or "agent-export" or "agent-remove" or "find-symbols" or "read-symbols" or "relations")
             && !Enum.TryParse<QueryKind>(parsed.Command, true, out _)) throw new CliFailure("COMMAND_UNKNOWN", 2);
         var allowed = new HashSet<string>(Common, StringComparer.Ordinal);
         if (parsed.Command is "agent-export" or "agent-remove") allowed.UnionWith(["client", "output-dir", "mcp-command", "dry-run"]);
@@ -74,6 +74,7 @@ internal sealed class CliArguments
             allowed.UnionWith(["watch", "watch-resync-seconds"]);
         }
         else if (parsed.Command == "explore") allowed.UnionWith(Explore);
+        else if (parsed.Command is "find-symbols" or "read-symbols" or "relations") allowed.UnionWith(Symbols);
         else if (parsed.Command is not ("help" or "doctor" or "serve" or "coordinator-status")) allowed.UnionWith(Query);
         for (var i = 1; i < args.Length; i++)
         {

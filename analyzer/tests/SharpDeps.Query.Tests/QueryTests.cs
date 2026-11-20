@@ -737,10 +737,14 @@ public sealed class QueryTests
         Assert.Null(query.Envelope.Snapshot.CheckedAt);
         Assert.Empty(query.Envelope.Snapshot.DirtyPaths);
         Assert.Contains("SELECTED_PROJECT_INPUTS_UNVERIFIED", query.Envelope.Snapshot.Unverified);
-        var explore = new ExplorationService(index, workspace, isTrusted: true).Execute(
-            new("Service", Freshness: QueryFreshnessPolicy.RequireFresh, Budget: Generous));
+        var service = new ExplorationService(index, workspace, isTrusted: true);
+        var explore = service.Execute(new("Service", Freshness: QueryFreshnessPolicy.RequireFresh, Budget: Generous));
         Assert.Contains(explore.Errors, issue => issue.Code == "FRESHNESS_REQUIREMENT_NOT_MET");
         Assert.Empty(explore.Units);
+        var symbols = service.ExecuteSymbols(new(SymbolQueryOperation.FindSymbols, Query: "Service",
+            Freshness: QueryFreshnessPolicy.RequireFresh, Budget: Generous));
+        Assert.Equal("FRESHNESS_REQUIREMENT_NOT_MET", Assert.Single(symbols.Envelope.Errors).Code);
+        Assert.Empty(symbols.Envelope.Items);
         Assert.Equal(0, ownerCalls);
 
         var inspection = workspace.Verify(index.Snapshot);

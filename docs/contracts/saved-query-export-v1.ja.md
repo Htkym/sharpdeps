@@ -1,6 +1,6 @@
 # Saved Query context / JSON export v1
 
-hostのpinned SavedQueryProviderから準備した結果を、context copy・JSON copy・ローカルJSON Saveへ接続する。legacy ContextExportInput/report JSONへ保存結果を詰めず、SVG/PNG/Mermaidはsaved向けに提供しない。現在のproviderは[保存Query契約](saved-query-provider-v1.ja.md)に従う。実clipboard/file/UIの検証と受入れは、純粋変換・stubbed host検証とは区別する。
+hostのpinned SavedQueryProviderから準備した結果を、context copy・JSON copy・ローカルJSON Saveへ接続する。legacy ContextExportInput/report JSONへ保存結果を詰めず、SVG/PNG/Mermaidはsaved向けに提供しない。現在のproviderは[保存Query契約](saved-query-provider-v1.ja.md)に従う。
 
 ## 情報源とsession
 
@@ -12,17 +12,17 @@ hostのpinned SavedQueryProviderから準備した結果を、context copy・JSO
 
 kindは`sharpdeps.saved-query-export`、versionは`1`。TypeScript定義は`src/export/savedQueryExport.ts`のSavedQueryExportである。
 
-| field | 意味 |
-|---|---|
-| analysisId | exportを準備したhost providerのsession ID |
-| snapshot | workspaceId、id（saved snapshot ID）、generation、variantIds/variantCount、coverage、freshnessをpinned headerのまま保持 |
-| selectedVariantId | 明示選択済みの単一variant。variantIdsは選択scopeであり全variant inventoryとは称さない |
-| scope | projectionの要求scope。idはopaque aliasから解決した元saved ID。要求depthは範囲の完全性を証明しない |
-| filters | 任意のresultKinds/code/docsとincludeExternal。主Query・追加Symbol・表示・export準備の同じ条件を保持 |
-| includedNodeIds | 明示表示要求を元saved node IDへ解決したもの |
-| display | granularity、実表示node/edgeの元ID、local node表示制限のtruncated |
-| observedInputChange | host watcherが観測した変更理由。snapshot freshnessを更新した証拠ではない |
-| responses | 主Browse/Search/Impactと、既存の追加Symbol responseを別recordとして保持 |
+| field               | 意味                                                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| analysisId          | exportを準備したhost providerのsession ID                                                                               |
+| snapshot            | workspaceId、id（saved snapshot ID）、generation、variantIds/variantCount、coverage、freshnessをpinned headerのまま保持 |
+| selectedVariantId   | 明示選択済みの単一variant。variantIdsは選択scopeであり全variant inventoryとは称さない                                   |
+| scope               | projectionの要求scope。idはopaque aliasから解決した元saved ID。要求depthは範囲の完全性を証明しない                      |
+| filters             | 任意のresultKinds/code/docsとincludeExternal。主Query・追加Symbol・表示・export準備の同じ条件を保持                     |
+| includedNodeIds     | 明示表示要求を元saved node IDへ解決したもの                                                                             |
+| display             | granularity、実表示node/edgeの元ID、local node表示制限のtruncated                                                       |
+| observedInputChange | host watcherが観測した変更理由。snapshot freshnessを更新した証拠ではない                                                |
+| responses           | 主Browse/Search/Impactと、既存の追加Symbol responseを別recordとして保持                                                 |
 
 各responseはoperation/apiVersion/requestId/snapshot、items/candidates/unresolvedの元bucket、returnedCount、totalKind=`returned`、truncated/truncationReasons、hasMore、diagnosticsを保持する。returnedCountはそのresponseの3bucketの返却要素数である。別response間の同一IDを統合・重複除去せず、合計unique数や全scope件数を推測しない。表示のtruncatedと各Queryのtruncatedは別に記録する。
 

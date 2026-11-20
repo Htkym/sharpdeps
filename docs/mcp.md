@@ -4,6 +4,8 @@
 
 This guide describes CLI/MCP 0.5.0. Check [NuGet](https://www.nuget.org/packages/SharpDeps.Cli) or [GitHub Releases](https://github.com/Htkym/sharpdeps/releases) for availability and install matching versions. For the older release, use the [tagged 0.4.0 guide](https://github.com/Htkym/sharpdeps/blob/v0.4.0/docs/mcp.md).
 
+The development branch also provides [additive typed symbol investigation](contracts/symbol-investigation.md); this is unreleased and not a claim about the published version above.
+
 ## Install and create an index
 
 ```bash
@@ -49,7 +51,7 @@ Check the returned source ranges, project/variant, coverage, freshness, certaint
 
 CLI exploration defaults to `--format audit`, which retains full saved identities, hashes, spans and provenance. `--format agent` uses compact aliases and line-numbered source. MCP defaults to agent format. Neither format grants source access or changes the saved facts.
 
-Opt-in retrieval depth is available through CLI --response-mode overview|evidence|detail or MCP responseMode. Omit it to preserve existing behavior. Overview is optional when discovery is useful; use evidence directly when the target is known, and detail only when additional evidence is needed. These modes do not establish measured token or latency savings. Overview returns saved candidates, scope-specific relation summaries and exact selectors without retrieving source bodies for the response. Bodies are explicitly deferred, not absent; saved pointers do not prove current source freshness. Existing index and freshness proof checks remain in force and may read files for verification. An overview request consisting of exact saved selectors, or using pathTo, goes directly to evidence. Evidence retrieves requested declarations while deferring related bodies; detail additionally allows related declarations and owner context within the same budgets. Responses identify requested and effective modes. No mode grants source permission, changes freshness requirements, combines compilation scopes, or increases the total escaped wire limits. Intentionally deferred bodies and budget/access omissions remain distinct. A budget too small for an evidence response may still return the existing explicit failure with no evidence.
+Retrieval depth is available through CLI --response-mode overview|evidence|detail or MCP responseMode. MCP omission defaults to evidence; CLI and typed Query omission retain legacy retrieval. Overview is optional when discovery is useful; use evidence directly when the target is known, and detail only when additional evidence is needed. These modes do not establish measured token or latency savings. Overview returns saved candidates, scope-specific relation summaries and exact selectors without retrieving source bodies for the response. Bodies are explicitly deferred, not absent; saved pointers do not prove current source freshness. Existing index and freshness proof checks remain in force and may read files for verification. An overview request consisting of exact saved selectors, or using pathTo, goes directly to evidence. Evidence retrieves requested declarations while deferring related bodies; detail additionally allows related declarations and owner context within the same budgets. Responses identify requested and effective modes. No mode grants source permission, changes freshness requirements, combines compilation scopes, or increases the total escaped wire limits. Intentionally deferred bodies and budget/access omissions remain distinct. A budget too small for an evidence response may still return the existing explicit failure with no evidence.
 
 Aliases such as `@1` and `F1` are local to one response group. The agent format lists `F1 path` mappings before source blocks; a `Source F1:start-end @n` heading refers to that table without repeating the path. Consumers of older agent text should accept both this form and headings with `path=...`. In multi-group agent replies, identical index-wide diagnostics are shown once under `Index diagnostics (all saved scopes)`; per-group coverage, freshness, errors and omissions remain separate. Audit formatting is unchanged. Use the retained exact selector for later requests. Reuse complete saved ranges already in context with the same hash and span, and request only missing evidence. Ordinary read/search remains appropriate for dirty or unindexed files, documentation and questions outside the saved scope.
 
@@ -85,27 +87,32 @@ The host fixes root, index and source trust at startup. Add `--trusted` only whe
 The default tool list contains only `explore`. Call that connected tool with a **flat arguments object**:
 
 ```json
-{"query":"OrderService","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}
+{
+  "query": "OrderService",
+  "format": "agent",
+  "prepareMaxMilliseconds": 30000,
+  "maxMilliseconds": 1000
+}
 ```
 
 `query` must be a string. Scope and budget fields are siblings of `query`. The nested shape `{"query":{"query":"OrderService","maxMilliseconds":1000}}` is invalid and is rejected before searching. Inspect the advertised schema and call details if the client reports `MCP_ARGUMENT_INVALID`.
 
-| Argument | Meaning |
-| --- | --- |
-| `query` | Required string: related names, saved paths or exact selectors; at most 1,024 UTF-16 code units. |
-| `queryKind` | `symbol` (default) or `http-get-literal`. |
-| `projectId`, `variantId`, `pathPrefix` | Saved compilation/source filters. |
-| `scopePolicy` | `unique`, `prefer-debug`, or `discover`. |
-| `pathTo` | Exact target occurrence for a saved call witness; at most 128 characters. |
-| `freshness` | `allow-stale` (default), `require-fresh` or `refresh`. |
-| `format` | `agent` (default) or `audit`. |
-| `responseMode` | Optional `overview`, `evidence` or `detail`; omission preserves existing retrieval behavior. Independent of `format`. |
-| `includeEvidenceRefs` | Optional boolean, default false. Emit guards for later exact saved-occurrence retrieval. |
-| `evidenceRef` | Optional returned `er1_...` guard; requires an exact `hocc_` query, explicit project/variant, unique symbol scope, and no path filters. |
-| `ownerStatus` | Optional bounded observation of an existing coordinator; does not prove freshness. |
-| `maxChars`, `maxBytes` | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes. |
-| `prepareMaxMilliseconds` | Preparation computation budget; default 30,000 ms. |
-| `maxMilliseconds` | Query-only computation budget; default 1,000 ms. |
+| Argument                               | Meaning                                                                                                                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query`                                | Required string: related names, saved paths or exact selectors; at most 1,024 UTF-16 code units.                                                              |
+| `queryKind`                            | `symbol` (default) or `http-get-literal`.                                                                                                                     |
+| `projectId`, `variantId`, `pathPrefix` | Saved compilation/source filters.                                                                                                                             |
+| `scopePolicy`                          | `unique`, `prefer-debug`, or `discover`.                                                                                                                      |
+| `pathTo`                               | Exact target occurrence for a saved call witness; at most 128 characters.                                                                                     |
+| `freshness`                            | `allow-stale` (default), `require-fresh` or `refresh`.                                                                                                        |
+| `format`                               | `agent` (default) or `audit`.                                                                                                                                 |
+| `responseMode`                         | Optional `overview`, `evidence` or `detail`; omission defaults to `evidence` in MCP (CLI and typed Query omission remain unchanged). Independent of `format`. |
+| `includeEvidenceRefs`                  | Optional boolean, default false. Emit guards for later exact saved-occurrence retrieval.                                                                      |
+| `evidenceRef`                          | Optional returned `er1_...` guard; requires an exact `hocc_` query, explicit project/variant, unique symbol scope, and no path filters.                       |
+| `ownerStatus`                          | Optional bounded observation of an existing coordinator; does not prove freshness.                                                                            |
+| `maxChars`, `maxBytes`                 | Escaped response text limits; defaults 12,000 characters and 48,000 UTF-8 bytes.                                                                              |
+| `prepareMaxMilliseconds`               | Preparation computation budget; default 30,000 ms.                                                                                                            |
+| `maxMilliseconds`                      | Query-only computation budget; default 1,000 ms.                                                                                                              |
 
 In the 0.5.0 split-v1 contract, both computation budgets must be finite values from 10 to 30,000 ms; `0` is rejected for `explore`. Omitting both fields, as in `{"query":"OrderService","format":"agent"}`, selects preparation 30,000 ms and query 1,000 ms. The query default is an initial policy choice, not a guarantee that complete `DbContext` exploration or another workload finishes in one second. Published 0.4.0 retains its shared-budget behavior; use its tagged guide and advertised schema.
 
@@ -129,14 +136,14 @@ In the same connection, call `explore` with `{"query":"QueryHandler.Handle","res
 
 The standard `explore` MCP tool, not a model-request rewrite hook, is the shared interface for Codex, Copilot, Claude Code and OpenCode. Their registration formats and approval rules differ. A host name or a saved transcript is not proof that earlier source is still in the current model context. SharpDeps does not silently omit source because it was returned on an earlier call, and it does not require automatic MCP resource fetching.
 
-When a target is already known, query its exact selector with `responseMode: "evidence"` directly. Use overview only when discovering candidates is useful. Overview plus follow-up is an extra tool call and can cost more than direct retrieval. In agent-format overview/evidence, verbose non-root signatures and repeated member metadata are intentionally deferred; labels, selectors, certainty, locations and omission counts remain. Request detail or audit when those signatures are needed. This metadata compaction does not change the legacy omitted-mode, detail or audit rendering contract.
+When a target is already known, query its exact selector with `responseMode: "evidence"` directly. Use overview only when discovering candidates is useful. Overview plus follow-up is an extra tool call and can cost more than direct retrieval. In agent-format overview/evidence, verbose non-root signatures and repeated member metadata are intentionally deferred; labels, selectors, certainty, locations and omission counts remain. Request detail or audit when those signatures are needed. This metadata compaction does not change the CLI/typed Query legacy omitted-mode, detail or audit rendering contract.
 
 If an exact requested type cannot fit within the current evidence budget, eligible complete saved member ranges inside that same requested type may be returned instead. The parent type remains explicitly omitted; no complete type body or unrelated related-type body is implied. This retrieval fallback applies independently of agent/audit formatting and never increases a budget or bypasses source checks.
 
 For a guarded follow-up, explicitly request references:
 
 ```json
-{"query":"OrderService","responseMode":"overview","includeEvidenceRefs":true}
+{ "query": "OrderService", "responseMode": "overview", "includeEvidenceRefs": true }
 ```
 
 Copy the exact occurrence, project, variant and `evidenceRef` from the returned `Evidence ref` row into a normal tool call:
@@ -156,17 +163,50 @@ CLI equivalents are `--include-evidence-refs` and `--evidence-ref <guard>` along
 
 A new connection with no prior conversation can re-fetch using the same guard while the saved selection remains valid. If the selector or guard itself was lost, rediscover it normally. Saved-selection equality and fresh-source verification remain distinct. Tight budgets can still produce an explicit budget-limited result without source.
 
-The separate `eng/opencode-context-reuse/` HTTP experiment is optional, OpenCode-specific, and **not** this common feature. Its old multi-result replay savings cannot be transferred to the standard MCP path. Native-host transport checks, offline byte measurements and real-model quality/cost comparisons are separate acceptance gates; fewer output bytes alone do not establish a better answer or lower total cost.
+The separate [experimental OpenCode context-reuse adapter](context-reuse.md) is optional, OpenCode-specific, and **not** this common feature. Its old multi-result replay savings cannot be transferred to the standard MCP path. Native-host transport checks, offline byte measurements and real-model quality/cost comparisons are separate acceptance gates; fewer output bytes alone do not establish a better answer or lower total cost.
 
 ## Agent routing and opt-out
 
-Use SharpDeps explore when indexed .NET symbol, dependency, caller/callee or cross-file structure would help resolve missing evidence. Tool use is optional: use targeted source read/search when the relevant location is already known. Query focused names/paths and reuse returned evidence; do not retrieve complete unchanged ranges already in context. Follow exact selectors only for specific evidence still missing or changed and needed for the task. Omissions do not require exhaustive exploration; stop when sufficient evidence is available. Use ordinary read/search for simple literal text or documentation-only lookups, dirty/unindexed/out-of-scope files, unavailable tools/indexes or user opt-out. Report blockers without claiming unverified evidence. No repeat call is required for evidence already in context.
+Use the smallest evidence source that answers the question. Read known relevant files or ranges directly when they suffice, including across files. For missing indexed evidence, default to typed symbol discovery, exact reads and one-hop relations. Before submitting, check concrete method names, decisive conditions, failure paths and limits against evidence already in context. For exception-sensitive behavior, trace try/catch/finally, release failures and cleanup/disposal, including logging, rethrow and exception replacement. Retrieve only specific missing evidence; the check does not require another call. Stop when sufficient and preserve uncertainty. Do not automatically escalate to `explore`: it remains available for explicit user requests or manual investigation. Its overview/evidence/detail modes remain unchanged.
 
 Use ordinary read/search for simple literal text or documentation-only questions, dirty/unindexed files, unavailable tools/indexes or work outside the saved scope. Necessary current-file verification before an edit remains allowed. Report a blocked exploration before using permitted targeted fallback; do not imply that unavailable evidence was checked. Keep Partial coverage, proof limits, ambiguity and omissions. A no-match is not proof of absence.
 
 The server sends this workflow in both initialization instructions and the `explore` tool description, so the tool description carries the core rule even when a client does not forward server instructions to its model. These are model-facing instructions, not a security boundary: the server cannot intercept another tool's reads/searches or prevent a final answer. Actual tool-order enforcement requires support and configuration in the AI host; connecting MCP alone does not provide it. Source permissions, user opt-out and higher-priority instructions still apply.
 
-A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the longer workflow. It describes the 0.5.0 interface.
+A connection alone does not make a client read instructions. Use the instruction location your client actually discovers and reload/start a fresh session through its normal workflow. The [sharpdeps-query skill](https://github.com/Htkym/sharpdeps/blob/main/skills/sharpdeps-query/SKILL.md) contains the routine workflow and links to specialized interface contracts. Distribute the entire skill directory, including `references`, rather than copying only `SKILL.md`; read reference sections only when needed. It describes the 0.5.0 interface.
+
+### Project-bound agent package setup
+
+`agent-export` is a separate, explicit setup path in the 0.5.0 candidate. Check release availability first; a source checkout or CI candidate does not mean 0.5.0 is published. It exports files for an already installed host. It does **not** install SharpDeps, create an index, activate a plugin, edit existing host profiles, grant source access, or enable experimental context reuse.
+
+Choose one registration path:
+
+- **SharpDeps MCP already registered:** keep that server and export routing only. Do not register a second server through the package.
+- **No SharpDeps MCP registered:** explicitly bundle its launch command, or register MCP separately using the host's normal workflow. Routing-only output without an accessible server is not a completed integration.
+
+Preview a routing-only package in an explicit project child directory:
+
+```bash
+sharpdeps agent-export --client portable --root /absolute/workspace --output-dir /absolute/workspace/sharpdeps-agent --dry-run
+```
+
+Use `portable` for Codex/Copilot, `claude-code` for Claude Code, or `opencode-v2` for OpenCode V2. The root and output parent must exist; the output must be a new project-contained directory. Review the returned files, then repeat without `--dry-run`. For optional MCP bundling add `--mcp-command`: portable requires an explicit bare executable such as `sharpdeps-mcp` on the host PATH; Claude/OpenCode require an absolute existing executable. Select the existing root-contained index with `--index`. Add `--trusted` only when source reads are authorized; exporting does not change index trust by itself. See the [export contract and thin shell/PowerShell entry points](agent-packages.md).
+
+| Host            | What to activate explicitly                                                                                                   | What the package provides                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Codex / Copilot | Load the portable package with that host's supported plugin mechanism; follow the generated README.                           | A discoverable routing skill, plus MCP only if requested. Skill discovery does not mean its full body was loaded.              |
+| Claude Code     | Load the exported plugin through Claude Code's supported plugin mechanism.                                                    | A routing skill and optional MCP registration. A plugin-root instruction file is not assumed to be always-on guidance.         |
+| OpenCode V2     | Load the exported `opencode.config.json` through its supported configuration mechanism, without replacing unrelated settings. | `routing.md` through `instructions`, plus optional MCP. The same SharpDeps skill is deliberately not registered a second time. |
+
+Check these separately in a fresh host session:
+
+1. **Connection:** the intended SharpDeps server is connected and advertises `explore` with the expected workspace/index and permissions. A manifest-validation success alone is not this check.
+2. **Guidance:** the intended routing file or skill is discoverable/loaded through the host's actual path. Do not manually add a second copy of MCP initialization instructions, or infer full skill loading from a listed skill name.
+3. **Useful behavior:** for a real task needing missing cross-file evidence, inspect whether focused exploration returns useful source or explicit candidates and whether the answer has adequate evidence. Simple lookups may correctly skip it. A forced diagnostic call proves connectivity, not natural adoption or token savings. Testing with a real provider may incur charges.
+
+If a check fails, report which stage failed. Do not reinstall, reindex, change trust or grant permissions automatically. A no-hit or unavailable index is not evidence that the target is absent.
+
+To disable, first remove/disable the host's package activation or configuration entry. Then preview `sharpdeps agent-remove --root /absolute/workspace --output-dir /absolute/workspace/sharpdeps-agent --dry-run` and repeat without `--dry-run` only for an unchanged owned package. Removal moves it to an adjacent backup; modified, extra, moved or symlinked files are refused. Routing-only removal does not unregister an independently configured MCP server. Keep unrelated host settings and user instructions unchanged.
 
 ### Dedicated Copilot CLI setup
 
@@ -211,13 +251,17 @@ For [Claude Code's UserPromptSubmit command hook](https://code.claude.com/docs/e
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [{
-      "hooks": [{
-        "type": "command",
-        "command": "\"/absolute/tools/sharpdeps\" prompt-context --root \"/absolute/workspace\" --index .sharpdeps/index.sqlite --trusted",
-        "timeout": 40
-      }]
-    }]
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/absolute/tools/sharpdeps\" prompt-context --root \"/absolute/workspace\" --index .sharpdeps/index.sqlite --trusted",
+            "timeout": 40
+          }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -257,24 +301,24 @@ sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --f
 sharpdeps explore --root /absolute/workspace --trusted --term "OrderService" --format agent --prepare-max-milliseconds 30000 --max-milliseconds 1000
 ```
 
-Preparation establishes a validated frozen snapshot and all standard derived and lexical indexes, including the HttpGet projection when requested. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation.
+Preparation establishes a validated frozen snapshot and query-required derived indexes, including the HttpGet projection when requested. A single existing saved identity or HttpGet literal request automatically skips unused lexical search preparation; ordinary names, mixed terms and multiple identities retain it. Snapshot validation, structural expansion, source checks and returned evidence are unchanged. This avoids unnecessary preparation, not model tokens by itself. Query time starts after that boundary and covers exploration, source/freshness checks and rendering. The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation.
 
 One monotonic request owner bounds caller preparation/wait by `P`, query work by `Q`, and their total by `P + Q`. With request start `t0` and query start `tq`, the query deadline is `min(tq + Q, t0 + P + Q)`. The MCP host's independent finite preparation owner may continue after the caller leaves; the request sum does not bound all later background CPU work. Cancellation is cooperative; individual I/O/JSON operations can complete before the next check. Process startup, MCP handshake, client permissions and transport are outside this computation bound. These values are not a universal latency guarantee.
 
 When upgrading from 0.4.0, `maxMilliseconds`/`--max-milliseconds` changes from shared preparation/query time to query-only time. Replace explore's old zero/unlimited input with an explicitly chosen finite value. Non-explore typed Query operations still allow `QueryBudget.MaxMilliseconds = 0`. Choose values for the purpose, workload and caller deadline; do not silently raise budgets or retry. Index schemas 1/2/3 are unchanged; there is no automatic in-place migration.
 
-| Result | Action |
-| --- | --- |
-| `MCP_ARGUMENT_INVALID` | Compare the advertised schema and actual arguments. Use a flat string query and supported fields; no search has run for rejected arguments. |
-| `INDEX_MISSING` | Check the selected root/index. Create an index only through an authorized explicit indexing operation. |
-| `INDEX_OPEN_FAILED` | Check the selected DB, existing WAL/SHM and runtime temporary paths within existing permissions. Missing/invalid paths, OS restrictions and sandbox restrictions are different causes; the individual failing file may be unknown. |
-| Sandbox restriction supported by evidence | For a valid path and authorized operation, use the client's normal scoped permission review. Stop on denial; do not change ACLs, disable sandboxing or move/copy/checkpoint the index to bypass access controls. |
-| `PREPARATION_TIMEOUT` | Preparation expired; exit 4, with no source returned. |
-| `QUERY_TIMEOUT` | The query-only allowance expired; exit 4, with no source returned. |
-| `REQUEST_TIMEOUT` | The total request computation allowance expired; exit 4, with no source returned. |
-| `CANCELLED` | Caller cancellation takes priority over deadline failures; exit 130, with no source returned. |
-| `scope-choices` or omitted source | Narrow with actual returned scope/selector values, or use permitted ordinary source search. |
-| `OUTPUT_BUDGET_TOO_SMALL` | Required metadata cannot fit; choose an appropriate finite response budget or narrow the request. |
+| Result                                    | Action                                                                                                                                                                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_ARGUMENT_INVALID`                    | Compare the advertised schema and actual arguments. Use a flat string query and supported fields; no search has run for rejected arguments.                                                                                        |
+| `INDEX_MISSING`                           | Check the selected root/index. Create an index only through an authorized explicit indexing operation.                                                                                                                             |
+| `INDEX_OPEN_FAILED`                       | Check the selected DB, existing WAL/SHM and runtime temporary paths within existing permissions. Missing/invalid paths, OS restrictions and sandbox restrictions are different causes; the individual failing file may be unknown. |
+| Sandbox restriction supported by evidence | For a valid path and authorized operation, use the client's normal scoped permission review. Stop on denial; do not change ACLs, disable sandboxing or move/copy/checkpoint the index to bypass access controls.                   |
+| `PREPARATION_TIMEOUT`                     | Preparation expired; exit 4, with no source returned.                                                                                                                                                                              |
+| `QUERY_TIMEOUT`                           | The query-only allowance expired; exit 4, with no source returned.                                                                                                                                                                 |
+| `REQUEST_TIMEOUT`                         | The total request computation allowance expired; exit 4, with no source returned.                                                                                                                                                  |
+| `CANCELLED`                               | Caller cancellation takes priority over deadline failures; exit 130, with no source returned.                                                                                                                                      |
+| `scope-choices` or omitted source         | Narrow with actual returned scope/selector values, or use permitted ordinary source search.                                                                                                                                        |
+| `OUTPUT_BUDGET_TOO_SMALL`                 | Required metadata cannot fit; choose an appropriate finite response budget or narrow the request.                                                                                                                                  |
 
 Do not automatically retry failed calls, raise limits or change settings without a reason and authorization. A larger deadline does not fix access, schema or source-proof errors.
 
@@ -327,3 +371,13 @@ sharpdeps-mcp --root /absolute/workspace --index .sharpdeps/explore-0.5.sqlite -
 ```
 
 The extension reads only its default index path. Use another source checkout to try a new default index while retaining the previous workspace and index.
+
+### MCP response-mode default compatibility
+
+MCP `explore` now treats an omitted `responseMode` as `evidence`, including audit-format requests. This is a behavioral compatibility change for existing MCP clients: requested declarations (or bounded contained-member fallback) are retained, but related bodies are deferred rather than automatically retrieved. Their relations, selectors and explicit omission reasons remain available. Request `responseMode: "detail"` when additional related bodies or owner context are needed; it is not a promise of byte-for-byte legacy output. Explicit `overview`, `evidence` and `detail` retain their meanings. CLI omission and the typed Query API default remain unchanged. No source permission, freshness check, ambiguity resolution or preparation/query/output budget is relaxed. Fewer returned bytes on focused fixtures do not establish lower end-to-end AI token usage or equal answer quality.
+
+Fixed-query CLI/MCP transport replays now explicitly send the same `responseMode` to both hosts (the replay manifest's `responseMode` defaults to `detail` to retain related-source coverage checks). The CLI argv, MCP request, requested/effective receipt fields, and identity limits record this condition. These runs test explicit-mode parity, not parity of omitted defaults or byte-for-byte reproduction of older omitted-mode receipts. Earlier receipts remain historical evidence; regenerate into a new receipt directory. `OmittedMcpModeUsesEvidenceWhileCliAndTypedDefaultsStayLegacy` separately tests the intentional default difference.
+
+### Routing v5
+
+Default to `find_symbols`, `read_symbols`, and `relations` for missing indexed evidence. Do not automatically escalate to `explore`; retain it for explicit requests or manual investigation. Before submitting, check concrete methods, branch conditions, failure and cleanup paths against existing evidence. Use typed/source reads only for missing evidence; do not force an extra call. Keep concrete symbol names, conditions and failure paths already supported by evidence in the answer; do not fetch again solely to comply. Four read tools and their CLI equivalents remain available. New managed installations allow all four; old registrations and routing-v1/v2/v3/v4 packages remain immutable and require explicit removal/reinstallation or export to adopt the new guidance. No permission or budget is expanded.

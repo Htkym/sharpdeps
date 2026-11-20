@@ -13,7 +13,7 @@ using SharpDeps.Index;
 using SharpDeps.Query;
 using Xunit;
 
-public sealed class CliTests
+public sealed partial class CliTests
 {
     [Fact]
     public async Task IndexReportsTheFirstExceededFileBudgetWithoutLeakingItsPath()

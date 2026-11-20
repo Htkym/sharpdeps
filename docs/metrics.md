@@ -83,16 +83,6 @@ preparation owner. Replay includes these waits in the request's `readerPreparati
 group. They include waiting, not exclusive preparation work; owner spans use a
 different monotonic clock origin and must never be unioned with request spans.
 Startup, MCP handshake and transport remain separate.
-Limited P2 Windows builds and 306 targeted tests passed with SDK 10.0.404, including
-small-fixture native warm reuse. Full CI, Linux runtime, retained-HANDLE path
-replacement, real-corpus/heap/concurrency/performance and packaged smoke checks
-remain pending; see [validation scope](prepared-exploration.md#diagnostics-and-validation-scope). The EF Core
-P0 diagnostics used three repetitions per entrypoint/budget; all six MCP calls
-recorded capacity bypass. No performance improvement follows from that observation
-or from the budget split. Preserve the original 24-trial, shared 8-second P0 cohort.
-Because `maxMilliseconds` now means query-only time, freeze a new cohort manifest
-before replay and do not compare the new same-named fields directly with old runs.
-
 A completed query run means the saved request
 succeeded, not that freshness was verified. Failed and cancelled requests retain
 their outcome; stages never reached are absent. Setup rejected before admission
@@ -160,7 +150,6 @@ wall time. Parallel projects may overlap; never subtract or add them to
 Failure/cancellation can leave an unreported operation unfinished. A warm semantic
 update that does not open MSBuild emits no MSBuild progress, not zero evaluation.
 
-
 ## Watch cycles and external resources
 
 A `watch-cycle` has its own run ID, separate from `index.watch-update` owner runs.
@@ -178,7 +167,7 @@ reconciliation failure remains failed if stop then cancels idle. Only the separa
 completed extraction-owner run establishes durable publication. No cycle event
 changes watcher revision checks, full-resync policy, owner lease or session expiry.
 
-The opt-in [attach-only observer](../../comparison/process-observation.md) records
+The opt-in [attach-only observer](process-observation.md) records
 process RSS, OS lifetime peak working set, process CPU, process-wide cumulative I/O
 and DB/WAL byte-length gauges
 outside the product. The sampled interval maximum is not an exact interval peak;
@@ -192,7 +181,7 @@ from a lack of updates. Keep its output outside the workspace and dependency tre
 
 ## Coverage and compatibility
 
-These collectors prepare later measurements; no corpus baseline, watch resource cap, overhead
+No corpus baseline, watch resource cap, overhead
 result or performance adoption follows from these collectors. Setup/restore boundaries
 require explicit caller markers. Exact per-file DB/WAL writes and exclusive total
 MSBuild evaluation wall time are not available from this instrumentation; do not
@@ -201,12 +190,3 @@ stages remain absent or explicitly null with fixed reasons, never zero.
 Compilation acquisition includes Roslyn lazy work; no syntax retrieval is moved or
 added. Caller manifests must separately record commit/binary/corpus hashes, SDK,
 configuration, restore/cache state and parallelism before comparing runs.
-
-The diagnostics stream itself does not change public signatures or reuse predicates.
-The shared sink is internal in Core, with friend access restricted to CLI, Query,
-Index, Roslyn, Markdown and CLI/Query test assemblies built in this solution. This
-instrumentation changes no shipped API baseline, multi-targeted library or generated
-contract. The separate unreleased split-v1 request contract requires matching newly
-built consumers. Full-oracle comparisons
-should compare the unchanged snapshots/queries and assert branches separately from
-this out-of-band stream. Never discard all saved diagnostics as measurement noise.

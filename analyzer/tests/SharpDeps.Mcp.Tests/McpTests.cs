@@ -9,6 +9,48 @@ using Xunit;
 public sealed class McpTests
 {
     [Fact]
+    public async Task FourReadToolsAreAdvertisedWithoutHostCapabilityArguments()
+    {
+        await using var adapter = new McpQueryAdapter(new(Path.GetTempPath()));
+        Assert.Equal(new[] { "explore", "find_symbols", "read_symbols", "relations" }, adapter.ListTools().Select(tool => tool.Name));
+        foreach (var tool in adapter.ListTools())
+        {
+            Assert.True(tool.Annotations!.ReadOnlyHint);
+            var properties = tool.InputSchema.GetProperty("properties");
+            foreach (var forbidden in new[] { "root", "index", "trusted", "allowMutations", "cursor", "depth" })
+                Assert.False(properties.TryGetProperty(forbidden, out _));
+            Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
+        }
+    }
+
+    [Theory]
+    [InlineData("find_symbols", "{}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"trusted\":true}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"direction\":\"outgoing\"}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"freshness\":\"unknown\"}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"maxResults\":33}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"maxMilliseconds\":0}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"prepareMaxMilliseconds\":null}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"maxBytes\":2047}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"maxChars\":1000001}")]
+    [InlineData("find_symbols", "{\"query\":\"Service\",\"maxResults\":1.5}")]
+    [InlineData("find_symbols", "{\"query\":{\"name\":\"Service\"}}")]
+    [InlineData("read_symbols", "{\"selectors\":[]}")]
+    [InlineData("read_symbols", "{\"selectors\":[\"hocc_missing\"]}")]
+    [InlineData("read_symbols", "{\"query\":\"Service\"}")]
+    [InlineData("relations", "{\"selectors\":[\"hocc_missing\"],\"projectId\":\"p\",\"variantId\":\"v\",\"direction\":\"both\"}")]
+    [InlineData("relations", "{\"selectors\":[\"hocc_missing\"],\"projectId\":\"p\",\"variantId\":\"v\",\"edgeKinds\":[\"unknown\"]}")]
+    public async Task SymbolArgumentsFailClosedBeforeWorkspaceAccess(string name, string json)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sharpdeps-invalid-symbols-" + Guid.NewGuid().ToString("N"));
+        await using var adapter = new McpQueryAdapter(new(root));
+        var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await adapter.CallAsync(new()
+        { Name = name, Arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)! }));
+        Assert.Equal("MCP_ARGUMENT_INVALID", error.Message);
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
     public async Task ToolSchemasUsePortableTopLevelObjectsWithoutConditionalCombinators()
     {
         await using var adapter = new McpQueryAdapter(new(Path.GetTempPath(), Trusted: true, AllowMutations: true));
@@ -26,7 +68,7 @@ public sealed class McpTests
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N")));
         await using var adapter = new McpQueryAdapter(new(root));
-        var tool = Assert.Single(adapter.ListTools());
+        var tool = Assert.Single(adapter.ListTools(), tool => tool.Name == "explore");
         Assert.Equal("explore", tool.Name);
         Assert.Equal("query", tool.InputSchema.GetProperty("required")[0].GetString());
         Assert.False(tool.InputSchema.GetProperty("additionalProperties").GetBoolean());
@@ -49,7 +91,7 @@ public sealed class McpTests
         }));
         Assert.False(Directory.Exists(root));
         await using var mutationAdapter = new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true));
-        Assert.Equal(3, mutationAdapter.ListTools().Count);
+        Assert.Equal(6, mutationAdapter.ListTools().Count);
         foreach (var invalid in new[]
         {
             """{"target":"App.slnx","arguments":["--target","Other.slnx"]}""",
@@ -70,7 +112,7 @@ public sealed class McpTests
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
         await using var adapter = new McpQueryAdapter(new(root));
-        var tool = Assert.Single(adapter.ListTools());
+        var tool = Assert.Single(adapter.ListTools(), tool => tool.Name == "explore");
         var properties = tool.InputSchema.GetProperty("properties");
         Assert.Equal("string", properties.GetProperty("query").GetProperty("type").GetString());
         foreach (var (name, expectedDefault) in new[] { ("maxMilliseconds", 1000), ("prepareMaxMilliseconds", 30000) })
@@ -131,7 +173,7 @@ public sealed class McpTests
     {
         var root = Path.Combine(Path.GetTempPath(), "sharpdeps-mcp-not-created-" + Guid.NewGuid().ToString("N"));
         await using var adapter = new McpQueryAdapter(new(root));
-        var schema = Assert.Single(adapter.ListTools()).InputSchema;
+        var schema = Assert.Single(adapter.ListTools(), tool => tool.Name == "explore").InputSchema;
         var kind = schema.GetProperty("properties").GetProperty("queryKind");
         Assert.Equal("symbol", kind.GetProperty("default").GetString());
         Assert.Equal(new[] { "symbol", "http-get-literal" }, kind.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
@@ -140,7 +182,7 @@ public sealed class McpTests
         Assert.Contains("Empty text requires explicit queryKind=http-get-literal", schema.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
         var modes = schema.GetProperty("properties").GetProperty("responseMode");
         Assert.Equal(new[] { "overview", "evidence", "detail" }, modes.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
-        Assert.False(modes.TryGetProperty("default", out _));
+        Assert.Equal("evidence", modes.GetProperty("default").GetString());
         Assert.False(schema.GetProperty("properties").GetProperty("includeEvidenceRefs").GetProperty("default").GetBoolean());
         Assert.Equal(47, schema.GetProperty("properties").GetProperty("evidenceRef").GetProperty("maxLength").GetInt32());
 

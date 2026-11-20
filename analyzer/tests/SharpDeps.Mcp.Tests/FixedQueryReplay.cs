@@ -15,7 +15,7 @@ internal sealed record ReplayCase(string Id, string Query, string Format = "audi
     string? ProjectId = null, string? VariantId = null, string? PathPrefix = null,
     string Freshness = "allow-stale", int MaxChars = 12000, int MaxBytes = 48000,
     int? MaxMilliseconds = null, bool OwnerStatus = false, string Equivalence = "exact",
-    string? Purpose = null, int? PrepareMaxMilliseconds = null);
+    string? Purpose = null, int? PrepareMaxMilliseconds = null, string ResponseMode = "detail");
 internal sealed record ReplayInput(string Root, string CliDll, string McpDll, string RepositoryRoot,
     IReadOnlyList<ReplayCase> Cases, bool Trusted = true, string Index = ".sharpdeps/index.sqlite", bool PhaseMetrics = false,
     bool AbortOnIncompletePreparation = false);
@@ -196,6 +196,7 @@ internal static class FixedQueryReplay
                 .Select(name => Path.Combine(input.RepositoryRoot, name)).Where(File.Exists)
                 .Select(path => new { path, sha256 = Hash(File.ReadAllBytes(path)) }).ToArray(),
             limits = new[] { "No model trial, tokens, cost or additional Read behavior is measured.",
+                "Replay pins responseMode explicitly on both hosts (default: detail) to compare transport parity, not their divergent omitted-mode contracts or historical output.",
                 "Per-phase timings require explicit opt-in; unreported candidate counts remain null; process CPU includes all host work.",
                 "Agent spans are supplied only when uniquely proven by saved declarations; ambiguous candidates are retained.",
                 "A source commit plus payload hashes identifies this replay, not an unbound historical binary or index." }
@@ -326,6 +327,7 @@ internal static class FixedQueryReplay
                     effective = new
                     {
                         item.Format,
+                        item.ResponseMode,
                         scopePolicy = item.ScopePolicy ?? (mcpText?.StartsWith("SharpDeps discover ", StringComparison.Ordinal) == true
                             ? "discover" : mcpText?.StartsWith("SharpDeps explore ", StringComparison.Ordinal) == true ? "unique" : null),
                         item.ProjectId,
@@ -519,7 +521,7 @@ internal static class FixedQueryReplay
     private static List<string> Arguments(ReplayInput input, ReplayCase item)
     {
         var args = new List<string> { input.CliDll, "explore", "--root", input.Root, "--index", input.Index,
-            "--format", item.Format, "--freshness", item.Freshness,
+            "--format", item.Format, "--response-mode", item.ResponseMode, "--freshness", item.Freshness,
             "--max-chars", item.MaxChars.ToString(CultureInfo.InvariantCulture),
             "--max-bytes", item.MaxBytes.ToString(CultureInfo.InvariantCulture) };
         foreach (var (name, value) in new[] { ("--max-milliseconds", item.MaxMilliseconds),
@@ -552,6 +554,7 @@ internal static class FixedQueryReplay
         {
             ["query"] = item.Query,
             ["format"] = item.Format,
+            ["responseMode"] = item.ResponseMode,
             ["freshness"] = item.Freshness,
             ["maxChars"] = item.MaxChars,
             ["maxBytes"] = item.MaxBytes,

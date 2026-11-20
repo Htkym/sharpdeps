@@ -46,23 +46,23 @@ SDK登録はprocess全体に固定される。ownerは実SDK path/versionに固�
 
 ## IPC境界と予算
 
-local .NET named pipeを`CurrentUserOnly`で使用する。Windowsはlocal named pipe、Unixは.NETのlocal pipe実装を使う。TCPやremote shellを開かない。endpointは固定prefixとowner instanceから作り、descriptor中の任意command／URLを実行しない。OSごとの動作確認は各taskの検証証跡で判定する。
+local .NET named pipeを`CurrentUserOnly`で使用する。Windowsはlocal named pipe、Unixは.NETのlocal pipe実装を使う。TCPやremote shellを開かない。endpointは固定prefixとowner instanceから作り、descriptor中の任意command／URLを実行しない。
 
 一connectionにつき`status`、`update`、trustedな`verify-query`のいずれかを一回送る。frameは4-byte little-endian lengthとstrict UTF-8 JSON。protocol、owner instance、workspace UUID、root/index、request IDを照合する。未知field、duplicate key、不正UTF-8、深すぎるJSONを拒否する。updateは解析条件とtrustだけを受け取り、本文やshell commandを受け取らない。client cancelはconnection closeで伝える。
 
-| 上限 | 値 |
-| --- | ---: |
-| frame | 65,536 bytes |
-| descriptor | 8,192 bytes |
-| JSON depth | 8 |
-| 同時connection | 32 |
-| pending batch | 16 |
-| pending waiter | 64 |
-| handshake | 3秒 |
-| ownerの一抽出 | 3600秒 |
-| 更新connection全体（queue待ちを含む） | handshake後3605秒 |
-| status／verify-query connection全体 | 305秒 |
-| client応答待ち | 1〜3600秒、既定1800秒 |
+| 上限                                  |                    値 |
+| ------------------------------------- | --------------------: |
+| frame                                 |          65,536 bytes |
+| descriptor                            |           8,192 bytes |
+| JSON depth                            |                     8 |
+| 同時connection                        |                    32 |
+| pending batch                         |                    16 |
+| pending waiter                        |                    64 |
+| handshake                             |                   3秒 |
+| ownerの一抽出                         |                3600秒 |
+| 更新connection全体（queue待ちを含む） |     handshake後3605秒 |
+| status／verify-query connection全体   |                 305秒 |
+| client応答待ち                        | 1〜3600秒、既定1800秒 |
 
 responseは元request ID、owner instance、captured／desired revision、owner状態、committed結果またはerror codeを返す。ownerが返したrevisionと保存generationは別の値である。
 

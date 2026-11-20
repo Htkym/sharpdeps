@@ -18,13 +18,13 @@ accessorのownerはassociated property/eventです。lambdaとlocal functionのb
 
 Projectへ渡す根拠は、DeclarationDependencyCollector.Collectの結果と、OperationDependencyCollector.Collectの結果の `(operation.HarnessEvidence ?? operation.Evidence)` を連結します。OperationCollectionResult.Evidenceは旧report v2用です。method referenceの追加がなければHarnessEvidenceはnullです。非nullなら旧Evidenceの全件と追加分を含むため、Evidenceを再度連結しません。method-groupのdelegate変換・delegate構築・event-handlerは静的に束縛した参照先へのreferences_memberを返し、実呼出しのcallsやevent storageのwritesと区別します。
 
-| 原文の利用 | 新Harnessの辺 |
-| --- | --- |
-| property/field等の読取り、in引数 | reads |
-| 単純代入、out引数、eventの購読更新 | writes |
-| 複合代入、increment/decrement、coalesce代入、ref引数 | 同じ原文位置を持つreadsとwrites |
-| nameof等の評価しないmember参照、method-group/delegate/event-handlerのmethod参照 | references_member |
-| 静的束縛したcall/構築・型利用 | 既存calls/constructs等の種別 |
+| 原文の利用                                                                      | 新Harnessの辺                   |
+| ------------------------------------------------------------------------------- | ------------------------------- |
+| property/field等の読取り、in引数                                                | reads                           |
+| 単純代入、out引数、eventの購読更新                                              | writes                          |
+| 複合代入、increment/decrement、coalesce代入、ref引数                            | 同じ原文位置を持つreadsとwrites |
+| nameof等の評価しないmember参照、method-group/delegate/event-handlerのmethod参照 | references_member               |
+| 静的束縛したcall/構築・型利用                                                   | 既存calls/constructs等の種別    |
 
 receiverやindex引数を代入先のwriteへ昇格させません。tuple代入も対象となるstorageだけをwriteとします。producerはroslyn-declarationまたはroslyn-operation、Originは既存userSource/generatedSourceを保持します。位置は原文UTF-16の半開区間で、source IDとcontent hashを一緒に返します。空・未知位置を実際の位置へ補完しません。
 

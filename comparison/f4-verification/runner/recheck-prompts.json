@@ -1,0 +1,4 @@
+{
+  "generic": "Verify the provisional answer against the relevant typed/source evidence. Correct omissions or errors, then return the final answer.",
+  "exception_checklist": "Before finalizing, trace the relevant try/catch/finally paths. Check normal and failure conditions, release/rollback/logging/cleanup failures, what is swallowed or rethrown, whether later cleanup still executes, and which exception reaches the caller. Reuse evidence already read; retrieve only a missing decisive range. Then return the final answer."
+}
