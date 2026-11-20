@@ -258,7 +258,8 @@ internal sealed class CliCoordinator : IAsyncDisposable
                         else
                         {
                             state = stopping ? "stopping" : "degraded";
-                            Complete(batch, captured, null, code);
+                            Complete(batch, captured, null, code, CliIndexDiagnostics.Get(error)
+                                ?? (built is null ? new("unknown") : new("publication", "snapshot-validation")));
                         }
                     }
                 }
@@ -286,11 +287,12 @@ internal sealed class CliCoordinator : IAsyncDisposable
         }
     }
 
-    private void Complete(Batch batch, long revision, CoordinatorResult? result, string? error)
+    private void Complete(Batch batch, long revision, CoordinatorResult? result, string? error,
+        CliIndexDiagnostic? diagnostic = null)
     {
         foreach (var waiter in batch.Waiters)
             waiter.Completion.TrySetResult(new(CoordinatorProtocol.Version, Owner.Instance, waiter.RequestId,
-                revision, desiredRevision, state, result, error));
+                revision, desiredRevision, state, result, error) { IndexDiagnostic = diagnostic });
     }
 
     internal static string ErrorCode(Exception error, bool stopped = false) => error switch

@@ -19,6 +19,8 @@ internal sealed record CoordinatorReply(int Protocol, Guid Instance, string Requ
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public QueryInputInventory? QueryInventory { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CliIndexDiagnostic? IndexDiagnostic { get; init; }
 }
 
 internal static class CoordinatorProtocol

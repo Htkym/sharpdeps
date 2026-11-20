@@ -14,6 +14,7 @@ using SharpDeps.Analysis.Roslyn.Evidence;
 public sealed class SymbolResolver
 {
     private readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> _definingVariantByAssembly;
+    internal IReadOnlySet<string>? IndexedVariants { get; init; }
 
     /// <param name="definingVariantByAssembly">
     /// For every project variant key: the assembly name of the variant itself and of
@@ -146,6 +147,7 @@ public sealed class SymbolResolver
 
         return _definingVariantByAssembly.TryGetValue(ownerVariantKey, out var map)
             && map.TryGetValue(assemblyName, out var variantKey)
+            && (IndexedVariants is null || IndexedVariants.Contains(variantKey))
                 ? variantKey
                 : null;
     }

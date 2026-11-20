@@ -43,6 +43,8 @@ dotnet tool run sharpdeps -- status --root 'D:\work\repo' --quiet
 
 解析の選択は`--configuration`（既定Debug）、`--platform`、繰返し`--project PATH`、`--tfm`で指定する。TFM選択にはproject選択が必要で、曖昧な複数project/TFMを自動確定しない。選択projectもroot内に置く。`--timeout-seconds`は既定1800、最大3600で、通常は共有ownerへの応答待ち期限である。短命ownerは期限後も受理済み処理の終了を待つため、process全体の上限ではない。`--quiet`はstderr progressを止める。`--request-id`は応答との照合に使う。
 
+開発版で `--project` を指定すると、選択したコンパイルから C# の宣言と関係を収集する。呼び出し側と呼び出し先の両方を索引に載せるには、各プロジェクトを指定する。ワークスペース全体の Markdown と未使用のキャッシュは走査対象から外れる。更新時には同じ選択を渡す。MSBuild の入力全体を証明できないため、選択範囲を更新するたびに解析をやり直す。鮮度は `unverified` となり、`require-fresh` は根拠を返さない。全体索引と併用する場合は、それぞれに別の `--index` を指定する。
+
 `index`／`update`の`--timeout-seconds 0`は期限のない専有実行を明示する。既存ownerへの接続や共有ownerの起動は行わず、OS writer leaseを取得できなければ`INDEX_BUSY`で終了する。SDK・入力・公開時の検証は通常と同じで、呼出し側の取消を解析とcommitへ渡す。取消は協調的であり、同期処理の即時停止は保証しない。応答は`coordinatorState: "exclusive"`を返す。`serve --watch`とowner IPCは0を受理せず、共有ownerの3600秒期限は変わらない。
 
 watchなしの`serve`には解析選択を付けない。watchの解析期限もownerの3600秒上限を使う。Markdown入力は`.md`／`.markdown`／`.mdx`を扱う。MDXは保存された静的Markdown本文として解析し、式・JSX・importの評価やrenderは行わない。watchの収束はlive Query freshnessを証明せず、保存QueryのPartial／unverifiedと明示更新契約を保持する。範囲と回復方法は[coordinator契約](coordinator-ipc-v1.ja.md)を参照する。
@@ -88,6 +90,8 @@ sharpdeps explore --root /absolute/workspace --term "related names" --format age
 ## JSONと終了コード
 
 Query成功・Query内部errorのstdoutは既存`QueryReply.Json`をそのまま一つのJSON objectとして出す。`apiVersion: "1"`、requestId、snapshot、items/candidates/unresolved、budget、truncated/reasons、diagnostics/errors等を保持し、CLI envelopeで包み直さない。command成功は`apiVersion: "1"`、command、requestId、result、空errorsの別envelopeで返す。Query開始前のCLI errorは同じ識別fieldとerrorsを持ち、resultを省略する。stderr progressをstdoutへ混ぜず、stack traceや秘密をJSON/logへ出さない。
+
+`index` と `update` の失敗時には、`indexDiagnostic.stage` に失敗した段階を返す。把握できた場合は `lastCompletedStage` も返す。入力上限に達した場合は `reason`（`file-bytes`、`total-bytes`、`walk-entries`）、上限値 `limit`、観測値 `observed` を返す。読み込みに失敗した場合は、取得できた SDK バージョン、プロジェクト名、TFM、代表診断のコードまたは分類、残りの診断件数を返す。段階が不明な場合は `unknown` を返す。
 
 | exit | 意味 |
 |---:|---|

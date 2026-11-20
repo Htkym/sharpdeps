@@ -48,7 +48,10 @@ public sealed record ProjectVariantInfo(
     bool CompilationObtained,
     int ErrorDiagnosticCount,
     string? FailureReason,
-    string Kind = "unknown");
+    string Kind = "unknown")
+{
+    internal string? FirstCompilerErrorCode { get; init; }
+}
 
 public sealed record ReferenceEdgeInfo(
     string SourceVariantKey,

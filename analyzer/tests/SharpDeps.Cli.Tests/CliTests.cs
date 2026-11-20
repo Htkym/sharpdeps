@@ -15,6 +15,28 @@ using Xunit;
 
 public sealed class CliTests
 {
+    [Fact]
+    public async Task IndexReportsTheFirstExceededFileBudgetWithoutLeakingItsPath()
+    {
+        using var fixture = new Fixture(seed: false);
+        File.WriteAllText(Path.Combine(fixture.Root, "App.csproj"), "<Project />");
+        File.Copy(Path.Combine(SemanticBaselineFixture().Root, "global.json"), Path.Combine(fixture.Root, "global.json"));
+        var size = IndexSnapshotValidator.MaximumInputFileBytes + 1;
+        using (var input = File.Create(Path.Combine(fixture.Root, "private-cache.bin")))
+            input.SetLength(size);
+        var reply = await Run("index", "--root", fixture.Root, "--target", "App.csproj", "--trusted");
+        Assert.Equal(4, reply.Exit);
+        Assert.Equal("CLI_INPUT_BUDGET_EXCEEDED", Code(reply.Json));
+        using var json = JsonDocument.Parse(reply.Json);
+        var detail = json.RootElement.GetProperty("indexDiagnostic");
+        Assert.Equal("input-scan", detail.GetProperty("stage").GetString());
+        Assert.Equal("file-bytes", detail.GetProperty("reason").GetString());
+        Assert.Equal(IndexSnapshotValidator.MaximumInputFileBytes, detail.GetProperty("limit").GetInt64());
+        Assert.Equal(size, detail.GetProperty("observed").GetInt64());
+        Assert.DoesNotContain("private-cache.bin", reply.Json);
+        Assert.DoesNotContain(Path.GetFileName(fixture.Root), reply.Json);
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("context")]
@@ -1659,6 +1681,142 @@ public sealed class CliTests
             // until the test process exits, so cleanup is best effort.
             TryDeleteDirectory(root);
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ScopedIndexFindsServiceCallBesideLargeCacheAndPreservesGenerationOnFailure()
+    {
+        using var fixture = new Fixture(seed: false);
+        var root = fixture.Root;
+        foreach (var directory in new[] { "Api", "Services", ".nuget" })
+            Directory.CreateDirectory(Path.Combine(root, directory));
+        void Write(string name, string contents) => File.WriteAllText(Path.Combine(root, name), contents);
+        Write("Example.slnx", """
+            <Solution><Project Path="Api/Api.csproj" /><Project Path="Services/Services.csproj" /><Project Path="Unused.csproj" /></Solution>
+            """);
+        Write("Unused.csproj", "<invalid");
+        Write("Services/Services.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>
+            """);
+        Write("Api/Api.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <Import Project="../.nuget/used.props" />
+              <ItemGroup><ProjectReference Include="../Services/Services.csproj" /></ItemGroup>
+            </Project>
+            """);
+        Write(".nuget/used.props", "<Project><PropertyGroup><DefineConstants>FIRST</DefineConstants></PropertyGroup></Project>");
+        Write("Api/QueryHandler.cs", """
+            public class QueryHandler
+            {
+                public int Handle() =>
+            #if FIRST
+                    Service.Read();
+            #else
+                    Service.ReadNew();
+            #endif
+            }
+            """);
+        Write("Services/Service.cs", "public static class Service { public static int Read() => 1; public static int ReadNew() => 2; }");
+        File.Copy(Path.Combine(SemanticBaselineFixture().Root, "global.json"), Path.Combine(root, "global.json"));
+        Write("restore.config", "<configuration><packageSources><clear /></packageSources></configuration>");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        await OracleProcess.ExecuteAsync(root, ["restore", "Api/Api.csproj", "--configfile", "restore.config"],
+            deadline.Token, packageRoot: Path.Combine(root, ".nuget", "packages"));
+        using (var cache = File.Create(Path.Combine(root, ".nuget", "unused.nupkg")))
+            cache.SetLength(257L * 1024 * 1024);
+
+        string[] scope = ["--root", root, "--target", "Example.slnx", "--project", "Api/Api.csproj",
+            "--project", "Services/Services.csproj", "--configuration", "Release", "--trusted", "--timeout-seconds", "0"];
+        var created = await Run(["index", .. scope]);
+        Assert.True(created.Exit == 0, created.Json);
+        var workspace = CliWorkspaceState.Open(root, create: false).WorkspaceUuid;
+        var handle = CheckPublishedCall("Read", 1, 5);
+        var callees = await Run("callees", "--root", root, "--id", handle, "--max-milliseconds", "0");
+        Assert.True(callees.Exit == 0, callees.Json);
+        Assert.Contains("Read", callees.Json);
+
+        Write(".nuget/used.props", "<Project />");
+        var fresh = await Run("callees", "--root", root, "--id", handle, "--trusted", "--freshness", "require-fresh");
+        Assert.Equal("FRESHNESS_REQUIREMENT_NOT_MET", Code(fresh.Json));
+        var updated = await Run(["update", .. scope]);
+        Assert.True(updated.Exit == 0, updated.Json);
+        CheckPublishedCall("ReadNew", 2, 7);
+        File.AppendAllText(Path.Combine(root, "Services/Service.cs"), "\n#error PRIVATE_DIAGNOSTIC_TEXT\n");
+        var failed = await Run("update", "--root", root, "--target", "Example.slnx", "--project", "Api/Api.csproj",
+            "--configuration", "Release", "--trusted", "--timeout-seconds", "0");
+        Assert.Equal(4, failed.Exit);
+        Assert.Equal("CLI_SEMANTIC_LOAD_INCOMPLETE", Code(failed.Json));
+        using var failure = JsonDocument.Parse(failed.Json);
+        var detail = failure.RootElement.GetProperty("indexDiagnostic");
+        Assert.Equal("semantic-load", detail.GetProperty("stage").GetString());
+        Assert.Equal("compilation-errors", detail.GetProperty("reason").GetString());
+        Assert.Equal("Services.csproj", detail.GetProperty("project").GetString());
+        Assert.Equal("net10.0", detail.GetProperty("targetFramework").GetString());
+        Assert.False(string.IsNullOrEmpty(detail.GetProperty("sdkVersion").GetString()));
+        Assert.Equal("CS1029", detail.GetProperty("representativeDiagnostic").GetString());
+        Assert.DoesNotContain("PRIVATE_DIAGNOSTIC_TEXT", failed.Json);
+        Assert.DoesNotContain(Path.GetFileName(root), failed.Json);
+        CheckPublishedCall("ReadNew", 2, 7);
+
+        string CheckPublishedCall(string name, long generation, int line)
+        {
+            using var reader = IndexReader.Open(fixture.IndexPath, workspace);
+            var snapshot = reader.Snapshot();
+            Assert.Equal(generation, snapshot.Graph.Generation);
+            Assert.All(snapshot.Files, file => Assert.Null(file.Reuse));
+            var handler = Assert.Single(snapshot.Graph.Nodes, node => node.Name == "Handle");
+            var service = Assert.Single(snapshot.Graph.Nodes, node => node.Name == name);
+            var edge = Assert.Single(snapshot.Graph.Edges, e => e.Kind == "calls" && e.SourceNodeId == handler.Id && e.TargetNodeId == service.Id);
+            var location = Assert.IsType<HarnessLocation>(edge.Evidence);
+            var file = Assert.Single(snapshot.Files, item => item.SourceId == location.SourceId);
+            Assert.Equal("Api/QueryHandler.cs", file.RelativePath);
+            var source = File.ReadAllText(Path.Combine(root, file.RelativePath));
+            var span = Assert.IsType<HarnessRawSpan>(location.RawSpan);
+            Assert.Equal(line, source[..span.Start].Count(c => c == '\n') + 1);
+            Assert.Contains(name, source.Substring(span.Start, span.Length));
+            return handler.Id;
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ScopedIndexRejectsReferenceReplacedBeforeCommit()
+    {
+        using var fixture = new Fixture();
+        var root = fixture.Root;
+        var project = Path.Combine(root, "App.csproj");
+        var reference = Path.Combine(root, ".nuget", "SharpDeps.Analysis.Contracts.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(reference)!);
+        File.Copy(typeof(HarnessGraphEnvelope).Assembly.Location, reference);
+        File.WriteAllText(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup>
+                <Reference Include="SharpDeps.Analysis.Contracts"><HintPath>.nuget/SharpDeps.Analysis.Contracts.dll</HintPath></Reference>
+              </ItemGroup>
+            </Project>
+            """);
+        File.Copy(Path.Combine(SemanticBaselineFixture().Root, "global.json"), Path.Combine(root, "global.json"));
+        File.WriteAllText(Path.Combine(root, "NuGet.Config"), "<configuration><packageSources><clear /></packageSources></configuration>");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        await OracleProcess.ExecuteAsync(root, ["restore", project], deadline.Token);
+        using var writer = IndexWriter.Open(root, fixture.IndexPath, fixture.Uuid, true);
+        IndexSnapshot previous;
+        using (var reader = IndexReader.Open(fixture.IndexPath, fixture.Uuid))
+            previous = reader.Snapshot();
+        var build = await CliIndexer.BuildForPublicationAsync(new(root, project, fixture.IndexPath, fixture.Uuid,
+            ProjectPaths: [project]), previous, deadline.Token);
+        Assert.Contains(build.Snapshot.Files, f => f.Kind == "reference" && f.RelativePath == ".nuget/SharpDeps.Analysis.Contracts.dll");
+        var replacement = Path.Combine(root, "replacement.dll");
+        File.Copy(typeof(IndexReader).Assembly.Location, replacement);
+        File.Move(replacement, reference, overwrite: true);
+        var failure = Assert.Throws<IndexStoreException>(() =>
+            writer.Commit(IndexStage.Create(build.Snapshot), deadline.Token, build.VerifySelection));
+        Assert.Equal("SOURCE_CHANGED_SINCE_STAGING", failure.Code);
+        using var saved = IndexReader.Open(fixture.IndexPath, fixture.Uuid);
+        Assert.Equal(previous.Graph.SnapshotId, saved.Snapshot().Graph.SnapshotId);
     }
 
     private const string OverBudgetGeneratorSource = """

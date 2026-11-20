@@ -25,6 +25,14 @@ Replace the paths and names with your own. `index` evaluates build logic and may
 
 The default index is `.sharpdeps/index.sqlite` under the selected root. Use a root-contained `--index` path to select another index, and retain it in every later command and MCP startup. The VS Code extension reads only the default path.
 
+In a build from this branch, repeat `--project` to index the C# projects you want to explore together. For example, to follow calls between an API and its services in a large checkout, run:
+
+```bash
+sharpdeps index --root /absolute/workspace --target YourSolution.sln --project src/Api/Api.csproj --project src/Services/Services.csproj --configuration Release --trusted
+```
+
+Paths are relative to `--root`. Use the same selection with `update`. A scoped index omits workspace Markdown and collects code from the selected compilations. Unused files in local package caches do not consume its input budget. Scoped updates load the compilations again. Queries report `unverified` freshness and verify the hashes of source they return. To keep the whole-workspace generation available alongside the scoped generation, give the scoped index its own `--index` path.
+
 [dnx](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-exec) is an alternative launcher with SDK 10.0.100 or later:
 
 ```bash

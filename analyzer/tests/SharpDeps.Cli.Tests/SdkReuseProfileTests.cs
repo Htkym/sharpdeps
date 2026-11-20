@@ -127,7 +127,7 @@ public sealed class SdkReuseProfileTests
         var root = SdkProfileTestData.NewRoot("sharpdeps-ignore-profile");
         var index = Path.Combine(root, ".sharpdeps", "index.sqlite");
         async Task<string?> Fingerprint() => await (Task<string?>)typeof(CliIndexer).GetMethod("FingerprintInputs",
-            BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [root, index, true, default(CancellationToken), false, null])!;
+            BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [root, index, true, default(CancellationToken), false, null, false])!;
         var previous = await Fingerprint();
         Assert.NotNull(previous);
         foreach (var path in new[] { ".gitignore", "src/.gitignore", "obj/Debug/net10.0/.gitignore", "bin/.gitignore" })

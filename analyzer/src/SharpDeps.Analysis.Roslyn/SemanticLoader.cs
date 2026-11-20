@@ -1,5 +1,7 @@
 using SharpDeps.Analysis.Core.Diagnostics;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
@@ -14,7 +16,11 @@ public sealed record SemanticLoadOptions(
     string Configuration = "Debug",
     string? Platform = null,
     int TimeoutSeconds = 180,
-    IReadOnlyList<ProjectVariantSelection>? ProjectVariants = null);
+    IReadOnlyList<ProjectVariantSelection>? ProjectVariants = null)
+{
+    internal IReadOnlySet<string>? SelectedProjectPaths { get; init; }
+    internal string? SelectedTargetFramework { get; init; }
+}
 
 public sealed record ProjectVariantSelection(string ProjectLogicalId, string TargetFramework);
 
@@ -104,25 +110,26 @@ public static class SemanticLoader
             properties["Platform"] = options.Platform;
         }
 
-        var diagnostics = new List<ProbeDiagnostic>();
+        var diagnostics = new ConcurrentQueue<WorkspaceDiagnostic>();
+        static ProbeDiagnostic Describe(WorkspaceDiagnostic diagnostic) => new(diagnostic.Kind.ToString(), diagnostic.Message);
         var limitations = new List<ProbeLimitation>();
 
         var workspace = MSBuildWorkspace.Create(properties);
-        workspace.RegisterWorkspaceFailedHandler(args =>
-            diagnostics.Add(new ProbeDiagnostic(args.Diagnostic.Kind.ToString(), args.Diagnostic.Message)));
+        workspace.RegisterWorkspaceFailedHandler(args => diagnostics.Enqueue(args.Diagnostic));
 
         Solution solution;
         try
         {
             using var openMetrics = PhaseMetrics.Measure("semantic.msbuild-open");
             using var progress = SemanticLoadMetrics.TryCreate();
-            solution = await OpenAsync(workspace, targetPath, progress, cancellationToken);
+            solution = await OpenAsync(workspace, targetPath, options.SelectedProjectPaths, progress, cancellationToken);
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             limitations.Add(new ProbeLimitation("semantic.loadFailed", error.Message, null));
             workspace.Dispose();
-            return new SemanticColdLoad(null, null, options, diagnostics.ToArray(), new SemanticLoadResult(
+            var failures = diagnostics.Select(Describe).ToArray();
+            return new SemanticColdLoad(null, null, options, failures, new SemanticLoadResult(
                 new SemanticProbeReport(
                     SchemaVersion: "semantic-probe-1",
                     CreatedAt: DateTimeOffset.UtcNow.ToString("O"),
@@ -132,7 +139,7 @@ public static class SemanticLoader
                     Profile: new SemanticProfileInfo(options.Configuration, options.Platform, string.Empty, []),
                     Variants: [],
                     References: [],
-                    Diagnostics: diagnostics.ToArray(),
+                    Diagnostics: failures,
                     Limitations: limitations,
                     Coverage: new ProbeCoverage(0, 0, 0, 0, 0, 0)),
                 new Dictionary<string, Compilation>(),
@@ -147,9 +154,18 @@ public static class SemanticLoader
 
         try
         {
-            solution = SelectVariants(solution, options);
-            var result = await EvaluateAsync(solution, options, diagnostics, cancellationToken);
-            return new SemanticColdLoad(workspace, solution, options, diagnostics.ToArray(), result);
+            var selected = SelectVariants(solution, options);
+            var omitted = options.SelectedProjectPaths is { Count: > 0 }
+                ? solution.ProjectIds.Except(selected.ProjectIds).ToHashSet() : [];
+            // An unattributed MSBuild failure can belong to a required dependency. Keep it.
+            var relevant = diagnostics.Where(diagnostic => diagnostic switch
+            {
+                DocumentDiagnostic document => !omitted.Contains(document.DocumentId.ProjectId),
+                ProjectDiagnostic project => !omitted.Contains(project.ProjectId),
+                _ => true
+            }).Select(Describe);
+            var result = await EvaluateAsync(selected, options, relevant, cancellationToken);
+            return new SemanticColdLoad(workspace, selected, options, result.Report.Diagnostics, result);
         }
         catch
         {
@@ -161,6 +177,21 @@ public static class SemanticLoader
     private static Solution SelectVariants(Solution solution, SemanticLoadOptions options)
     {
         var targetPath = Path.GetFullPath(options.TargetPath);
+        if (options.SelectedProjectPaths is { Count: > 0 } paths)
+        {
+            // Keep each selected compilation's actual reference variants, which can target a different TFM.
+            var graph = solution.GetProjectDependencyGraph();
+            var closure = new HashSet<ProjectId>();
+            foreach (var project in solution.Projects.Where(p => p.FilePath is not null && paths.Contains(p.FilePath)
+                         && (options.SelectedTargetFramework is null || TryGetTargetFramework(p) == options.SelectedTargetFramework)))
+            {
+                closure.Add(project.Id);
+                closure.UnionWith(graph.GetProjectsThatThisProjectTransitivelyDependsOn(project.Id));
+            }
+            foreach (var id in solution.ProjectIds.Where(id => !closure.Contains(id)).ToArray())
+                solution = solution.RemoveProject(id);
+            return solution;
+        }
         if (options.ProjectVariants is { Count: > 0 })
         {
             var root = Path.GetDirectoryName(targetPath)!;
@@ -188,7 +219,7 @@ public static class SemanticLoader
     }
 
     internal static async Task<SemanticLoadResult> EvaluateAsync(Solution solution,
-        SemanticLoadOptions options, IReadOnlyList<ProbeDiagnostic> diagnostics,
+        SemanticLoadOptions options, IEnumerable<ProbeDiagnostic> loadDiagnostics,
         CancellationToken cancellationToken)
     {
         var targetPath = Path.GetFullPath(options.TargetPath);
@@ -277,6 +308,7 @@ public static class SemanticLoader
 
             var compilationObtained = compilations.TryGetValue(variantKey, out var compilation);
             var errorDiagnostics = 0;
+            string? firstCompilerErrorCode = null;
             var sampleErrors = new List<string>();
             if (compilation is not null)
             {
@@ -288,6 +320,7 @@ public static class SemanticLoader
                     }
 
                     errorDiagnostics++;
+                    firstCompilerErrorCode ??= diagnostic.Id;
                     if (sampleErrors.Count < 3)
                     {
                         sampleErrors.Add(diagnostic.Id + ": " + diagnostic.GetMessage());
@@ -328,7 +361,7 @@ public static class SemanticLoader
                     CompilationObtained: compilationObtained,
                     ErrorDiagnosticCount: errorDiagnostics,
                     FailureReason: null,
-                    Kind: ReadProjectKind(project, limitations)));
+                    Kind: ReadProjectKind(project, limitations)) { FirstCompilerErrorCode = firstCompilerErrorCode });
 
             foreach (var reference in project.ProjectReferences)
             {
@@ -395,6 +428,7 @@ public static class SemanticLoader
 
         // Projects the workspace could not load at all are reported as failed instead of
         // silently disappearing from the model.
+        var diagnostics = loadDiagnostics.ToArray();
         foreach (var (path, message) in CollectFailedProjects(diagnostics))
         {
             if (loadedPaths.Contains(path))
@@ -442,13 +476,13 @@ public static class SemanticLoader
                     solution.Projects.Count(project => project.Language != LanguageNames.CSharp)));
         }
 
-        if (diagnostics.Count > 0)
+        if (diagnostics.Length > 0)
         {
             limitations.Add(
                 new ProbeLimitation(
                     "semantic.workspaceDiagnostics",
                     "The workspace reported failures while loading; see diagnostics for details.",
-                    diagnostics.Count));
+                    diagnostics.Length));
         }
 
         var loaded = variants.Count(variant => variant.LoadState == "loaded");
@@ -463,7 +497,7 @@ public static class SemanticLoader
             Profile: BuildProfile(solution, options),
             Variants: variants,
             References: references,
-            Diagnostics: diagnostics.ToArray(),
+            Diagnostics: diagnostics,
             Limitations: limitations,
             Coverage: new ProbeCoverage(
                 Discovered: loaded + failed,
@@ -968,9 +1002,10 @@ public static class SemanticLoader
     /// Opens the target with the matching workspace entry point. A single project
     /// file is opened as a project; solutions (including .slnx) as a solution.
     /// </summary>
-    private static Task<Solution> OpenAsync(
+    private static async Task<Solution> OpenAsync(
         MSBuildWorkspace workspace,
         string targetPath,
+        IReadOnlySet<string>? selectedPaths,
         IProgress<ProjectLoadProgress>? progress,
         CancellationToken cancellationToken)
     {
@@ -979,19 +1014,27 @@ public static class SemanticLoader
             || string.Equals(extension, ".vbproj", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".fsproj", StringComparison.OrdinalIgnoreCase))
         {
-            return OpenProjectAsync(workspace, targetPath, progress, cancellationToken);
+            var project = await workspace.OpenProjectAsync(targetPath, progress: progress, cancellationToken: cancellationToken);
+            return project.Solution;
         }
 
-        return workspace.OpenSolutionAsync(targetPath, progress: progress, cancellationToken: cancellationToken);
-    }
+        if (selectedPaths is not { Count: > 0 })
+            return await workspace.OpenSolutionAsync(targetPath, progress: progress, cancellationToken: cancellationToken);
 
-    private static async Task<Solution> OpenProjectAsync(
-        MSBuildWorkspace workspace,
-        string projectPath,
-        IProgress<ProjectLoadProgress>? progress,
-        CancellationToken cancellationToken)
-    {
-        var project = await workspace.OpenProjectAsync(projectPath, progress: progress, cancellationToken: cancellationToken);
-        return project.Solution;
+        // Roslyn reads the original solution and resolves its project references, without evaluating unrelated roots.
+        var directory = Directory.CreateTempSubdirectory("sharpdeps-slnf-");
+        var filter = Path.Combine(directory.FullName, "selected.slnf");
+        try
+        {
+            var projects = selectedPaths.Select(path => Path.GetRelativePath(Path.GetDirectoryName(targetPath)!, path));
+            await File.WriteAllTextAsync(filter, JsonSerializer.Serialize(new { solution = new { path = targetPath, projects } }),
+                cancellationToken);
+            return await workspace.OpenSolutionAsync(filter, progress: progress, cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            File.Delete(filter);
+            directory.Delete();
+        }
     }
 }
