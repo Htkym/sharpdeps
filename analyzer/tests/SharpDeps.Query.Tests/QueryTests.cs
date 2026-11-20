@@ -1009,10 +1009,8 @@ public sealed class QueryTests
         private const string Markdown = "# 設定\r\n\r\n😀 設定の手順を説明する。\r\n";
         private const string Configuration = "<Project />\n";
         public static readonly string[] InputPaths = ["src/App.cs", "other/Other.cs", "readme.md", "config.props"];
-        private static readonly string FixtureBase = OperatingSystem.IsWindows()
-            ? @"D:\DevData\AgentOps\work-cli-20261007\runs\sharpdeps-sd206-20261010-01\fixtures"
-            : OperatingSystem.IsMacOS() ? "/private/tmp/sharpdeps-sd206-fixtures"
-            : Path.Combine(Path.GetTempPath(), "sharpdeps-sd206-fixtures");
+        private static readonly string FixtureBase = OperatingSystem.IsMacOS()
+            ? "/private/tmp/sharpdeps-sd206-fixtures" : Path.Combine(Path.GetTempPath(), "sharpdeps-sd206-fixtures");
         private static readonly byte[] CursorKey = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
         public Guid Workspace { get; } = Guid.NewGuid();
         private Guid Document { get; } = Guid.NewGuid();
