@@ -263,7 +263,7 @@ public sealed partial class ExplorationService
             Check();
             if (!trusted) { Error("WORKSPACE_UNTRUSTED", "Current source requires workspace trust."); return; }
             if (workspace is null) { Error("FRESHNESS_UNVERIFIED", "Supply the trusted source owner and configuration proof."); return; }
-            freshness = workspace.Verify(owner.saved, timer.Token);
+            freshness = workspace.VerifyForQuery(owner.saved, timer.Token);
             Check();
             if (freshness.State != "verified-current")
                 Error("FRESHNESS_REQUIREMENT_NOT_MET", "Wait for the trusted owner to publish a current generation, then reopen the reader.");

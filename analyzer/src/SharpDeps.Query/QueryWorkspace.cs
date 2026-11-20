@@ -20,6 +20,7 @@ public sealed class QuerySourceException(string code, string? path = null) : Exc
 /// <summary>Trusted source access only. ReadSaved queries must not construct or use this filesystem verifier.</summary>
 public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInputInventory>? inspectInventory = null)
 {
+    internal const string SelectedProjectsDiagnostic = "cli.explicitlySelectedProjects";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     // Normalization is lexical; source/root attributes are inspected only by Read or Verify.
     private readonly string canonicalRoot = NormalizeRoot(root);
@@ -132,6 +133,7 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
         token.ThrowIfCancellationRequested();
         var dirty = new HashSet<string>(StringComparer.Ordinal);
         var unverified = new HashSet<string>(StringComparer.Ordinal);
+        if (HasProjectSelection(snapshot)) unverified.Add("SELECTED_PROJECT_INPUTS_UNVERIFIED");
         try { CheckRoot(token); }
         catch (QuerySourceException error)
         {
@@ -219,6 +221,18 @@ public sealed class QueryWorkspace(string root, Func<CancellationToken, QueryInp
             DateTimeOffset.UtcNow, dirty.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
             unverified.OrderBy(value => value, StringComparer.Ordinal).ToArray());
     }
+
+    // A require-fresh query already holds a validated snapshot and only needs to know whether it can return evidence.
+    internal QueryFreshness VerifyForQuery(IndexSnapshot snapshot, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return HasProjectSelection(snapshot)
+            ? new("unverified", null, [], ["SELECTED_PROJECT_INPUTS_UNVERIFIED"])
+            : Verify(snapshot, token);
+    }
+
+    private static bool HasProjectSelection(IndexSnapshot snapshot)
+        => snapshot.Graph.Diagnostics?.Any(d => d.Code == SelectedProjectsDiagnostic && d.Count > 0) == true;
 
     private bool StoredBodyMatches(IndexFile input, string body, CancellationToken token)
     {

@@ -27,6 +27,16 @@ Merge this entry into the configuration your MCP client actually loads:
 
 Replace the workspace path. `--trusted` permits source reads; omit it for saved graph evidence without source text. Root, index and trust are fixed at startup. Client approvals remain separate. The default connection exposes one `explore` tool; it does not index, restore or start watch.
 
+## Index selected projects from MCP (development build)
+
+For a trusted, restored workspace, add `--allow-mutations` alongside `--trusted` to expose `index` and `update`. Call `index` with the solution and the projects whose code you want to explore:
+
+```json
+{"target":"MyApp.slnx","projects":["src/Api/Api.csproj","src/Services/Services.csproj"],"configuration":"Release"}
+```
+
+Paths are relative to the server's root. Repeat the same arguments with `update` after a change. Both tools return the published generation on success and bounded indexing diagnostics on failure. Then call `explore` with `{"query":"QueryHandler.Handle","responseMode":"detail"}` and check the returned source and call locations. Indexing selected projects skips the workspace Markdown scan and unused local package caches. The result carries unverified semantic freshness.
+
 ## Call explore
 
 Use the advertised schema and a flat arguments object:

@@ -61,7 +61,15 @@ index schema 1／2／3は変更せず、in-place migrationは行わない。
 応答はsource返却、無一致、scope候補、予算不足、source利用不可、失敗を区別する。巨大typeの保存範囲が予算に入らない場合は、予算内で完全に返せる関連memberの保存範囲を候補とし、返していないtype全体を返却済みとは扱わない。
 
 `--trusted --allow-mutations`を両方指定したhostだけがindex／updateを追加する。
-変更toolだけが`{"arguments":["--target","App.csproj"]}`形式のCLI flag/value配列を受け取る。
+`index` と `update` には、開発版から解析対象を次の形式で渡せる。`target` と `projects` のパスは起動時の `--root` を基準にする。
+
+```json
+{"target":"App.slnx","projects":["src/Api/Api.csproj","src/Services/Services.csproj"],"configuration":"Release"}
+```
+
+同じ接続で `explore` に `{"query":"QueryHandler.Handle","responseMode":"detail"}` を渡すと、保存した世代から宣言と呼び出し位置を検索できる。`update` でこの範囲を再解析するときも同じプロジェクトを指定する。選択したプロジェクト数は `cli.explicitlySelectedProjects` に記録される。必要な参照を読み込めなかった場合は `isError` が立ち、`structuredContent.indexDiagnostic` に失敗した段階と取得できた理由が入る。
+
+従来の `{"arguments":["--target","App.csproj"]}` 形式も利用できる。1回の呼び出しではどちらかの形式を選ぶ。
 targetのvalidation、SDK/MSBuild activation、OS writer lease、owner IPC、取消とcommit guardは
 既存CLIを通す。MCP独自のwatcher／writerを作らず、serve／watchのtoolも追加しない。
 trustを撤回するときはhostを終了し、untrustedで起動し直す。clientの引数でtrustを昇格できない。

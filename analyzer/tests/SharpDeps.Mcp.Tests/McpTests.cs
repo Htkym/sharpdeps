@@ -50,6 +50,19 @@ public sealed class McpTests
         Assert.False(Directory.Exists(root));
         await using var mutationAdapter = new McpQueryAdapter(new(root, Trusted: true, AllowMutations: true));
         Assert.Equal(3, mutationAdapter.ListTools().Count);
+        foreach (var invalid in new[]
+        {
+            """{"target":"App.slnx","arguments":["--target","Other.slnx"]}""",
+            """{"target":"App.slnx","projects":[]}""",
+            """{"target":"App.slnx","projects":["--trusted"]}""",
+            """{"target":"App.slnx","root":"other"}"""
+        })
+        {
+            var error = await Assert.ThrowsAsync<McpProtocolException>(async () => await mutationAdapter.CallAsync(new()
+            { Name = "index", Arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(invalid) }));
+            Assert.Equal(McpErrorCode.InvalidParams, error.ErrorCode);
+        }
+        Assert.False(Directory.Exists(root));
     }
 
     [Fact]

@@ -113,6 +113,18 @@ The tool returns one text content block, without duplicating the evidence in `st
 
 Starting with both `--trusted --allow-mutations` additionally exposes `index` and `update`, whose `arguments` are CLI flag/value arrays. These can execute build logic and use the coordinator's writer lease. They are not needed for a read-only connection. No watch tool is exposed.
 
+### Index and explore selected projects over MCP (development build)
+
+Start `sharpdeps-mcp --root /absolute/workspace --trusted --allow-mutations` for a workspace whose dependencies have already been restored. To use a separate database, add `--index .sharpdeps/api.sqlite` at startup. Call `index` with these tool arguments, replacing the paths with paths under that root:
+
+```json
+{"target":"YourSolution.sln","projects":["src/Api/Api.csproj","src/Services/Services.csproj"],"configuration":"Release"}
+```
+
+To refresh after edits, call `update` with the same arguments. The existing CLI-style `arguments` array is also supported as a separate input form. A successful response identifies the saved generation. On an indexing error, inspect `errors[0].code` and `indexDiagnostic` in the tool's structured content. A failed update preserves the last published generation.
+
+In the same connection, call `explore` with `{"query":"QueryHandler.Handle","responseMode":"detail"}` to retrieve saved source ranges and call evidence for that method. Check the returned filename, line and relationship kind. The saved diagnostic `cli.explicitlySelectedProjects` gives the number of selected projects. A scoped generation reports unverified semantic freshness. A host started with only `--trusted` can explore the same database and return source.
+
 ### Host-neutral selective evidence and re-fetch
 
 The standard `explore` MCP tool, not a model-request rewrite hook, is the shared interface for Codex, Copilot, Claude Code and OpenCode. Their registration formats and approval rules differ. A host name or a saved transcript is not proof that earlier source is still in the current model context. SharpDeps does not silently omit source because it was returned on an earlier call, and it does not require automatic MCP resource fetching.

@@ -47,7 +47,20 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
         {"type":"object","properties":{"query":{"type":"string","maxLength":1024,"description":"Flat arguments: query is a string naming symbols, exact IDs or source paths. Symbol queries must be nonempty. Empty text requires explicit queryKind=http-get-literal; literal mode matches saved HttpGet text and forbids pathTo."},"queryKind":{"type":"string","enum":["symbol","http-get-literal"],"default":"symbol"},"projectId":{"type":"string","maxLength":128},"variantId":{"type":"string","maxLength":128},"scopePolicy":{"type":"string","enum":["discover","unique","prefer-debug"],"description":"Omitted: discover for unscoped names/paths, otherwise unique. Exact IDs, pathTo and http-get-literal require unique. Discover keeps saved project/variant groups separate; prefer-debug selects the sole saved Debug variant within one project."},"pathPrefix":{"type":"string","maxLength":512},"pathTo":{"type":"string","minLength":1,"maxLength":128,"description":"Exact target occurrence ID for one retained call witness in symbol mode; query must be one exact source occurrence ID."},"freshness":{"type":"string","enum":["allow-stale","require-fresh","refresh"]},"ownerStatus":{"type":"boolean","default":false,"description":"Observe an existing coordinator; status is not freshness proof."},"format":{"type":"string","enum":["agent","audit"],"default":"agent","description":"Agent is concise; audit includes full saved identities and provenance."},"responseMode":{"type":"string","enum":["overview","evidence","detail"],"description":"Omitted: legacy retrieval. Prefer evidence for known names/selectors: requested declarations or contained-member fallback. Overview defers bodies (exact selectors/pathTo use evidence); detail permits related bodies. Permissions, freshness and budgets remain unchanged."},"includeEvidenceRefs":{"type":"boolean","default":false,"description":"Issue saved-selection guards for exact follow-up; not proof of retained source or token savings."},"evidenceRef":{"type":"string","minLength":47,"maxLength":47,"pattern":"^er1_[A-Za-z0-9_-]{43}$","description":"Guard from includeEvidenceRefs; requires one exact hocc_ code selector, explicit projectId/variantId, unique symbol scope, no pathPrefix/pathTo. Source permission and freshness checks still apply."},"maxChars":{"type":"integer","minimum":2048,"maximum":1000000},"maxBytes":{"type":"integer","minimum":2048,"maximum":4000000},"prepareMaxMilliseconds":{"type":"integer","default":30000,"minimum":10,"maximum":30000,"description":"split-v1: full index validation and standard derived/lexical indexes before the query; independent of maxMilliseconds."},"maxMilliseconds":{"type":"integer","default":1000,"minimum":10,"maximum":30000,"description":"split-v1: query time after preparation; total bound is both budgets added, not a latency promise. Keep frozen budgets unchanged."}},"required":["query"],"examples":[{"query":"Service","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000,"responseMode":"evidence"}],"additionalProperties":false}
         """).RootElement.Clone();
     private static readonly JsonElement MutationSchema = JsonDocument.Parse("""
-        {"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet: the host fixes those."}},"additionalProperties":false}
+        {
+          "type":"object",
+          "description":"Use target and optional selection fields, or use arguments by itself. The host fixes the workspace, index and trust.",
+          "properties":{
+            "target":{"type":"string","minLength":1,"maxLength":8192,"description":"Required for typed input. Path to a .sln, .slnx or .csproj inside the host root."},
+            "projects":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":8192},"description":"Select .csproj paths inside the host root for a scoped index. Scoped freshness is unverified; omit projects for full indexing."},
+            "configuration":{"type":"string","minLength":1,"maxLength":8192,"default":"Debug"},
+            "platform":{"type":"string","minLength":1,"maxLength":8192},
+            "targetFramework":{"type":"string","minLength":1,"maxLength":8192,"description":"Requested TFM, for example net10.0."},
+            "arguments":{"type":"array","items":{"type":"string","maxLength":8192},"maxItems":192,"description":"CLI indexing flags and values. Omit root/index/trusted/quiet and metrics-directory."}
+          },
+          "examples":[{"target":"App.slnx","projects":["Api/Api.csproj","Services/Services.csproj"],"configuration":"Release"}],
+          "additionalProperties":false
+        }
         """).RootElement.Clone();
 
     public IList<Tool> ListTools()
@@ -57,7 +70,7 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
             ExploreSchema, readOnly: true) };
         if (host.AllowMutations && host.Trusted)
             foreach (var name in new[] { "index", "update" })
-                tools.Add(MakeTool(name, "Explicit trusted CLI extraction; arguments: [--target, root-contained.csproj|.sln|.slnx]. May execute MSBuild/generators. Uses the existing lease/IPC owner.", MutationSchema, readOnly: false));
+                tools.Add(MakeTool(name, $"{(name == "index" ? "Create or replace a saved index" : "Update an existing saved index")} for the target. Select projects to bound extraction in a large workspace. May execute MSBuild/generators. Requires explicit authorization.", MutationSchema, readOnly: false));
         return tools;
     }
 
@@ -185,10 +198,10 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
 
     private static void AddMutationArguments(CallToolRequestParams request, List<string> arguments)
     {
-        if (request.Arguments is { } properties && properties.Keys.Any(key => key != "arguments")) throw Invalid();
-        if (request.Arguments?.TryGetValue("arguments", out var values) == true)
+        if (request.Arguments is not { Count: > 0 } properties) return;
+        if (properties.TryGetValue("arguments", out var values))
         {
-            if (values.ValueKind != JsonValueKind.Array || values.GetArrayLength() > 192) throw Invalid();
+            if (properties.Count != 1 || values.ValueKind != JsonValueKind.Array || values.GetArrayLength() > 192) throw Invalid();
             foreach (var value in values.EnumerateArray())
             {
                 if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text
@@ -196,6 +209,36 @@ public sealed class McpQueryAdapter(McpHostOptions host) : IAsyncDisposable
                     || text is "--root" or "--index" or "--trusted" or "--quiet" or "--metrics-directory") throw Invalid();
                 arguments.Add(text);
             }
+            return;
+        }
+
+        if (!properties.ContainsKey("target")) throw Invalid();
+        foreach (var (name, value) in properties)
+        {
+            if (name == "projects")
+            {
+                if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() is < 1 or > 64) throw Invalid();
+                foreach (var project in value.EnumerateArray()) AddValue("--project", project);
+                continue;
+            }
+            AddValue(name switch
+            {
+                "target" => "--target",
+                "configuration" => "--configuration",
+                "platform" => "--platform",
+                "targetFramework" => "--tfm",
+                _ => throw Invalid()
+            }, value);
+        }
+
+        void AddValue(string option, JsonElement value)
+        {
+            if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text || string.IsNullOrWhiteSpace(text))
+                throw Invalid();
+            try { CliArguments.ValidateValue(text); }
+            catch (CliFailure) { throw Invalid(); }
+            arguments.Add(option);
+            arguments.Add(text);
         }
     }
 

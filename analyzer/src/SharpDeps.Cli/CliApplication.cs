@@ -194,7 +194,8 @@ public static class CliApplication
                 "QUERY_TIMEOUT" => $"The configured {request.Budget!.MaxMilliseconds} ms query deadline expired during exploration. No source evidence was returned. Preparation used its separate finite budget. Narrow the query within the agreed budget.",
                 "REQUEST_TIMEOUT" => $"The configured {execution!.TotalMilliseconds} ms total request deadline expired. No source evidence was returned. Preparation, exploration and response finalization share this total upper bound.",
                 "INDEX_PREPARATION_BUSY" => "Prepared-index capacity is occupied by active requests. No source evidence was returned. Wait for the active requests to finish; retry only when authorized within the agreed budget.",
-                "INDEX_MISSING" or "WORKSPACE_STATE_MISSING" => $"No usable saved index at '{index}' for selected root '{root}'. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command.",
+                "INDEX_MISSING" or "WORKSPACE_STATE_MISSING" => $"No usable saved index at '{index}' for selected root '{root}'. Use source read/search for this investigation. Select an existing --root/--index, or create an index with an explicitly authorized trusted index command.",
+                "INDEX_NO_SNAPSHOT" => "No committed generation exists. Use source read/search for this investigation. An explicitly authorized trusted index can publish the first generation.",
                 _ => null
             };
             return (ErrorText(hostParsed ? "explore" : "unknown", hostParsed ? requestId : "cli", failure.Code, recovery), failure.ExitCode);
