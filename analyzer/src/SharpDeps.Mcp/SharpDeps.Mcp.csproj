@@ -8,7 +8,11 @@
     <Version>0.5.0</Version>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Description>Optional stdio adapter for SharpDeps saved Query and explicitly trusted updates.</Description>
+    <Description>A Model Context Protocol (MCP) server for AI coding assistants. Search C# symbols, trace calls across .NET projects, and cite files and lines from a local index.</Description>
+    <PackageTags>mcp;mcp-server;model-context-protocol;ai-agents;dotnet;csharp;code-search;call-graph;dependency-analysis</PackageTags>
+    <PackageType>McpServer</PackageType>
+    <PackageProjectUrl>https://github.com/Htkym/sharpdeps</PackageProjectUrl>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PackMcpServerManifest</TargetsForTfmSpecificContentInPackage>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
@@ -18,4 +22,12 @@
     <PackageReference Include="ModelContextProtocol.Core" />
     <ProjectReference Include="..\SharpDeps.Cli\SharpDeps.Cli.csproj" />
   </ItemGroup>
+  <Target Name="PackMcpServerManifest">
+    <WriteLinesToFile File="$(IntermediateOutputPath)server.json"
+                      Lines="$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/.mcp/server.template.json').Replace('@PACKAGE_VERSION@', '$(PackageVersion)'))"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(IntermediateOutputPath)server.json" PackagePath=".mcp/server.json" />
+    </ItemGroup>
+  </Target>
 </Project>

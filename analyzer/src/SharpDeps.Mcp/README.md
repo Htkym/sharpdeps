@@ -1,58 +1,41 @@
 # SharpDeps.Mcp
 
-Connect an MCP client to SharpDeps saved .NET dependency and source evidence.
+Give your AI coding assistant a local Model Context Protocol (MCP) server for exploring C# code. Ask which methods call a service, what a handler calls across projects, or where a type is declared. SharpDeps can return the matching source lines so you can check the answer in your editor.
 
-This guide describes 0.5.0. Check the package registry for availability before installing.
+## Connect your assistant
 
-## Install and connect
+Install the server with a .NET SDK. You need the .NET 10 runtime to run it. To index a solution, use an SDK compatible with the solution and restore its dependencies. Run the second command in your solution folder, replacing `Shop.sln` with its filename.
 
-```bash
-dotnet tool install --global SharpDeps.Mcp --version 0.5.0
+```sh
+dotnet tool install --global SharpDeps.Mcp
+dotnet restore Shop.sln
 ```
 
-Installation requires a .NET SDK; the installed server requires the .NET 10 runtime. Create the index separately using a matching [SharpDeps.Cli](https://www.nuget.org/packages/SharpDeps.Cli) and the target's SDK/restored dependencies.
-
-Merge this entry into the configuration your MCP client actually loads:
+Add `sharpdeps-mcp` as a stdio server in your assistant's MCP settings. For clients that use `mcpServers`, replace the path below with the absolute path to your solution folder.
 
 ```json
 {
   "mcpServers": {
     "sharpdeps": {
       "command": "sharpdeps-mcp",
-      "args": ["--root", "/absolute/workspace", "--index", ".sharpdeps/index.sqlite", "--trusted"]
+      "args": ["--root", "/absolute/path/to/Shop", "--trusted", "--allow-mutations"]
     }
   }
 }
 ```
 
-Replace the workspace path. `--trusted` permits source reads; omit it for saved graph evidence without source text. Root, index and trust are fixed at startup. Client approvals remain separate. The default connection exposes one `explore` tool; it does not index, restore or start watch.
+Use this configuration for a workspace you trust. `--trusted` permits the assistant to read source. Adding `--allow-mutations` lets it create and update the index, which can execute the project's build logic and source generators. For read-only exploration of an existing index, omit `--allow-mutations`. You can also create the index from a terminal with the [SharpDeps CLI](https://www.nuget.org/packages/SharpDeps.Cli).
 
-## Index selected projects from MCP (development build)
+## Ask about your code
 
-For a trusted, restored workspace, add `--allow-mutations` alongside `--trusted` to expose `index` and `update`. Call `index` with the solution and the projects whose code you want to explore:
+Reconnect your client and try these prompts. Substitute a method from your solution for `OrderStore.Save`.
 
-```json
-{"target":"MyApp.slnx","projects":["src/Api/Api.csproj","src/Services/Services.csproj"],"configuration":"Release"}
-```
+> Use SharpDeps to index Shop.sln in Release.
 
-Paths are relative to the server's root. Repeat the same arguments with `update` after a change. Both tools return the published generation on success and bounded indexing diagnostics on failure. Then call `explore` with `{"query":"QueryHandler.Handle","responseMode":"detail"}` and check the returned source and call locations. Indexing selected projects skips the workspace Markdown scan and unused local package caches. The result carries unverified semantic freshness.
+> What calls OrderStore.Save? Show the source file and line for the calls you find.
 
-## Call explore
+The assistant can query the `explore` tool with `{"query":"OrderStore.Save"}`. If the name matches several methods, choose the project, target framework and declaration you meant. A reported call describes the relationship found in that build configuration. When coverage is partial, other calls may fall outside the index.
 
-Use the advertised schema and a flat arguments object:
+After changing code, ask the assistant to update the index with the same solution and configuration. An `unverified` result means SharpDeps could not confirm that all inputs still match the saved index.
 
-```json
-{"query":"OrderService","format":"agent","prepareMaxMilliseconds":30000,"maxMilliseconds":1000}
-```
-
-`query` is a string. Do not nest another arguments object inside it. Use actual returned scope IDs/selectors for follow-ups and retain coverage, freshness/proof limits and omissions.
-
-The 0.5.0 split-v1 contract defaults to 30,000 ms for preparation and 1,000 ms for the query only. Omitting both budget fields, as in `{"query":"OrderService","format":"agent"}`, selects those defaults. Both accept finite values from 10 to 30,000 ms; explore rejects zero. Preparation establishes a validated frozen snapshot and standard derived/lexical indexes before query time starts. One monotonic request owner caps caller wait/query computation at the sum of both allowances. Cancellation is cooperative; process startup, MCP handshake and transport are outside the bound. The query default is not a complete-`DbContext` guarantee.
-
-The long-lived MCP host can reuse validated state on Windows only after native physical-identity and same-connection `data_version` proof. Unsupported proof and Unix use fresh full validation. The default retention is one ready generation with a five-minute idle TTL, without a heap-byte guarantee. Its independent finite preparation owner can continue after a caller leaves; abandoned readers are eventually drained. One-shot CLI reads use fresh validation. Embedding callers must await `McpQueryAdapter.DisposeAsync`, preferably with `await using`.
-
-Use matching 0.5.0 CLI/MCP/API consumers for this breaking contract. Existing `maxMilliseconds` now means query-only time. Do not silently raise budgets or retry. `PREPARATION_TIMEOUT`, `QUERY_TIMEOUT` and `REQUEST_TIMEOUT` return no source; caller `CANCELLED` takes priority and also returns no source. Published 0.4.0 keeps its released behavior; inspect the connected server's schema. No result or a successful transport alone proves that source was returned.
-
-See the [CLI/MCP guide](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md) for version-specific behavior, recovery and [agent setup/opt-out](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md#agent-routing-and-opt-out). Removing guidance is not a CLI execution ban. The [VS Code extension](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps) is installed separately.
-
-[Source and issues](https://github.com/Htkym/sharpdeps) · [MIT license](https://github.com/Htkym/sharpdeps/blob/main/LICENSE)
+[CLI and MCP guide](https://github.com/Htkym/sharpdeps/blob/main/docs/mcp.md) · [Dependency map for VS Code](https://marketplace.visualstudio.com/items?itemName=htkym.sharpdeps)
